@@ -149,9 +149,9 @@ function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapCon
   return {
     mode: overrides.mode ?? base.mode,
     bwrapPath: overrides.bwrapPath ?? base.bwrapPath,
-    writablePaths: overrides.writablePaths ?? base.writablePaths,
-    tmpfsPaths: overrides.tmpfsPaths ?? base.tmpfsPaths,
-    extraArgs: overrides.extraArgs ?? base.extraArgs,
+    writablePaths: [...base.writablePaths, ...(overrides.writablePaths ?? [])],
+    tmpfsPaths: [...base.tmpfsPaths, ...(overrides.tmpfsPaths ?? [])],
+    extraArgs: [...base.extraArgs, ...(overrides.extraArgs ?? [])],
   };
 }
 
