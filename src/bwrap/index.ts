@@ -96,9 +96,9 @@ function findBwrap(override?: string): string {
 
   throw new Error(
     "bwrap (bubblewrap) not found in PATH. Install it:\n" +
-      "  apt install bubblewrap (Debian/Ubuntu)\n" +
-      "  pacman -S bubblewrap (Arch)\n" +
-      "  dnf install bubblewrap (Fedora)",
+    "  apt install bubblewrap (Debian/Ubuntu)\n" +
+    "  pacman -S bubblewrap (Arch)\n" +
+    "  dnf install bubblewrap (Fedora)",
   );
 }
 
@@ -107,10 +107,10 @@ type BwrapMode = "allow-all" | "workspace-write" | "readonly";
 interface BwrapConfig {
   mode: BwrapMode;
   bwrapPath?: string;
-  writablePaths: string[];
-  extraReadablePaths: string[];
-  tmpfsPaths: string[];
-  extraArgs: string[];
+  writablePaths?: string[];
+  extraWritablePaths: string[];
+  tmpfsPaths?: string[];
+  extraArgs?: string[];
 }
 
 interface ResolvedBwrap {
@@ -119,7 +119,7 @@ interface ResolvedBwrap {
   network: boolean;
   bwrapPath?: string;
   writablePaths: string[];
-  extraReadablePaths: string[];
+  extraWritablePaths: string[];
   tmpfsPaths: string[];
   extraArgs: string[];
 }
@@ -128,10 +128,10 @@ function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
   const base = {
     mode: config.mode,
     bwrapPath: config.bwrapPath,
-    writablePaths: config.writablePaths,
-    extraReadablePaths: config.extraReadablePaths,
-    tmpfsPaths: config.tmpfsPaths,
-    extraArgs: config.extraArgs,
+    writablePaths: config.writablePaths ?? ([".", "/tmp"] as string[]),
+    extraWritablePaths: config.extraWritablePaths,
+    tmpfsPaths: config.tmpfsPaths ?? ([] as string[]),
+    extraArgs: config.extraArgs ?? ([] as string[]),
   };
   switch (config.mode) {
     case "allow-all":
@@ -146,7 +146,7 @@ function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
 const DEFAULT_CONFIG: BwrapConfig = {
   mode: "workspace-write",
   writablePaths: [".", "/tmp"],
-  extraReadablePaths: [],
+  extraWritablePaths: [],
   tmpfsPaths: [],
   extraArgs: [],
 };
@@ -156,7 +156,7 @@ function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapCon
     mode: overrides.mode ?? base.mode,
     bwrapPath: overrides.bwrapPath ?? base.bwrapPath,
     writablePaths: overrides.writablePaths ?? base.writablePaths,
-    extraReadablePaths: [...base.extraReadablePaths, ...(overrides.extraReadablePaths ?? [])],
+    extraWritablePaths: [...base.extraWritablePaths, ...(overrides.extraWritablePaths ?? [])],
     tmpfsPaths: overrides.tmpfsPaths ?? base.tmpfsPaths,
     extraArgs: overrides.extraArgs ?? base.extraArgs,
   };
@@ -206,9 +206,9 @@ function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): string[] {
     const r = resolvePath(path, cwd);
     args.push("--bind", r, r);
   }
-  for (const path of resolved.extraReadablePaths) {
+  for (const path of resolved.extraWritablePaths) {
     const r = resolvePath(path, cwd);
-    args.push("--ro-bind", r, r);
+    args.push("--bind", r, r);
   }
   for (const path of resolved.tmpfsPaths) {
     const r = resolvePath(path, cwd);
@@ -337,6 +337,14 @@ function createEscalateAwareBashOps(resolved: ResolvedBwrap): BashOperations {
   };
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function notifyMode(
   ctx: { ui: { notify: (m: string, t?: "info" | "warning" | "error") => void } },
   mode: BwrapMode,
@@ -426,7 +434,7 @@ export default function (pi: ExtensionAPI) {
           let choice: string | undefined;
           while (!choice) {
             choice = await ctx.ui.select(
-              `Unsandboxed execution requested:\n\n  ${params.command.replace(/\n/g, "\n  ")}\n\nAllow this command to run without sandbox?`,
+              `Unsandboxed execution requested:\n\n<code>${escapeHtml(params.command)}</code>\n\nAllow this command to run without sandbox?`,
               ["Approve once", "Block", "Block with reason"],
             );
             if (choice === "Block with reason") {
@@ -528,11 +536,11 @@ export default function (pi: ExtensionAPI) {
     return {
       systemPrompt:
         _event.systemPrompt +
-          [
-            "",
-            "You are running inside a bwrap sandbox. The root filesystem is read-only.",
-            `Current mode: ${getResolved().mode}.`,
-            "",
+        [
+          "",
+          "You are running inside a bwrap sandbox. The root filesystem is read-only.",
+          `Current mode: ${getResolved().mode}.`,
+          "",
           "Three sandbox modes exist:",
           "  /bwrap-allow-all       — sandbox off, network on, full filesystem access",
           "  /bwrap-workspace-write — sandbox on, network off, workspace and /tmp writable",

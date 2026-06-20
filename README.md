@@ -29,7 +29,7 @@ Wraps all bash commands in [bubblewrap](https://github.com/containers/bubblewrap
   "mode": "workspace-write", // "allow-all" | "workspace-write" | "readonly"
   "bwrapPath": "/usr/local/bin/bwrap", // optional, custom bwrap binary path
   "writablePaths": [".", "/tmp", "~/my-projects"], // ~ expanded to $HOME, overwrites default
-  "extraReadablePaths": ["~/.config"], // merged with default, adds ro-bind
+  "extraWritablePaths": ["~/.config"], // merged with default, adds ro-bind
   "tmpfsPaths": [],
   "extraArgs": ["--die-with-parent"], // extra bwrap arguments
 }
