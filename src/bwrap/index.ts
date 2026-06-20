@@ -426,7 +426,7 @@ export default function (pi: ExtensionAPI) {
           let choice: string | undefined;
           while (!choice) {
             choice = await ctx.ui.select(
-              `Unsandboxed execution requested:\n\n\`\`\`\n${params.command}\n\`\`\`\n\nAllow this command to run without sandbox?`,
+              `Unsandboxed execution requested:\n\n  ${params.command.replace(/\n/g, "\n  ")}\n\nAllow this command to run without sandbox?`,
               ["Approve once", "Block", "Block with reason"],
             );
             if (choice === "Block with reason") {
@@ -528,14 +528,15 @@ export default function (pi: ExtensionAPI) {
     return {
       systemPrompt:
         _event.systemPrompt +
-        [
-          "",
-          "You are running inside a bwrap sandbox. The root filesystem is read-only.",
-          "",
+          [
+            "",
+            "You are running inside a bwrap sandbox. The root filesystem is read-only.",
+            `Current mode: ${getResolved().mode}.`,
+            "",
           "Three sandbox modes exist:",
-          "  allow-all       — sandbox off, network on, full filesystem access",
-          "  workspace-write — sandbox on, network off, workspace and /tmp writable",
-          "  readonly        — sandbox on, network off, nothing writable",
+          "  /bwrap-allow-all       — sandbox off, network on, full filesystem access",
+          "  /bwrap-workspace-write — sandbox on, network off, workspace and /tmp writable",
+          "  /bwrap-readonly        — sandbox on, network off, nothing writable",
           "",
           ".git, .pi, and .agent directories are always read-only inside the sandbox,",
           "even in workspace-write mode. Git operations (commit, push, etc.) require",
@@ -589,12 +590,15 @@ export default function (pi: ExtensionAPI) {
     if (!r.bwrapEnabled) {
       ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode}`));
     } else {
-      const net = r.network ? "net" : "no-net";
-      const w = r.writablePaths.length;
-      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode} ${net} ${w}w`));
+      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode}`));
     }
 
     notifyMode(ctx, mode);
+    pi.sendMessage({
+      customType: "info",
+      content: `Bwrap sandbox mode changed to "${mode}".`,
+      display: true,
+    });
   }
 
   pi.registerCommand("bwrap-allow-all", {
