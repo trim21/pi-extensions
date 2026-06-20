@@ -106,6 +106,7 @@ interface BwrapConfig {
   mode: BwrapMode;
   bwrapPath?: string;
   writablePaths: string[];
+  extraReadablePaths: string[];
   tmpfsPaths: string[];
   extraArgs: string[];
 }
@@ -116,6 +117,7 @@ interface ResolvedBwrap {
   network: boolean;
   bwrapPath?: string;
   writablePaths: string[];
+  extraReadablePaths: string[];
   tmpfsPaths: string[];
   extraArgs: string[];
 }
@@ -125,6 +127,7 @@ function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
     mode: config.mode,
     bwrapPath: config.bwrapPath,
     writablePaths: config.writablePaths,
+    extraReadablePaths: config.extraReadablePaths,
     tmpfsPaths: config.tmpfsPaths,
     extraArgs: config.extraArgs,
   };
@@ -141,6 +144,7 @@ function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
 const DEFAULT_CONFIG: BwrapConfig = {
   mode: "workspace-write",
   writablePaths: [".", "/tmp"],
+  extraReadablePaths: [],
   tmpfsPaths: [],
   extraArgs: [],
 };
@@ -149,9 +153,10 @@ function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapCon
   return {
     mode: overrides.mode ?? base.mode,
     bwrapPath: overrides.bwrapPath ?? base.bwrapPath,
-    writablePaths: [...base.writablePaths, ...(overrides.writablePaths ?? [])],
-    tmpfsPaths: [...base.tmpfsPaths, ...(overrides.tmpfsPaths ?? [])],
-    extraArgs: [...base.extraArgs, ...(overrides.extraArgs ?? [])],
+    writablePaths: overrides.writablePaths ?? base.writablePaths,
+    extraReadablePaths: [...base.extraReadablePaths, ...(overrides.extraReadablePaths ?? [])],
+    tmpfsPaths: overrides.tmpfsPaths ?? base.tmpfsPaths,
+    extraArgs: overrides.extraArgs ?? base.extraArgs,
   };
 }
 
@@ -200,6 +205,10 @@ function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): string[] {
   for (const path of resolved.writablePaths) {
     const r = resolvePath(path, cwd);
     args.push("--bind", r, r);
+  }
+  for (const path of resolved.extraReadablePaths) {
+    const r = resolvePath(path, cwd);
+    args.push("--ro-bind", r, r);
   }
   for (const path of resolved.tmpfsPaths) {
     const r = resolvePath(path, cwd);
