@@ -10,7 +10,7 @@ Wraps all bash commands in [bubblewrap](https://github.com/containers/bubblewrap
 
 **Prerequisites:** install bubblewrap (`apt install bubblewrap`, `pacman -S bubblewrap`, `dnf install bubblewrap`).
 
-**Modes** (switchable at runtime with `/bwrap-mode`):
+**Modes** (switchable at runtime):
 
 | Mode              | Sandbox | Network | Writable fs        | Escalation    |
 | ----------------- | :-----: | :-----: | ------------------ | ------------- |

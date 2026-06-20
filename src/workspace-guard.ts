@@ -77,13 +77,30 @@ export default function (pi: ExtensionAPI) {
       };
     }
 
-    const choice = await ctx.ui.select(
-      `Model requests write access outside workspace:\n\n` +
-        `  Tool:  ${event.toolName}\n` +
-        `  Path:  ${rawPath}\n` +
-        `  Resolved: ${resolved}\n\nAllow?`,
-      ["Approve once", "Block"],
-    );
+    let choice: string | undefined;
+    while (!choice) {
+      choice = await ctx.ui.select(
+        `Model requests write access outside workspace:\n\n` +
+          `  Tool:  ${event.toolName}\n` +
+          `  Path:  ${rawPath}\n` +
+          `  Resolved: ${resolved}\n\nAllow?`,
+        ["Approve once", "Block", "Block with reason"],
+      );
+
+      if (choice === "Block with reason") {
+        const feedback = await ctx.ui.input("Why was this write denied?");
+        if (feedback === undefined) {
+          choice = undefined; // cancelled input, retry select
+          continue;
+        }
+        return {
+          block: true,
+          reason: feedback
+            ? `Write outside workspace denied: ${feedback}`
+            : "Write outside workspace denied by user.",
+        };
+      }
+    }
 
     if (choice !== "Approve once") {
       return { block: true, reason: "Write outside workspace denied by user." };

@@ -11,7 +11,7 @@
  *
  * ## Modes
  *
- * Three modes, switchable at runtime via `/bwrap-mode`:
+ * Three modes, switchable at runtime:
  *
  *   allow-all       No sandbox. Network allowed. All commands run natively.
  *   workspace-write Sandbox enabled, network blocked. Project dir + /tmp writable.
@@ -38,8 +38,10 @@
  * ```
  *
  * Commands:
- *   /bwrap       Show current mode and paths
- *   /bwrap-mode  Switch mode (allow-all | workspace-write | readonly)
+ *   /bwrap              Show current mode and paths
+ *   /bwrap-allow-all    Full access, sandbox off
+ *   /bwrap-workspace-write  Sandbox on, workspace writable
+ *   /bwrap-readonly     Sandbox on, no writes
  *
  * Usage:
  *   pi -e ./bwrap
@@ -422,10 +424,25 @@ export default function (pi: ExtensionAPI) {
 
       if (escalate) {
         if (ctx?.hasUI) {
-          const choice = await ctx.ui.select(
-            `Unsandboxed execution requested:\n\n\`\`\`\n${params.command}\n\`\`\`\n\nAllow this command to run without sandbox?`,
-            ["Approve once", "Block"],
-          );
+          let choice: string | undefined;
+          while (!choice) {
+            choice = await ctx.ui.select(
+              `Unsandboxed execution requested:\n\n\`\`\`\n${params.command}\n\`\`\`\n\nAllow this command to run without sandbox?`,
+              ["Approve once", "Block", "Block with reason"],
+            );
+            if (choice === "Block with reason") {
+              const feedback = await ctx.ui.input("Why was this denied?");
+              if (feedback === undefined) {
+                choice = undefined; // cancelled input, retry select
+                continue;
+              }
+              throw new Error(
+                feedback
+                  ? `User denied unsandboxed execution: ${feedback}`
+                  : "User denied unsandboxed execution.",
+              );
+            }
+          }
           if (choice !== "Approve once") {
             throw new Error("User denied unsandboxed execution.");
           }
@@ -499,36 +516,37 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     resolved = null;
     manuallyDisabled = false;
+    promptInjected = false;
   });
 
+  let promptInjected = false;
+
   pi.on("before_agent_start", (_event) => {
-    const r = getResolved();
-    if (!r.bwrapEnabled) return;
+    if (promptInjected) return;
+    promptInjected = true;
+    if (!getResolved().bwrapEnabled) return;
 
-    const writableDesc =
-      r.mode === "readonly"
-        ? "ALL filesystem writes are blocked (read-only mode)"
-        : `only ${r.writablePaths.join(", ") || "(none)"} are writable; everything else is read-only`;
-
-    const block = [
-      "",
-      "You are running inside a bwrap sandbox. The root filesystem is read-only.",
-      `In the current mode "${r.mode}": ${writableDesc}. Network is ${r.network ? "enabled" : "disabled"}.`,
-      "",
-      'If you encounter "Read-only file system" or "Permission denied" errors,',
-      "call the bash tool with dangerously_allow_full_access: true to request",
-      "execution outside the sandbox. The user will be prompted to approve.",
-    ].join("\n");
-
-    const prompt = _event.systemPrompt;
-
-    // Strip any previous bwrap block to avoid duplication on mode switch
-    const cleaned = prompt.replace(
-      /\n{2}You are running inside a bwrap sandbox\.[\s\S]*?user will be prompted to approve\./,
-      "",
-    );
-
-    return { systemPrompt: cleaned + "\n" + block };
+    return {
+      systemPrompt:
+        _event.systemPrompt +
+        [
+          "",
+          "You are running inside a bwrap sandbox. The root filesystem is read-only.",
+          "",
+          "Three sandbox modes exist:",
+          "  allow-all       — sandbox off, network on, full filesystem access",
+          "  workspace-write — sandbox on, network off, workspace and /tmp writable",
+          "  readonly        — sandbox on, network off, nothing writable",
+          "",
+          "In workspace-write and readonly modes, the bash tool has a",
+          "dangerously_allow_full_access boolean parameter. Set it to true",
+          "to request execution outside the sandbox. The user must approve.",
+          "",
+          'If you encounter "Read-only file system" or "Permission denied" in',
+          "a bash command, retry with dangerously_allow_full_access: true.",
+          "",
+        ].join("\n"),
+    };
   });
 
   pi.registerCommand("bwrap", {
@@ -551,28 +569,42 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("bwrap-mode", {
-    description: "Switch bwrap mode: allow-all | workspace-write | readonly",
-    handler: async (args, ctx) => {
-      const raw = args.trim();
-      if (!["allow-all", "workspace-write", "readonly"].includes(raw)) {
-        ctx.ui.notify("Usage: /bwrap-mode allow-all | workspace-write | readonly", "error");
-        return;
-      }
-
-      const mode = raw as BwrapMode;
-      setMode(mode);
-      const r = getResolved();
-
-      if (!r.bwrapEnabled) {
-        ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode}`));
-      } else {
-        const net = r.network ? "net" : "no-net";
-        const w = r.writablePaths.length;
-        ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode} ${net} ${w}w`));
-      }
-
-      notifyMode(ctx, mode);
+  function switchMode(
+    mode: BwrapMode,
+    ctx: {
+      ui: {
+        notify: (m: string, t?: "info" | "warning" | "error") => void;
+        theme: any;
+        setStatus: (k: string, t: string | undefined) => void;
+      };
     },
+  ) {
+    setMode(mode);
+    const r = getResolved();
+
+    if (!r.bwrapEnabled) {
+      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode}`));
+    } else {
+      const net = r.network ? "net" : "no-net";
+      const w = r.writablePaths.length;
+      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode} ${net} ${w}w`));
+    }
+
+    notifyMode(ctx, mode);
+  }
+
+  pi.registerCommand("bwrap-allow-all", {
+    description: "Disable bwrap sandbox, full access",
+    handler: async (_args, ctx) => switchMode("allow-all", ctx),
+  });
+
+  pi.registerCommand("bwrap-workspace-write", {
+    description: "Sandbox on, network off, workspace writable",
+    handler: async (_args, ctx) => switchMode("workspace-write", ctx),
+  });
+
+  pi.registerCommand("bwrap-readonly", {
+    description: "Sandbox on, network off, no writes",
+    handler: async (_args, ctx) => switchMode("readonly", ctx),
   });
 }
