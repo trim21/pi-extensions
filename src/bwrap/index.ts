@@ -505,15 +505,22 @@ export default function (pi: ExtensionAPI) {
     const r = getResolved();
     if (!r.bwrapEnabled) return;
 
-    const modeNote =
+    const writableDesc =
       r.mode === "readonly"
-        ? "read-only (no writable paths)"
-        : `writable: ${r.writablePaths.join(", ") || "(none)"}`;
+        ? "ALL filesystem writes are blocked (read-only mode)"
+        : `only ${r.writablePaths.join(", ") || "(none)"} are writable; everything else is read-only`;
 
     return {
       systemPrompt:
-        `\nBash commands are sandboxed with bwrap (${modeNote}, network: ${r.network ? "on" : "off"}).\n` +
-        `Set dangerously_allow_full_access: true on the bash tool to request unsandboxed execution. The user must approve before it runs.`,
+        _event.systemPrompt +
+        `\n` +
+        `You are running inside a bwrap sandbox. The root filesystem is read-only.\n` +
+        `In the current mode "${r.mode}": ${writableDesc}. ` +
+        `Network is ${r.network ? "enabled" : "disabled"}.\n` +
+        `\n` +
+        `If you encounter "Read-only file system" or "Permission denied" errors,\n` +
+        `call the bash tool with dangerously_allow_full_access: true to request\n` +
+        `execution outside the sandbox. The user will be prompted to approve.`,
     };
   });
 
