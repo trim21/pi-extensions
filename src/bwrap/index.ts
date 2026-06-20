@@ -416,7 +416,7 @@ export default function (pi: ExtensionAPI) {
       if (escalate) {
         if (ctx?.hasUI) {
           const choice = await ctx.ui.select(
-            `Model requests full (non-sandboxed) access for:\n\n  ${params.command}\n\nAllow?`,
+            `Unsandboxed execution requested:\n\n\`\`\`\n${params.command}\n\`\`\`\n\nAllow this command to run without sandbox?`,
             ["Approve once", "Block"],
           );
           if (choice !== "Approve once") {
