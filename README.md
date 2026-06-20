@@ -12,11 +12,11 @@ Wraps all bash commands in [bubblewrap](https://github.com/containers/bubblewrap
 
 **Modes** (switchable at runtime with `/bwrap-mode`):
 
-| Mode | Sandbox | Network | Writable fs | Escalation |
-|------|:---:|:---:|---|---|
-| `allow-all` | off | on | full | not needed |
-| `workspace-write` | on | off | workspace + `/tmp` | user approves |
-| `readonly` | on | off | none | user approves |
+| Mode              | Sandbox | Network | Writable fs        | Escalation    |
+| ----------------- | :-----: | :-----: | ------------------ | ------------- |
+| `allow-all`       |   off   |   on    | full               | not needed    |
+| `workspace-write` |   on    |   off   | workspace + `/tmp` | user approves |
+| `readonly`        |   on    |   off   | none               | user approves |
 
 **Escalation:** the bash tool is re-registered with a `dangerously_allow_full_access` parameter. Set to `true` to request unsandboxed execution. The user is prompted to approve or deny.
 
@@ -26,11 +26,11 @@ Wraps all bash commands in [bubblewrap](https://github.com/containers/bubblewrap
 
 ```jsonc
 {
-  "mode": "workspace-write",         // "allow-all" | "workspace-write" | "readonly"
+  "mode": "workspace-write", // "allow-all" | "workspace-write" | "readonly"
   "bwrapPath": "/usr/local/bin/bwrap", // optional, custom bwrap binary path
-  "writablePaths": [".", "/tmp", "~/my-projects"],  // ~ expanded to $HOME
+  "writablePaths": [".", "/tmp", "~/my-projects"], // ~ expanded to $HOME
   "tmpfsPaths": [],
-  "extraArgs": ["--die-with-parent"]  // extra bwrap arguments
+  "extraArgs": ["--die-with-parent"], // extra bwrap arguments
 }
 ```
 
@@ -49,7 +49,7 @@ Blocks `write` and `edit` tools from targeting paths outside the workspace. Read
 ```jsonc
 // ~/.pi/agent/settings.json
 {
-  "packages": ["github:trim21/pi-extensions"]
+  "packages": ["github:trim21/pi-extensions"],
 }
 ```
 
