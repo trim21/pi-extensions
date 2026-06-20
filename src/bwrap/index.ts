@@ -231,11 +231,10 @@ function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): string[] {
   return args;
 }
 
-function createBwrapBashOps(resolved: ResolvedBwrap, cwd: string): BashOperations {
-  const bwrapArgs = buildBwrapArgs(resolved, cwd);
-
+function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
   return {
     async exec(command, cwd: string, { onData, signal, timeout }) {
+      const bwrapArgs = buildBwrapArgs(resolved, cwd);
       try {
         await fsAccess(cwd, constants.F_OK);
       } catch {
@@ -323,8 +322,8 @@ function createBwrapBashOps(resolved: ResolvedBwrap, cwd: string): BashOperation
   };
 }
 
-function createEscalateAwareBashOps(resolved: ResolvedBwrap, cwd: string): BashOperations {
-  const bwrapOps = createBwrapBashOps(resolved, cwd);
+function createEscalateAwareBashOps(resolved: ResolvedBwrap): BashOperations {
+  const bwrapOps = createBwrapBashOps(resolved);
   const localOps = createLocalBashOperations();
 
   return {
@@ -451,7 +450,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       const sandboxedBash = createBashTool(localCwd, {
-        operations: createBwrapBashOps(r, localCwd),
+        operations: createBwrapBashOps(r),
       });
       return sandboxedBash.execute(id, params, signal, onUpdate);
     },
@@ -460,7 +459,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("user_bash", () => {
     const r = getResolved();
     if (!r.bwrapEnabled) return;
-    return { operations: createEscalateAwareBashOps(r, localCwd) };
+    return { operations: createEscalateAwareBashOps(r) };
   });
 
   pi.on("session_start", async (_event, ctx) => {
@@ -537,6 +536,10 @@ export default function (pi: ExtensionAPI) {
           "  allow-all       — sandbox off, network on, full filesystem access",
           "  workspace-write — sandbox on, network off, workspace and /tmp writable",
           "  readonly        — sandbox on, network off, nothing writable",
+          "",
+          ".git, .pi, and .agent directories are always read-only inside the sandbox,",
+          "even in workspace-write mode. Git operations (commit, push, etc.) require",
+          "dangerously_allow_full_access: true.",
           "",
           "In workspace-write and readonly modes, the bash tool has a",
           "dangerously_allow_full_access boolean parameter. Set it to true",
