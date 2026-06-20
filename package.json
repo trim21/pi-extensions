@@ -1,0 +1,23 @@
+{
+  "name": "pi-extensions",
+  "type": "module",
+  "private": true,
+  "description": "Custom pi coding-agent extensions: bwrap sandbox + workspace guard",
+  "scripts": {
+    "check": "tsc --noEmit && prettier --check .",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.79.3",
+    "prettier": "^3.6.0",
+    "typebox": "1.1.38",
+    "typescript": "^5.8.0"
+  },
+  "pi": {
+    "extensions": [
+      "src/bwrap/index.ts",
+      "src/workspace-guard.ts"
+    ]
+  },
+  "packageManager": "pnpm@10.33.2"
+}
