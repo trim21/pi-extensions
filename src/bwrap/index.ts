@@ -175,8 +175,8 @@ function resolvePath(p: string, cwd: string): string {
 }
 
 function loadConfig(cwd: string): BwrapConfig {
-  const projectConfigPath = join(cwd, ".pi", "bwrap.json");
   const globalConfigPath = join(getAgentDir(), "extensions", "bwrap.json");
+  const projectConfigPath = join(cwd, ".pi", "bwrap.json");
 
   const globalConfig: Partial<BwrapConfig> = {};
   const projectConfig: Partial<BwrapConfig> = {};
@@ -194,9 +194,7 @@ function loadConfig(cwd: string): BwrapConfig {
     }
   }
 
-  const merged = deepMerge(deepMerge(DEFAULT_CONFIG, globalConfig), projectConfig);
-
-  return merged;
+  return deepMerge(deepMerge(DEFAULT_CONFIG, globalConfig), projectConfig);
 }
 
 function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): string[] {
