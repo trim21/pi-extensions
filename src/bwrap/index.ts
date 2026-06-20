@@ -510,18 +510,25 @@ export default function (pi: ExtensionAPI) {
         ? "ALL filesystem writes are blocked (read-only mode)"
         : `only ${r.writablePaths.join(", ") || "(none)"} are writable; everything else is read-only`;
 
-    return {
-      systemPrompt:
-        _event.systemPrompt +
-        `\n` +
-        `You are running inside a bwrap sandbox. The root filesystem is read-only.\n` +
-        `In the current mode "${r.mode}": ${writableDesc}. ` +
-        `Network is ${r.network ? "enabled" : "disabled"}.\n` +
-        `\n` +
-        `If you encounter "Read-only file system" or "Permission denied" errors,\n` +
-        `call the bash tool with dangerously_allow_full_access: true to request\n` +
-        `execution outside the sandbox. The user will be prompted to approve.`,
-    };
+    const block = [
+      "",
+      "You are running inside a bwrap sandbox. The root filesystem is read-only.",
+      `In the current mode "${r.mode}": ${writableDesc}. Network is ${r.network ? "enabled" : "disabled"}.`,
+      "",
+      'If you encounter "Read-only file system" or "Permission denied" errors,',
+      "call the bash tool with dangerously_allow_full_access: true to request",
+      "execution outside the sandbox. The user will be prompted to approve.",
+    ].join("\n");
+
+    const prompt = _event.systemPrompt;
+
+    // Strip any previous bwrap block to avoid duplication on mode switch
+    const cleaned = prompt.replace(
+      /\n{2}You are running inside a bwrap sandbox\.[\s\S]*?user will be prompted to approve\./,
+      "",
+    );
+
+    return { systemPrompt: cleaned + "\n" + block };
   });
 
   pi.registerCommand("bwrap", {
