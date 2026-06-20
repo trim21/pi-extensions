@@ -545,8 +545,9 @@ export default function (pi: ExtensionAPI) {
           "dangerously_allow_full_access boolean parameter. Set it to true",
           "to request execution outside the sandbox. The user must approve.",
           "",
-          'If you encounter "Read-only file system" or "Permission denied" in',
-          "a bash command, retry with dangerously_allow_full_access: true.",
+          'If you encounter "Read-only file system", "Permission denied",',
+          '"Network is unreachable", or "Could not resolve host" in a bash command,',
+          "retry with dangerously_allow_full_access: true.",
           "",
         ].join("\n"),
     };
