@@ -11,9 +11,8 @@
  *   pi -e workspace-guard
  */
 
-import { isAbsolute, resolve, relative, sep } from "node:path";
+import { isAbsolute, join, resolve, relative, sep } from "node:path";
 import { homedir } from "node:os";
-import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const WRITE_TOOLS = new Set(["write", "edit"]);
@@ -47,14 +46,13 @@ function isPathAllowed(resolvedPath: string, cwd: string): boolean {
 }
 
 export default function (pi: ExtensionAPI) {
-  const localCwd = process.cwd();
-
-  pi.on("before_agent_start", async (event) => {
+  pi.on("before_agent_start", async (event, ctx) => {
+    const currentCwd = ctx.cwd;
     return {
       systemPrompt:
         event.systemPrompt +
         `\nWorkspace write protection is active. ` +
-        `write and edit to paths inside the workspace "${localCwd}" or /tmp are auto-allowed. ` +
+        `write and edit to paths inside the workspace "${currentCwd}" or /tmp are auto-allowed. ` +
         `Paths outside require user approval before execution.`,
     };
   });

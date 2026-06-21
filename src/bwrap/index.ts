@@ -56,14 +56,11 @@ import { join, delimiter } from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-  type BashOperations,
-  createBashTool,
-  getAgentDir,
-} from "@earendil-works/pi-coding-agent";
+import { type BashOperations, createBashTool, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 const SANDBOX_PROMPT = `
-You are running inside a sandbox. The root filesystem is read-only.
+## Command Execution
+You are running inside a sandbox.
 
 Three sandbox modes exist:
 - allow-all: sandbox off, network on, full access
@@ -123,9 +120,9 @@ function findBwrap(override?: string): string {
 
   throw new Error(
     "bwrap (bubblewrap) not found in PATH. Install it:\n" +
-    "  apt install bubblewrap (Debian/Ubuntu)\n" +
-    "  pacman -S bubblewrap (Arch)\n" +
-    "  dnf install bubblewrap (Fedora)",
+      "  apt install bubblewrap (Debian/Ubuntu)\n" +
+      "  pacman -S bubblewrap (Arch)\n" +
+      "  dnf install bubblewrap (Fedora)",
   );
 }
 
@@ -379,8 +376,7 @@ const sandboxedBashSchema = Type.Object({
   dangerously_allow_full_access: Type.Optional(
     Type.Boolean({
       description:
-        "Set to true to request unsandboxed execution. User must approve. " +
-        "Ignored in readonly mode (always blocked).",
+        "Set to true to run the command without sandbox, the command will get full fs write permission and network access. The user will review this command and user must  approve this. Do not set this if your command doesn't write any file and doesn't need network access.",
     }),
   ),
 });
@@ -446,7 +442,7 @@ export default function (pi: ExtensionAPI) {
           let choice: string | undefined;
           while (!choice) {
             choice = await ctx.ui.select(
-              `Allow this command to run without sandbox?:\n\n---\n\n> ${escapeHtml(params.command)}\n\n<br>\n\n`,
+              `Allow this command to run without sandbox?:\n\n---\n\n> ${escapeHtml(params.command)}\n\n\n\n`,
               ["Approve once", "Block", "Block with reason"],
             );
             if (choice === "Block with reason") {
@@ -527,22 +523,14 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     resolved = null;
     manuallyDisabled = false;
-    promptInjected = false;
   });
 
-  let promptInjected = false;
+  pi.on("before_agent_start", (event) => {
+    const r = getResolved();
 
-  pi.on("before_agent_start", (_event) => {
-    if (promptInjected) return;
-    promptInjected = true;
-    if (!getResolved().bwrapEnabled) return;
-
-    const mode = getResolved().mode;
     return {
       systemPrompt:
-        _event.systemPrompt +
-        SANDBOX_PROMPT +
-        `\n\nCurrent mode: **${mode}**\n`,
+        event.systemPrompt + "\n\n" + SANDBOX_PROMPT + `\n\nCurrent mode: **${r.mode}**\n`,
     };
   });
 
