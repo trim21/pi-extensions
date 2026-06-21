@@ -59,11 +59,38 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   type BashOperations,
   createBashTool,
-  createLocalBashOperations,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 
-const ESCALATE_PREFIX = "ESCALATE:";
+const SANDBOX_PROMPT = `
+You are running inside a sandbox. The root filesystem is read-only.
+
+Three sandbox modes exist:
+- allow-all: sandbox off, network on, full access
+- readonly: sandbox on, network off, nothing writable
+- workspace-write: sandbox on, network off, only workspace and /tmp writable
+
+In workspace-write and readonly modes, the bash tool has a
+\`dangerously_allow_full_access\` boolean parameter.
+Set it to true to request execution outside the sandbox.
+The user must approve.
+
+In addition to root files system, .git, .pi, and .agent directories inside workspace
+are still read-only even in workspace-write mode.
+Git operations that change git status (add, commit, push, etc.)
+require dangerously_allow_full_access: true.
+
+the \`dangerously_allow_full_access\` is only needed for:
+  - Writing to paths outside the configured writable directories,
+  - Operations requiring network access (curl, npm install, git push, etc.).
+Writing inside the workspace or /tmp, or reading any file, does not require escalation,
+for example, the simple \`ls\`, \`cat\`, \`find\` or \`grep\` and git command that only read from .git directory but not change .git directory and other read only commands.
+**If the command is readonly operator, do not use \`dangerously_allow_full_access\`**
+
+If you encounter "Read-only file system", "Permission denied",
+"Network is unreachable", or "Could not resolve host" in a bash command,
+retry with dangerously_allow_full_access: true.
+`;
 
 const PROTECTED_DIRS = [".git", ".pi", ".agent"];
 
@@ -247,10 +274,10 @@ function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
       const child = spawn(
         findBwrap(resolved.bwrapPath),
         [
-          ...bwrapArgs,
           "--ro-bind",
           "/",
           "/",
+          ...bwrapArgs,
           "--dev",
           "/dev",
           "--proc",
@@ -318,21 +345,6 @@ function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
           }
         });
       });
-    },
-  };
-}
-
-function createEscalateAwareBashOps(resolved: ResolvedBwrap): BashOperations {
-  const bwrapOps = createBwrapBashOps(resolved);
-  const localOps = createLocalBashOperations();
-
-  return {
-    async exec(command, cwd, opts) {
-      if (command.startsWith(ESCALATE_PREFIX)) {
-        const actual = command.slice(ESCALATE_PREFIX.length).trim();
-        return localOps.exec(actual, cwd, opts);
-      }
-      return bwrapOps.exec(command, cwd, opts);
     },
   };
 }
@@ -434,7 +446,7 @@ export default function (pi: ExtensionAPI) {
           let choice: string | undefined;
           while (!choice) {
             choice = await ctx.ui.select(
-              `Unsandboxed execution requested:\n\n<code>${escapeHtml(params.command)}</code>\n\nAllow this command to run without sandbox?`,
+              `Allow this command to run without sandbox?:\n\n---\n\n> ${escapeHtml(params.command)}\n\n<br>\n\n`,
               ["Approve once", "Block", "Block with reason"],
             );
             if (choice === "Block with reason") {
@@ -462,12 +474,6 @@ export default function (pi: ExtensionAPI) {
       });
       return sandboxedBash.execute(id, params, signal, onUpdate);
     },
-  });
-
-  pi.on("user_bash", () => {
-    const r = getResolved();
-    if (!r.bwrapEnabled) return;
-    return { operations: createEscalateAwareBashOps(r) };
   });
 
   pi.on("session_start", async (_event, ctx) => {
@@ -507,8 +513,6 @@ export default function (pi: ExtensionAPI) {
     }
 
     const r = resolved;
-    const net = r.network ? "net" : "no-net";
-    const w = r.writablePaths.length;
 
     if (!r.bwrapEnabled) {
       ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${r.mode}`));
@@ -516,7 +520,7 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${r.mode} ${net} ${w}w`));
+    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${r.mode}`));
     ctx.ui.notify(`bwrap initialized (${r.mode})`, "info");
   });
 
@@ -533,32 +537,12 @@ export default function (pi: ExtensionAPI) {
     promptInjected = true;
     if (!getResolved().bwrapEnabled) return;
 
+    const mode = getResolved().mode;
     return {
       systemPrompt:
         _event.systemPrompt +
-        [
-          "",
-          "You are running inside a bwrap sandbox. The root filesystem is read-only.",
-          `Current mode: ${getResolved().mode}.`,
-          "",
-          "Three sandbox modes exist:",
-          "  /bwrap-allow-all       — sandbox off, network on, full filesystem access",
-          "  /bwrap-workspace-write — sandbox on, network off, workspace and /tmp writable",
-          "  /bwrap-readonly        — sandbox on, network off, nothing writable",
-          "",
-          ".git, .pi, and .agent directories are always read-only inside the sandbox,",
-          "even in workspace-write mode. Git operations (commit, push, etc.) require",
-          "dangerously_allow_full_access: true.",
-          "",
-          "In workspace-write and readonly modes, the bash tool has a",
-          "dangerously_allow_full_access boolean parameter. Set it to true",
-          "to request execution outside the sandbox. The user must approve.",
-          "",
-          'If you encounter "Read-only file system", "Permission denied",',
-          '"Network is unreachable", or "Could not resolve host" in a bash command,',
-          "retry with dangerously_allow_full_access: true.",
-          "",
-        ].join("\n"),
+        SANDBOX_PROMPT +
+        `\n\nCurrent mode: **${mode}**\n`,
     };
   });
 
