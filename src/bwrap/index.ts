@@ -120,9 +120,9 @@ function findBwrap(override?: string): string {
 
   throw new Error(
     "bwrap (bubblewrap) not found in PATH. Install it:\n" +
-      "  apt install bubblewrap (Debian/Ubuntu)\n" +
-      "  pacman -S bubblewrap (Arch)\n" +
-      "  dnf install bubblewrap (Fedora)",
+    "  apt install bubblewrap (Debian/Ubuntu)\n" +
+    "  pacman -S bubblewrap (Arch)\n" +
+    "  dnf install bubblewrap (Fedora)",
   );
 }
 
@@ -443,8 +443,12 @@ export default function (pi: ExtensionAPI) {
           while (!choice) {
             choice = await ctx.ui.select(
               `Allow this command to run without sandbox?:\n\n---\n\n> ${escapeHtml(params.command)}\n\n\n\n`,
-              ["Approve once", "Block", "Block with reason"],
+              ["Approve once", "Block", "Block with reason", "Reject with end tune"],
             );
+            if (choice === "Reject with end tune") {
+              ctx.abort();
+              throw new Error("User denied the command execution.");
+            }
             if (choice === "Block with reason") {
               const feedback = await ctx.ui.input("Why was this denied?");
               if (feedback === undefined) {
