@@ -20,5 +20,5 @@
       "src/workspace-guard.ts"
     ]
   },
-  "packageManager": "pnpm@10.33.2"
+  "packageManager": "pnpm@11.9.0"
 }
