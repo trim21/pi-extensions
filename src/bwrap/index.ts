@@ -20,8 +20,12 @@
  *
  * ## Escalation
  *
- * The bash tool is re-registered with a `dangerously_allow_full_access` parameter.
- * When set to true, the user is prompted to approve unsandboxed execution.
+ * The bash tool is re-registered with `dangerously_allow_full_access` and
+ * `dangerously_allow_full_access_reason` parameters. When full access is needed,
+ * the model must explain why (e.g., network required, writing outside workspace).
+ *
+ * Models should try sandbox mode first when unsure. If the command fails due to
+ * sandbox restrictions, retry with full access and provide the failure reason.
  *
  * Config files (merged, project takes precedence):
  *   - ~/.pi/agent/extensions/bwrap.json (global)
@@ -72,6 +76,12 @@ In workspace-write and readonly modes, the bash tool has a
 Set it to true to request execution outside the sandbox.
 The user must approve.
 
+When requesting full access, you MUST also provide
+a \`dangerously_allow_full_access_reason\` string explaining why:
+  - What specific operation requires escaping the sandbox
+  - e.g. "needs network to install npm packages",
+    "needs to write to /etc/hosts which is outside the workspace"
+
 In addition to root files system, .git, .pi, and .agent directories inside workspace
 are still read-only even in workspace-write mode.
 Git operations that change git status (add, commit, push, etc.)
@@ -84,9 +94,11 @@ Writing inside the workspace or /tmp, or reading any file, does not require esca
 for example, the simple \`ls\`, \`cat\`, \`find\` or \`grep\` and git command that only read from .git directory but not change .git directory and other read only commands.
 **If the command is readonly operator, do not use \`dangerously_allow_full_access\`**
 
-If you encounter "Read-only file system", "Permission denied",
-"Network is unreachable", or "Could not resolve host" in a bash command,
-retry with dangerously_allow_full_access: true.
+**Strategy for uncertain cases**: if you are not sure whether a command will
+work inside the sandbox, run it WITHOUT full access first. If it fails with
+"Read-only file system", "Permission denied", "Network is unreachable", or
+"Could not resolve host", then retry with \`dangerously_allow_full_access: true\`
+and set \`dangerously_allow_full_access_reason\` to describe the failure.
 `;
 
 const PROTECTED_DIRS = [".git", ".pi", ".agent"];
@@ -354,6 +366,19 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/**
+ * Wrap code in a markdown fenced code block that cannot be prematurely closed
+ * by backtick sequences within the content itself.
+ */
+function fenceCodeBlock(code: string): string {
+  const maxConsecutive = Math.max(
+    ...(code.match(/`+/g) ?? [""]).map((s) => s.length),
+    0,
+  );
+  const fence = "`".repeat(maxConsecutive + 1);
+  return `${fence}\n${code}\n${fence}`;
+}
+
 function notifyMode(
   ctx: { ui: { notify: (m: string, t?: "info" | "warning" | "error") => void } },
   mode: BwrapMode,
@@ -376,7 +401,13 @@ const sandboxedBashSchema = Type.Object({
   dangerously_allow_full_access: Type.Optional(
     Type.Boolean({
       description:
-        "Set to true to run the command without sandbox, the command will get full fs write permission and network access. The user will review this command and user must  approve this. Do not set this if your command doesn't write any file and doesn't need network access.",
+        "Set to true to run the command without sandbox, the command will get full fs write permission and network access. The user will review this command and user must approve this. Do not set this if your command doesn't write any file and doesn't need network access.",
+    }),
+  ),
+  dangerously_allow_full_access_reason: Type.Optional(
+    Type.String({
+      description:
+        "Required when dangerously_allow_full_access is true. Explain why the command needs full access outside the sandbox (e.g. 'needs network for npm install', 'must write to /etc/config outside workspace').",
     }),
   ),
 });
@@ -385,6 +416,7 @@ interface SandboxedBashInput {
   command: string;
   timeout?: number;
   dangerously_allow_full_access?: boolean;
+  dangerously_allow_full_access_reason?: string;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -439,13 +471,24 @@ export default function (pi: ExtensionAPI) {
 
       if (escalate) {
         if (ctx?.hasUI) {
+          const reason = params.dangerously_allow_full_access_reason;
+          const reasonText = reason
+            ? `\n\nReason: ${escapeHtml(reason)}`
+            : "\n\n(No reason provided by model)";
+          const codeBlock = fenceCodeBlock(params.command);
+          const desc = `Allow this command to run without sandbox?:\n\n---\n${codeBlock}\n---\n${reasonText}\n\n`;
+
           let choice: string | undefined;
           while (!choice) {
             choice = await ctx.ui.select(
-              `Allow this command to run without sandbox?:\n\n---\n\n> ${escapeHtml(params.command)}\n\n\n\n`,
-              ["Approve once", "Block", "Block with reason", "Reject with end tune"],
+              desc,
+              [
+                "Approve once",
+                "Block",
+                "Block with reason",
+              ],
             );
-            if (choice === "Reject with end tune") {
+            if (typeof choice === 'undefined') {
               ctx.abort();
               throw new Error("User denied the command execution.");
             }
