@@ -132,9 +132,9 @@ function findBwrap(override?: string): string {
 
   throw new Error(
     "bwrap (bubblewrap) not found in PATH. Install it:\n" +
-    "  apt install bubblewrap (Debian/Ubuntu)\n" +
-    "  pacman -S bubblewrap (Arch)\n" +
-    "  dnf install bubblewrap (Fedora)",
+      "  apt install bubblewrap (Debian/Ubuntu)\n" +
+      "  pacman -S bubblewrap (Arch)\n" +
+      "  dnf install bubblewrap (Fedora)",
   );
 }
 
@@ -371,10 +371,7 @@ function escapeHtml(text: string): string {
  * by backtick sequences within the content itself.
  */
 function fenceCodeBlock(code: string): string {
-  const maxConsecutive = Math.max(
-    ...(code.match(/`+/g) ?? [""]).map((s) => s.length),
-    0,
-  );
+  const maxConsecutive = Math.max(...(code.match(/`+/g) ?? [""]).map((s) => s.length), 0);
   const fence = "`".repeat(maxConsecutive + 1);
   return `${fence}\n${code}\n${fence}`;
 }
@@ -480,15 +477,8 @@ export default function (pi: ExtensionAPI) {
 
           let choice: string | undefined;
           while (!choice) {
-            choice = await ctx.ui.select(
-              desc,
-              [
-                "Approve once",
-                "Block",
-                "Block with reason",
-              ],
-            );
-            if (typeof choice === 'undefined') {
+            choice = await ctx.ui.select(desc, ["Approve once", "Block", "Block with reason"]);
+            if (typeof choice === "undefined") {
               ctx.abort();
               throw new Error("User denied the command execution.");
             }
