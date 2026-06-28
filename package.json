@@ -20,7 +20,8 @@
   "pi": {
     "extensions": [
       "src/bwrap/index.ts",
-      "src/workspace-guard.ts"
+      "src/workspace-guard.ts",
+      "src/gh-readonly/index.ts"
     ]
   },
   "lint-staged": {
@@ -28,5 +29,5 @@
       "prettier --write"
     ]
   },
-  "packageManager": "pnpm@10.33.2"
+  "packageManager": "pnpm@11.9.0"
 }
