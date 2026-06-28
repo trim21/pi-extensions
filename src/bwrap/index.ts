@@ -132,9 +132,9 @@ function findBwrap(override?: string): string {
 
   throw new Error(
     "bwrap (bubblewrap) not found in PATH. Install it:\n" +
-    "  apt install bubblewrap (Debian/Ubuntu)\n" +
-    "  pacman -S bubblewrap (Arch)\n" +
-    "  dnf install bubblewrap (Fedora)",
+      "  apt install bubblewrap (Debian/Ubuntu)\n" +
+      "  pacman -S bubblewrap (Arch)\n" +
+      "  dnf install bubblewrap (Fedora)",
   );
 }
 
