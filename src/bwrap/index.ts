@@ -132,9 +132,9 @@ function findBwrap(override?: string): string {
 
   throw new Error(
     "bwrap (bubblewrap) not found in PATH. Install it:\n" +
-      "  apt install bubblewrap (Debian/Ubuntu)\n" +
-      "  pacman -S bubblewrap (Arch)\n" +
-      "  dnf install bubblewrap (Fedora)",
+    "  apt install bubblewrap (Debian/Ubuntu)\n" +
+    "  pacman -S bubblewrap (Arch)\n" +
+    "  dnf install bubblewrap (Fedora)",
   );
 }
 
@@ -367,13 +367,52 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Wrap code in a markdown fenced code block that cannot be prematurely closed
- * by backtick sequences within the content itself.
+ * Wrap code in markdown blockquotes (`>`) so multi-line code renders as literal
+ * text without fenced code block overflow UI issues.
  */
 function fenceCodeBlock(code: string): string {
-  const maxConsecutive = Math.max(...(code.match(/`+/g) ?? [""]).map((s) => s.length), 0);
-  const fence = "`".repeat(maxConsecutive + 1);
-  return `${fence}\n${code}\n${fence}`;
+  const escaped = escapeMarkdown(code);
+  return escaped
+    .split("\n")
+    .map((l) => `> ${l}`)
+    .join("\n");
+}
+
+/**
+ * Escape markdown special characters so text renders as literal plain text
+ * when passed through marked (CommonMark / GFM).
+ *
+ * Use with blockquote wrapping to display multi-line code content without
+ * fenced code blocks:
+ *
+ * ```typescript
+ * const escaped = escapeMarkdown(code);
+ * const markdown = escaped.split("\n").map(l => `> ${l}`).join("\n");
+ * ```
+ */
+function escapeMarkdown(text: string): string {
+  // Backslash must be first — it's the escape character itself
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/`/g, "\\`")
+    .replace(/\*/g, "\\*")
+    .replace(/_/g, "\\_")
+    .replace(/{/g, "\\{")
+    .replace(/}/g, "\\}")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/#/g, "\\#")
+    .replace(/\+/g, "\\+")
+    .replace(/-/g, "\\-")
+    .replace(/\./g, "\\.")
+    .replace(/!/g, "\\!")
+    .replace(/\|/g, "\\|")
+    .replace(/~/g, "\\~")
+    .replace(/</g, "\\<")
+    .replace(/>/g, "\\>")
+    .replace(/&/g, "\\&");
 }
 
 function notifyMode(
