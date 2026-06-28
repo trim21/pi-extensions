@@ -512,7 +512,7 @@ export default function (pi: ExtensionAPI) {
             ? `\n\nReason: ${escapeHtml(reason)}`
             : "\n\n(No reason provided by model)";
           const codeBlock = fenceCodeBlock(params.command);
-          const desc = `Allow this command to run without sandbox?:\n\n---\n${codeBlock}\n---\n${reasonText}\n\n`;
+          const desc = `Allow this command to run without sandbox?\n---\n${reasonText}\n---\n${codeBlock}`;
 
           let choice: string | undefined;
           while (!choice) {
