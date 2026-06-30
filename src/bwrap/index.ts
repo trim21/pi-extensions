@@ -367,52 +367,31 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Wrap code in markdown blockquotes (`>`) so multi-line code renders as literal
- * text without fenced code block overflow UI issues.
+ * Count the longest consecutive backtick run in a string.
  */
-function fenceCodeBlock(code: string): string {
-  const escaped = escapeMarkdown(code);
-  return escaped
-    .split("\n")
-    .map((l) => `> ${l}`)
-    .join("\n");
+function maxConsecutiveBackticks(text: string): number {
+  let maxCount = 0;
+  let currentCount = 0;
+  for (const ch of text) {
+    if (ch === "`") {
+      currentCount++;
+      if (currentCount > maxCount) maxCount = currentCount;
+    } else {
+      currentCount = 0;
+    }
+  }
+  return maxCount;
 }
 
 /**
- * Escape markdown special characters so text renders as literal plain text
- * when passed through marked (CommonMark / GFM).
- *
- * Use with blockquote wrapping to display multi-line code content without
- * fenced code blocks:
- *
- * ```typescript
- * const escaped = escapeMarkdown(code);
- * const markdown = escaped.split("\n").map(l => `> ${l}`).join("\n");
- * ```
+ * Wrap code in fenced code blocks (```) for literal plain-text rendering.
+ * Uses N+1 backticks for the fence where N is the longest consecutive
+ * backtick sequence in the code, so no escaping is needed.
  */
-function escapeMarkdown(text: string): string {
-  // Backslash must be first — it's the escape character itself
-  return text
-    .replace(/\\/g, "\\\\")
-    .replace(/`/g, "\\`")
-    .replace(/\*/g, "\\*")
-    .replace(/_/g, "\\_")
-    .replace(/{/g, "\\{")
-    .replace(/}/g, "\\}")
-    .replace(/\[/g, "\\[")
-    .replace(/\]/g, "\\]")
-    .replace(/\(/g, "\\(")
-    .replace(/\)/g, "\\)")
-    .replace(/#/g, "\\#")
-    .replace(/\+/g, "\\+")
-    .replace(/-/g, "\\-")
-    .replace(/\./g, "\\.")
-    .replace(/!/g, "\\!")
-    .replace(/\|/g, "\\|")
-    .replace(/~/g, "\\~")
-    .replace(/</g, "\\<")
-    .replace(/>/g, "\\>")
-    .replace(/&/g, "\\&");
+function fenceCodeBlock(code: string): string {
+  const fenceLen = Math.max(3, maxConsecutiveBackticks(code) + 1);
+  const fence = "`".repeat(fenceLen);
+  return `${fence}\n${code}\n${fence}`;
 }
 
 function notifyMode(
