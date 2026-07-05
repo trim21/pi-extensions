@@ -18,7 +18,7 @@ Wraps all bash commands in [bubblewrap](https://github.com/containers/bubblewrap
 | `workspace-write` |   on    |   off   | workspace + `/tmp` | user approves |
 | `readonly`        |   on    |   off   | none               | user approves |
 
-**Escalation:** the bash tool is re-registered with a `dangerously_allow_full_access` parameter. Set to `true` to request unsandboxed execution. The user is prompted to approve or deny.
+**Escalation:** the bash tool is re-registered with a `request_full_access` parameter. Set to `true` to request unsandboxed execution. The user is prompted to approve or deny.
 
 **Protected directories:** `.git`, `.pi`, `.agent` are always read-only inside the sandbox, even in `workspace-write` mode.
 

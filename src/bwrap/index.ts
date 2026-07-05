@@ -20,8 +20,8 @@
  *
  * ## Escalation
  *
- * The bash tool is re-registered with `dangerously_allow_full_access` and
- * `dangerously_allow_full_access_reason` parameters. When full access is needed,
+ * The bash tool is re-registered with `request_full_access` and
+ * `request_full_access_reason` parameters. When full access is needed,
  * the model must explain why (e.g., network required, writing outside workspace).
  *
  * Models should try sandbox mode first when unsure. If the command fails due to
@@ -72,12 +72,12 @@ Three sandbox modes exist:
 - workspace-write: sandbox on, network off, only workspace and /tmp writable
 
 In workspace-write and readonly modes, the bash tool has a
-\`dangerously_allow_full_access\` boolean parameter.
+\`request_full_access\` boolean parameter.
 Set it to true to request execution outside the sandbox.
 The user must approve.
 
 When requesting full access, you MUST also provide
-a \`dangerously_allow_full_access_reason\` string explaining why:
+a \`request_full_access_reason\` string explaining why:
   - What specific operation requires escaping the sandbox
   - e.g. "needs network to install npm packages",
     "needs to write to /etc/hosts which is outside the workspace"
@@ -85,20 +85,20 @@ a \`dangerously_allow_full_access_reason\` string explaining why:
 In addition to root files system, .git, .pi, and .agent directories inside workspace
 are still read-only even in workspace-write mode.
 Git operations that change git status (add, commit, push, etc.)
-require dangerously_allow_full_access: true.
+require request_full_access: true.
 
-the \`dangerously_allow_full_access\` is only needed for:
+the \`request_full_access\` is only needed for:
   - Writing to paths outside the configured writable directories,
   - Operations requiring network access (curl, npm install, git push, etc.).
 Writing inside the workspace or /tmp, or reading any file, does not require escalation,
 for example, the simple \`ls\`, \`cat\`, \`find\` or \`grep\` and git command that only read from .git directory but not change .git directory and other read only commands.
-**If the command is readonly operator, do not use \`dangerously_allow_full_access\`**
+**If the command is readonly operator, do not use \`request_full_access\`**
 
 **Strategy for uncertain cases**: if you are not sure whether a command will
 work inside the sandbox, run it WITHOUT full access first. If it fails with
 "Read-only file system", "Permission denied", "Network is unreachable", or
-"Could not resolve host", then retry with \`dangerously_allow_full_access: true\`
-and set \`dangerously_allow_full_access_reason\` to describe the failure.
+"Could not resolve host", then retry with \`request_full_access: true\`
+and set \`request_full_access_reason\` to describe the failure.
 `;
 
 const PROTECTED_DIRS = [".git", ".pi", ".agent"];
@@ -413,16 +413,16 @@ const sandboxedBashSchema = Type.Object({
       description: "Timeout in seconds (optional, no default timeout)",
     }),
   ),
-  dangerously_allow_full_access: Type.Optional(
+  request_full_access: Type.Optional(
     Type.Boolean({
       description:
         "Set to true to run the command without sandbox, the command will get full fs write permission and network access. The user will review this command and user must approve this. Do not set this if your command doesn't write any file and doesn't need network access.",
     }),
   ),
-  dangerously_allow_full_access_reason: Type.Optional(
+  request_full_access_reason: Type.Optional(
     Type.String({
       description:
-        "Required when dangerously_allow_full_access is true. Explain why the command needs full access outside the sandbox (e.g. 'needs network for npm install', 'must write to /etc/config outside workspace').",
+        "Required when request_full_access is true. Explain why the command needs full access outside the sandbox (e.g. 'needs network for npm install', 'must write to /etc/config outside workspace').",
     }),
   ),
 });
@@ -430,8 +430,8 @@ const sandboxedBashSchema = Type.Object({
 interface SandboxedBashInput {
   command: string;
   timeout?: number;
-  dangerously_allow_full_access?: boolean;
-  dangerously_allow_full_access_reason?: string;
+  request_full_access?: boolean;
+  request_full_access_reason?: string;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -469,7 +469,7 @@ export default function (pi: ExtensionAPI) {
     label: "bash (bwrap)",
     description:
       localBash.description +
-      "\n\nSet dangerously_allow_full_access to true to request unsandboxed execution.",
+      "\n\nSet request_full_access to true to request unsandboxed execution.",
     parameters: sandboxedBashSchema,
     prepareArguments: (args) => {
       return Value.Parse(sandboxedBashSchema, args);
@@ -482,11 +482,11 @@ export default function (pi: ExtensionAPI) {
         return localBash.execute(id, params, signal, onUpdate);
       }
 
-      const escalate = params.dangerously_allow_full_access === true;
+      const escalate = params.request_full_access === true;
 
       if (escalate) {
         if (ctx?.hasUI) {
-          const reason = params.dangerously_allow_full_access_reason;
+          const reason = params.request_full_access_reason;
           const reasonText = reason
             ? `\n\nReason: ${escapeHtml(reason)}`
             : "\n\n(No reason provided by model)";
