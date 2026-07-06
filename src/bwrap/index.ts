@@ -53,10 +53,12 @@
  */
 
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, openSync, closeSync } from "node:fs";
 import { join, delimiter } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -267,6 +269,27 @@ function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): string[] {
   return args;
 }
 
+// ── Lazy seccomp filter cache ────────────────────────────────────────
+// BPF bytecode is deterministic per architecture — shipped as static
+// .bpf files alongside the extension (src/bwrap/seccomp-<arch>.bpf).
+// At runtime we pick the right file and open it per-exec.
+
+const SECCOMP_BPF_FILE: string = (() => {
+  const dir = fileURLToPath(new URL(".", import.meta.url));
+  if (process.arch === "x64") return join(dir, "seccomp-x86_64.bpf");
+  if (process.arch === "arm64") return join(dir, "seccomp-aarch64.bpf");
+  return "";
+})();
+
+function getSeccompFd(): number | undefined {
+  if (!SECCOMP_BPF_FILE) return undefined;
+  try {
+    return openSync(SECCOMP_BPF_FILE, "r");
+  } catch {
+    return undefined;
+  }
+}
+
 function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
   return {
     async exec(command, cwd: string, { onData, signal, timeout }) {
@@ -280,29 +303,41 @@ function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
         throw new Error("aborted");
       }
 
-      const child = spawn(
-        findBwrap(resolved.bwrapPath),
-        [
-          "--ro-bind",
-          "/",
-          "/",
-          ...bwrapArgs,
-          "--dev",
-          "/dev",
-          "--proc",
-          "/proc",
-          "--",
-          "bash",
-          "-c",
-          command,
-        ],
-        {
-          cwd,
-          detached: true,
-          stdio: ["ignore", "pipe", "pipe"],
-          env: process.env,
-        },
-      );
+      // ── seccomp: block AF_UNIX + network syscalls ───────────────
+      // bwrap --unshare-net handles IP; seccomp closes the UNIX socket
+      // gap (Docker CLI, mysqld, etc.). Filter is generated once.
+      const seccompFd = !resolved.network ? getSeccompFd() : undefined;
+
+      const baseArgs: string[] = [
+        "--ro-bind",
+        "/",
+        "/",
+        ...bwrapArgs,
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+      ];
+
+      // Two spawn paths so TypeScript can infer the correct child type.
+      const child: ChildProcess =
+        seccompFd !== undefined
+          ? spawn(
+              findBwrap(resolved.bwrapPath),
+              [...baseArgs, "--seccomp", "3", "--", "bash", "-c", command],
+              {
+                cwd,
+                detached: true,
+                stdio: ["ignore", "pipe", "pipe", seccompFd],
+                env: process.env,
+              },
+            )
+          : spawn(findBwrap(resolved.bwrapPath), [...baseArgs, "--", "bash", "-c", command], {
+              cwd,
+              detached: true,
+              stdio: ["ignore", "pipe", "pipe"],
+              env: process.env,
+            });
 
       return new Promise((resolve, reject) => {
         let timedOut = false;
@@ -344,6 +379,15 @@ function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
         child.on("close", (code) => {
           if (timeoutHandle) clearTimeout(timeoutHandle);
           signal?.removeEventListener("abort", onAbort);
+
+          // Close the per-exec seccomp fd (temp file is reused).
+          if (seccompFd !== undefined) {
+            try {
+              closeSync(seccompFd);
+            } catch {
+              /* ignore */
+            }
+          }
 
           if (signal?.aborted) {
             reject(new Error("aborted"));

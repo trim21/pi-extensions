@@ -1,0 +1,13 @@
+[workspace]
+name = "bwrap-seccomp-gen"
+version = "0.1.0"
+description = "Dev-time seccomp BPF generator for the bwrap pi extension"
+channels = ["conda-forge"]
+platforms = ["linux-64", "linux-aarch64"]
+
+[tasks]
+gen = "python src/bwrap/gen_seccomp.py"
+
+[dependencies]
+python = ">=3.11"
+seccomp = ">=2.6"
