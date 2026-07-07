@@ -1,5 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["local>trim21/renovate-config"],
-  "minimumReleaseAge": "1 day"
+  "minimumReleaseAge": "1 day",
+  "packageRules": [
+    {
+      "matchPackageNames": ["@earendil-works/pi-coding-agent", "typebox"],
+      "enabled": false
+    }
+  ]
 }
