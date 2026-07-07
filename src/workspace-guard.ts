@@ -85,6 +85,11 @@ export default function (pi: ExtensionAPI) {
         ["Approve once", "Block", "Block with reason"],
       );
 
+      if (typeof choice === "undefined") {
+        ctx.abort();
+        return { block: true, reason: "Write outside workspace cancelled by user." };
+      }
+
       if (choice === "Block with reason") {
         const feedback = await ctx.ui.input("Why was this write denied?");
         if (feedback === undefined) {

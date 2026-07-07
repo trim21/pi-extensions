@@ -2,7 +2,7 @@
   "name": "pi-extensions",
   "type": "module",
   "private": true,
-  "description": "Custom pi coding-agent extensions: bwrap sandbox + workspace guard",
+  "description": "Custom pi coding-agent extensions: bwrap sandbox, workspace guard, opencode edit, and more",
   "scripts": {
     "check": "tsc --noEmit && prettier --check .",
     "format": "prettier --write .",
@@ -21,7 +21,9 @@
     "extensions": [
       "src/bwrap/index.ts",
       "src/workspace-guard.ts",
-      "src/gh-readonly/index.ts"
+      "src/opencode-edit.ts",
+      "src/bash-default-timeout.ts",
+      "src/agents-md-user-message.ts"
     ]
   },
   "lint-staged": {
