@@ -60,8 +60,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     if (!WRITE_TOOLS.has(event.toolName)) return;
 
-    const input = event.input as { path: string };
-    const rawPath = input.path;
+    const input = event.input as { path?: string; filePath?: string };
+    const rawPath = input.path ?? input.filePath;
     if (!rawPath) return;
 
     const resolved = resolvePath(rawPath, ctx.cwd);
