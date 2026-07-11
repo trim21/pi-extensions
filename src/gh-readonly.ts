@@ -31,21 +31,97 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { spawn } from "node:child_process";
+
+interface GhResult {
+  stdout: string;
+  stderr: string;
+  code: number;
+  killed: boolean;
+  combined: string;
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+function execGh(
+  pi: ExtensionAPI,
+  args: string[],
+  ctx: { cwd?: string; signal?: AbortSignal; timeout?: number },
+): Promise<GhResult> {
+  return new Promise((resolve) => {
+    const proc = spawn("gh", args, {
+      cwd: ctx.cwd,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GH_PAGER: "cat" },
+    });
+
+    let stdout = "";
+    let stderr = "";
+    const combined: string[] = [];
+    let killed = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const killProcess = () => {
+      if (!killed) {
+        killed = true;
+        proc.kill("SIGTERM");
+        setTimeout(() => {
+          if (!proc.killed) proc.kill("SIGKILL");
+        }, 5000);
+      }
+    };
+
+    if (ctx.signal) {
+      if (ctx.signal.aborted) {
+        killProcess();
+      } else {
+        ctx.signal.addEventListener("abort", killProcess, { once: true });
+      }
+    }
+
+    const timeout = ctx.timeout ?? 30_000;
+    if (timeout > 0) {
+      timeoutId = setTimeout(killProcess, timeout);
+    }
+
+    proc.stdout?.on("data", (data: Buffer) => {
+      const text = data.toString();
+      stdout += text;
+      combined.push(text);
+    });
+    proc.stderr?.on("data", (data: Buffer) => {
+      const text = data.toString();
+      stderr += text;
+      combined.push(text);
+    });
+
+    proc.on("close", (code) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (ctx.signal) {
+        ctx.signal.removeEventListener("abort", killProcess);
+      }
+      resolve({ stdout, stderr, code: code ?? 0, killed, combined: combined.join("") });
+    });
+
+    proc.on("error", (_err) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (ctx.signal) {
+        ctx.signal.removeEventListener("abort", killProcess);
+      }
+      resolve({ stdout, stderr, code: 1, killed, combined: combined.join("") });
+    });
+  });
+}
 
 async function ghExec(
   pi: ExtensionAPI,
   args: string[],
   ctx: { cwd?: string; signal?: AbortSignal },
 ): Promise<string> {
-  const result = await pi.exec("gh", args, {
-    cwd: ctx.cwd,
-    signal: ctx.signal,
-    timeout: 30_000,
-  });
+  const result = await execGh(pi, args, ctx);
   if (result.code !== 0) {
-    const msg = result.stderr.trim() || `exit code ${result.code}`;
+    const msg = result.combined.trim() || `exit code ${result.code}`;
     throw new Error(`gh ${args.slice(0, 2).join(" ")} failed: ${msg}`);
   }
   return result.stdout;
@@ -402,7 +478,9 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { repo } = params as { repo?: string };
-      const out = await ghExec(pi, ["repo", "view", ...repoArgs(repo)], { cwd: ctx.cwd, signal });
+      const args = ["repo", "view"];
+      if (repo) args.push(repo);
+      const out = await ghExec(pi, args, { cwd: ctx.cwd, signal });
       const { text, truncated } = truncate(out);
       return {
         content: [{ type: "text", text }],
@@ -488,11 +566,7 @@ export default function (pi: ExtensionAPI) {
       const args = ["pr", "checks", String(number), ...repoArgs(repo), "--watch"];
       if (fail_fast) args.push("--fail-fast");
 
-      const result = await pi.exec("gh", args, {
-        cwd: ctx.cwd,
-        signal,
-        timeout: 600_000, // 10 minutes max for watching
-      });
+      const result = await execGh(pi, args, { cwd: ctx.cwd, signal, timeout: 600_000 });
 
       const exitCode = result.code;
       const stdout = result.stdout;
@@ -539,10 +613,10 @@ export default function (pi: ExtensionAPI) {
         details: {},
       });
 
-      const result = await pi.exec("gh", ["run", "watch", String(run_id), ...repoArgs(repo)], {
+      const result = await execGh(pi, ["run", "watch", String(run_id), ...repoArgs(repo)], {
         cwd: ctx.cwd,
         signal,
-        timeout: 600_000, // 10 minutes max
+        timeout: 600_000,
       });
 
       if (result.code !== 0) {
