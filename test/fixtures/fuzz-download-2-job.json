@@ -1,0 +1,98 @@
+{
+  "id": 86765555652,
+  "run_id": 29234375498,
+  "workflow_name": "ci",
+  "head_branch": "master",
+  "run_url": "https://api.github.com/repos/trim21/neptune/actions/runs/29234375498",
+  "run_attempt": 1,
+  "node_id": "CR_kwDOMZZNz88AAAAUM6FPxA",
+  "head_sha": "aebaa41ebf369f8fa4849cab7c08d66a9de444ba",
+  "url": "https://api.github.com/repos/trim21/neptune/actions/jobs/86765555652",
+  "html_url": "https://github.com/trim21/neptune/actions/runs/29234375498/job/86765555652",
+  "status": "completed",
+  "conclusion": "failure",
+  "created_at": "2026-07-13T08:08:29Z",
+  "started_at": "2026-07-13T08:08:32Z",
+  "completed_at": "2026-07-13T08:09:44Z",
+  "name": "fuzz-download-2",
+  "steps": [
+    {
+      "name": "Set up job",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 1,
+      "started_at": "2026-07-13T08:08:33Z",
+      "completed_at": "2026-07-13T08:08:34Z"
+    },
+    {
+      "name": "Run actions/checkout@v7.0.0",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 2,
+      "started_at": "2026-07-13T08:08:34Z",
+      "completed_at": "2026-07-13T08:08:35Z"
+    },
+    {
+      "name": "Run trim21/actions/setup-go@master",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 3,
+      "started_at": "2026-07-13T08:08:35Z",
+      "completed_at": "2026-07-13T08:08:48Z"
+    },
+    {
+      "name": "Run go test -race -fuzz=FuzzPickerDownloadIntegration -fuzztime=30s ./internal/download/",
+      "status": "completed",
+      "conclusion": "failure",
+      "number": 4,
+      "started_at": "2026-07-13T08:08:48Z",
+      "completed_at": "2026-07-13T08:09:42Z"
+    },
+    {
+      "name": "Run go test -race -fuzz=FuzzStaleRequest -fuzztime=30s ./internal/download/",
+      "status": "completed",
+      "conclusion": "skipped",
+      "number": 5,
+      "started_at": "2026-07-13T08:09:42Z",
+      "completed_at": "2026-07-13T08:09:42Z"
+    },
+    {
+      "name": "Run go test -race -tags assert -fuzz=^FuzzFullDownload$ -fuzztime=30s ./internal/download/",
+      "status": "completed",
+      "conclusion": "skipped",
+      "number": 6,
+      "started_at": "2026-07-13T08:09:42Z",
+      "completed_at": "2026-07-13T08:09:42Z"
+    },
+    {
+      "name": "Post Run trim21/actions/setup-go@master",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 11,
+      "started_at": "2026-07-13T08:09:42Z",
+      "completed_at": "2026-07-13T08:09:42Z"
+    },
+    {
+      "name": "Post Run actions/checkout@v7.0.0",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 12,
+      "started_at": "2026-07-13T08:09:42Z",
+      "completed_at": "2026-07-13T08:09:43Z"
+    },
+    {
+      "name": "Complete job",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 13,
+      "started_at": "2026-07-13T08:09:43Z",
+      "completed_at": "2026-07-13T08:09:43Z"
+    }
+  ],
+  "check_run_url": "https://api.github.com/repos/trim21/neptune/check-runs/86765555652",
+  "labels": ["ubuntu-latest"],
+  "runner_id": 1000239039,
+  "runner_name": "GitHub Actions 1000239039",
+  "runner_group_id": 0,
+  "runner_group_name": "GitHub Actions"
+}

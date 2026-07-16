@@ -1,0 +1,286 @@
+﻿2026-07-13T08:08:33.2666270Z Current runner version: '2.335.1'
+2026-07-13T08:08:33.2703330Z ##[group]Runner Image Provisioner
+2026-07-13T08:08:33.2705024Z Hosted Compute Agent
+2026-07-13T08:08:33.2706156Z Version: 20260624.560
+2026-07-13T08:08:33.2707314Z Commit: 925d229a51159bc391ae97e54a2dd1fe20af789d
+2026-07-13T08:08:33.2708760Z Build Date: 2026-06-24T18:26:47Z
+2026-07-13T08:08:33.2710129Z Worker ID: {c8e0af0f-0a34-40c8-8130-593890c6740c}
+2026-07-13T08:08:33.2711417Z Azure Region: northcentralus
+2026-07-13T08:08:33.2712576Z ##[endgroup]
+2026-07-13T08:08:33.2715257Z ##[group]Operating System
+2026-07-13T08:08:33.2716308Z Ubuntu
+2026-07-13T08:08:33.2717353Z 24.04.4
+2026-07-13T08:08:33.2718203Z LTS
+2026-07-13T08:08:33.2719148Z ##[endgroup]
+2026-07-13T08:08:33.2720193Z ##[group]Runner Image
+2026-07-13T08:08:33.2721333Z Image: ubuntu-24.04
+2026-07-13T08:08:33.2722466Z Version: 20260705.232.1
+2026-07-13T08:08:33.2724897Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260705.232/images/ubuntu/Ubuntu2404-Readme.md
+2026-07-13T08:08:33.2727963Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260705.232
+2026-07-13T08:08:33.2729731Z ##[endgroup]
+2026-07-13T08:08:33.2732069Z ##[group]GITHUB_TOKEN Permissions
+2026-07-13T08:08:33.2735387Z Contents: read
+2026-07-13T08:08:33.2736510Z Metadata: read
+2026-07-13T08:08:33.2737472Z Packages: read
+2026-07-13T08:08:33.2738366Z ##[endgroup]
+2026-07-13T08:08:33.2741583Z Secret source: Actions
+2026-07-13T08:08:33.2742732Z Prepare workflow directory
+2026-07-13T08:08:33.3259690Z Prepare all required actions
+2026-07-13T08:08:33.3317845Z Getting action download info
+2026-07-13T08:08:33.5840377Z Download action repository 'actions/checkout@v7.0.0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+2026-07-13T08:08:33.6634932Z Download action repository 'trim21/actions@master' (SHA:d5a340f330a7bf78d32df8fae23ad1f67e2f5ab7)
+2026-07-13T08:08:33.9031128Z Getting action download info
+2026-07-13T08:08:34.0248940Z Download action repository 'actions/setup-go@v6' (SHA:924ae3a1cded613372ab5595356fb5720e22ba16)
+2026-07-13T08:08:34.3426603Z Download action repository 'actions/cache@v6' (SHA:55cc8345863c7cc4c66a329aec7e433d2d1c52a9)
+2026-07-13T08:08:34.5549101Z Complete job name: fuzz-download-2
+2026-07-13T08:08:34.6344622Z ##[group]Run actions/checkout@v7.0.0
+2026-07-13T08:08:34.6345654Z with:
+2026-07-13T08:08:34.6346125Z   repository: trim21/neptune
+2026-07-13T08:08:34.6349888Z   token: ***
+2026-07-13T08:08:34.6350385Z   ssh-strict: true
+2026-07-13T08:08:34.6350861Z   ssh-user: git
+2026-07-13T08:08:34.6351337Z   persist-credentials: true
+2026-07-13T08:08:34.6351861Z   clean: true
+2026-07-13T08:08:34.6352337Z   sparse-checkout-cone-mode: true
+2026-07-13T08:08:34.6352890Z   fetch-depth: 1
+2026-07-13T08:08:34.6353352Z   fetch-tags: false
+2026-07-13T08:08:34.6353816Z   show-progress: true
+2026-07-13T08:08:34.6354520Z   lfs: false
+2026-07-13T08:08:34.6354988Z   submodules: false
+2026-07-13T08:08:34.6355466Z   set-safe-directory: true
+2026-07-13T08:08:34.6356003Z   allow-unsafe-pr-checkout: false
+2026-07-13T08:08:34.6357232Z env:
+2026-07-13T08:08:34.6357742Z   GOTOOLCHAIN: local
+2026-07-13T08:08:34.6358234Z ##[endgroup]
+2026-07-13T08:08:34.7357517Z Syncing repository: trim21/neptune
+2026-07-13T08:08:34.7359766Z ##[group]Getting Git version info
+2026-07-13T08:08:34.7360613Z Working directory is '/home/runner/work/neptune/neptune'
+2026-07-13T08:08:34.7361816Z [command]/usr/bin/git version
+2026-07-13T08:08:34.7426800Z git version 2.54.0
+2026-07-13T08:08:34.7449530Z ##[endgroup]
+2026-07-13T08:08:34.7461273Z Temporarily overriding HOME='/home/runner/work/_temp/0821035b-eab6-4381-97c0-6f07f73ddba4' before making global git config changes
+2026-07-13T08:08:34.7463589Z Adding repository directory to the temporary git global config as a safe directory
+2026-07-13T08:08:34.7467274Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/neptune/neptune
+2026-07-13T08:08:34.7520477Z Deleting the contents of '/home/runner/work/neptune/neptune'
+2026-07-13T08:08:34.7524770Z ##[group]Determining repository object format
+2026-07-13T08:08:34.7527050Z ##[endgroup]
+2026-07-13T08:08:34.7528357Z ##[group]Initializing the repository
+2026-07-13T08:08:34.7532051Z [command]/usr/bin/git init /home/runner/work/neptune/neptune
+2026-07-13T08:08:34.7647419Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-07-13T08:08:34.7649238Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-07-13T08:08:34.7650773Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-07-13T08:08:34.7652005Z hint: call:
+2026-07-13T08:08:34.7652561Z hint:
+2026-07-13T08:08:34.7653267Z hint: 	git config --global init.defaultBranch <name>
+2026-07-13T08:08:34.7654861Z hint:
+2026-07-13T08:08:34.7656053Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-07-13T08:08:34.7658201Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-07-13T08:08:34.7660062Z hint:
+2026-07-13T08:08:34.7660570Z hint: 	git branch -m <name>
+2026-07-13T08:08:34.7661086Z hint:
+2026-07-13T08:08:34.7661756Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-07-13T08:08:34.7662840Z Initialized empty Git repository in /home/runner/work/neptune/neptune/.git/
+2026-07-13T08:08:34.7665929Z [command]/usr/bin/git remote add origin https://github.com/trim21/neptune
+2026-07-13T08:08:34.7713488Z ##[endgroup]
+2026-07-13T08:08:34.7714730Z ##[group]Disabling automatic garbage collection
+2026-07-13T08:08:34.7718752Z [command]/usr/bin/git config --local gc.auto 0
+2026-07-13T08:08:34.7748650Z ##[endgroup]
+2026-07-13T08:08:34.7749567Z ##[group]Setting up auth
+2026-07-13T08:08:34.7750236Z Removing SSH command configuration
+2026-07-13T08:08:34.7755431Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-07-13T08:08:34.7787596Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-07-13T08:08:34.8128329Z Removing HTTP extra header
+2026-07-13T08:08:34.8134736Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-07-13T08:08:34.8166869Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-07-13T08:08:34.8385923Z Removing includeIf entries pointing to credentials config files
+2026-07-13T08:08:34.8391202Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-07-13T08:08:34.8425910Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-07-13T08:08:34.8656375Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-07-13T08:08:34.8697723Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/neptune/neptune/.git.path /home/runner/work/_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:08:34.8727407Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/neptune/neptune/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:08:34.8761648Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:08:34.8793404Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:08:34.8819916Z ##[endgroup]
+2026-07-13T08:08:34.8820730Z ##[group]Fetching the repository
+2026-07-13T08:08:34.8828804Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +aebaa41ebf369f8fa4849cab7c08d66a9de444ba:refs/remotes/origin/master
+2026-07-13T08:08:35.2406839Z From https://github.com/trim21/neptune
+2026-07-13T08:08:35.2408186Z  * [new ref]         aebaa41ebf369f8fa4849cab7c08d66a9de444ba -> origin/master
+2026-07-13T08:08:35.2453520Z [command]/usr/bin/git branch --list --remote origin/master
+2026-07-13T08:08:35.2481849Z   origin/master
+2026-07-13T08:08:35.2490476Z [command]/usr/bin/git rev-parse refs/remotes/origin/master
+2026-07-13T08:08:35.2512773Z aebaa41ebf369f8fa4849cab7c08d66a9de444ba
+2026-07-13T08:08:35.2518718Z ##[endgroup]
+2026-07-13T08:08:35.2520173Z ##[group]Determining the checkout info
+2026-07-13T08:08:35.2521800Z ##[endgroup]
+2026-07-13T08:08:35.2523001Z [command]/usr/bin/git sparse-checkout disable
+2026-07-13T08:08:35.2569969Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-07-13T08:08:35.2601646Z ##[group]Checking out the ref
+2026-07-13T08:08:35.2606357Z [command]/usr/bin/git checkout --progress --force -B master refs/remotes/origin/master
+2026-07-13T08:08:35.2826891Z Reset branch 'master'
+2026-07-13T08:08:35.2830489Z branch 'master' set up to track 'origin/master'.
+2026-07-13T08:08:35.2841722Z ##[endgroup]
+2026-07-13T08:08:35.2891774Z [command]/usr/bin/git log -1 --format=%H
+2026-07-13T08:08:35.2921640Z aebaa41ebf369f8fa4849cab7c08d66a9de444ba
+2026-07-13T08:08:35.3286854Z ##[group]Run trim21/actions/setup-go@master
+2026-07-13T08:08:35.3288767Z with:
+2026-07-13T08:08:35.3289891Z   cache-namespace: fuzz
+2026-07-13T08:08:35.3290927Z env:
+2026-07-13T08:08:35.3291819Z   GOTOOLCHAIN: local
+2026-07-13T08:08:35.3292821Z ##[endgroup]
+2026-07-13T08:08:35.3573592Z ##[group]Run actions/setup-go@v6
+2026-07-13T08:08:35.3574975Z with:
+2026-07-13T08:08:35.3575817Z   go-version-file: go.mod
+2026-07-13T08:08:35.3576820Z   cache: false
+2026-07-13T08:08:35.3577707Z   check-latest: false
+2026-07-13T08:08:35.3587421Z   token: ***
+2026-07-13T08:08:35.3588281Z env:
+2026-07-13T08:08:35.3589173Z   GOTOOLCHAIN: local
+2026-07-13T08:08:35.3590095Z ##[endgroup]
+2026-07-13T08:08:35.4997498Z Setup go version spec 1.26.5
+2026-07-13T08:08:35.5022762Z Attempting to download 1.26.5...
+2026-07-13T08:08:35.9997156Z matching 1.26.5...
+2026-07-13T08:08:36.0028666Z Acquiring 1.26.5 from https://github.com/actions/go-versions/releases/download/1.26.5-28913679792/go-1.26.5-linux-x64.tar.gz
+2026-07-13T08:08:36.5025191Z Extracting Go...
+2026-07-13T08:08:36.5132679Z [command]/usr/bin/tar xz --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/62be94ca-2d6f-4131-904a-f9147e19eae9 -f /home/runner/work/_temp/b63ef533-cbc8-40b0-9b75-a0c85a15c703
+2026-07-13T08:08:38.1990057Z Successfully extracted go to /home/runner/work/_temp/62be94ca-2d6f-4131-904a-f9147e19eae9
+2026-07-13T08:08:38.1991002Z Adding to the cache ...
+2026-07-13T08:08:44.1359984Z Successfully cached go to /opt/hostedtoolcache/go/1.26.5/x64
+2026-07-13T08:08:44.1365738Z Added go to the path
+2026-07-13T08:08:44.1366302Z Successfully set up Go version 1.26.5
+2026-07-13T08:08:44.1581043Z go version go1.26.5 linux/amd64
+2026-07-13T08:08:44.1581300Z 
+2026-07-13T08:08:44.1581655Z ##[group]go env
+2026-07-13T08:08:44.2918799Z AR='ar'
+2026-07-13T08:08:44.2919258Z CC='gcc'
+2026-07-13T08:08:44.2919617Z CGO_CFLAGS='-O2 -g'
+2026-07-13T08:08:44.2920011Z CGO_CPPFLAGS=''
+2026-07-13T08:08:44.2920264Z CGO_CXXFLAGS='-O2 -g'
+2026-07-13T08:08:44.2920527Z CGO_ENABLED='1'
+2026-07-13T08:08:44.2920773Z CGO_FFLAGS='-O2 -g'
+2026-07-13T08:08:44.2921033Z CGO_LDFLAGS='-O2 -g'
+2026-07-13T08:08:44.2921260Z CXX='g++'
+2026-07-13T08:08:44.2921474Z GCCGO='gccgo'
+2026-07-13T08:08:44.2921690Z GO111MODULE=''
+2026-07-13T08:08:44.2921892Z GOAMD64='v1'
+2026-07-13T08:08:44.2922089Z GOARCH='amd64'
+2026-07-13T08:08:44.2922288Z GOAUTH='netrc'
+2026-07-13T08:08:44.2922506Z GOBIN=''
+2026-07-13T08:08:44.2922730Z GOCACHE='/home/runner/.cache/go-build'
+2026-07-13T08:08:44.2923007Z GOCACHEPROG=''
+2026-07-13T08:08:44.2923217Z GODEBUG=''
+2026-07-13T08:08:44.2923439Z GOENV='/home/runner/.config/go/env'
+2026-07-13T08:08:44.2924060Z GOEXE=''
+2026-07-13T08:08:44.2924528Z GOEXPERIMENT=''
+2026-07-13T08:08:44.2924906Z GOFIPS140='off'
+2026-07-13T08:08:44.2925116Z GOFLAGS=''
+2026-07-13T08:08:44.2925820Z GOGCCFLAGS='-fPIC -m64 -pthread -Wl,--no-gc-sections -fmessage-length=0 -ffile-prefix-map=/tmp/go-build2714875129=/tmp/go-build -gno-record-gcc-switches'
+2026-07-13T08:08:44.2926512Z GOHOSTARCH='amd64'
+2026-07-13T08:08:44.2926728Z GOHOSTOS='linux'
+2026-07-13T08:08:44.2926938Z GOINSECURE=''
+2026-07-13T08:08:44.2927204Z GOMOD='/home/runner/work/neptune/neptune/go.mod'
+2026-07-13T08:08:44.2927532Z GOMODCACHE='/home/runner/go/pkg/mod'
+2026-07-13T08:08:44.2927798Z GONOPROXY=''
+2026-07-13T08:08:44.2927989Z GONOSUMDB=''
+2026-07-13T08:08:44.2928174Z GOOS='linux'
+2026-07-13T08:08:44.2928382Z GOPATH='/home/runner/go'
+2026-07-13T08:08:44.2928607Z GOPRIVATE=''
+2026-07-13T08:08:44.2928883Z GOPROXY='https://proxy.golang.org,direct'
+2026-07-13T08:08:44.2929214Z GOROOT='/opt/hostedtoolcache/go/1.26.5/x64'
+2026-07-13T08:08:44.2929520Z GOSUMDB='sum.golang.org'
+2026-07-13T08:08:44.2929752Z GOTELEMETRY='local'
+2026-07-13T08:08:44.2930018Z GOTELEMETRYDIR='/home/runner/.config/go/telemetry'
+2026-07-13T08:08:44.2930317Z GOTMPDIR=''
+2026-07-13T08:08:44.2930512Z GOTOOLCHAIN='local'
+2026-07-13T08:08:44.2930829Z GOTOOLDIR='/opt/hostedtoolcache/go/1.26.5/x64/pkg/tool/linux_amd64'
+2026-07-13T08:08:44.2931178Z GOVCS=''
+2026-07-13T08:08:44.2931584Z GOVERSION='go1.26.5'
+2026-07-13T08:08:44.2931808Z GOWORK=''
+2026-07-13T08:08:44.2932009Z PKG_CONFIG='pkg-config'
+2026-07-13T08:08:44.2932152Z 
+2026-07-13T08:08:44.2932629Z ##[endgroup]
+2026-07-13T08:08:44.5913579Z ##[group]Run actions/cache@v6
+2026-07-13T08:08:44.5913845Z with:
+2026-07-13T08:08:44.5914056Z   path: ~/.cache/go-build
+~/go/pkg
+
+2026-07-13T08:08:44.5915304Z   key: go-cache-0e8c2947ddbf349a2f00c005d01d61d528ba59aaff5a477c3a60e6b4dc632b8e-99a6eb4ca6c49bfba279e5b7a9d0d8875395df3098c4c6f107a5cfdf9362b0e4-fuzz
+2026-07-13T08:08:44.5916921Z   restore-keys: go-cache-0e8c2947ddbf349a2f00c005d01d61d528ba59aaff5a477c3a60e6b4dc632b8e-99a6eb4ca6c49bfba279e5b7a9d0d8875395df3098c4c6f107a5cfdf9362b0e4-
+go-cache-0e8c2947ddbf349a2f00c005d01d61d528ba59aaff5a477c3a60e6b4dc632b8e-
+
+2026-07-13T08:08:44.5918059Z   enableCrossOsArchive: false
+2026-07-13T08:08:44.5918312Z   fail-on-cache-miss: false
+2026-07-13T08:08:44.5918546Z   lookup-only: false
+2026-07-13T08:08:44.5918757Z   save-always: false
+2026-07-13T08:08:44.5918968Z env:
+2026-07-13T08:08:44.5919149Z   GOTOOLCHAIN: local
+2026-07-13T08:08:44.5919352Z ##[endgroup]
+2026-07-13T08:08:44.8334995Z Cache hit for: go-cache-0e8c2947ddbf349a2f00c005d01d61d528ba59aaff5a477c3a60e6b4dc632b8e-99a6eb4ca6c49bfba279e5b7a9d0d8875395df3098c4c6f107a5cfdf9362b0e4-fuzz
+2026-07-13T08:08:45.9946208Z Received 96468992 of 125783372 (76.7%), 91.9 MBs/sec
+2026-07-13T08:08:46.2200249Z Received 125783372 of 125783372 (100.0%), 97.6 MBs/sec
+2026-07-13T08:08:46.2202883Z Cache Size: ~120 MB (125783372 B)
+2026-07-13T08:08:46.2317064Z [command]/usr/bin/tar -xf /home/runner/work/_temp/fbf93deb-70af-43e5-870c-02f15a5494c6/cache.tzst -P -C /home/runner/work/neptune/neptune --use-compress-program unzstd
+2026-07-13T08:08:47.3369258Z Cache restored successfully
+2026-07-13T08:08:47.3507262Z Cache restored from key: go-cache-0e8c2947ddbf349a2f00c005d01d61d528ba59aaff5a477c3a60e6b4dc632b8e-99a6eb4ca6c49bfba279e5b7a9d0d8875395df3098c4c6f107a5cfdf9362b0e4-fuzz
+2026-07-13T08:08:47.3630412Z ##[group]Run go get ./...
+2026-07-13T08:08:47.3630730Z [36;1mgo get ./...[0m
+2026-07-13T08:08:47.3789782Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-07-13T08:08:47.3790182Z env:
+2026-07-13T08:08:47.3790395Z   GOTOOLCHAIN: local
+2026-07-13T08:08:47.3790647Z ##[endgroup]
+2026-07-13T08:08:48.3100300Z ##[group]Run go test -race -fuzz=FuzzPickerDownloadIntegration -fuzztime=30s ./internal/download/
+2026-07-13T08:08:48.3101033Z [36;1mgo test -race -fuzz=FuzzPickerDownloadIntegration -fuzztime=30s ./internal/download/[0m
+2026-07-13T08:08:48.3133636Z shell: /usr/bin/bash -e {0}
+2026-07-13T08:08:48.3134113Z env:
+2026-07-13T08:08:48.3134631Z   GOTOOLCHAIN: local
+2026-07-13T08:08:48.3134859Z ##[endgroup]
+2026-07-13T08:09:37.7784102Z --- FAIL: TestHandleResOrder (0.01s)
+2026-07-13T08:09:37.7785363Z     --- FAIL: TestHandleResOrder/last_block_first (0.00s)
+2026-07-13T08:09:37.7787233Z         handle_res_test.go:280: FAIL last_block_first: heap=0
+2026-07-13T08:09:37.7788400Z             
+2026-07-13T08:09:37.7789024Z             === State ===
+2026-07-13T08:09:37.7789805Z             pieces=5 chunkLen=4 heap=0
+2026-07-13T08:09:37.7790497Z             pending=[]
+2026-07-13T08:09:37.7791151Z             done=[]
+2026-07-13T08:09:37.7791958Z               piece 0: total=4 pending=0 done=0
+2026-07-13T08:09:37.7792998Z               piece 1: total=4 pending=0 done=0
+2026-07-13T08:09:37.7793958Z               piece 2: total=4 pending=0 done=0
+2026-07-13T08:09:37.7795142Z               piece 3: total=4 pending=0 done=0
+2026-07-13T08:09:37.7796124Z               piece 4: total=4 pending=0 done=0
+2026-07-13T08:09:42.8036723Z FAIL
+2026-07-13T08:09:42.8134728Z exit status 1
+2026-07-13T08:09:42.8135142Z FAIL	neptune/internal/download	6.754s
+2026-07-13T08:09:42.9665975Z ##[error]Process completed with exit code 1.
+2026-07-13T08:09:42.9772569Z Post job cleanup.
+2026-07-13T08:09:42.9871039Z Post job cleanup.
+2026-07-13T08:09:43.0690849Z [command]/usr/bin/git version
+2026-07-13T08:09:43.0730698Z git version 2.54.0
+2026-07-13T08:09:43.0768952Z Temporarily overriding HOME='/home/runner/work/_temp/e286320c-af8b-4ecf-a8d5-b11016fa17c5' before making global git config changes
+2026-07-13T08:09:43.0770151Z Adding repository directory to the temporary git global config as a safe directory
+2026-07-13T08:09:43.0775226Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/neptune/neptune
+2026-07-13T08:09:43.0809580Z Removing SSH command configuration
+2026-07-13T08:09:43.0816504Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-07-13T08:09:43.0853422Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-07-13T08:09:43.1081369Z Removing HTTP extra header
+2026-07-13T08:09:43.1087896Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-07-13T08:09:43.1122176Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-07-13T08:09:43.1341475Z Removing includeIf entries pointing to credentials config files
+2026-07-13T08:09:43.1348454Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-07-13T08:09:43.1376580Z includeif.gitdir:/home/runner/work/neptune/neptune/.git.path
+2026-07-13T08:09:43.1377505Z includeif.gitdir:/home/runner/work/neptune/neptune/.git/worktrees/*.path
+2026-07-13T08:09:43.1378315Z includeif.gitdir:/github/workspace/.git.path
+2026-07-13T08:09:43.1378866Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-07-13T08:09:43.1385102Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/neptune/neptune/.git.path
+2026-07-13T08:09:43.1408297Z /home/runner/work/_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:09:43.1418680Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/neptune/neptune/.git.path /home/runner/work/_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:09:43.1452023Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/neptune/neptune/.git/worktrees/*.path
+2026-07-13T08:09:43.1473756Z /home/runner/work/_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:09:43.1483857Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/neptune/neptune/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:09:43.1516389Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-07-13T08:09:43.1538766Z /github/runner_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:09:43.1547221Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:09:43.1577180Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-07-13T08:09:43.1599325Z /github/runner_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:09:43.1608630Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config
+2026-07-13T08:09:43.1641253Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-07-13T08:09:43.1860137Z Removing credentials config '/home/runner/work/_temp/git-credentials-d8d40370-441e-4f97-b76c-5ca44d693653.config'
+2026-07-13T08:09:43.2021498Z Cleaning up orphan processes
