@@ -77,14 +77,6 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    const completedCount = visible.filter((t) => t.status === "completed").length;
-    const allDone = completedCount === visible.length;
-
-    if (allDone) {
-      ctx.ui.setWidget("todo-pendant", undefined);
-    } else {
-      const header = `Todos (${completedCount}/${visible.length})`;
-      ctx.ui.setWidget("todo-pendant", [header, "", ...visible.map(formatTaskLine)]);
-    }
+    ctx.ui.setWidget("todo-pendant", [...visible.map(formatTaskLine)]);
   });
 }
