@@ -1,9 +1,9 @@
 /**
  * Todo Pendant Extension
  *
- * Intercepts `@juicesharp/rpiv-todo` tool results and renders the task list
- * as a markdown pendant in Pendant's UI. Compatible with rpiv-todo's
- * four-status task model (pending / in_progress / completed / deleted).
+ * Intercepts `todo` tool results and renders the task list as a widget
+ * above the editor in Pendant's UI. Compatible with pi's built-in todo
+ * tool's four-status task model (pending / in_progress / completed / deleted).
  *
  * Usage:
  *   pi -e src/todo-pendant.ts
@@ -12,7 +12,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
-// Types matching @juicesharp/rpiv-todo's TaskDetails (tool/types.ts)
+// Types matching pi's built-in todo tool TaskDetails
 // ---------------------------------------------------------------------------
 
 type TaskStatus = "pending" | "in_progress" | "completed" | "deleted";
@@ -40,7 +40,12 @@ interface TaskDetails {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const STATUS_MARK = { pending: " ", in_progress: " ", completed: "x", deleted: " " } as const;
+const STATUS_MARK = {
+  pending: " ",
+  in_progress: " ",
+  deleted: " ",
+  completed: "x",
+} as const;
 
 function formatTaskLine(t: Task): string {
   const mark = STATUS_MARK[t.status];
@@ -75,22 +80,11 @@ export default function (pi: ExtensionAPI) {
     const completedCount = visible.filter((t) => t.status === "completed").length;
     const allDone = completedCount === visible.length;
 
-    // Hide widget when all tasks are completed.
     if (allDone) {
       ctx.ui.setWidget("todo-pendant", undefined);
     } else {
-      ctx.ui.setWidget("todo-pendant", [`Todos: ${completedCount}/${visible.length}`]);
+      const header = `Todos (${completedCount}/${visible.length})`;
+      ctx.ui.setWidget("todo-pendant", [header, "", ...visible.map(formatTaskLine)]);
     }
-
-    const lines = visible.map(formatTaskLine);
-    const header = `**Todos** (${completedCount}/${visible.length})`;
-    const markdown = [header, "", ...lines].join("\n");
-
-    return {
-      details: {
-        ...(event.details as Record<string, unknown>),
-        pendant: { markdown, expanded: true },
-      },
-    };
   });
 }
