@@ -29,7 +29,8 @@
       "src/opencode-edit.ts",
       "src/bash-default-timeout.ts",
       "src/agents-md-user-message.ts",
-      "src/gh-readonly.ts"
+      "src/gh-readonly.ts",
+      "src/todo-pendant.ts"
     ]
   },
   "lint-staged": {
