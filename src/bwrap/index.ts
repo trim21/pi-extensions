@@ -238,7 +238,7 @@ function loadConfig(cwd: string): BwrapConfig {
 }
 
 function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): string[] {
-  const args: string[] = [];
+  const args: string[] = ["--unshare-pid"];
 
   for (const path of resolved.writablePaths) {
     const r = resolvePath(path, cwd);
