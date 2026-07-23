@@ -4,7 +4,7 @@
   "minimumReleaseAge": "1 day",
   "packageRules": [
     {
-      "matchPackageNames": ["@earendil-works/pi-coding-agent", "typebox"],
+      "matchPackageNames": ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "typebox"],
       "enabled": false
     }
   ]
