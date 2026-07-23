@@ -238,7 +238,12 @@ function loadConfig(cwd: string): BwrapConfig {
 }
 
 function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): string[] {
-  const args: string[] = ["--unshare-pid"];
+  // Process-isolation flags placed before filesystem mounts.
+  //   --new-session     Escape the parent TTY (no Ctrl-C leakage)
+  //   --die-with-parent Auto-SIGTERM child when the bwrap parent exits
+  //   --unshare-user    User namespace (root-inside-ns ≠ host root)
+  //   --unshare-pid     PID namespace (kill(-1) confined to sandbox)
+  const args: string[] = ["--new-session", "--die-with-parent", "--unshare-user", "--unshare-pid"];
 
   for (const path of resolved.writablePaths) {
     const r = resolvePath(path, cwd);
@@ -376,9 +381,40 @@ function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
 
         signal?.addEventListener("abort", onAbort, { once: true });
 
+        // ── Signal forwarding ──────────────────────────────────────
+        // With --new-session + detached, terminal signals (Ctrl-C) only
+        // reach the parent. Forward SIGHUP/SIGINT/SIGTERM to the bwrap
+        // child so the sandboxed command can react before the parent
+        // (potentially) exits. --die-with-parent already covers the
+        // case where the parent actually dies.
+        const forwardedSignals: NodeJS.Signals[] = ["SIGHUP", "SIGINT", "SIGTERM"];
+        const signalForwarders: Array<() => void> = [];
+
+        for (const sig of forwardedSignals) {
+          const handler = () => {
+            if (child.pid) {
+              try {
+                process.kill(-child.pid, sig);
+              } catch {
+                child.kill(sig);
+              }
+            }
+            // Remove ourselves and re-raise so the default handler runs.
+            process.removeListener(sig, handler);
+            process.kill(process.pid, sig);
+          };
+          process.on(sig, handler);
+          signalForwarders.push(() => process.removeListener(sig, handler));
+        }
+
         child.on("close", (code) => {
           if (timeoutHandle) clearTimeout(timeoutHandle);
           signal?.removeEventListener("abort", onAbort);
+
+          // Remove signal forwarders now that the child is gone.
+          for (const unforward of signalForwarders) {
+            unforward();
+          }
 
           // Close the per-exec seccomp fd (temp file is reused).
           if (seccompFd !== undefined) {

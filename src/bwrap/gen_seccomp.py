@@ -18,7 +18,11 @@ import seccomp
 
 OUT_DIR = Path(__file__).resolve().parent
 
-# Syscalls to deny. socketpair intentionally excluded for process-local IPC.
+# Syscalls to deny.
+#   socket/network: socketpair intentionally excluded for process-local IPC.
+#   ptrace/vm:      prevent cross-process memory access / code injection.
+#   io_uring:       prevent kernel-bypass that can circumvent seccomp.
+#   sockopt:        prevent socket option manipulation.
 BLOCKED_SYSCALLS = [
     "socket",
     "connect",
@@ -32,6 +36,14 @@ BLOCKED_SYSCALLS = [
     "getpeername",
     "getsockname",
     "shutdown",
+    "getsockopt",
+    "setsockopt",
+    "ptrace",
+    "process_vm_readv",
+    "process_vm_writev",
+    "io_uring_setup",
+    "io_uring_enter",
+    "io_uring_register",
 ]
 
 
@@ -43,8 +55,10 @@ def build_filter() -> bytes:
         try:
             f.add_rule(seccomp.ERRNO(1), name)
         except RuntimeError as e:
-            print(f"warning: syscall '{name}' not available, skipping: {e}",
-                  file=sys.stderr)
+            print(
+                f"warning: syscall '{name}' not available, skipping: {e}",
+                file=sys.stderr,
+            )
 
     return f.export_bpf_mem()
 
@@ -54,6 +68,7 @@ def main() -> None:
 
     native_arch = {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
     import platform
+
     arch = native_arch.get(platform.machine(), platform.machine())
     out = OUT_DIR / f"seccomp-{arch}.bpf"
     out.write_bytes(bytecode)
