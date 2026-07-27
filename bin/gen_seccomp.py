@@ -16,7 +16,7 @@ from pathlib import Path
 
 import seccomp
 
-OUT_DIR = Path(__file__).resolve().parent
+OUT_DIR = Path(__file__).resolve().parent.parent / "src" / "bwrap"
 
 # Syscalls to deny.
 #   socket/network: socketpair intentionally excluded for process-local IPC.
