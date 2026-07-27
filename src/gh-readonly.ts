@@ -20,7 +20,8 @@
  *   - read-github-release: Get release details
  *   - wait-github-pr-checks: Watch PR CI checks
  *   - watch-github-run: Watch a workflow run
- *   - read-github-search: Search GitHub
+ *   - search-github-issues: Search GitHub issues
+ *   - search-github-prs: Search GitHub pull requests
  *
  * Install:
  *   cp gh-readonly.ts ~/.pi/agent/extensions/
@@ -1203,20 +1204,58 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── read-github-search ─────────────────────────────────────────────────────
+  // ── search-github-issues ───────────────────────────────────────────────────
   pi.registerTool({
-    name: "read-github-search",
-    label: "GitHub Search",
-    description: "Search GitHub for repos, issues, or PRs.",
-    promptSnippet: "Search GitHub",
+    name: "search-github-issues",
+    label: "GitHub Issue Search",
+    description: "Search GitHub issues using GitHub search syntax.",
+    promptSnippet: "Search GitHub issues",
     parameters: Type.Object({
-      type: Type.Union([Type.Literal("repos"), Type.Literal("issues"), Type.Literal("prs")]),
-      query: Type.String({ description: "Search query" }),
+      query: Type.String({
+        description:
+          "GitHub search syntax (e.g. 'repo:owner/name keyword', 'is:open label:bug'). Do NOT include 'type:issue' or 'type:pr' qualifiers.",
+      }),
+      include_prs: Type.Optional(
+        Type.Boolean({
+          description: "Whether to include pull requests in results (default: false)",
+        }),
+      ),
       limit: Type.Optional(Type.Number({ description: "Max results (default 20)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { type, query, limit } = params as { type: string; query: string; limit?: number };
-      const args = ["search", type, query];
+      const { query, include_prs, limit } = params as {
+        query: string;
+        include_prs?: boolean;
+        limit?: number;
+      };
+      const args = ["search", "issues", query];
+      if (!include_prs) args.push("--type", "issue");
+      if (limit) args.push("--limit", String(limit));
+      const out = await ghExec(pi, args, { cwd: ctx.cwd, signal });
+      const { text, truncated } = truncate(out);
+      return {
+        content: [{ type: "text", text }],
+        details: { truncated },
+      };
+    },
+  });
+
+  // ── search-github-prs ──────────────────────────────────────────────────────
+  pi.registerTool({
+    name: "search-github-prs",
+    label: "GitHub PR Search",
+    description: "Search GitHub pull requests using GitHub search syntax.",
+    promptSnippet: "Search GitHub PRs",
+    parameters: Type.Object({
+      query: Type.String({
+        description:
+          "GitHub search syntax (e.g. 'repo:owner/name keyword', 'is:open label:bug'). Do NOT include 'type:issue' or 'type:pr' qualifiers.",
+      }),
+      limit: Type.Optional(Type.Number({ description: "Max results (default 20)" })),
+    }),
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      const { query, limit } = params as { query: string; limit?: number };
+      const args = ["search", "prs", query];
       if (limit) args.push("--limit", String(limit));
       const out = await ghExec(pi, args, { cwd: ctx.cwd, signal });
       const { text, truncated } = truncate(out);
