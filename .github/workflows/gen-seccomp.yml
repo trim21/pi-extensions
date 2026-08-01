@@ -3,7 +3,7 @@ name: Generate seccomp BPF
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "bin/gen_seccomp.py"
       - "pixi.lock"

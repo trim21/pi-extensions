@@ -1,14 +1,31 @@
 {
-  "name": "pi-extensions",
+  "name": "@trim21/personal-pi-extensions",
+  "version": "0.0.0",
   "type": "module",
-  "private": true,
   "description": "Custom pi coding-agent extensions: bwrap sandbox, workspace guard, opencode edit, and more",
+  "keywords": [
+    "pi-package"
+  ],
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "tsc --noEmit && prettier --check .",
     "format": "prettier --write .",
     "build:cli": "esbuild bin/cli.ts --bundle --platform=node --format=esm --outfile=dist/cli.js --external:@earendil-works/pi-coding-agent --external:typebox --external:node:*",
     "test": "vitest run",
     "prepare": "husky"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.80.6",
