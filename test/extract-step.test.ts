@@ -148,12 +148,12 @@ function firstLine(text: string): string {
 
 // ── tests ───────────────────────────────────────────────────────────────────
 
-const job = JSON.parse(loadFixture("fuzz-download-2-job.json")) as {
+const job: {
   id: number;
   name: string;
   conclusion: string | null;
   steps: StepInfo[];
-};
+} = JSON.parse(loadFixture("fuzz-download-2-job.json"));
 const log = loadFixture("fuzz-download-2-raw.log");
 
 describe("extractStepFromLog — fuzz-download-2 job", () => {

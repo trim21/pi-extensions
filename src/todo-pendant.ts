@@ -36,6 +36,10 @@ interface TaskDetails {
   error?: string;
 }
 
+function isTaskDetails(d: unknown): d is TaskDetails {
+  return typeof d === "object" && d !== null && "tasks" in d && Array.isArray(d.tasks);
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -65,8 +69,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_result", (event, ctx) => {
     if (event.toolName !== "todo") return;
 
-    const details = event.details as TaskDetails | undefined;
-    if (!details?.tasks?.length) {
+    const details = event.details;
+    if (!isTaskDetails(details) || !details.tasks.length) {
       ctx.ui.setWidget("todo-pendant", undefined);
       return;
     }

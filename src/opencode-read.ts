@@ -317,11 +317,7 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const {
-        filePath: rawPath,
-        offset,
-        limit,
-      } = params as { filePath: string; offset?: number; limit?: number };
+      const { filePath: rawPath, offset, limit } = params;
 
       const absolutePath = isAbsolute(rawPath) ? rawPath : resolvePath(ctx.cwd, rawPath);
 
@@ -336,9 +332,7 @@ export default function (pi: ExtensionAPI) {
       } catch {
         const suggestion = await didYouMean(absolutePath);
         return {
-          content: [
-            { type: "text", text: `File not found: ${absolutePath}${suggestion}` },
-          ] as TextContent[],
+          content: [{ type: "text", text: `File not found: ${absolutePath}${suggestion}` }],
           details: undefined,
         };
       }
@@ -366,7 +360,7 @@ export default function (pi: ExtensionAPI) {
         output += `\n</entries>`;
 
         return {
-          content: [{ type: "text", text: output }] as TextContent[],
+          content: [{ type: "text", text: output }],
           details: undefined,
         };
       }
@@ -380,7 +374,7 @@ export default function (pi: ExtensionAPI) {
         await access(absolutePath, constants.R_OK);
       } catch {
         return {
-          content: [{ type: "text", text: `File not readable: ${absolutePath}` }] as TextContent[],
+          content: [{ type: "text", text: `File not readable: ${absolutePath}` }],
           details: undefined,
         };
       }
@@ -392,7 +386,7 @@ export default function (pi: ExtensionAPI) {
         const base64 = buffer.toString("base64");
         content = [
           { type: "text", text: `[Image: ${mimeType}, ${formatSize(buffer.length)}]` },
-          { type: "image", data: base64, mimeType } as ImageContent,
+          { type: "image", data: base64, mimeType },
         ];
         return { content, details: undefined };
       }
@@ -404,9 +398,7 @@ export default function (pi: ExtensionAPI) {
       // Binary file detection
       if (isBinaryExtension(absolutePath) || isBinaryFileBySample(sample)) {
         return {
-          content: [
-            { type: "text", text: `Cannot read binary file: ${absolutePath}` },
-          ] as TextContent[],
+          content: [{ type: "text", text: `Cannot read binary file: ${absolutePath}` }],
           details: undefined,
         };
       }
@@ -426,7 +418,7 @@ export default function (pi: ExtensionAPI) {
               type: "text",
               text: `Offset ${offset} is beyond end of file (${allLines.length} lines total)`,
             },
-          ] as TextContent[],
+          ],
           details: undefined,
         };
       }
@@ -477,7 +469,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      content = [{ type: "text", text: outputText }] as TextContent[];
+      content = [{ type: "text", text: outputText }];
 
       return { content, details };
     },

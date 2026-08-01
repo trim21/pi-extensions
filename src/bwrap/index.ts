@@ -62,7 +62,12 @@ import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { type BashOperations, createBashTool, getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  type BashOperations,
+  createBashTool,
+  getAgentDir,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
 
 const SANDBOX_PROMPT = `
 ## Command Execution
@@ -166,10 +171,10 @@ function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
   const base = {
     mode: config.mode,
     bwrapPath: config.bwrapPath,
-    writablePaths: config.writablePaths ?? ([".", "/tmp"] as string[]),
+    writablePaths: config.writablePaths ?? [".", "/tmp"],
     extraWritablePaths: config.extraWritablePaths,
-    tmpfsPaths: config.tmpfsPaths ?? ([] as string[]),
-    extraArgs: config.extraArgs ?? ([] as string[]),
+    tmpfsPaths: config.tmpfsPaths ?? [],
+    extraArgs: config.extraArgs ?? [],
   };
   switch (config.mode) {
     case "allow-all":
@@ -229,7 +234,7 @@ function loadConfig(cwd: string): BwrapConfig {
       try {
         Object.assign(target, JSON.parse(readFileSync(path, "utf-8")));
       } catch (e) {
-        console.error(`Warning: Could not parse ${path}: ${e}`);
+        console.error(`Warning: Could not parse ${path}: ${String(e)}`);
       }
     }
   }
@@ -507,13 +512,6 @@ const sandboxedBashSchema = Type.Object({
   ),
 });
 
-interface SandboxedBashInput {
-  command: string;
-  timeout?: number;
-  request_full_access?: boolean;
-  request_full_access_reason?: string;
-}
-
 export default function (pi: ExtensionAPI) {
   pi.registerFlag("no-bwrap", {
     description: "Disable bwrap sandboxing for bash commands",
@@ -525,17 +523,12 @@ export default function (pi: ExtensionAPI) {
   const localBash = createBashTool(localCwd);
 
   let resolved: ResolvedBwrap | null = null;
-  let manuallyDisabled = false;
 
   function getResolved(): ResolvedBwrap {
     if (!resolved) {
       resolved = resolveBwrap(loadConfig(localCwd));
     }
     return resolved;
-  }
-
-  function isEnabled() {
-    return !manuallyDisabled && getResolved().bwrapEnabled;
   }
 
   function setMode(mode: BwrapMode) {
@@ -607,24 +600,21 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.on("session_start", async (_event, ctx) => {
-    const noBwrap = pi.getFlag("no-bwrap") as boolean;
+  pi.on("session_start", (_event, ctx) => {
+    const noBwrap = pi.getFlag("no-bwrap") === true;
 
     if (noBwrap) {
-      manuallyDisabled = true;
       resolved = null;
       ctx.ui.notify("bwrap sandbox disabled via --no-bwrap", "warning");
       return;
     }
 
     if (!process.env.HOME) {
-      manuallyDisabled = true;
       ctx.ui.notify("bwrap requires HOME environment variable", "error");
       return;
     }
 
     if (process.platform !== "linux") {
-      manuallyDisabled = true;
       ctx.ui.notify("bwrap sandbox requires Linux", "warning");
       return;
     }
@@ -637,7 +627,6 @@ export default function (pi: ExtensionAPI) {
         findBwrap(resolved.bwrapPath);
       } catch (err) {
         resolved = null;
-        manuallyDisabled = true;
         ctx.ui.notify(err instanceof Error ? err.message : "bwrap not found", "error");
         return;
       }
@@ -657,7 +646,6 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => {
     resolved = null;
-    manuallyDisabled = false;
   });
 
   pi.on("before_agent_start", (event) => {
@@ -671,11 +659,11 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("bwrap", {
     description: "Show bwrap sandbox configuration",
-    handler: async (_args, ctx) => {
+    handler: (_args, ctx) => {
       const r = getResolved();
       if (!r.bwrapEnabled) {
         ctx.ui.notify(`bwrap disabled (mode: ${r.mode})`, "info");
-        return;
+        return Promise.resolve();
       }
 
       const net = r.network ? "net" : "no-net";
@@ -686,6 +674,7 @@ export default function (pi: ExtensionAPI) {
         `bwrap ${r.mode} ${net} write:[${w.join(", ")}] tmpfs:[${t.join(", ") || "-"}]`,
         "info",
       );
+      return Promise.resolve();
     },
   });
 
@@ -694,7 +683,7 @@ export default function (pi: ExtensionAPI) {
     ctx: {
       ui: {
         notify: (m: string, t?: "info" | "warning" | "error") => void;
-        theme: any;
+        theme: Theme;
         setStatus: (k: string, t: string | undefined) => void;
       };
     },
@@ -718,16 +707,16 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("bwrap-allow-all", {
     description: "Disable bwrap sandbox, full access",
-    handler: async (_args, ctx) => switchMode("allow-all", ctx),
+    handler: (_args, ctx) => Promise.resolve(switchMode("allow-all", ctx)),
   });
 
   pi.registerCommand("bwrap-workspace-write", {
     description: "Sandbox on, network off, workspace writable",
-    handler: async (_args, ctx) => switchMode("workspace-write", ctx),
+    handler: (_args, ctx) => Promise.resolve(switchMode("workspace-write", ctx)),
   });
 
   pi.registerCommand("bwrap-readonly", {
     description: "Sandbox on, network off, no writes",
-    handler: async (_args, ctx) => switchMode("readonly", ctx),
+    handler: (_args, ctx) => Promise.resolve(switchMode("readonly", ctx)),
   });
 }

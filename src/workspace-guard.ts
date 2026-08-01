@@ -13,10 +13,17 @@
 
 import { isAbsolute, join, resolve, relative, sep } from "node:path";
 import { homedir } from "node:os";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 
 const WRITE_TOOLS = new Set(["write", "edit"]);
 const ALWAYS_ALLOW = ["/tmp"];
+
+function getWriteTarget(input: ToolCallEvent["input"]): string | undefined {
+  if (typeof input !== "object" || input === null) return undefined;
+  if ("path" in input && typeof input.path === "string") return input.path;
+  if ("filePath" in input && typeof input.filePath === "string") return input.filePath;
+  return undefined;
+}
 
 function resolvePath(filePath: string, cwd: string): string {
   let p = filePath;
@@ -46,7 +53,7 @@ function isPathAllowed(resolvedPath: string, cwd: string): boolean {
 }
 
 export default function (pi: ExtensionAPI) {
-  pi.on("before_agent_start", async (event, ctx) => {
+  pi.on("before_agent_start", (event, ctx) => {
     const currentCwd = ctx.cwd;
     return {
       systemPrompt:
@@ -60,8 +67,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     if (!WRITE_TOOLS.has(event.toolName)) return;
 
-    const input = event.input as { path?: string; filePath?: string };
-    const rawPath = input.path ?? input.filePath;
+    const rawPath = getWriteTarget(event.input);
     if (!rawPath) return;
 
     const resolved = resolvePath(rawPath, ctx.cwd);

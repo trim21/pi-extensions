@@ -33,6 +33,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -108,7 +109,7 @@ function runGh(
       resolve({ stdout, stderr, code: code ?? 0, killed, combined: combined.join("") });
     });
 
-    proc.on("error", (_err) => {
+    proc.on("error", () => {
       if (timeoutId) clearTimeout(timeoutId);
       if (ctx.signal) {
         ctx.signal.removeEventListener("abort", killProcess);
@@ -157,6 +158,27 @@ async function ghExec(
 function repoArgs(repo?: string): string[] {
   return repo ? ["--repo", repo] : [];
 }
+
+// ── runtime validation schemas for JSON.parse results ───────────────────────
+
+const repoViewSchema = Type.Object({ nameWithOwner: Type.String() });
+
+const stepSchema = Type.Object({
+  name: Type.String(),
+  number: Type.Number(),
+  status: Type.String(),
+  conclusion: Type.Union([Type.String(), Type.Null()]),
+});
+
+const jobRunSchema = Type.Object({
+  id: Type.Number(),
+  name: Type.String(),
+  status: Type.String(),
+  conclusion: Type.Union([Type.String(), Type.Null()]),
+  steps: Type.Array(stepSchema),
+});
+
+const jobsResponseSchema = Type.Object({ jobs: Type.Array(jobRunSchema) });
 
 function truncate(
   text: string,
@@ -280,7 +302,8 @@ async function resolveRepo(
 ): Promise<string> {
   if (repo) return repo;
   const stdout = await ghExec(["repo", "view", "--json", "nameWithOwner"], { cwd, signal, input });
-  return JSON.parse(stdout).nameWithOwner;
+  const { nameWithOwner } = Value.Parse(repoViewSchema, JSON.parse(stdout));
+  return nameWithOwner;
 }
 
 export function statusIcon(conclusion: string | null): string {
@@ -400,7 +423,7 @@ export default function (pi: ExtensionAPI) {
       repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { number, repo } = params as { number: number | string; repo?: string };
+      const { number, repo } = params;
       return toToolResult(
         await ghExec(
           [
@@ -429,7 +452,7 @@ export default function (pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Max results (default 30)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { repo, state, limit } = params as { repo?: string; state?: string; limit?: number };
+      const { repo, state, limit } = params;
       const args = ["issue", "list", ...repoArgs(repo)];
       if (state) args.push("--state", state);
       if (limit) args.push("--limit", String(limit));
@@ -448,7 +471,7 @@ export default function (pi: ExtensionAPI) {
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { number, repo } = params as { number: number | string; repo?: string };
+      const { number, repo } = params;
       return toToolResult(
         await ghExec(
           [
@@ -479,7 +502,7 @@ export default function (pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Max results (default 30)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { repo, state, limit } = params as { repo?: string; state?: string; limit?: number };
+      const { repo, state, limit } = params;
       const args = ["pr", "list", ...repoArgs(repo)];
       if (state) args.push("--state", state);
       if (limit) args.push("--limit", String(limit));
@@ -498,10 +521,7 @@ export default function (pi: ExtensionAPI) {
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { number, repo } = params as {
-        number: number | string;
-        repo?: string;
-      };
+      const { number, repo } = params;
       const args = ["pr", "diff", String(number), ...repoArgs(repo)];
       return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));
     },
@@ -518,7 +538,7 @@ export default function (pi: ExtensionAPI) {
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { number, repo } = params as { number: number | string; repo?: string };
+      const { number, repo } = params;
       return toToolResult(
         await ghExec(["pr", "checks", String(number), ...repoArgs(repo)], {
           cwd: ctx.cwd,
@@ -547,11 +567,7 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { number, repo, reviews } = params as {
-        number: number | string;
-        repo?: string;
-        reviews?: boolean;
-      };
+      const { number, repo, reviews } = params;
       let out: string;
       if (reviews) {
         const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
@@ -569,8 +585,8 @@ export default function (pi: ExtensionAPI) {
           }),
         ]);
 
-        const reviewComments = JSON.parse(comments);
-        const reviewSummaries = JSON.parse(reviewsOut);
+        const reviewComments = Value.Parse(Type.Array(Type.Unknown()), JSON.parse(comments));
+        const reviewSummaries = Value.Parse(Type.Array(Type.Unknown()), JSON.parse(reviewsOut));
 
         out = JSON.stringify(
           {
@@ -609,7 +625,7 @@ export default function (pi: ExtensionAPI) {
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { number, repo } = params as { number: number | string; repo?: string };
+      const { number, repo } = params;
       return toToolResult(
         await ghExec(["issue", "view", String(number), ...repoArgs(repo), "--json", "comments"], {
           cwd: ctx.cwd,
@@ -635,12 +651,7 @@ export default function (pi: ExtensionAPI) {
       workflow: Type.Optional(Type.String({ description: "Filter by workflow name or file" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { repo, limit, status, workflow } = params as {
-        repo?: string;
-        limit?: number;
-        status?: string;
-        workflow?: string;
-      };
+      const { repo, limit, status, workflow } = params;
       const args = ["run", "list", ...repoArgs(repo)];
       if (limit) args.push("--limit", String(limit));
       if (status) args.push("--status", status);
@@ -685,14 +696,7 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
-      const { run_id, repo, job, step, offset, limit } = params as {
-        run_id: number | string;
-        repo?: string;
-        job?: string;
-        step?: string;
-        offset?: number;
-        limit?: number;
-      };
+      const { run_id, repo, job, step, offset, limit } = params;
 
       // ── Fetch specific step logs ───────────────────────────────────────
       if (step !== undefined && step !== null) {
@@ -702,20 +706,7 @@ export default function (pi: ExtensionAPI) {
           ["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`],
           { cwd: ctx.cwd, signal, input: params },
         );
-        const { jobs } = JSON.parse(jobsOut) as {
-          jobs: Array<{
-            id: number;
-            name: string;
-            status: string;
-            conclusion: string | null;
-            steps: Array<{
-              name: string;
-              number: number;
-              status: string;
-              conclusion: string | null;
-            }>;
-          }>;
-        };
+        const { jobs } = Value.Parse(jobsResponseSchema, JSON.parse(jobsOut));
 
         if (!jobs || jobs.length === 0) {
           return {
@@ -889,20 +880,7 @@ export default function (pi: ExtensionAPI) {
         signal,
         input: params,
       });
-      const { jobs } = JSON.parse(jobsOut) as {
-        jobs: Array<{
-          id: number;
-          name: string;
-          status: string;
-          conclusion: string | null;
-          steps: Array<{
-            name: string;
-            number: number;
-            status: string;
-            conclusion: string | null;
-          }>;
-        }>;
-      };
+      const { jobs } = Value.Parse(jobsResponseSchema, JSON.parse(jobsOut));
 
       if (!jobs || jobs.length === 0) {
         return {
@@ -1034,7 +1012,7 @@ export default function (pi: ExtensionAPI) {
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { run_id, repo } = params as { run_id: number | string; repo?: string };
+      const { run_id, repo } = params;
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
       return toToolResult(
         await ghExec(["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`], {
@@ -1056,7 +1034,7 @@ export default function (pi: ExtensionAPI) {
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { repo } = params as { repo?: string };
+      const { repo } = params;
       const args = ["repo", "view"];
       if (repo) args.push(repo);
       return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));
@@ -1074,7 +1052,7 @@ export default function (pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Max results (default 10)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { repo, limit } = params as { repo?: string; limit?: number };
+      const { repo, limit } = params;
       const args = ["release", "list", ...repoArgs(repo)];
       if (limit) args.push("--limit", String(limit));
       return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));
@@ -1092,7 +1070,7 @@ export default function (pi: ExtensionAPI) {
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { tag, repo } = params as { tag: string; repo?: string };
+      const { tag, repo } = params;
       return toToolResult(
         await ghExec(["release", "view", tag, ...repoArgs(repo)], {
           cwd: ctx.cwd,
@@ -1119,11 +1097,7 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
-      const { number, repo, fail_fast } = params as {
-        number: number | string;
-        repo?: string;
-        fail_fast?: boolean;
-      };
+      const { number, repo, fail_fast } = params;
 
       onUpdate?.({
         content: [{ type: "text", text: `Watching CI checks for PR #${number}...` }],
@@ -1173,7 +1147,7 @@ export default function (pi: ExtensionAPI) {
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
-      const { run_id, repo } = params as { run_id: number | string; repo?: string };
+      const { run_id, repo } = params;
 
       onUpdate?.({
         content: [{ type: "text", text: `Watching workflow run ${run_id}...` }],
@@ -1218,11 +1192,7 @@ export default function (pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Max results (default 20)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { query, include_prs, limit } = params as {
-        query: string;
-        include_prs?: boolean;
-        limit?: number;
-      };
+      const { query, include_prs, limit } = params;
       const args = ["search", "issues", query];
       if (include_prs) args.push("--include-prs");
       if (limit) args.push("--limit", String(limit));
@@ -1244,7 +1214,7 @@ export default function (pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Max results (default 20)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { query, limit } = params as { query: string; limit?: number };
+      const { query, limit } = params;
       const args = ["search", "prs", query];
       if (limit) args.push("--limit", String(limit));
       return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));

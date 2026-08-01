@@ -35,7 +35,7 @@ export default function (pi: ExtensionAPI) {
       content: Type.String({ description: "The content to write to the file" }),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const { filePath: rawPath, content } = params as { filePath: string; content: string };
+      const { filePath: rawPath, content } = params;
       const absolutePath = resolvePath(ctx.cwd, rawPath);
       const dir = dirname(absolutePath);
 
@@ -51,10 +51,7 @@ export default function (pi: ExtensionAPI) {
         throwIfAborted();
 
         return {
-          content: [{ type: "text", text: `Wrote file successfully: ${absolutePath}` }] as Array<{
-            type: "text";
-            text: string;
-          }>,
+          content: [{ type: "text", text: `Wrote file successfully: ${absolutePath}` }],
           details: undefined,
         };
       });

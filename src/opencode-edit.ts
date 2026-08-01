@@ -517,7 +517,9 @@ export default function (pi: ExtensionAPI) {
         } catch (error: unknown) {
           throwIfAborted();
           const msg =
-            error instanceof Error && "code" in error ? `Error code: ${error.code}` : String(error);
+            error instanceof Error && "code" in error && typeof error.code === "string"
+              ? `Error code: ${error.code}`
+              : String(error);
           throw new Error(`Could not edit file: ${filePath}. ${msg}.`);
         }
         throwIfAborted();
