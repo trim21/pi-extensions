@@ -5,10 +5,10 @@
  *
  * Tools:
  *   - read-github-issue: Get issue details
- *   - list-github-issues: List issues
+ *   - list-github-issues: List or search issues
  *   - read-github-issue-comments: Get issue comments
  *   - read-github-pr: Get PR details
- *   - list-github-prs: List PRs
+ *   - list-github-prs: List or search PRs
  *   - read-github-pr-diff: Get PR diff
  *   - read-github-pr-status: Get PR status checks
  *   - read-github-pr-comments: Get PR comments
@@ -20,8 +20,6 @@
  *   - read-github-release: Get release details
  *   - wait-github-pr-checks: Watch PR CI checks
  *   - watch-github-run: Watch a workflow run
- *   - search-github-issues: Search GitHub issues
- *   - search-github-prs: Search GitHub pull requests
  *
  * Install:
  *   cp gh-readonly.ts ~/.pi/agent/extensions/
@@ -212,6 +210,55 @@ function toToolResult(stdout: string): {
 } {
   const { text, truncated } = truncate(stdout);
   return { content: [{ type: "text", text }], details: { truncated } };
+}
+
+interface ListFilters {
+  repo?: string;
+  keywords?: string;
+  state?: string;
+  label?: string;
+  author?: string;
+  assignee?: string;
+  milestone?: string;
+  limit?: number;
+}
+
+/**
+ * List or search issues/PRs with structured filters.
+ *
+ * `gh issue list` / `gh pr list` are used when a repo is available (repo param or
+ * current directory), with keywords passed via `--search`. When no repo is given
+ * and keywords are present, falls back to `gh search issues` / `gh search prs`
+ * with plain keywords — never embedding a `repo:` qualifier in the query string,
+ * because `gh` mis-parses `repo:` values followed by spaces.
+ */
+async function listGithub(
+  kind: "issue" | "pr",
+  params: ListFilters,
+  ctx: { cwd?: string; signal?: AbortSignal; input?: unknown },
+): Promise<string> {
+  const { repo, keywords, state, label, author, assignee, milestone, limit } = params;
+
+  if (!repo && keywords) {
+    const args = ["search", kind === "issue" ? "issues" : "prs", keywords];
+    if (state && state !== "all") args.push("--state", state);
+    if (label) args.push("--label", label);
+    if (author) args.push("--author", author);
+    if (assignee) args.push("--assignee", assignee);
+    if (milestone) args.push("--milestone", milestone);
+    if (limit) args.push("--limit", String(limit));
+    return ghExec(args, ctx);
+  }
+
+  const args = [kind, "list", ...repoArgs(repo)];
+  if (state) args.push("--state", state);
+  if (keywords) args.push("--search", keywords);
+  if (label) args.push("--label", label);
+  if (author) args.push("--author", author);
+  if (assignee) args.push("--assignee", assignee);
+  if (milestone) args.push("--milestone", milestone);
+  if (limit) args.push("--limit", String(limit));
+  return ghExec(args, ctx);
 }
 
 // ── CI helpers ───────────────────────────────────────────────────────────────
@@ -444,19 +491,23 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "list-github-issues",
     label: "GitHub Issues List",
-    description: "List GitHub issues with optional filters.",
-    promptSnippet: "List GitHub issues",
+    description:
+      "List GitHub issues with optional filters and keyword search. When repo is omitted, searches across GitHub using keywords.",
+    promptSnippet: "List or search GitHub issues",
     parameters: Type.Object({
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+      repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
+      keywords: Type.Optional(Type.String({ description: "Search keywords (free text)" })),
       state: Type.Optional(Type.String({ description: "open, closed, all (default: open)" })),
+      label: Type.Optional(Type.String({ description: "Filter by label" })),
+      author: Type.Optional(Type.String({ description: "Filter by author" })),
+      assignee: Type.Optional(Type.String({ description: "Filter by assignee" })),
+      milestone: Type.Optional(Type.String({ description: "Filter by milestone" })),
       limit: Type.Optional(Type.Number({ description: "Max results (default 30)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { repo, state, limit } = params;
-      const args = ["issue", "list", ...repoArgs(repo)];
-      if (state) args.push("--state", state);
-      if (limit) args.push("--limit", String(limit));
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));
+      return toToolResult(
+        await listGithub("issue", params, { cwd: ctx.cwd, signal, input: params }),
+      );
     },
   });
 
@@ -492,21 +543,23 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "list-github-prs",
     label: "GitHub PRs List",
-    description: "List GitHub pull requests with optional filters.",
-    promptSnippet: "List GitHub PRs",
+    description:
+      "List GitHub pull requests with optional filters and keyword search. When repo is omitted, searches across GitHub using keywords.",
+    promptSnippet: "List or search GitHub PRs",
     parameters: Type.Object({
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+      repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
+      keywords: Type.Optional(Type.String({ description: "Search keywords (free text)" })),
       state: Type.Optional(
         Type.String({ description: "open, closed, merged, all (default: open)" }),
       ),
+      label: Type.Optional(Type.String({ description: "Filter by label" })),
+      author: Type.Optional(Type.String({ description: "Filter by author" })),
+      assignee: Type.Optional(Type.String({ description: "Filter by assignee" })),
+      milestone: Type.Optional(Type.String({ description: "Filter by milestone" })),
       limit: Type.Optional(Type.Number({ description: "Max results (default 30)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      const { repo, state, limit } = params;
-      const args = ["pr", "list", ...repoArgs(repo)];
-      if (state) args.push("--state", state);
-      if (limit) args.push("--limit", String(limit));
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));
+      return toToolResult(await listGithub("pr", params, { cwd: ctx.cwd, signal, input: params }));
     },
   });
 
@@ -1170,54 +1223,6 @@ export default function (pi: ExtensionAPI) {
         ],
         details: { exitCode: 0 },
       };
-    },
-  });
-
-  // ── search-github-issues ───────────────────────────────────────────────────
-  pi.registerTool({
-    name: "search-github-issues",
-    label: "GitHub Issue Search",
-    description: "Search GitHub issues using GitHub search syntax.",
-    promptSnippet: "Search GitHub issues",
-    parameters: Type.Object({
-      query: Type.String({
-        description:
-          "GitHub search syntax (e.g. 'repo:owner/name keyword', 'is:open label:bug'). Do NOT include 'type:issue' or 'type:pr' qualifiers.",
-      }),
-      include_prs: Type.Optional(
-        Type.Boolean({
-          description: "Whether to include pull requests in results (default: false)",
-        }),
-      ),
-      limit: Type.Optional(Type.Number({ description: "Max results (default 20)" })),
-    }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      const { query, include_prs, limit } = params;
-      const args = ["search", "issues", query];
-      if (include_prs) args.push("--include-prs");
-      if (limit) args.push("--limit", String(limit));
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));
-    },
-  });
-
-  // ── search-github-prs ──────────────────────────────────────────────────────
-  pi.registerTool({
-    name: "search-github-prs",
-    label: "GitHub PR Search",
-    description: "Search GitHub pull requests using GitHub search syntax.",
-    promptSnippet: "Search GitHub PRs",
-    parameters: Type.Object({
-      query: Type.String({
-        description:
-          "GitHub search syntax (e.g. 'repo:owner/name keyword', 'is:open label:bug'). Do NOT include 'type:issue' or 'type:pr' qualifiers.",
-      }),
-      limit: Type.Optional(Type.Number({ description: "Max results (default 20)" })),
-    }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      const { query, limit } = params;
-      const args = ["search", "prs", query];
-      if (limit) args.push("--limit", String(limit));
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));
     },
   });
 }
