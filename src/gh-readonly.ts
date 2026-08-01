@@ -1235,7 +1235,7 @@ export default function (pi: ExtensionAPI) {
         limit?: number;
       };
       const args = ["search", "issues", query];
-      if (!include_prs) args.push("--type", "issue");
+      if (include_prs) args.push("--include-prs");
       if (limit) args.push("--limit", String(limit));
       return toToolResult(await ghExec(pi, args, { cwd: ctx.cwd, signal }));
     },
