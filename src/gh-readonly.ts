@@ -119,17 +119,29 @@ function execGh(
   });
 }
 
+/** Result of a gh invocation. On failure, `args` carries the full raw command input for debugging. */
+export interface GhExecResult {
+  ok: boolean;
+  stdout: string;
+  error: string | null;
+  args: string[];
+}
+
 async function ghExec(
   pi: ExtensionAPI,
   args: string[],
   ctx: { cwd?: string; signal?: AbortSignal },
-): Promise<string> {
+): Promise<GhExecResult> {
   const result = await execGh(pi, args, ctx);
   if (result.code !== 0) {
-    const msg = result.combined.trim() || `exit code ${result.code}`;
-    throw new Error(`gh ${args.slice(0, 2).join(" ")} failed: ${msg}`);
+    return {
+      ok: false,
+      stdout: "",
+      error: result.combined.trim() || `exit code ${result.code}`,
+      args,
+    };
   }
-  return result.stdout;
+  return { ok: true, stdout: result.stdout, error: null, args };
 }
 
 function repoArgs(repo?: string): string[] {
@@ -156,6 +168,26 @@ function truncate(
     bytes += lineBytes;
   }
   return { text: out.join("\n"), truncated: true };
+}
+
+/**
+ * Convert a gh invocation result into a tool result.
+ *
+ * On failure, returns the error text as content and includes the raw command
+ * input (`args`) in `details` so the user can debug what the model actually ran.
+ */
+function toToolResult(res: GhExecResult): {
+  content: Array<{ type: "text"; text: string }>;
+  details: Record<string, unknown>;
+} {
+  if (!res.ok) {
+    return {
+      content: [{ type: "text", text: `gh ${res.args.join(" ")} failed: ${res.error}` }],
+      details: { error: res.error, args: res.args },
+    };
+  }
+  const { text, truncated } = truncate(res.stdout);
+  return { content: [{ type: "text", text }], details: { truncated } };
 }
 
 // ── CI helpers ───────────────────────────────────────────────────────────────
@@ -188,7 +220,7 @@ export function stepsDetail(
 }
 
 /** In-flight dedup map to avoid concurrent fetches of the same log. */
-const inflightLogs = new Map<string, Promise<string>>();
+const inflightLogs = new Map<string, Promise<GhExecResult & { log?: string }>>();
 
 async function getJobLog(
   pi: ExtensionAPI,
@@ -197,7 +229,7 @@ async function getJobLog(
   effectiveRepo: string,
   signal: AbortSignal | undefined,
   cwd: string | undefined,
-): Promise<string> {
+): Promise<GhExecResult & { log?: string }> {
   const cacheDir = join(homedir(), ".cache", "pi", "ci-logs", runId);
   const cacheFile = join(cacheDir, `${jobId}.log`);
   const key = `${runId}:${jobId}`;
@@ -206,27 +238,28 @@ async function getJobLog(
   const inflight = inflightLogs.get(key);
   if (inflight) return inflight;
 
-  const fetchAndCache = async (): Promise<string> => {
+  const fetchAndCache = async (): Promise<GhExecResult & { log?: string }> => {
     // Check file cache
     try {
       const cached = await readFile(cacheFile, "utf-8");
-      return cached;
+      return { ok: true, stdout: cached, error: null, args: [], log: cached };
     } catch {
       // Not cached, fetch from GitHub
     }
 
-    const rawLog = await ghExec(pi, ["api", `/repos/${effectiveRepo}/actions/jobs/${jobId}/logs`], {
+    const res = await ghExec(pi, ["api", `/repos/${effectiveRepo}/actions/jobs/${jobId}/logs`], {
       cwd,
       signal,
     });
+    if (!res.ok) return res;
 
     // Write to cache
     await mkdir(cacheDir, { recursive: true });
     await withFileMutationQueue(cacheFile, async () => {
-      await writeFile(cacheFile, rawLog);
+      await writeFile(cacheFile, res.stdout);
     });
 
-    return rawLog;
+    return { ...res, log: res.stdout };
   };
 
   const promise = fetchAndCache();
@@ -243,10 +276,11 @@ async function resolveRepo(
   repo: string | undefined,
   signal: AbortSignal | undefined,
   cwd: string | undefined,
-): Promise<string> {
-  if (repo) return repo;
-  const result = await ghExec(pi, ["repo", "view", "--json", "nameWithOwner"], { cwd, signal });
-  return JSON.parse(result).nameWithOwner;
+): Promise<GhExecResult & { repo?: string }> {
+  if (repo) return { ok: true, stdout: "", error: null, args: [], repo };
+  const res = await ghExec(pi, ["repo", "view", "--json", "nameWithOwner"], { cwd, signal });
+  if (!res.ok) return res;
+  return { ...res, repo: JSON.parse(res.stdout).nameWithOwner };
 }
 
 export function statusIcon(conclusion: string | null): string {
@@ -367,23 +401,20 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params as { number: number | string; repo?: string };
-      const out = await ghExec(
-        pi,
-        [
-          "issue",
-          "view",
-          String(number),
-          ...repoArgs(repo),
-          "--json",
-          "title,state,body,author,createdAt,updatedAt,closedAt,url,labels,assignees,comments,milestone,number",
-        ],
-        { cwd: ctx.cwd, signal },
+      return toToolResult(
+        await ghExec(
+          pi,
+          [
+            "issue",
+            "view",
+            String(number),
+            ...repoArgs(repo),
+            "--json",
+            "title,state,body,author,createdAt,updatedAt,closedAt,url,labels,assignees,comments,milestone,number",
+          ],
+          { cwd: ctx.cwd, signal },
+        ),
       );
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
     },
   });
 
@@ -403,12 +434,7 @@ export default function (pi: ExtensionAPI) {
       const args = ["issue", "list", ...repoArgs(repo)];
       if (state) args.push("--state", state);
       if (limit) args.push("--limit", String(limit));
-      const out = await ghExec(pi, args, { cwd: ctx.cwd, signal });
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
+      return toToolResult(await ghExec(pi, args, { cwd: ctx.cwd, signal }));
     },
   });
 
@@ -424,23 +450,20 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params as { number: number | string; repo?: string };
-      const out = await ghExec(
-        pi,
-        [
-          "pr",
-          "view",
-          String(number),
-          ...repoArgs(repo),
-          "--json",
-          "title,state,body,author,createdAt,updatedAt,mergedAt,mergedBy,headRefName,baseRefName,url,additions,deletions,changedFiles,labels,assignees,reviewRequests,reviews,comments,number",
-        ],
-        { cwd: ctx.cwd, signal },
+      return toToolResult(
+        await ghExec(
+          pi,
+          [
+            "pr",
+            "view",
+            String(number),
+            ...repoArgs(repo),
+            "--json",
+            "title,state,body,author,createdAt,updatedAt,mergedAt,mergedBy,headRefName,baseRefName,url,additions,deletions,changedFiles,labels,assignees,reviewRequests,reviews,comments,number",
+          ],
+          { cwd: ctx.cwd, signal },
+        ),
       );
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
     },
   });
 
@@ -462,12 +485,7 @@ export default function (pi: ExtensionAPI) {
       const args = ["pr", "list", ...repoArgs(repo)];
       if (state) args.push("--state", state);
       if (limit) args.push("--limit", String(limit));
-      const out = await ghExec(pi, args, { cwd: ctx.cwd, signal });
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
+      return toToolResult(await ghExec(pi, args, { cwd: ctx.cwd, signal }));
     },
   });
 
@@ -487,12 +505,7 @@ export default function (pi: ExtensionAPI) {
         repo?: string;
       };
       const args = ["pr", "diff", String(number), ...repoArgs(repo)];
-      const out = await ghExec(pi, args, { cwd: ctx.cwd, signal });
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
+      return toToolResult(await ghExec(pi, args, { cwd: ctx.cwd, signal }));
     },
   });
 
@@ -508,15 +521,12 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params as { number: number | string; repo?: string };
-      const out = await ghExec(pi, ["pr", "checks", String(number), ...repoArgs(repo)], {
-        cwd: ctx.cwd,
-        signal,
-      });
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
+      return toToolResult(
+        await ghExec(pi, ["pr", "checks", String(number), ...repoArgs(repo)], {
+          cwd: ctx.cwd,
+          signal,
+        }),
+      );
     },
   });
 
@@ -545,21 +555,24 @@ export default function (pi: ExtensionAPI) {
       };
       let out: string;
       if (reviews) {
-        const effectiveRepo = await resolveRepo(pi, repo, signal, ctx.cwd);
+        const resolved = await resolveRepo(pi, repo, signal, ctx.cwd);
+        if (!resolved.ok) return toToolResult(resolved);
 
-        const [commentsRaw, reviewsRaw] = await Promise.all([
-          ghExec(pi, ["api", `/repos/${effectiveRepo}/pulls/${String(number)}/comments`], {
+        const [commentsRes, reviewsRes] = await Promise.all([
+          ghExec(pi, ["api", `/repos/${resolved.repo!}/pulls/${String(number)}/comments`], {
             cwd: ctx.cwd,
             signal,
           }),
-          ghExec(pi, ["api", `/repos/${effectiveRepo}/pulls/${String(number)}/reviews`], {
+          ghExec(pi, ["api", `/repos/${resolved.repo!}/pulls/${String(number)}/reviews`], {
             cwd: ctx.cwd,
             signal,
           }),
         ]);
+        if (!commentsRes.ok) return toToolResult(commentsRes);
+        if (!reviewsRes.ok) return toToolResult(reviewsRes);
 
-        const reviewComments = JSON.parse(commentsRaw);
-        const reviewSummaries = JSON.parse(reviewsRaw);
+        const reviewComments = JSON.parse(commentsRes.stdout);
+        const reviewSummaries = JSON.parse(reviewsRes.stdout);
 
         out = JSON.stringify(
           {
@@ -570,7 +583,7 @@ export default function (pi: ExtensionAPI) {
           2,
         );
       } else {
-        out = await ghExec(
+        const res = await ghExec(
           pi,
           ["pr", "view", String(number), ...repoArgs(repo), "--json", "comments"],
           {
@@ -578,6 +591,8 @@ export default function (pi: ExtensionAPI) {
             signal,
           },
         );
+        if (!res.ok) return toToolResult(res);
+        out = res.stdout;
       }
       const { text, truncated } = truncate(out);
       return {
@@ -599,16 +614,13 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params as { number: number | string; repo?: string };
-      const out = await ghExec(
-        pi,
-        ["issue", "view", String(number), ...repoArgs(repo), "--json", "comments"],
-        { cwd: ctx.cwd, signal },
+      return toToolResult(
+        await ghExec(
+          pi,
+          ["issue", "view", String(number), ...repoArgs(repo), "--json", "comments"],
+          { cwd: ctx.cwd, signal },
+        ),
       );
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
     },
   });
 
@@ -637,12 +649,7 @@ export default function (pi: ExtensionAPI) {
       if (limit) args.push("--limit", String(limit));
       if (status) args.push("--status", status);
       if (workflow) args.push("--workflow", workflow);
-      const out = await ghExec(pi, args, { cwd: ctx.cwd, signal });
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
+      return toToolResult(await ghExec(pi, args, { cwd: ctx.cwd, signal }));
     },
   });
 
@@ -693,14 +700,16 @@ export default function (pi: ExtensionAPI) {
 
       // ── Fetch specific step logs ───────────────────────────────────────
       if (step !== undefined && step !== null) {
-        const effectiveRepo = await resolveRepo(pi, repo, signal, ctx.cwd);
+        const resolved = await resolveRepo(pi, repo, signal, ctx.cwd);
+        if (!resolved.ok) return toToolResult(resolved);
 
-        const jobsResult = await ghExec(
+        const jobsRes = await ghExec(
           pi,
-          ["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`],
+          ["api", `/repos/${resolved.repo!}/actions/runs/${run_id}/jobs`],
           { cwd: ctx.cwd, signal },
         );
-        const { jobs } = JSON.parse(jobsResult) as {
+        if (!jobsRes.ok) return toToolResult(jobsRes);
+        const { jobs } = JSON.parse(jobsRes.stdout) as {
           jobs: Array<{
             id: number;
             name: string;
@@ -795,14 +804,16 @@ export default function (pi: ExtensionAPI) {
           details: {},
         });
 
-        const rawLog = await getJobLog(
+        const logRes = await getJobLog(
           pi,
           String(run_id),
           targetJob.id,
-          effectiveRepo,
+          resolved.repo!,
           signal,
           ctx.cwd,
         );
+        if (!logRes.ok) return toToolResult(logRes);
+        const rawLog = logRes.log!;
 
         const stepLog = extractStepFromLog(rawLog, stepNum, targetJob.steps);
         if (stepLog === null) {
@@ -880,14 +891,16 @@ export default function (pi: ExtensionAPI) {
         details: {},
       });
 
-      const effectiveRepo = await resolveRepo(pi, repo, signal, ctx.cwd);
+      const resolved = await resolveRepo(pi, repo, signal, ctx.cwd);
+      if (!resolved.ok) return toToolResult(resolved);
 
-      const jobsResult = await ghExec(
+      const jobsRes = await ghExec(
         pi,
-        ["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`],
+        ["api", `/repos/${resolved.repo!}/actions/runs/${run_id}/jobs`],
         { cwd: ctx.cwd, signal },
       );
-      const { jobs } = JSON.parse(jobsResult) as {
+      if (!jobsRes.ok) return toToolResult(jobsRes);
+      const { jobs } = JSON.parse(jobsRes.stdout) as {
         jobs: Array<{
           id: number;
           name: string;
@@ -961,7 +974,15 @@ export default function (pi: ExtensionAPI) {
         if (failedSteps.length === 0) continue;
 
         try {
-          const rawLog = await getJobLog(pi, String(run_id), j.id, effectiveRepo, signal, ctx.cwd);
+          const logRes = await getJobLog(pi, String(run_id), j.id, resolved.repo!, signal, ctx.cwd);
+          if (!logRes.ok) {
+            contents.push({
+              type: "text",
+              text: `\n⚠️ Could not auto-fetch logs for ${j.name}: gh ${logRes.args.join(" ")} failed: ${logRes.error}`,
+            });
+            continue;
+          }
+          const rawLog = logRes.log!;
 
           for (const fs of failedSteps) {
             if (fetchedCount >= maxFailed) break;
@@ -1026,16 +1047,14 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { run_id, repo } = params as { run_id: number | string; repo?: string };
-      const effectiveRepo = await resolveRepo(pi, repo, signal, ctx.cwd);
-      const out = await ghExec(pi, ["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`], {
-        cwd: ctx.cwd,
-        signal,
-      });
-      const { text, truncated: tr } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated: tr },
-      };
+      const resolved = await resolveRepo(pi, repo, signal, ctx.cwd);
+      if (!resolved.ok) return toToolResult(resolved);
+      return toToolResult(
+        await ghExec(pi, ["api", `/repos/${resolved.repo!}/actions/runs/${run_id}/jobs`], {
+          cwd: ctx.cwd,
+          signal,
+        }),
+      );
     },
   });
 
@@ -1052,12 +1071,7 @@ export default function (pi: ExtensionAPI) {
       const { repo } = params as { repo?: string };
       const args = ["repo", "view"];
       if (repo) args.push(repo);
-      const out = await ghExec(pi, args, { cwd: ctx.cwd, signal });
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
+      return toToolResult(await ghExec(pi, args, { cwd: ctx.cwd, signal }));
     },
   });
 
@@ -1075,12 +1089,7 @@ export default function (pi: ExtensionAPI) {
       const { repo, limit } = params as { repo?: string; limit?: number };
       const args = ["release", "list", ...repoArgs(repo)];
       if (limit) args.push("--limit", String(limit));
-      const out = await ghExec(pi, args, { cwd: ctx.cwd, signal });
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
+      return toToolResult(await ghExec(pi, args, { cwd: ctx.cwd, signal }));
     },
   });
 
@@ -1096,15 +1105,12 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { tag, repo } = params as { tag: string; repo?: string };
-      const out = await ghExec(pi, ["release", "view", tag, ...repoArgs(repo)], {
-        cwd: ctx.cwd,
-        signal,
-      });
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
+      return toToolResult(
+        await ghExec(pi, ["release", "view", tag, ...repoArgs(repo)], {
+          cwd: ctx.cwd,
+          signal,
+        }),
+      );
     },
   });
 
@@ -1231,12 +1237,7 @@ export default function (pi: ExtensionAPI) {
       const args = ["search", "issues", query];
       if (!include_prs) args.push("--type", "issue");
       if (limit) args.push("--limit", String(limit));
-      const out = await ghExec(pi, args, { cwd: ctx.cwd, signal });
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
+      return toToolResult(await ghExec(pi, args, { cwd: ctx.cwd, signal }));
     },
   });
 
@@ -1257,12 +1258,7 @@ export default function (pi: ExtensionAPI) {
       const { query, limit } = params as { query: string; limit?: number };
       const args = ["search", "prs", query];
       if (limit) args.push("--limit", String(limit));
-      const out = await ghExec(pi, args, { cwd: ctx.cwd, signal });
-      const { text, truncated } = truncate(out);
-      return {
-        content: [{ type: "text", text }],
-        details: { truncated },
-      };
+      return toToolResult(await ghExec(pi, args, { cwd: ctx.cwd, signal }));
     },
   });
 }
