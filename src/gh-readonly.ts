@@ -141,6 +141,60 @@ export class GhError extends Error {
   }
 }
 
+/** How long `read-github-pr-status` waits for pending checks to resolve. */
+const POLL_INTERVAL_MS = 30_000;
+const POLL_TIMEOUT_MS = 30 * 60_000;
+
+/** Sleep for `ms`, resolving early if `signal` is aborted. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Poll a `gh pr checks` query until it reaches a final state.
+ *
+ * `gh pr checks` exit codes: 0 = all passed, 1 = some failed, 8 = some pending.
+ * Pending (8) is polled every `intervalMs` until `timeoutMs` elapses, at which
+ * point the current result is returned as-is. Any other code is returned
+ * immediately; the caller decides whether it is an error.
+ */
+export async function pollChecksResult<R extends { code: number; stdout: string }>(
+  query: () => Promise<R>,
+  opts: { signal?: AbortSignal; intervalMs?: number; timeoutMs?: number } = {},
+): Promise<R> {
+  const { signal, intervalMs = POLL_INTERVAL_MS, timeoutMs = POLL_TIMEOUT_MS } = opts;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (signal?.aborted) {
+      throw new Error("read-github-pr-status aborted");
+    }
+    const result = await query();
+    if (result.code !== 8) {
+      // 0 = all passed, 1 = some failed, anything else is a real error
+      return result;
+    }
+    // Still pending — keep waiting unless the overall timeout expired
+    if (Date.now() >= deadline) {
+      return result;
+    }
+    await sleep(intervalMs, signal);
+  }
+}
+
 /** Run `gh` and return stdout. On non-zero exit, throws a `GhError` carrying the toolcall input and raw command. */
 async function ghExec(
   args: string[],
@@ -592,13 +646,18 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params;
-      return toToolResult(
-        await ghExec(["pr", "checks", String(number), ...repoArgs(repo)], {
-          cwd: ctx.cwd,
-          signal,
-          input: params,
-        }),
-      );
+      const args = ["pr", "checks", String(number), ...repoArgs(repo)];
+
+      // Pending is not an error — poll until checks fail or all pass.
+      const final = await pollChecksResult(() => runGh(args, { cwd: ctx.cwd, signal }), {
+        signal,
+      });
+
+      if (final.code !== 0 && final.code !== 1 && final.code !== 8) {
+        // Anything else is a real error (cancelled, auth, network, ...)
+        throw new GhError(args, final, params);
+      }
+      return toToolResult(final.stdout);
     },
   });
 
