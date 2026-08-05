@@ -1,0 +1,500 @@
+﻿2026-08-05T16:39:46.3432869Z Current runner version: '2.336.0'
+2026-08-05T16:39:46.3458094Z ##[group]Runner Image Provisioner
+2026-08-05T16:39:46.3459230Z Hosted Compute Agent
+2026-08-05T16:39:46.3460021Z Version: 20260729.566
+2026-08-05T16:39:46.3460862Z Commit: cf7153fe6e25b664e8693c24944bf2b00355d109
+2026-08-05T16:39:46.3461949Z Build Date: 2026-07-29T19:17:02Z
+2026-08-05T16:39:46.3462971Z Worker ID: {9904fd49-1508-4c67-b0f5-c9d370237b3c}
+2026-08-05T16:39:46.3463992Z Azure Region: eastus2
+2026-08-05T16:39:46.3464793Z ##[endgroup]
+2026-08-05T16:39:46.3466461Z ##[group]Operating System
+2026-08-05T16:39:46.3467305Z Microsoft Windows Server 2022
+2026-08-05T16:39:46.3468117Z 10.0.20348
+2026-08-05T16:39:46.3468797Z Datacenter
+2026-08-05T16:39:46.3469540Z ##[endgroup]
+2026-08-05T16:39:46.3470250Z ##[group]Runner Image
+2026-08-05T16:39:46.3470998Z Image: windows-2022
+2026-08-05T16:39:46.3471751Z Version: 20260802.262.1
+2026-08-05T16:39:46.3473811Z Included Software: https://github.com/actions/runner-images/blob/win22/20260802.262/images/windows/Windows2022-Readme.md
+2026-08-05T16:39:46.3476154Z Image Release: https://github.com/actions/runner-images/releases/tag/win22%2F20260802.262
+2026-08-05T16:39:46.3477543Z ##[endgroup]
+2026-08-05T16:39:46.3479209Z ##[group]GITHUB_TOKEN Permissions
+2026-08-05T16:39:46.3481620Z Contents: read
+2026-08-05T16:39:46.3482413Z Metadata: read
+2026-08-05T16:39:46.3483115Z Packages: read
+2026-08-05T16:39:46.3483694Z ##[endgroup]
+2026-08-05T16:39:46.3485654Z Secret source: Actions
+2026-08-05T16:39:46.3486599Z Prepare workflow directory
+2026-08-05T16:39:46.3824144Z Prepare all required actions
+2026-08-05T16:39:46.3883439Z Getting action download info
+2026-08-05T16:39:46.5656223Z Download action repository 'actions/download-artifact@v8' (SHA:3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c)
+2026-08-05T16:39:46.8420452Z Download action repository 'astral-sh/setup-uv@v9.0.0' (SHA:c771a70e6277c0a99b617c7a806ffedaca235ff9)
+2026-08-05T16:39:47.1002007Z Download action repository 'pypa/cibuildwheel@v4.2.0' (SHA:1828c10ab37f080699c7b81cea34097c684a7074)
+2026-08-05T16:39:47.3593049Z Download action repository 'actions/upload-artifact@v7' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+2026-08-05T16:39:47.8051569Z Getting action download info
+2026-08-05T16:39:47.9019935Z Download action repository 'actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97' (SHA:5fda3b95a4ea91299a34e894583c3862153e4b97)
+2026-08-05T16:39:48.2703043Z Uses: trim21/winflexbison-py/.github/workflows/_build_wheel.yaml@refs/pull/10/merge (c7c34c7428cdb1f72a9292b91c47e94dc7db8612)
+2026-08-05T16:39:48.2707471Z Complete job name: wheels / wheel (windows-2022, AMD64)
+2026-08-05T16:39:48.3976165Z ##[group]Run actions/download-artifact@v8
+2026-08-05T16:39:48.3977120Z with:
+2026-08-05T16:39:48.3977481Z   name: wheels-sdist
+2026-08-05T16:39:48.3977842Z   path: dist
+2026-08-05T16:39:48.3978195Z   merge-multiple: false
+2026-08-05T16:39:48.3978596Z   repository: trim21/winflexbison-py
+2026-08-05T16:39:48.3979013Z   run-id: 31026281019
+2026-08-05T16:39:48.3979414Z   skip-decompress: false
+2026-08-05T16:39:48.3979798Z   digest-mismatch: error
+2026-08-05T16:39:48.3980425Z ##[endgroup]
+2026-08-05T16:39:48.5897366Z Downloading single artifact
+2026-08-05T16:39:48.6909355Z Preparing to download the following artifacts:
+2026-08-05T16:39:48.6910823Z - wheels-sdist (ID: 8938744279, Size: 1491869, Expected Digest: sha256:a642258ca45e608cfb2ce437d13af5a23330927cd0425342f5fe9ccbb768cb7b)
+2026-08-05T16:39:48.8552132Z Redirecting to blob download url: https://productionresultssa17.blob.core.windows.net/actions-results/88d25644-942c-4dba-a007-cde30e085709/workflow-job-run-b2123ecc-7076-59cb-8aa4-c80d9230bd3a/artifacts/022d928e3ac6ac5377d9f1efe2ea75e7e379e937f792677ecaaa2f16de25fb65.zip
+2026-08-05T16:39:48.8553702Z Starting download of artifact to: D:\a\winflexbison-py\winflexbison-py\dist
+2026-08-05T16:39:48.8997781Z (node:5692) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2026-08-05T16:39:48.9002942Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-05T16:39:48.9397418Z SHA256 digest of downloaded artifact is a642258ca45e608cfb2ce437d13af5a23330927cd0425342f5fe9ccbb768cb7b
+2026-08-05T16:39:48.9398237Z Artifact download completed successfully.
+2026-08-05T16:39:48.9398713Z Total of 1 artifact(s) downloaded
+2026-08-05T16:39:48.9403146Z Download artifact has finished successfully
+2026-08-05T16:39:48.9708708Z ##[group]Run mkdir -p package
+2026-08-05T16:39:48.9709345Z [36;1mmkdir -p package[0m
+2026-08-05T16:39:48.9709798Z [36;1mmv dist/*.tar.gz winflexbison.tar.gz[0m
+2026-08-05T16:39:48.9727893Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-05T16:39:48.9728489Z ##[endgroup]
+2026-08-05T16:39:49.6924408Z ##[group]Run astral-sh/setup-uv@v9.0.0
+2026-08-05T16:39:49.6924848Z with:
+2026-08-05T16:39:49.6925117Z   activate-environment: false
+2026-08-05T16:39:49.6925454Z   no-project: false
+2026-08-05T16:39:49.6925800Z   working-directory: D:\a\winflexbison-py\winflexbison-py
+2026-08-05T16:39:49.6928426Z   github-token: ***
+2026-08-05T16:39:49.6928684Z   enable-cache: auto
+2026-08-05T16:39:49.6929325Z   cache-dependency-glob: **/*requirements*.txt
+**/*requirements*.in
+**/*constraints*.txt
+**/*constraints*.in
+**/pyproject.toml
+**/uv.lock
+**/*.py.lock
+
+2026-08-05T16:39:49.6929992Z   restore-cache: true
+2026-08-05T16:39:49.6930249Z   save-cache: true
+2026-08-05T16:39:49.6930494Z   prune-cache: false
+2026-08-05T16:39:49.6930756Z   cache-python: false
+2026-08-05T16:39:49.6931047Z   ignore-nothing-to-cache: false
+2026-08-05T16:39:49.6931355Z   ignore-empty-workdir: false
+2026-08-05T16:39:49.6931665Z   download-from-astral-mirror: true
+2026-08-05T16:39:49.6932026Z   add-problem-matchers: true
+2026-08-05T16:39:49.6932303Z   quiet: false
+2026-08-05T16:39:49.6932555Z   resolution-strategy: highest
+2026-08-05T16:39:49.6932839Z ##[endgroup]
+2026-08-05T16:39:49.8723255Z Trying to find version for uv in: D:\a\winflexbison-py\winflexbison-py\uv.toml
+2026-08-05T16:39:49.8724527Z Could not find file: D:\a\winflexbison-py\winflexbison-py\uv.toml
+2026-08-05T16:39:49.8725656Z Trying to find version for uv in: D:\a\winflexbison-py\winflexbison-py\pyproject.toml
+2026-08-05T16:39:49.8726681Z Could not find file: D:\a\winflexbison-py\winflexbison-py\pyproject.toml
+2026-08-05T16:39:49.8727667Z Could not determine uv version from uv.toml or pyproject.toml. Falling back to latest.
+2026-08-05T16:39:49.8729572Z Fetching manifest data from https://raw.githubusercontent.com/astral-sh/versions/main/v1/uv.ndjson ...
+2026-08-05T16:39:49.9359798Z Downloading uv from "https://releases.astral.sh/github/uv/releases/download/0.12.1/uv-x86_64-pc-windows-msvc.zip" ...
+2026-08-05T16:39:50.9184816Z [command]C:\Windows\system32\tar.exe x -C D:\a\_temp\8855299a-5d22-4da4-a615-3da39252f377 -f D:\a\_temp\eb3a95d3-1018-4908-acde-cfa2dd3b44fc
+2026-08-05T16:39:51.3785132Z Set UV_TOOL_BIN_DIR to D:\a\_temp\uv-tool-bin-dir
+2026-08-05T16:39:51.3789323Z Added D:\a\_temp\uv-tool-bin-dir to the path
+2026-08-05T16:39:51.3796717Z Added C:\hostedtoolcache\windows\uv\0.12.1\x86_64 to the path
+2026-08-05T16:39:51.3799227Z Set UV_TOOL_DIR to D:\a\_temp\uv-tool-dir
+2026-08-05T16:39:51.3801957Z Set UV_PYTHON_INSTALL_DIR to D:\a\_temp\uv-python-dir
+2026-08-05T16:39:51.3804311Z Added D:\a\_temp\uv-python-dir to the path
+2026-08-05T16:39:51.3910708Z Set UV_CACHE_DIR to D:\a\_temp\setup-uv-cache
+2026-08-05T16:39:51.3911112Z Successfully installed uv version 0.12.1
+2026-08-05T16:39:52.4859308Z Searching files using cache dependency glob: D:\a\winflexbison-py\winflexbison-py\**\*requirements*.txt,D:\a\winflexbison-py\winflexbison-py\**\*requirements*.in,D:\a\winflexbison-py\winflexbison-py\**\*constraints*.txt,D:\a\winflexbison-py\winflexbison-py\**\*constraints*.in,D:\a\winflexbison-py\winflexbison-py\**\pyproject.toml,D:\a\winflexbison-py\winflexbison-py\**\uv.lock,D:\a\winflexbison-py\winflexbison-py\**\*.py.lock
+2026-08-05T16:39:52.4938568Z No matches found for glob
+2026-08-05T16:39:52.4983464Z ##[warning]No file matched to [D:\a\winflexbison-py\winflexbison-py\**\*requirements*.txt,D:\a\winflexbison-py\winflexbison-py\**\*requirements*.in,D:\a\winflexbison-py\winflexbison-py\**\*constraints*.txt,D:\a\winflexbison-py\winflexbison-py\**\*constraints*.in,D:\a\winflexbison-py\winflexbison-py\**\pyproject.toml,D:\a\winflexbison-py\winflexbison-py\**\uv.lock,D:\a\winflexbison-py\winflexbison-py\**\*.py.lock]. The cache will never get invalidated. Make sure you have checked out the target repository and configured the cache-dependency-glob input correctly.
+2026-08-05T16:39:52.5105726Z Trying to restore cache from GitHub Actions cache with key: setup-uv-2-x86_64-pc-windows-msvc-windows-2022-3.12.10-no-dependency-glob
+2026-08-05T16:39:52.6931224Z Cache hit for: setup-uv-2-x86_64-pc-windows-msvc-windows-2022-3.12.10-no-dependency-glob
+2026-08-05T16:39:52.9924741Z Received 41789268 of 41789268 (100.0%), 146.0 MBs/sec
+2026-08-05T16:39:52.9926518Z Cache Size: ~40 MB (41789268 B)
+2026-08-05T16:39:53.0046885Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/a6e79ec0-910f-4909-b9e6-7d451f826c1a/cache.tzst -P -C D:/a/winflexbison-py/winflexbison-py --force-local --use-compress-program "zstd -d"
+2026-08-05T16:39:53.9246493Z Cache restored successfully
+2026-08-05T16:39:53.9277210Z cache restored from GitHub Actions cache with key: setup-uv-2-x86_64-pc-windows-msvc-windows-2022-3.12.10-no-dependency-glob
+2026-08-05T16:39:54.0805767Z ##[group]Run pypa/cibuildwheel@v4.2.0
+2026-08-05T16:39:54.0806143Z with:
+2026-08-05T16:39:54.0806364Z   package-dir: winflexbison.tar.gz
+2026-08-05T16:39:54.0806647Z   output-dir: wheelhouse
+2026-08-05T16:39:54.0806868Z env:
+2026-08-05T16:39:54.0807101Z   UV_TOOL_BIN_DIR: D:\a\_temp\uv-tool-bin-dir
+2026-08-05T16:39:54.0807397Z   UV_TOOL_DIR: D:\a\_temp\uv-tool-dir
+2026-08-05T16:39:54.0807689Z   UV_PYTHON_INSTALL_DIR: D:\a\_temp\uv-python-dir
+2026-08-05T16:39:54.0808001Z   UV_CACHE_DIR: D:\a\_temp\setup-uv-cache
+2026-08-05T16:39:54.0808269Z   CIBW_BUILD: cp310-*
+2026-08-05T16:39:54.0808483Z   CIBW_ARCHS: AMD64
+2026-08-05T16:39:54.0808719Z ##[endgroup]
+2026-08-05T16:39:54.0865832Z ##[start-action display=Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97;id=__pypa_cibuildwheel.python]
+2026-08-05T16:39:54.1029020Z ##[group]Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+2026-08-05T16:39:54.1029404Z with:
+2026-08-05T16:39:54.1029649Z   python-version: 3.11 - 3.14
+2026-08-05T16:39:54.1029911Z   update-environment: false
+2026-08-05T16:39:54.1030140Z   check-latest: false
+2026-08-05T16:39:54.1032459Z   token: ***
+2026-08-05T16:39:54.1032659Z   allow-prereleases: false
+2026-08-05T16:39:54.1032901Z   freethreaded: false
+2026-08-05T16:39:54.1033100Z env:
+2026-08-05T16:39:54.1033306Z   UV_TOOL_BIN_DIR: D:\a\_temp\uv-tool-bin-dir
+2026-08-05T16:39:54.1033596Z   UV_TOOL_DIR: D:\a\_temp\uv-tool-dir
+2026-08-05T16:39:54.1033900Z   UV_PYTHON_INSTALL_DIR: D:\a\_temp\uv-python-dir
+2026-08-05T16:39:54.1034196Z   UV_CACHE_DIR: D:\a\_temp\setup-uv-cache
+2026-08-05T16:39:54.1034452Z   CIBW_BUILD: cp310-*
+2026-08-05T16:39:54.1034664Z   CIBW_ARCHS: AMD64
+2026-08-05T16:39:54.1034858Z ##[endgroup]
+2026-08-05T16:39:54.2411886Z ##[group]Installed versions
+2026-08-05T16:39:54.2471547Z Successfully set up CPython (3.14.6)
+2026-08-05T16:39:54.2472347Z ##[endgroup]
+2026-08-05T16:39:54.2587338Z ##[end-action id=__pypa_cibuildwheel.python;outcome=success;conclusion=success;duration_ms=172]
+2026-08-05T16:39:54.2594809Z ##[start-action display=Run # Install cibuildwheel and build the command line;id=__pypa_cibuildwheel.cibw]
+2026-08-05T16:39:54.2694681Z ##[group]Run # Install cibuildwheel and build the command line
+2026-08-05T16:39:54.2695173Z [36;1m# Install cibuildwheel and build the command line[0m
+2026-08-05T16:39:54.2695501Z [36;1m"$PYTHON" -u << "EOF"[0m
+2026-08-05T16:39:54.2695736Z [36;1mimport os[0m
+2026-08-05T16:39:54.2696102Z [36;1mimport shlex[0m
+2026-08-05T16:39:54.2696308Z [36;1mimport shutil[0m
+2026-08-05T16:39:54.2696516Z [36;1mimport sys[0m
+2026-08-05T16:39:54.2696709Z [36;1mimport venv[0m
+2026-08-05T16:39:54.2696904Z [36;1m[0m
+2026-08-05T16:39:54.2697097Z [36;1mfrom pathlib import Path[0m
+2026-08-05T16:39:54.2697367Z [36;1mfrom subprocess import run[0m
+2026-08-05T16:39:54.2697604Z [36;1m[0m
+2026-08-05T16:39:54.2697977Z [36;1mEXTRAS = set(e.strip() for e in os.environ.get("INPUT_EXTRAS", "").split(",") if e.strip())[0m
+2026-08-05T16:39:54.2698422Z [36;1m[0m
+2026-08-05T16:39:54.2698596Z [36;1m[0m
+2026-08-05T16:39:54.2698804Z [36;1mclass EnvBuilder(venv.EnvBuilder):[0m
+2026-08-05T16:39:54.2699080Z [36;1m    def __init__(self):[0m
+2026-08-05T16:39:54.2699338Z [36;1m        super().__init__()[0m
+2026-08-05T16:39:54.2699569Z [36;1m[0m
+2026-08-05T16:39:54.2699770Z [36;1m    def setup_scripts(self, context):[0m
+2026-08-05T16:39:54.2700051Z [36;1m        pass[0m
+2026-08-05T16:39:54.2700252Z [36;1m[0m
+2026-08-05T16:39:54.2700447Z [36;1m    def post_setup(self, context):[0m
+2026-08-05T16:39:54.2700731Z [36;1m        super().post_setup(context)[0m
+2026-08-05T16:39:54.2701057Z [36;1m        self.bin_path = Path(context.env_exe).parent[0m
+2026-08-05T16:39:54.2701418Z [36;1m        install_spec = os.environ["GITHUB_ACTION_PATH"][0m
+2026-08-05T16:39:54.2701728Z [36;1m        if EXTRAS:[0m
+2026-08-05T16:39:54.2703732Z [36;1m            install_spec += f"[{','.join(sorted(EXTRAS))}]"[0m
+2026-08-05T16:39:54.2704405Z [36;1m        run([sys.executable, "-m", "pip", "--python", context.env_exe, "install", install_spec], check=True)[0m
+2026-08-05T16:39:54.2704900Z [36;1m[0m
+2026-08-05T16:39:54.2705074Z [36;1m[0m
+2026-08-05T16:39:54.2705287Z [36;1mprint("::group::Install cibuildwheel")[0m
+2026-08-05T16:39:54.2705640Z [36;1mvenv_path = Path(os.environ["RUNNER_TEMP"]) / "cibw"[0m
+2026-08-05T16:39:54.2705973Z [36;1mif venv_path.exists():[0m
+2026-08-05T16:39:54.2706234Z [36;1m    shutil.rmtree(venv_path)[0m
+2026-08-05T16:39:54.2706480Z [36;1m[0m
+2026-08-05T16:39:54.2706671Z [36;1mbuilder = EnvBuilder()[0m
+2026-08-05T16:39:54.2706911Z [36;1mbuilder.create(venv_path)[0m
+2026-08-05T16:39:54.2707182Z [36;1mexposed_binaries = {"cibuildwheel"}[0m
+2026-08-05T16:39:54.2707440Z [36;1m[0m
+2026-08-05T16:39:54.2707626Z [36;1mif "uv" in EXTRAS:[0m
+2026-08-05T16:39:54.2707869Z [36;1m    exposed_binaries.add("uv")[0m
+2026-08-05T16:39:54.2708263Z [36;1mclean_bin_path = builder.bin_path.parent / f"{builder.bin_path.name}.clean"[0m
+2026-08-05T16:39:54.2708676Z [36;1mclean_bin_path.mkdir()[0m
+2026-08-05T16:39:54.2708894Z [36;1m[0m
+2026-08-05T16:39:54.2709120Z [36;1mfor path in list(builder.bin_path.iterdir()):[0m
+2026-08-05T16:39:54.2709443Z [36;1m    if path.stem in exposed_binaries:[0m
+2026-08-05T16:39:54.2709709Z [36;1m        try:[0m
+2026-08-05T16:39:54.2709976Z [36;1m            os.symlink(path, clean_bin_path / path.name)[0m
+2026-08-05T16:39:54.2710294Z [36;1m        except OSError:[0m
+2026-08-05T16:39:54.2710591Z [36;1m            shutil.copy2(path, clean_bin_path / path.name)[0m
+2026-08-05T16:39:54.2710889Z [36;1m[0m
+2026-08-05T16:39:54.2711248Z [36;1mcibw_bin = [p for p in builder.bin_path.glob("cibuildwheel*") if p.stem == "cibuildwheel"][0][0m
+2026-08-05T16:39:54.2711677Z [36;1m[0m
+2026-08-05T16:39:54.2711860Z [36;1m# Build the command line[0m
+2026-08-05T16:39:54.2712180Z [36;1mcmd_args = [str(cibw_bin), os.environ["INPUT_PACKAGE_DIR"]][0m
+2026-08-05T16:39:54.2712496Z [36;1m[0m
+2026-08-05T16:39:54.2712729Z [36;1mif output_dir := os.environ.get("INPUT_OUTPUT_DIR"):[0m
+2026-08-05T16:39:54.2713078Z [36;1m    cmd_args += ["--output-dir", output_dir][0m
+2026-08-05T16:39:54.2713348Z [36;1m[0m
+2026-08-05T16:39:54.2713592Z [36;1mif config_file := os.environ.get("INPUT_CONFIG_FILE"):[0m
+2026-08-05T16:39:54.2713944Z [36;1m    cmd_args += ["--config-file", config_file][0m
+2026-08-05T16:39:54.2714218Z [36;1m[0m
+2026-08-05T16:39:54.2714550Z [36;1mif only := os.environ.get("INPUT_ONLY"):[0m
+2026-08-05T16:39:54.2714844Z [36;1m    cmd_args += ["--only", only][0m
+2026-08-05T16:39:54.2715090Z [36;1m[0m
+2026-08-05T16:39:54.2715280Z [36;1mcmd_bash = shlex.join(cmd_args)[0m
+2026-08-05T16:39:54.2715537Z [36;1m[0m
+2026-08-05T16:39:54.2715717Z [36;1mdef pwsh_quote(text):[0m
+2026-08-05T16:39:54.2716056Z [36;1m    # Wrap in single quotes and double-up any existing single quotes[0m
+2026-08-05T16:39:54.2716472Z [36;1m    return "'" + str(text).replace("'", "''") + "'"[0m
+2026-08-05T16:39:54.2716752Z [36;1m[0m
+2026-08-05T16:39:54.2717016Z [36;1m# Prepend '& ' so PowerShell executes the quoted binary path[0m
+2026-08-05T16:39:54.2717430Z [36;1mcmd_pwsh = "& " + " ".join(pwsh_quote(arg) for arg in cmd_args)[0m
+2026-08-05T16:39:54.2717747Z [36;1m[0m
+2026-08-05T16:39:54.2717980Z [36;1mwith open(os.environ["GITHUB_OUTPUT"], "at") as f:[0m
+2026-08-05T16:39:54.2718339Z [36;1m    f.write(f"prepend-path={clean_bin_path}\n")[0m
+2026-08-05T16:39:54.2718656Z [36;1m    f.write(f"cmd-bash={cmd_bash}\n")[0m
+2026-08-05T16:39:54.2718936Z [36;1m    f.write(f"cmd-pwsh={cmd_pwsh}\n")[0m
+2026-08-05T16:39:54.2719186Z [36;1m[0m
+2026-08-05T16:39:54.2719382Z [36;1mprint("::endgroup::")[0m
+2026-08-05T16:39:54.2719611Z [36;1mEOF[0m
+2026-08-05T16:39:54.2729933Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-08-05T16:39:54.2730332Z env:
+2026-08-05T16:39:54.2731120Z   UV_TOOL_BIN_DIR: D:\a\_temp\uv-tool-bin-dir
+2026-08-05T16:39:54.2731464Z   UV_TOOL_DIR: D:\a\_temp\uv-tool-dir
+2026-08-05T16:39:54.2731750Z   UV_PYTHON_INSTALL_DIR: D:\a\_temp\uv-python-dir
+2026-08-05T16:39:54.2732047Z   UV_CACHE_DIR: D:\a\_temp\setup-uv-cache
+2026-08-05T16:39:54.2732306Z   CIBW_BUILD: cp310-*
+2026-08-05T16:39:54.2732514Z   CIBW_ARCHS: AMD64
+2026-08-05T16:39:54.2732802Z   PYTHON: C:\hostedtoolcache\windows\Python\3.14.6\x64\python.exe
+2026-08-05T16:39:54.2733148Z   INPUT_PACKAGE_DIR: winflexbison.tar.gz
+2026-08-05T16:39:54.2733488Z   INPUT_OUTPUT_DIR: wheelhouse
+2026-08-05T16:39:54.2733731Z   INPUT_CONFIG_FILE: 
+2026-08-05T16:39:54.2733952Z   INPUT_ONLY: 
+2026-08-05T16:39:54.2734141Z   INPUT_EXTRAS: 
+2026-08-05T16:39:54.2734336Z ##[endgroup]
+2026-08-05T16:40:02.3259443Z ##[group]Install cibuildwheel
+2026-08-05T16:40:17.9706182Z Processing D:\a\_actions\pypa\cibuildwheel\v4.2.0
+2026-08-05T16:40:18.0352941Z   Installing build dependencies: started
+2026-08-05T16:40:21.3453831Z   Installing build dependencies: finished with status 'done'
+2026-08-05T16:40:21.3470731Z   Getting requirements to build wheel: started
+2026-08-05T16:40:21.6468059Z   Getting requirements to build wheel: finished with status 'done'
+2026-08-05T16:40:21.6497634Z   Preparing metadata (pyproject.toml): started
+2026-08-05T16:40:22.0690150Z   Preparing metadata (pyproject.toml): finished with status 'done'
+2026-08-05T16:40:22.1899694Z Collecting bashlex!=0.13 (from cibuildwheel==4.2.0)
+2026-08-05T16:40:22.2244021Z   Downloading bashlex-0.18-py2.py3-none-any.whl.metadata (1.1 kB)
+2026-08-05T16:40:22.2728081Z Collecting bracex (from cibuildwheel==4.2.0)
+2026-08-05T16:40:22.2813521Z   Downloading bracex-3.0.1-py3-none-any.whl.metadata (3.3 kB)
+2026-08-05T16:40:22.3243672Z Collecting build>=1.0.0 (from cibuildwheel==4.2.0)
+2026-08-05T16:40:22.3330304Z   Downloading build-1.5.0-py3-none-any.whl.metadata (5.7 kB)
+2026-08-05T16:40:22.3892146Z Collecting certifi (from cibuildwheel==4.2.0)
+2026-08-05T16:40:22.3976783Z   Downloading certifi-2026.7.22-py3-none-any.whl.metadata (2.5 kB)
+2026-08-05T16:40:22.4400218Z Collecting dependency-groups>=1.2 (from cibuildwheel==4.2.0)
+2026-08-05T16:40:22.4483388Z   Downloading dependency_groups-1.3.1-py3-none-any.whl.metadata (2.3 kB)
+2026-08-05T16:40:22.4971395Z Collecting filelock (from cibuildwheel==4.2.0)
+2026-08-05T16:40:22.5055448Z   Downloading filelock-3.32.2-py3-none-any.whl.metadata (2.0 kB)
+2026-08-05T16:40:22.5500243Z Collecting humanize (from cibuildwheel==4.2.0)
+2026-08-05T16:40:22.5616832Z   Downloading humanize-4.16.0-py3-none-any.whl.metadata (8.0 kB)
+2026-08-05T16:40:22.5858551Z Collecting packaging>=20.9 (from cibuildwheel==4.2.0)
+2026-08-05T16:40:22.5878043Z   Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+2026-08-05T16:40:22.6194369Z Collecting platformdirs (from cibuildwheel==4.2.0)
+2026-08-05T16:40:22.6321195Z   Downloading platformdirs-4.11.0-py3-none-any.whl.metadata (5.5 kB)
+2026-08-05T16:40:22.6700390Z Collecting pyproject_hooks (from build>=1.0.0->cibuildwheel==4.2.0)
+2026-08-05T16:40:22.6780601Z   Downloading pyproject_hooks-1.2.0-py3-none-any.whl.metadata (1.3 kB)
+2026-08-05T16:40:22.7199769Z Collecting colorama (from build>=1.0.0->cibuildwheel==4.2.0)
+2026-08-05T16:40:22.7287533Z   Downloading colorama-0.4.6-py2.py3-none-any.whl.metadata (17 kB)
+2026-08-05T16:40:22.7570088Z Downloading bashlex-0.18-py2.py3-none-any.whl (69 kB)
+2026-08-05T16:40:22.7832465Z Downloading build-1.5.0-py3-none-any.whl (26 kB)
+2026-08-05T16:40:22.8098563Z Downloading dependency_groups-1.3.1-py3-none-any.whl (8.7 kB)
+2026-08-05T16:40:22.8225304Z Using cached packaging-26.3-py3-none-any.whl (129 kB)
+2026-08-05T16:40:22.8311101Z Downloading bracex-3.0.1-py3-none-any.whl (11 kB)
+2026-08-05T16:40:22.8549260Z Downloading certifi-2026.7.22-py3-none-any.whl (136 kB)
+2026-08-05T16:40:22.8816447Z Downloading colorama-0.4.6-py2.py3-none-any.whl (25 kB)
+2026-08-05T16:40:22.9069820Z Downloading filelock-3.32.2-py3-none-any.whl (98 kB)
+2026-08-05T16:40:22.9290267Z Downloading humanize-4.16.0-py3-none-any.whl (137 kB)
+2026-08-05T16:40:22.9533516Z Downloading platformdirs-4.11.0-py3-none-any.whl (23 kB)
+2026-08-05T16:40:22.9737126Z Downloading pyproject_hooks-1.2.0-py3-none-any.whl (10 kB)
+2026-08-05T16:40:23.0381450Z Building wheels for collected packages: cibuildwheel
+2026-08-05T16:40:23.0449201Z   Building wheel for cibuildwheel (pyproject.toml): started
+2026-08-05T16:40:23.1228780Z   Building wheel for cibuildwheel (pyproject.toml): finished with status 'done'
+2026-08-05T16:40:23.1246189Z   Created wheel for cibuildwheel: filename=cibuildwheel-4.2.0-py3-none-any.whl size=166906 sha256=d77d085e8e58395f5bab212e547de65afbd8c7b5255666b52467a3a2722b25e3
+2026-08-05T16:40:23.1248121Z   Stored in directory: C:\Users\runneradmin\AppData\Local\Temp\pip-ephem-wheel-cache-9el1q6ti\wheels\6c\79\da\007432dcc8b5596fc95c7a200108d055bf41befe5537acf6be
+2026-08-05T16:40:23.1288982Z Successfully built cibuildwheel
+2026-08-05T16:40:23.1623011Z Installing collected packages: pyproject_hooks, platformdirs, packaging, humanize, filelock, colorama, certifi, bracex, bashlex, dependency-groups, build, cibuildwheel
+2026-08-05T16:40:23.7903883Z 
+2026-08-05T16:40:23.7920806Z Successfully installed bashlex-0.18 bracex-3.0.1 build-1.5.0 certifi-2026.7.22 cibuildwheel-4.2.0 colorama-0.4.6 dependency-groups-1.3.1 filelock-3.32.2 humanize-4.16.0 packaging-26.3 platformdirs-4.11.0 pyproject_hooks-1.2.0
+2026-08-05T16:40:23.9310577Z ##[endgroup]
+2026-08-05T16:40:23.9444697Z ##[end-action id=__pypa_cibuildwheel.cibw;outcome=success;conclusion=success;duration_ms=29684]
+2026-08-05T16:40:23.9449560Z ##[start-action display=Run export PATH="$CIBW_PREPEND_PATH:$PATH";id=__pypa_cibuildwheel.__run]
+2026-08-05T16:40:23.9458719Z ##[end-action id=__pypa_cibuildwheel.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-08-05T16:40:23.9461835Z ##[start-action display=Run $env:PATH = "$env:CIBW_PREPEND_PATH%3B$env:PATH";id=__pypa_cibuildwheel.__run_2]
+2026-08-05T16:40:23.9559281Z ##[group]Run $env:PATH = "$env:CIBW_PREPEND_PATH;$env:PATH"
+2026-08-05T16:40:23.9559704Z [36;1m$env:PATH = "$env:CIBW_PREPEND_PATH;$env:PATH"[0m
+2026-08-05T16:40:23.9560056Z [36;1mInvoke-Expression $env:CIBW_CMD_PWSH[0m
+2026-08-05T16:40:23.9610163Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-08-05T16:40:23.9610600Z env:
+2026-08-05T16:40:23.9610912Z   UV_TOOL_BIN_DIR: D:\a\_temp\uv-tool-bin-dir
+2026-08-05T16:40:23.9611265Z   UV_TOOL_DIR: D:\a\_temp\uv-tool-dir
+2026-08-05T16:40:23.9611825Z   UV_PYTHON_INSTALL_DIR: D:\a\_temp\uv-python-dir
+2026-08-05T16:40:23.9612194Z   UV_CACHE_DIR: D:\a\_temp\setup-uv-cache
+2026-08-05T16:40:23.9612510Z   CIBW_BUILD: cp310-*
+2026-08-05T16:40:23.9612791Z   CIBW_ARCHS: AMD64
+2026-08-05T16:40:23.9613121Z   CIBW_PREPEND_PATH: D:\a\_temp\cibw\Scripts.clean
+2026-08-05T16:40:23.9613715Z   CIBW_CMD_PWSH: & 'D:\a\_temp\cibw\Scripts\cibuildwheel.exe' 'winflexbison.tar.gz' '--output-dir' 'wheelhouse'
+2026-08-05T16:40:23.9614258Z ##[endgroup]
+2026-08-05T16:40:26.7740062Z 
+2026-08-05T16:40:26.7740624Z      _ _       _ _   _       _           _
+2026-08-05T16:40:26.7741084Z  ___|_| |_ _ _|_| |_| |_ _ _| |_ ___ ___| |
+2026-08-05T16:40:26.7741459Z |  _| | . | | | | | . | | | |   | -_| -_| |
+2026-08-05T16:40:26.7741814Z |___|_|___|___|_|_|___|_____|_|_|___|___|_|
+2026-08-05T16:40:26.7742103Z 
+2026-08-05T16:40:26.7742240Z cibuildwheel version 4.2.0
+2026-08-05T16:40:26.7742465Z 
+2026-08-05T16:40:26.7742587Z Build options:
+2026-08-05T16:40:26.7742913Z   platform: windows
+2026-08-05T16:40:26.8026708Z   [38;5;244mallow_empty: False[0m
+2026-08-05T16:40:26.8027225Z   architectures: AMD64[0m
+2026-08-05T16:40:26.8027541Z   build_selector: 
+2026-08-05T16:40:26.8027786Z     build_config: cp310-*
+2026-08-05T16:40:26.8028022Z     skip_config: 
+2026-08-05T16:40:26.8028233Z     requires_python: >=3.9
+2026-08-05T16:40:26.8028527Z     enable: [][0m
+2026-08-05T16:40:26.8028889Z   output_dir: D:\a\winflexbison-py\winflexbison-py\wheelhouse[0m
+2026-08-05T16:40:26.8029799Z   package_dir: C:\Users\runneradmin\AppData\Local\Temp\cibw-sdist-m8musto8\winflexbison_bin-2.5.25.2[0m
+2026-08-05T16:40:26.8030335Z   [38;5;244mtest_selector: 
+2026-08-05T16:40:26.8030607Z [38;5;244m    skip_config:[0m
+2026-08-05T16:40:26.8030870Z   [38;5;244maudit_command: 
+2026-08-05T16:40:26.8031200Z [38;5;244m    abi3audit --strict --report {abi3_wheel}[0m
+2026-08-05T16:40:26.8031562Z   [38;5;244maudit_requires: 
+2026-08-05T16:40:26.8031820Z [38;5;244m    abi3audit[0m
+2026-08-05T16:40:26.8032082Z   [38;5;244mbefore_all: [0m
+2026-08-05T16:40:26.8032348Z   [38;5;244mbefore_build: [0m
+2026-08-05T16:40:26.8032612Z   [38;5;244mbefore_test: [0m
+2026-08-05T16:40:26.8032880Z   build_frontend: build[uv][0m
+2026-08-05T16:40:26.8033160Z   [38;5;244mbuild_verbosity: 0[0m
+2026-08-05T16:40:26.8033449Z   [38;5;244mconfig_settings: [0m
+2026-08-05T16:40:26.8033749Z   [38;5;244mcontainer_engine: docker[0m
+2026-08-05T16:40:26.8034097Z   [38;5;244mdependency_constraints: pinned[0m
+2026-08-05T16:40:26.8034421Z   [38;5;244menvironment: [0m
+2026-08-05T16:40:26.8034696Z   [38;5;244mmanylinux_images: None[0m
+2026-08-05T16:40:26.8034992Z   [38;5;244mmusllinux_images: None[0m
+2026-08-05T16:40:26.8035283Z   [38;5;244mpyodide_version: None[0m
+2026-08-05T16:40:26.8035710Z   [38;5;244mrepair_command: delvewheel repair -w {dest_dir} -v {wheel}[0m
+2026-08-05T16:40:26.8036143Z   test_command: win_bison.exe --version[0m
+2026-08-05T16:40:26.8036451Z   [38;5;244mtest_environment: [0m
+2026-08-05T16:40:26.8036767Z   [38;5;244mtest_extras: [0m
+2026-08-05T16:40:26.8037030Z   [38;5;244mtest_groups: [0m
+2026-08-05T16:40:26.8037295Z   [38;5;244mtest_requires: [0m
+2026-08-05T16:40:26.8037561Z   [38;5;244mtest_runtime: 
+2026-08-05T16:40:26.8037821Z [38;5;244m    args: ()[0m
+2026-08-05T16:40:26.8038069Z   [38;5;244mtest_sources: [0m
+2026-08-05T16:40:26.8038329Z   [38;5;244mxbuild_files: 
+2026-08-05T16:40:26.8039152Z [38;5;244m    numpy: ['numpy/_core/include/numpy/_numpyconfig.h', 'numpy/_core/include/numpy/numpyconfig.h', 'numpy/_core/lib/libnpymath.a', 'numpy/random/lib/libnpyrandom.a'][0m
+2026-08-05T16:40:26.8040487Z   [38;5;244mxbuild_tools: None[0m
+2026-08-05T16:40:26.8040656Z 
+2026-08-05T16:40:26.8040850Z Cache folder: C:\Users\runneradmin\AppData\Local\pypa\cibuildwheel\Cache
+2026-08-05T16:40:26.8041132Z 
+2026-08-05T16:40:26.8067156Z 1 build selected:
+2026-08-05T16:40:26.8067440Z cp310-win_amd64
+2026-08-05T16:40:26.8067593Z 
+2026-08-05T16:40:26.8067860Z Here we go!
+2026-08-05T16:40:26.8067972Z 
+2026-08-05T16:40:26.8090273Z 
+2026-08-05T16:40:26.8090644Z [1m[34mBuilding cp310-win_amd64 wheel[0m
+2026-08-05T16:40:26.8090988Z CPython 3.10 Windows 64bit
+2026-08-05T16:40:26.8091139Z 
+2026-08-05T16:40:26.8099417Z ##[group]Installing Python cp310...
+2026-08-05T16:40:26.8099616Z 
+2026-08-05T16:40:26.8114853Z + Download https://dist.nuget.org/win-x86-commandline/latest/nuget.exe to C:\Users\runneradmin\AppData\Local\pypa\cibuildwheel\Cache\nuget.exe
+2026-08-05T16:40:27.0831864Z + 'C:\Users\runneradmin\AppData\Local\pypa\cibuildwheel\Cache\nuget.exe' install python -Version 3.10.11 -FallbackSource https://api.nuget.org/v3/index.json -OutputDirectory 'C:\Users\runneradmin\AppData\Local\pypa\cibuildwheel\Cache\nuget-cpython'
+2026-08-05T16:40:28.7768122Z Feeds used:
+2026-08-05T16:40:28.7768541Z   https://api.nuget.org/v3/index.json
+2026-08-05T16:40:28.7768929Z   C:\Program Files (x86)\Microsoft SDKs\NuGetPackages\
+2026-08-05T16:40:28.7769369Z   https://api.nuget.org/v3/index.json
+2026-08-05T16:40:28.7769680Z 
+2026-08-05T16:40:28.8118854Z 
+2026-08-05T16:40:28.8118890Z 
+2026-08-05T16:40:28.8572434Z Attempting to gather dependency information for package 'python.3.10.11' with respect to project 'C:\Users\runneradmin\AppData\Local\pypa\cibuildwheel\Cache\nuget-cpython', targeting 'Any,Version=v0.0'
+2026-08-05T16:40:29.5013059Z Gathering dependency information took 632 ms
+2026-08-05T16:40:29.5098604Z Attempting to resolve dependencies for package 'python.3.10.11' with DependencyBehavior 'Lowest'
+2026-08-05T16:40:29.5992650Z Resolving dependency information took 0 ms
+2026-08-05T16:40:29.5993638Z Resolving actions to install package 'python.3.10.11'
+2026-08-05T16:40:29.6009157Z Resolved actions to install package 'python.3.10.11'
+2026-08-05T16:40:29.6232018Z Retrieving package 'python 3.10.11' from 'nuget.org'.
+2026-08-05T16:40:30.1557141Z   GET https://api.nuget.org/v3-flatcontainer/python/3.10.11/python.3.10.11.nupkg
+2026-08-05T16:40:30.1656394Z   OK https://api.nuget.org/v3-flatcontainer/python/3.10.11/python.3.10.11.nupkg 9ms
+2026-08-05T16:40:38.7828128Z Installed python 3.10.11 from https://api.nuget.org/v3/index.json to C:\Users\runneradmin\.nuget\packages\python\3.10.11 with content hash UxC16pkpOgvZKLGz+QYunfLnmMlPXnRiZoLen58mie9UktnWal66p7Xl8L57q2W/fvxLGz8jZmZRIIATLElDdg==.
+2026-08-05T16:40:38.7958268Z Adding package 'python.3.10.11' to folder 'C:\Users\runneradmin\AppData\Local\pypa\cibuildwheel\Cache\nuget-cpython'
+2026-08-05T16:40:41.5859712Z Added package 'python.3.10.11' to folder 'C:\Users\runneradmin\AppData\Local\pypa\cibuildwheel\Cache\nuget-cpython'
+2026-08-05T16:40:41.5869106Z Successfully installed 'python 3.10.11' to C:\Users\runneradmin\AppData\Local\pypa\cibuildwheel\Cache\nuget-cpython
+2026-08-05T16:40:41.5887008Z Executing nuget actions took 11.97 sec
+2026-08-05T16:40:41.6450903Z ##[endgroup]
+2026-08-05T16:40:41.6452462Z                                                              [32m✓ [0m14.84s
+2026-08-05T16:40:41.6453284Z ##[group]Setting up build environment...
+2026-08-05T16:40:41.6453562Z 
+2026-08-05T16:40:41.6467045Z + 'C:\hostedtoolcache\windows\uv\0.12.1\x86_64\uv.EXE' venv 'C:\Users\runneradmin\AppData\Local\Temp\cibw-run-cc3hhauo\cp310-win_amd64\build\venv' --python 'C:\Users\runneradmin\AppData\Local\pypa\cibuildwheel\Cache\nuget-cpython\python.3.10.11\tools\python.exe'
+2026-08-05T16:40:41.6675132Z Using CPython 3.10.11 interpreter at: C:\Users\runneradmin\AppData\Local\pypa\cibuildwheel\Cache\nuget-cpython\python.3.10.11\tools\python.exe
+2026-08-05T16:40:41.6676095Z Creating virtual environment at: C:\Users\runneradmin\AppData\Local\Temp\cibw-run-cc3hhauo\cp310-win_amd64\build\venv
+2026-08-05T16:40:41.6770161Z Activate with: C:\Users\runneradmin\AppData\Local\Temp\cibw-run-cc3hhauo\cp310-win_amd64\build\venv\Scripts\activate
+2026-08-05T16:40:41.6810723Z + where python
+2026-08-05T16:40:44.3585181Z C:\Users\runneradmin\AppData\Local\Temp\cibw-run-cc3hhauo\cp310-win_amd64\build\venv\Scripts\python.exe
+2026-08-05T16:40:44.3586065Z + python -V -V
+2026-08-05T16:40:44.3866903Z Python 3.10.11 (tags/v3.10.11:7d4cc5a, Apr  5 2023, 00:38:17) [MSC v.1929 64 bit (AMD64)]
+2026-08-05T16:40:44.3891390Z + python -c '"import struct; print(struct.calcsize('"'"'P'"'"') * 8)"'
+2026-08-05T16:40:44.5760906Z ##[endgroup]
+2026-08-05T16:40:44.5761780Z                                                               [32m✓ [0m2.93s
+2026-08-05T16:40:44.5762325Z ##[group]Installing build tools...
+2026-08-05T16:40:44.5762508Z 
+2026-08-05T16:40:44.5763634Z + 'C:\hostedtoolcache\windows\uv\0.12.1\x86_64\uv.EXE' pip install --python 'C:\Users\runneradmin\AppData\Local\Temp\cibw-run-cc3hhauo\cp310-win_amd64\build\venv\Scripts\python.exe' --upgrade 'build[virtualenv]' delvewheel -c file:///D:/a/_temp/cibw/Lib/site-packages/cibuildwheel/resources/constraints-python310.txt
+2026-08-05T16:40:44.8182811Z Using Python 3.10.11 environment at: C:\Users\runneradmin\AppData\Local\Temp\cibw-run-cc3hhauo\cp310-win_amd64\build\venv
+2026-08-05T16:40:44.9623255Z Resolved 13 packages in 140ms
+2026-08-05T16:40:44.9727013Z Downloading virtualenv (5.2MiB)
+2026-08-05T16:40:45.0427883Z  Downloaded virtualenv
+2026-08-05T16:40:45.0432991Z Prepared 13 packages in 80ms
+2026-08-05T16:40:45.0473879Z warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+2026-08-05T16:40:45.0475260Z          If the cache and target directories are on different filesystems, hardlinking may not be supported.
+2026-08-05T16:40:45.0477309Z          If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+2026-08-05T16:40:45.6261912Z Installed 13 packages in 582ms
+2026-08-05T16:40:45.6263640Z  + build==1.5.0
+2026-08-05T16:40:45.6264793Z  + colorama==0.4.6
+2026-08-05T16:40:45.6265850Z  + delvewheel==1.13.0
+2026-08-05T16:40:45.6266895Z  + distlib==0.4.3
+2026-08-05T16:40:45.6267702Z  + filelock==3.32.2
+2026-08-05T16:40:45.6268740Z  + packaging==26.3
+2026-08-05T16:40:45.6269792Z  + pefile==2024.8.26
+2026-08-05T16:40:45.6270825Z  + platformdirs==4.11.0
+2026-08-05T16:40:45.6271848Z  + pyproject-hooks==1.2.0
+2026-08-05T16:40:45.6272828Z  + python-discovery==1.5.1
+2026-08-05T16:40:45.6273992Z  + tomli==2.4.1
+2026-08-05T16:40:45.6275044Z  + typing-extensions==4.16.0
+2026-08-05T16:40:45.6276167Z  + virtualenv==21.7.1
+2026-08-05T16:40:45.6357863Z ##[endgroup]
+2026-08-05T16:40:45.6358518Z                                                               [32m✓ [0m1.06s
+2026-08-05T16:40:45.6359064Z ##[group]Building wheel...
+2026-08-05T16:40:45.6359229Z 
+2026-08-05T16:40:45.6362355Z + python -m build 'C:\Users\runneradmin\AppData\Local\Temp\cibw-sdist-m8musto8\winflexbison_bin-2.5.25.2' --wheel '--outdir=C:\Users\runneradmin\AppData\Local\Temp\cibw-run-cc3hhauo\cp310-win_amd64\built_wheel' --installer=uv
+2026-08-05T16:40:46.1497741Z * Creating isolated environment: venv+uv...
+2026-08-05T16:40:46.1553768Z   Using external uv from C:\hostedtoolcache\windows\uv\0.12.1\x86_64\uv.EXE
+2026-08-05T16:40:46.1675819Z * Installing packages in isolated environment:
+2026-08-05T16:40:46.1676221Z   - cmake==4.4.2
+2026-08-05T16:40:46.1676959Z   - pdm-backend==2.4.9
+2026-08-05T16:40:58.0144926Z * Getting build dependencies for wheel...
+2026-08-05T16:40:58.4744359Z * Building wheel...
+2026-08-05T16:40:59.7668329Z CMake Error at CMakeLists.txt:1 (cmake_minimum_required):
+2026-08-05T16:40:59.7668877Z   Compatibility with CMake < 3.5 has been removed from CMake.
+2026-08-05T16:40:59.7669135Z 
+2026-08-05T16:40:59.7669380Z   Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+2026-08-05T16:40:59.7669957Z   to tell CMake that the project requires at least <min> but has been updated
+2026-08-05T16:40:59.7670519Z   to work with policies introduced by <max> or earlier.
+2026-08-05T16:40:59.7670750Z 
+2026-08-05T16:40:59.7670960Z   Or, add -DCMAKE_POLICY_VERSION_MINIMUM=3.5 to try configuring anyway.
+2026-08-05T16:40:59.7671231Z 
+2026-08-05T16:40:59.7671355Z -- Building for: Visual Studio 17 2022
+2026-08-05T16:40:59.7672657Z 
+2026-08-05T16:40:59.7672779Z -- Configuring incomplete, errors occurred!
+2026-08-05T16:40:59.7867348Z pdm-build execute: cmake -S 'C:\Users\runneradmin\AppData\Local\Temp\cibw-sdist-m8musto8\winflexbison_bin-2.5.25.2\upstream' -B 'C:\Users\runneradmin\AppData\Local\Temp\cibw-sdist-m8musto8\winflexbison_bin-2.5.25.2\.pdm-build\cmake-build' -DCMAKE_BUILD_TYPE=Release
+2026-08-05T16:40:59.7869155Z Traceback (most recent call last):
+2026-08-05T16:40:59.7878197Z   File "C:\Users\runneradmin\AppData\Local\Temp\cibw-run-cc3hhauo\cp310-win_amd64\build\venv\lib\site-packages\pyproject_hooks\_in_process\_in_process.py", line 389, in <module>
+2026-08-05T16:40:59.7879504Z     main()
+2026-08-05T16:40:59.7880648Z   File "C:\Users\runneradmin\AppData\Local\Temp\cibw-run-cc3hhauo\cp310-win_amd64\build\venv\lib\site-packages\pyproject_hooks\_in_process\_in_process.py", line 373, in main
+2026-08-05T16:40:59.7881942Z     json_out["return_val"] = hook(**hook_input["kwargs"])
+2026-08-05T16:40:59.7883312Z   File "C:\Users\runneradmin\AppData\Local\Temp\cibw-run-cc3hhauo\cp310-win_amd64\build\venv\lib\site-packages\pyproject_hooks\_in_process\_in_process.py", line 280, in build_wheel
+2026-08-05T16:40:59.7884581Z     return _build_backend().build_wheel(
+2026-08-05T16:40:59.7885576Z   File "C:\Users\runneradmin\AppData\Local\Temp\build-env-4q6s0cii\lib\site-packages\pdm\backend\__init__.py", line 56, in build_wheel
+2026-08-05T16:40:59.7886450Z     return builder.build(
+2026-08-05T16:40:59.7887537Z   File "C:\Users\runneradmin\AppData\Local\Temp\build-env-4q6s0cii\lib\site-packages\pdm\backend\base.py", line 219, in build
+2026-08-05T16:40:59.7888378Z     self.initialize(context)
+2026-08-05T16:40:59.7889241Z   File "C:\Users\runneradmin\AppData\Local\Temp\build-env-4q6s0cii\lib\site-packages\pdm\backend\base.py", line 186, in initialize
+2026-08-05T16:40:59.7890151Z     self.call_hook("pdm_build_initialize", context)
+2026-08-05T16:40:59.7891111Z   File "C:\Users\runneradmin\AppData\Local\Temp\build-env-4q6s0cii\lib\site-packages\pdm\backend\base.py", line 144, in call_hook
+2026-08-05T16:40:59.7892027Z     getattr(hook, hook_name)(context, *args, **kwargs)
+2026-08-05T16:40:59.7893040Z   File "C:\Users\runneradmin\AppData\Local\Temp\cibw-sdist-m8musto8\winflexbison_bin-2.5.25.2\pdm_build.py", line 69, in pdm_build_initialize
+2026-08-05T16:40:59.7893968Z     _run(cmake_configure, env=env)
+2026-08-05T16:40:59.7894781Z   File "C:\Users\runneradmin\AppData\Local\Temp\cibw-sdist-m8musto8\winflexbison_bin-2.5.25.2\pdm_build.py", line 16, in _run
+2026-08-05T16:40:59.7896724Z     subprocess.run(command, check=True, env=env)
+2026-08-05T16:40:59.7897618Z   File "C:\Users\runneradmin\AppData\Local\pypa\cibuildwheel\Cache\nuget-cpython\python.3.10.11\tools\lib\subprocess.py", line 526, in run
+2026-08-05T16:40:59.7898332Z     raise CalledProcessError(retcode, process.args,
+2026-08-05T16:40:59.7899662Z subprocess.CalledProcessError: Command '['cmake', '-S', 'C:\\Users\\runneradmin\\AppData\\Local\\Temp\\cibw-sdist-m8musto8\\winflexbison_bin-2.5.25.2\\upstream', '-B', 'C:\\Users\\runneradmin\\AppData\\Local\\Temp\\cibw-sdist-m8musto8\\winflexbison_bin-2.5.25.2\\.pdm-build\\cmake-build', '-DCMAKE_BUILD_TYPE=Release']' returned non-zero exit status 1.
+2026-08-05T16:41:00.6708936Z ERROR Backend subprocess exited when trying to invoke build_wheel
+2026-08-05T16:41:00.6709304Z 
+2026-08-05T16:41:00.8454265Z ##[error]cibuildwheel: Command ['C:\\Users\\runneradmin\\AppData\\Local\\Temp\\cibw-run-cc3hhauo\\cp310-win_amd64\\build\\venv\\Scripts\\python.EXE', '-m', 'build', 'C:\\Users\\runneradmin\\AppData\\Local\\Temp\\cibw-sdist-m8musto8\\winflexbison_bin-2.5.25.2', '--wheel', '--outdir=C:\\Users\\runneradmin\\AppData\\Local\\Temp\\cibw-run-cc3hhauo\\cp310-win_amd64\\built_wheel', '--installer=uv'] failed with code 1. 
+2026-08-05T16:41:00.8455684Z 
+2026-08-05T16:41:00.8455978Z ##[endgroup]
+2026-08-05T16:41:00.8456570Z                                                              [31m✕ [0m15.21s
+2026-08-05T16:41:00.9255040Z ##[error]Process completed with exit code 1.
+2026-08-05T16:41:00.9263109Z ##[end-action id=__pypa_cibuildwheel.__run_2;outcome=failure;conclusion=failure;duration_ms=36979]
+2026-08-05T16:41:00.9476974Z Post job cleanup.
+2026-08-05T16:41:00.9481261Z ##[start-action display=Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97;id=__dec58476-90f7-4f6a-a3fb-b16c427442b5.python]
+2026-08-05T16:41:00.9483603Z ##[end-action id=__dec58476-90f7-4f6a-a3fb-b16c427442b5.python;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-08-05T16:41:00.9541744Z Cleaning up orphan processes

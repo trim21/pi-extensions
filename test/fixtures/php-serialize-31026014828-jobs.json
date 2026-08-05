@@ -1,0 +1,353 @@
+{
+  "total_count": 3,
+  "jobs": [
+    {
+      "id": 92374541741,
+      "run_id": 31026014828,
+      "workflow_name": "ci",
+      "head_branch": "renovate/typescript-7.x",
+      "run_url": "https://api.github.com/repos/trim21/php-serialize/actions/runs/31026014828",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOI-gQb88AAAAVgfOlrQ",
+      "head_sha": "d33233a4d73e4e25b1fc602846760b159813c1b5",
+      "url": "https://api.github.com/repos/trim21/php-serialize/actions/jobs/92374541741",
+      "html_url": "https://github.com/trim21/php-serialize/actions/runs/31026014828/job/92374541741",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-08-05T16:35:40Z",
+      "started_at": "2026-08-05T16:35:43Z",
+      "completed_at": "2026-08-05T16:36:02Z",
+      "name": "test",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-08-05T16:35:44Z",
+          "completed_at": "2026-08-05T16:35:46Z"
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-08-05T16:35:46Z",
+          "completed_at": "2026-08-05T16:35:47Z"
+        },
+        {
+          "name": "Run pnpm/action-setup@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-08-05T16:35:47Z",
+          "completed_at": "2026-08-05T16:35:49Z"
+        },
+        {
+          "name": "Setup node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-08-05T16:35:49Z",
+          "completed_at": "2026-08-05T16:35:52Z"
+        },
+        {
+          "name": "Run pnpm install --frozen-lockfile",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-08-05T16:35:52Z",
+          "completed_at": "2026-08-05T16:35:58Z"
+        },
+        {
+          "name": "Run pnpm test --coverage",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 6,
+          "started_at": "2026-08-05T16:35:58Z",
+          "completed_at": "2026-08-05T16:35:59Z"
+        },
+        {
+          "name": "Upload Coverage to Codecov",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 7,
+          "started_at": "2026-08-05T16:35:59Z",
+          "completed_at": "2026-08-05T16:35:59Z"
+        },
+        {
+          "name": "Post Setup node",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 12,
+          "started_at": "2026-08-05T16:35:59Z",
+          "completed_at": "2026-08-05T16:35:59Z"
+        },
+        {
+          "name": "Post Run pnpm/action-setup@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-08-05T16:35:59Z",
+          "completed_at": "2026-08-05T16:35:59Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-08-05T16:35:59Z",
+          "completed_at": "2026-08-05T16:35:59Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-08-05T16:35:59Z",
+          "completed_at": "2026-08-05T16:36:00Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/trim21/php-serialize/check-runs/92374541741",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000260249,
+      "runner_name": "GitHub Actions 1000260249",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 92374541801,
+      "run_id": 31026014828,
+      "workflow_name": "ci",
+      "head_branch": "renovate/typescript-7.x",
+      "run_url": "https://api.github.com/repos/trim21/php-serialize/actions/runs/31026014828",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOI-gQb88AAAAVgfOl6Q",
+      "head_sha": "d33233a4d73e4e25b1fc602846760b159813c1b5",
+      "url": "https://api.github.com/repos/trim21/php-serialize/actions/jobs/92374541801",
+      "html_url": "https://github.com/trim21/php-serialize/actions/runs/31026014828/job/92374541801",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-08-05T16:35:40Z",
+      "started_at": "2026-08-05T16:35:43Z",
+      "completed_at": "2026-08-05T16:35:57Z",
+      "name": "build",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-08-05T16:35:44Z",
+          "completed_at": "2026-08-05T16:35:45Z"
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-08-05T16:35:45Z",
+          "completed_at": "2026-08-05T16:35:45Z"
+        },
+        {
+          "name": "Run pnpm/action-setup@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-08-05T16:35:45Z",
+          "completed_at": "2026-08-05T16:35:47Z"
+        },
+        {
+          "name": "Setup node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-08-05T16:35:47Z",
+          "completed_at": "2026-08-05T16:35:48Z"
+        },
+        {
+          "name": "Run pnpm install --frozen-lockfile",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-08-05T16:35:48Z",
+          "completed_at": "2026-08-05T16:35:53Z"
+        },
+        {
+          "name": "Run pnpm build",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-08-05T16:35:53Z",
+          "completed_at": "2026-08-05T16:35:54Z"
+        },
+        {
+          "name": "Post Setup node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-08-05T16:35:54Z",
+          "completed_at": "2026-08-05T16:35:55Z"
+        },
+        {
+          "name": "Post Run pnpm/action-setup@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-08-05T16:35:55Z",
+          "completed_at": "2026-08-05T16:35:55Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-08-05T16:35:55Z",
+          "completed_at": "2026-08-05T16:35:56Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-08-05T16:35:56Z",
+          "completed_at": "2026-08-05T16:35:56Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/trim21/php-serialize/check-runs/92374541801",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000260250,
+      "runner_name": "GitHub Actions 1000260250",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 92374541920,
+      "run_id": 31026014828,
+      "workflow_name": "ci",
+      "head_branch": "renovate/typescript-7.x",
+      "run_url": "https://api.github.com/repos/trim21/php-serialize/actions/runs/31026014828",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOI-gQb88AAAAVgfOmYA",
+      "head_sha": "d33233a4d73e4e25b1fc602846760b159813c1b5",
+      "url": "https://api.github.com/repos/trim21/php-serialize/actions/jobs/92374541920",
+      "html_url": "https://github.com/trim21/php-serialize/actions/runs/31026014828/job/92374541920",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-08-05T16:35:40Z",
+      "started_at": "2026-08-05T16:35:49Z",
+      "completed_at": "2026-08-05T16:36:14Z",
+      "name": "lint",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-08-05T16:35:50Z",
+          "completed_at": "2026-08-05T16:35:53Z"
+        },
+        {
+          "name": "Run actions/checkout@v7",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-08-05T16:35:53Z",
+          "completed_at": "2026-08-05T16:35:54Z"
+        },
+        {
+          "name": "Run pnpm/action-setup@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-08-05T16:35:54Z",
+          "completed_at": "2026-08-05T16:35:56Z"
+        },
+        {
+          "name": "Setup node",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-08-05T16:35:56Z",
+          "completed_at": "2026-08-05T16:36:04Z"
+        },
+        {
+          "name": "Run pnpm install --frozen-lockfile",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-08-05T16:36:04Z",
+          "completed_at": "2026-08-05T16:36:08Z"
+        },
+        {
+          "name": "Run npx prettier --check ./",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 6,
+          "started_at": "2026-08-05T16:36:08Z",
+          "completed_at": "2026-08-05T16:36:10Z"
+        },
+        {
+          "name": "Run npx tsc --pretty",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 7,
+          "started_at": "2026-08-05T16:36:10Z",
+          "completed_at": "2026-08-05T16:36:10Z"
+        },
+        {
+          "name": "Run pnpm lint",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 8,
+          "started_at": "2026-08-05T16:36:10Z",
+          "completed_at": "2026-08-05T16:36:10Z"
+        },
+        {
+          "name": "Post Setup node",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 14,
+          "started_at": "2026-08-05T16:36:10Z",
+          "completed_at": "2026-08-05T16:36:10Z"
+        },
+        {
+          "name": "Post Run pnpm/action-setup@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-08-05T16:36:10Z",
+          "completed_at": "2026-08-05T16:36:10Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v7",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-08-05T16:36:10Z",
+          "completed_at": "2026-08-05T16:36:10Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-08-05T16:36:10Z",
+          "completed_at": "2026-08-05T16:36:10Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/trim21/php-serialize/check-runs/92374541920",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000260251,
+      "runner_name": "GitHub Actions 1000260251",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}

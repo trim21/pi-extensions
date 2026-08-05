@@ -1,0 +1,311 @@
+﻿2026-08-05T16:35:44.6438205Z Current runner version: '2.336.0'
+2026-08-05T16:35:44.6472968Z ##[group]Runner Image Provisioner
+2026-08-05T16:35:44.6474245Z Hosted Compute Agent
+2026-08-05T16:35:44.6475288Z Version: 20260707.563
+2026-08-05T16:35:44.6476367Z Commit: 02667638d2b423fbc733a8e32a88b44996a3ba6e
+2026-08-05T16:35:44.6477496Z Build Date: 2026-07-07T19:33:50Z
+2026-08-05T16:35:44.6478712Z Worker ID: {ae41b592-071a-4e0c-bb3d-db88483e23f1}
+2026-08-05T16:35:44.6479825Z Azure Region: northcentralus
+2026-08-05T16:35:44.6480844Z ##[endgroup]
+2026-08-05T16:35:44.6483217Z ##[group]Operating System
+2026-08-05T16:35:44.6484220Z Ubuntu
+2026-08-05T16:35:44.6485306Z 24.04.4
+2026-08-05T16:35:44.6486053Z LTS
+2026-08-05T16:35:44.6486805Z ##[endgroup]
+2026-08-05T16:35:44.6487850Z ##[group]Runner Image
+2026-08-05T16:35:44.6488856Z Image: ubuntu-24.04
+2026-08-05T16:35:44.6489826Z Version: 20260720.247.2
+2026-08-05T16:35:44.6491746Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260720.247/images/ubuntu/Ubuntu2404-Readme.md
+2026-08-05T16:35:44.6494643Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260720.247
+2026-08-05T16:35:44.6496190Z ##[endgroup]
+2026-08-05T16:35:44.6498189Z ##[group]GITHUB_TOKEN Permissions
+2026-08-05T16:35:44.6501130Z Contents: read
+2026-08-05T16:35:44.6502134Z Metadata: read
+2026-08-05T16:35:44.6503274Z Packages: read
+2026-08-05T16:35:44.6504196Z ##[endgroup]
+2026-08-05T16:35:44.6506956Z Secret source: Actions
+2026-08-05T16:35:44.6508353Z Prepare workflow directory
+2026-08-05T16:35:44.6846678Z Prepare all required actions
+2026-08-05T16:35:44.6911124Z Getting action download info
+2026-08-05T16:35:44.9833987Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-08-05T16:35:45.4460256Z Download action repository 'pnpm/action-setup@v4' (SHA:b906affcce14559ad1aafd4ab0e942779e9f58b1)
+2026-08-05T16:35:45.8695781Z Download action repository 'actions/setup-node@v7' (SHA:820762786026740c76f36085b0efc47a31fe5020)
+2026-08-05T16:35:46.2334009Z Download action repository 'codecov/codecov-action@v7' (SHA:fb8b3582c8e4def4969c97caa2f19720cb33a72f)
+2026-08-05T16:35:46.5487157Z Getting action download info
+2026-08-05T16:35:46.6493711Z Download action repository 'actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd' (SHA:ed597411d8f924073f98dfc5c65a23a2325f34cd)
+2026-08-05T16:35:46.9617013Z Complete job name: test
+2026-08-05T16:35:47.0416571Z ##[group]Run actions/checkout@v7
+2026-08-05T16:35:47.0417220Z with:
+2026-08-05T16:35:47.0417526Z   repository: trim21/php-serialize
+2026-08-05T16:35:47.0420597Z   token: ***
+2026-08-05T16:35:47.0420863Z   ssh-strict: true
+2026-08-05T16:35:47.0421132Z   ssh-user: git
+2026-08-05T16:35:47.0421404Z   persist-credentials: true
+2026-08-05T16:35:47.0421690Z   clean: true
+2026-08-05T16:35:47.0421973Z   sparse-checkout-cone-mode: true
+2026-08-05T16:35:47.0422293Z   fetch-depth: 1
+2026-08-05T16:35:47.0422724Z   fetch-tags: false
+2026-08-05T16:35:47.0422987Z   show-progress: true
+2026-08-05T16:35:47.0423243Z   lfs: false
+2026-08-05T16:35:47.0423517Z   submodules: false
+2026-08-05T16:35:47.0423780Z   set-safe-directory: true
+2026-08-05T16:35:47.0424078Z   allow-unsafe-pr-checkout: false
+2026-08-05T16:35:47.0424591Z ##[endgroup]
+2026-08-05T16:35:47.1434964Z Syncing repository: trim21/php-serialize
+2026-08-05T16:35:47.1436571Z ##[group]Getting Git version info
+2026-08-05T16:35:47.1437145Z Working directory is '/home/runner/work/php-serialize/php-serialize'
+2026-08-05T16:35:47.1438008Z [command]/usr/bin/git version
+2026-08-05T16:35:47.1480076Z git version 2.54.0
+2026-08-05T16:35:47.1499452Z ##[endgroup]
+2026-08-05T16:35:47.1510165Z Temporarily overriding HOME='/home/runner/work/_temp/974bb120-9e47-4110-aa37-b80915b6f271' before making global git config changes
+2026-08-05T16:35:47.1515310Z Adding repository directory to the temporary git global config as a safe directory
+2026-08-05T16:35:47.1516204Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/php-serialize/php-serialize
+2026-08-05T16:35:47.1558528Z Deleting the contents of '/home/runner/work/php-serialize/php-serialize'
+2026-08-05T16:35:47.1561958Z ##[group]Determining repository object format
+2026-08-05T16:35:47.1563820Z ##[endgroup]
+2026-08-05T16:35:47.1564339Z ##[group]Initializing the repository
+2026-08-05T16:35:47.1569316Z [command]/usr/bin/git init /home/runner/work/php-serialize/php-serialize
+2026-08-05T16:35:47.1640590Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-08-05T16:35:47.1641980Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-08-05T16:35:47.1643628Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-08-05T16:35:47.1644543Z hint: call:
+2026-08-05T16:35:47.1645135Z hint:
+2026-08-05T16:35:47.1645633Z hint: 	git config --global init.defaultBranch <name>
+2026-08-05T16:35:47.1646164Z hint:
+2026-08-05T16:35:47.1646680Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-08-05T16:35:47.1647532Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-08-05T16:35:47.1648252Z hint:
+2026-08-05T16:35:47.1648622Z hint: 	git branch -m <name>
+2026-08-05T16:35:47.1649034Z hint:
+2026-08-05T16:35:47.1649592Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-08-05T16:35:47.1650542Z Initialized empty Git repository in /home/runner/work/php-serialize/php-serialize/.git/
+2026-08-05T16:35:47.1663605Z [command]/usr/bin/git remote add origin https://github.com/trim21/php-serialize
+2026-08-05T16:35:47.1698581Z ##[endgroup]
+2026-08-05T16:35:47.1699065Z ##[group]Disabling automatic garbage collection
+2026-08-05T16:35:47.1703952Z [command]/usr/bin/git config --local gc.auto 0
+2026-08-05T16:35:47.1735631Z ##[endgroup]
+2026-08-05T16:35:47.1736466Z ##[group]Setting up auth
+2026-08-05T16:35:47.1741607Z Removing SSH command configuration
+2026-08-05T16:35:47.1743038Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-08-05T16:35:47.1776458Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-08-05T16:35:47.2093496Z Removing HTTP extra header
+2026-08-05T16:35:47.2100293Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-08-05T16:35:47.2136395Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-08-05T16:35:47.2376283Z Removing includeIf entries pointing to credentials config files
+2026-08-05T16:35:47.2383018Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-08-05T16:35:47.2416571Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-08-05T16:35:47.2659223Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-08-05T16:35:47.2698092Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path /home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+2026-08-05T16:35:47.2729198Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+2026-08-05T16:35:47.2765191Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+2026-08-05T16:35:47.2797354Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+2026-08-05T16:35:47.2828035Z ##[endgroup]
+2026-08-05T16:35:47.2828600Z ##[group]Fetching the repository
+2026-08-05T16:35:47.2835545Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +c075a5cef7b1f96b89183568f0b702f521aa674a:refs/remotes/pull/303/merge
+2026-08-05T16:35:47.5463441Z From https://github.com/trim21/php-serialize
+2026-08-05T16:35:47.5464304Z  * [new ref]         c075a5cef7b1f96b89183568f0b702f521aa674a -> pull/303/merge
+2026-08-05T16:35:47.5497144Z ##[endgroup]
+2026-08-05T16:35:47.5503333Z ##[group]Determining the checkout info
+2026-08-05T16:35:47.5511905Z ##[endgroup]
+2026-08-05T16:35:47.5512687Z [command]/usr/bin/git sparse-checkout disable
+2026-08-05T16:35:47.5549910Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-08-05T16:35:47.5579256Z ##[group]Checking out the ref
+2026-08-05T16:35:47.5582734Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/303/merge
+2026-08-05T16:35:47.5647515Z Note: switching to 'refs/remotes/pull/303/merge'.
+2026-08-05T16:35:47.5648174Z 
+2026-08-05T16:35:47.5648832Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-08-05T16:35:47.5650224Z changes and commit them, and you can discard any commits you make in this
+2026-08-05T16:35:47.5651321Z state without impacting any branches by switching back to a branch.
+2026-08-05T16:35:47.5652146Z 
+2026-08-05T16:35:47.5652921Z If you want to create a new branch to retain commits you create, you may
+2026-08-05T16:35:47.5654049Z do so (now or later) by using -c with the switch command. Example:
+2026-08-05T16:35:47.5654855Z 
+2026-08-05T16:35:47.5655265Z   git switch -c <new-branch-name>
+2026-08-05T16:35:47.5655858Z 
+2026-08-05T16:35:47.5656135Z Or undo this operation with:
+2026-08-05T16:35:47.5656460Z 
+2026-08-05T16:35:47.5656613Z   git switch -
+2026-08-05T16:35:47.5656859Z 
+2026-08-05T16:35:47.5657216Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-08-05T16:35:47.5657725Z 
+2026-08-05T16:35:47.5658276Z HEAD is now at c075a5c Merge d33233a4d73e4e25b1fc602846760b159813c1b5 into 51c91633e6e2dd31980eced66114a8d713f2aef4
+2026-08-05T16:35:47.5659931Z ##[endgroup]
+2026-08-05T16:35:47.5703365Z [command]/usr/bin/git log -1 --format=%H
+2026-08-05T16:35:47.5727452Z c075a5cef7b1f96b89183568f0b702f521aa674a
+2026-08-05T16:35:47.5962973Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-05T16:35:47.5964906Z ##[group]Run pnpm/action-setup@v4
+2026-08-05T16:35:47.5965178Z with:
+2026-08-05T16:35:47.5965383Z   dest: ~/setup-pnpm
+2026-08-05T16:35:47.5965608Z   run_install: null
+2026-08-05T16:35:47.5965813Z   cache: false
+2026-08-05T16:35:47.5966049Z   cache_dependency_path: pnpm-lock.yaml
+2026-08-05T16:35:47.5966364Z   package_json_file: package.json
+2026-08-05T16:35:47.5966621Z   standalone: false
+2026-08-05T16:35:47.5966829Z ##[endgroup]
+2026-08-05T16:35:47.7607941Z ##[group]Running self-installer...
+2026-08-05T16:35:48.2447822Z (node:2389) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-08-05T16:35:48.2449423Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-05T16:35:48.4337863Z Progress: resolved 1, reused 0, downloaded 0, added 0
+2026-08-05T16:35:48.4442049Z Packages: +1
+2026-08-05T16:35:48.4443125Z +
+2026-08-05T16:35:48.9220204Z Progress: resolved 1, reused 0, downloaded 1, added 1, done
+2026-08-05T16:35:48.9483710Z 
+2026-08-05T16:35:48.9484456Z dependencies:
+2026-08-05T16:35:48.9484976Z + pnpm 11.20.0
+2026-08-05T16:35:48.9485321Z 
+2026-08-05T16:35:48.9511098Z Done in 1s
+2026-08-05T16:35:49.0435345Z ##[endgroup]
+2026-08-05T16:35:49.0436276Z Installation Completed!
+2026-08-05T16:35:49.0669190Z ##[group]Run actions/setup-node@v7
+2026-08-05T16:35:49.0669481Z with:
+2026-08-05T16:35:49.0669683Z   node-version: 24
+2026-08-05T16:35:49.0669890Z   cache: pnpm
+2026-08-05T16:35:49.0670091Z   check-latest: false
+2026-08-05T16:35:49.0672878Z   token: ***
+2026-08-05T16:35:49.0673115Z   package-manager-cache: true
+2026-08-05T16:35:49.0673391Z env:
+2026-08-05T16:35:49.0673653Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-08-05T16:35:49.0673966Z ##[endgroup]
+2026-08-05T16:35:49.1971232Z Found in cache @ /opt/hostedtoolcache/node/24.18.0/x64
+2026-08-05T16:35:49.1975445Z ##[group]Environment details
+2026-08-05T16:35:51.5305274Z node: v24.18.0
+2026-08-05T16:35:51.5305679Z npm: 11.16.0
+2026-08-05T16:35:51.5305968Z yarn: 1.22.22
+2026-08-05T16:35:51.5307349Z ##[endgroup]
+2026-08-05T16:35:51.5324861Z [command]/home/runner/setup-pnpm/node_modules/.bin/pnpm store path --silent
+2026-08-05T16:35:52.3638475Z /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-08-05T16:35:52.5473188Z pnpm cache is not found
+2026-08-05T16:35:52.5606135Z ##[group]Run pnpm install --frozen-lockfile
+2026-08-05T16:35:52.5606552Z [36;1mpnpm install --frozen-lockfile[0m
+2026-08-05T16:35:52.5753352Z shell: /usr/bin/bash -e {0}
+2026-08-05T16:35:52.5753653Z env:
+2026-08-05T16:35:52.5753922Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-08-05T16:35:52.5754272Z ##[endgroup]
+2026-08-05T16:35:53.1553228Z ? Verifying lockfile against supply-chain policies (564 entries)...
+2026-08-05T16:35:53.1664774Z Lockfile is up to date, resolution step is skipped
+2026-08-05T16:35:53.3019577Z Progress: resolved 1, reused 0, downloaded 0, added 0
+2026-08-05T16:35:53.3683858Z Packages: +493
+2026-08-05T16:35:53.3684976Z ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+2026-08-05T16:35:54.3327638Z Progress: resolved 493, reused 0, downloaded 0, added 0
+2026-08-05T16:35:54.9824672Z Packages are copied from the content-addressable store to the virtual store.
+2026-08-05T16:35:54.9834294Z   Content-addressable store is at: /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-08-05T16:35:54.9835560Z   Virtual store is at:             node_modules/.pnpm
+2026-08-05T16:35:55.3351532Z Progress: resolved 493, reused 0, downloaded 125, added 7
+2026-08-05T16:35:56.3362820Z Progress: resolved 493, reused 0, downloaded 421, added 30
+2026-08-05T16:35:56.8579809Z Progress: resolved 493, reused 0, downloaded 493, added 493, done
+2026-08-05T16:35:57.5187057Z ✓ Lockfile passes supply-chain policies (564 entries in 4.3s)
+2026-08-05T16:35:57.5439658Z .../node_modules/unrs-resolver postinstall$ node postinstall.js
+2026-08-05T16:35:57.5723982Z .../esbuild@0.28.1/node_modules/esbuild postinstall$ node install.js
+2026-08-05T16:35:57.6162352Z .../node_modules/unrs-resolver postinstall: Done
+2026-08-05T16:35:57.6314044Z .../esbuild@0.28.1/node_modules/esbuild postinstall: Done
+2026-08-05T16:35:57.7969628Z 
+2026-08-05T16:35:57.7970617Z devDependencies:
+2026-08-05T16:35:57.7971098Z + @eslint/js 10.0.1
+2026-08-05T16:35:57.7971449Z + @jest/globals 30.4.1
+2026-08-05T16:35:57.7971773Z + @types/node 24.13.3
+2026-08-05T16:35:57.7972069Z + esbuild 0.28.1
+2026-08-05T16:35:57.7972349Z + eslint 10.8.0
+2026-08-05T16:35:57.7972903Z + eslint-config-prettier 10.1.8
+2026-08-05T16:35:57.7973285Z + eslint-plugin-import 2.32.0
+2026-08-05T16:35:57.7973644Z + eslint-plugin-n 18.2.2
+2026-08-05T16:35:57.7974045Z + eslint-plugin-promise 7.3.0
+2026-08-05T16:35:57.7974369Z + husky 9.1.7
+2026-08-05T16:35:57.7974625Z + jest 30.4.2
+2026-08-05T16:35:57.7974904Z + lint-staged 17.3.0
+2026-08-05T16:35:57.7975199Z + prettier 3.9.6
+2026-08-05T16:35:57.7975515Z + ts-jest 29.4.12
+2026-08-05T16:35:57.7975869Z + tslib 2.8.1
+2026-08-05T16:35:57.7976169Z + typescript 7.0.2
+2026-08-05T16:35:57.7976503Z + typescript-eslint 8.66.0
+2026-08-05T16:35:57.7976732Z 
+2026-08-05T16:35:57.8867368Z . prepare$ husky
+2026-08-05T16:35:57.9407837Z . prepare: Done
+2026-08-05T16:35:57.9572811Z Done in 5.3s using pnpm v11.20.0
+2026-08-05T16:35:58.0330668Z ##[group]Run pnpm test --coverage
+2026-08-05T16:35:58.0330994Z [36;1mpnpm test --coverage[0m
+2026-08-05T16:35:58.0376528Z shell: /usr/bin/bash -e {0}
+2026-08-05T16:35:58.0376777Z env:
+2026-08-05T16:35:58.0377022Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-08-05T16:35:58.0377330Z ##[endgroup]
+2026-08-05T16:35:58.4705694Z $ NODE_OPTIONS="--no-warnings --experimental-vm-modules" jest --coverage
+2026-08-05T16:35:59.4225010Z FAIL test/serialize.test.ts
+2026-08-05T16:35:59.4226879Z   ● Test suite failed to run
+2026-08-05T16:35:59.4227060Z 
+2026-08-05T16:35:59.4228056Z     The TypeScript compiler "typescript" (version 7.0.2) does not expose the JavaScript compiler API required by ts-jest. To use TypeScript 7 for project type-checking, install it as "@typescript/native" and alias "@typescript/typescript6" as "typescript" for ts-jest.
+2026-08-05T16:35:59.4228954Z 
+2026-08-05T16:35:59.4229985Z       at Importer.typescript (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/utils/importer.js:35:19)
+2026-08-05T16:35:59.4232044Z       at new ConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/config/config-set.js:203:51)
+2026-08-05T16:35:59.4234143Z       at TsJestTransformer._createConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:119:16)
+2026-08-05T16:35:59.4236225Z       at TsJestTransformer._configsFor (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:98:34)
+2026-08-05T16:35:59.4238639Z       at TsJestTransformer.getCacheKey (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:252:30)
+2026-08-05T16:35:59.4240784Z       at ScriptTransformer._getCacheKey (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:188:41)
+2026-08-05T16:35:59.4242745Z       at ScriptTransformer._getFileCachePath (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:224:27)
+2026-08-05T16:35:59.4244538Z       at ScriptTransformer.transformSource (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:395:32)
+2026-08-05T16:35:59.4246390Z       at ScriptTransformer._transformAndBuildScript (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:512:40)
+2026-08-05T16:35:59.4248285Z       at ScriptTransformer.transform (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:551:19)
+2026-08-05T16:35:59.4249214Z 
+2026-08-05T16:35:59.4249441Z FAIL test/deserialize.test.ts
+2026-08-05T16:35:59.4250015Z   ● Test suite failed to run
+2026-08-05T16:35:59.4250262Z 
+2026-08-05T16:35:59.4251824Z     The TypeScript compiler "typescript" (version 7.0.2) does not expose the JavaScript compiler API required by ts-jest. To use TypeScript 7 for project type-checking, install it as "@typescript/native" and alias "@typescript/typescript6" as "typescript" for ts-jest.
+2026-08-05T16:35:59.4253978Z 
+2026-08-05T16:35:59.4255264Z       at Importer.typescript (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/utils/importer.js:35:19)
+2026-08-05T16:35:59.4258220Z       at new ConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/config/config-set.js:203:51)
+2026-08-05T16:35:59.4261149Z       at TsJestTransformer._createConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:119:16)
+2026-08-05T16:35:59.4264053Z       at TsJestTransformer._configsFor (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:98:34)
+2026-08-05T16:35:59.4266784Z       at TsJestTransformer.getCacheKey (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:252:30)
+2026-08-05T16:35:59.4268991Z       at ScriptTransformer._getCacheKey (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:188:41)
+2026-08-05T16:35:59.4270786Z       at ScriptTransformer._getFileCachePath (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:224:27)
+2026-08-05T16:35:59.4272860Z       at ScriptTransformer.transformSource (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:395:32)
+2026-08-05T16:35:59.4274905Z       at ScriptTransformer._transformAndBuildScript (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:512:40)
+2026-08-05T16:35:59.4277711Z       at ScriptTransformer.transform (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:551:19)
+2026-08-05T16:35:59.4278730Z 
+2026-08-05T16:35:59.4542112Z ----------|---------|----------|---------|---------|-------------------
+2026-08-05T16:35:59.4543270Z File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+2026-08-05T16:35:59.4544060Z ----------|---------|----------|---------|---------|-------------------
+2026-08-05T16:35:59.4547329Z All files |       0 |        0 |       0 |       0 |                   
+2026-08-05T16:35:59.4548106Z ----------|---------|----------|---------|---------|-------------------
+2026-08-05T16:35:59.4606939Z Test Suites: 2 failed, 2 total
+2026-08-05T16:35:59.4607415Z Tests:       0 total
+2026-08-05T16:35:59.4607939Z Snapshots:   0 total
+2026-08-05T16:35:59.4608310Z Time:        0.603 s
+2026-08-05T16:35:59.4608667Z Ran all test suites.
+2026-08-05T16:35:59.5514079Z [ELIFECYCLE] Test failed. See above for more details.
+2026-08-05T16:35:59.5909003Z ##[error]Process completed with exit code 1.
+2026-08-05T16:35:59.6006603Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-05T16:35:59.6007783Z Post job cleanup.
+2026-08-05T16:35:59.7458787Z Pruning is unnecessary.
+2026-08-05T16:35:59.7596885Z Post job cleanup.
+2026-08-05T16:35:59.8447303Z [command]/usr/bin/git version
+2026-08-05T16:35:59.8486399Z git version 2.54.0
+2026-08-05T16:35:59.8520432Z Temporarily overriding HOME='/home/runner/work/_temp/b76f4535-70d8-41c2-ba6a-fd9203cebf31' before making global git config changes
+2026-08-05T16:35:59.8522273Z Adding repository directory to the temporary git global config as a safe directory
+2026-08-05T16:35:59.8526369Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/php-serialize/php-serialize
+2026-08-05T16:35:59.8558876Z Removing SSH command configuration
+2026-08-05T16:35:59.8566522Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-08-05T16:35:59.8605648Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-08-05T16:35:59.8868003Z Removing HTTP extra header
+2026-08-05T16:35:59.8875221Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-08-05T16:35:59.8914955Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-08-05T16:35:59.9163157Z Removing includeIf entries pointing to credentials config files
+2026-08-05T16:35:59.9171205Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-08-05T16:35:59.9200344Z includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+2026-08-05T16:35:59.9201644Z includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+2026-08-05T16:35:59.9202962Z includeif.gitdir:/github/workspace/.git.path
+2026-08-05T16:35:59.9203943Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-08-05T16:35:59.9210020Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+2026-08-05T16:35:59.9234997Z /home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+2026-08-05T16:35:59.9245567Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-328b5635\-c71b\-4b00\-8135\-c6eb2b621a60\.config
+2026-08-05T16:35:59.9284839Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+2026-08-05T16:35:59.9313181Z /home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+2026-08-05T16:35:59.9321826Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-328b5635\-c71b\-4b00\-8135\-c6eb2b621a60\.config
+2026-08-05T16:35:59.9355959Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-08-05T16:35:59.9380626Z /github/runner_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+2026-08-05T16:35:59.9388352Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-328b5635\-c71b\-4b00\-8135\-c6eb2b621a60\.config
+2026-08-05T16:35:59.9422644Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-08-05T16:35:59.9445344Z /github/runner_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+2026-08-05T16:35:59.9452894Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-328b5635\-c71b\-4b00\-8135\-c6eb2b621a60\.config
+2026-08-05T16:35:59.9488365Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-08-05T16:35:59.9735396Z Removing credentials config '/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config'
+2026-08-05T16:35:59.9878003Z Cleaning up orphan processes
+2026-08-05T16:36:00.0234487Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

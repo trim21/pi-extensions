@@ -1,3 +1,4 @@
 pnpm-lock.yaml
 pixi.lock
 .pixi/
+test/fixtures/

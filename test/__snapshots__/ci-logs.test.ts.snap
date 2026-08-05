@@ -1,0 +1,1318 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`renderJobLogs > filters to a single job with job=lint 1`] = `
+{
+  "content": [
+    {
+      "text": "[
+  {
+    "name": "lint",
+    "steps": [
+      {
+        "name": "Set up job"
+      },
+      {
+        "name": "Run actions/checkout@v7"
+      },
+      {
+        "name": "Run pnpm/action-setup@v4"
+      },
+      {
+        "name": "Setup node"
+      },
+      {
+        "name": "Run pnpm install --frozen-lockfile"
+      },
+      {
+        "name": "Run npx prettier --check ./",
+        "output": "npx prettier --check ./\\nshell: /usr/bin/bash -e {0}\\nenv:\\n  PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin\\nChecking formatting...\\n[warn] pnpm-lock.yaml\\n[warn] Code style issues found in the above file. Run Prettier with --write to fix.\\n##[error]Process completed with exit code 1.\\nNode 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/\\nPost job cleanup.\\nPruning is unnecessary.\\nPost job cleanup.\\n[command]/usr/bin/git version\\ngit version 2.54.0\\nTemporarily overriding HOME='/home/runner/work/_temp/7d82f6ce-5bb3-42a4-a456-5f3b8dd8b309' before making global git config changes\\nAdding repository directory to the temporary git global config as a safe directory\\n[command]/usr/bin/git config --global --add safe.directory /home/runner/work/php-serialize/php-serialize\\nRemoving SSH command configuration\\n[command]/usr/bin/git config --local --name-only --get-regexp core\\\\.sshCommand\\n[command]/usr/bin/git submodule foreach --recursive sh -c \\"git config --local --name-only --get-regexp 'core\\\\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\\"\\nRemoving HTTP extra header\\n[command]/usr/bin/git config --local --name-only --get-regexp http\\\\.https\\\\:\\\\/\\\\/github\\\\.com\\\\/\\\\.extraheader\\n[command]/usr/bin/git submodule foreach --recursive sh -c \\"git config --local --name-only --get-regexp 'http\\\\.https\\\\:\\\\/\\\\/github\\\\.com\\\\/\\\\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\\"\\nRemoving includeIf entries pointing to credentials config files\\n[command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\\\\.gitdir:\\nincludeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path\\nincludeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path\\nincludeif.gitdir:/github/workspace/.git.path\\nincludeif.gitdir:/github/workspace/.git/worktrees/*.path\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path\\n/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path \\\\/home\\\\/runner\\\\/work\\\\/_temp\\\\/git\\\\-credentials\\\\-816cf3b4\\\\-e793\\\\-4cb2\\\\-ac44\\\\-31ccfe0b488f\\\\.config\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path\\n/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path \\\\/home\\\\/runner\\\\/work\\\\/_temp\\\\/git\\\\-credentials\\\\-816cf3b4\\\\-e793\\\\-4cb2\\\\-ac44\\\\-31ccfe0b488f\\\\.config\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path\\n/github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \\\\/github\\\\/runner_temp\\\\/git\\\\-credentials\\\\-816cf3b4\\\\-e793\\\\-4cb2\\\\-ac44\\\\-31ccfe0b488f\\\\.config\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path\\n/github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \\\\/github\\\\/runner_temp\\\\/git\\\\-credentials\\\\-816cf3b4\\\\-e793\\\\-4cb2\\\\-ac44\\\\-31ccfe0b488f\\\\.config\\n[command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url\\nRemoving credentials config '/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config'\\nCleaning up orphan processes\\n##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/"
+      },
+      {
+        "name": "Run npx tsc --pretty"
+      },
+      {
+        "name": "Run pnpm lint"
+      },
+      {
+        "name": "Post Setup node"
+      },
+      {
+        "name": "Post Run pnpm/action-setup@v4"
+      },
+      {
+        "name": "Post Run actions/checkout@v7"
+      },
+      {
+        "name": "Complete job"
+      }
+    ]
+  }
+]",
+      "type": "text",
+    },
+  ],
+  "details": {
+    "jobs": [
+      {
+        "conclusion": "failure",
+        "name": "lint",
+        "steps": [
+          {
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run actions/checkout@v7",
+            "number": 2,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run pnpm/action-setup@v4",
+            "number": 3,
+          },
+          {
+            "conclusion": "success",
+            "name": "Setup node",
+            "number": 4,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run pnpm install --frozen-lockfile",
+            "number": 5,
+          },
+          {
+            "conclusion": "failure",
+            "name": "Run npx prettier --check ./",
+            "number": 6,
+          },
+          {
+            "conclusion": "skipped",
+            "name": "Run npx tsc --pretty",
+            "number": 7,
+          },
+          {
+            "conclusion": "skipped",
+            "name": "Run pnpm lint",
+            "number": 8,
+          },
+          {
+            "conclusion": "skipped",
+            "name": "Post Setup node",
+            "number": 14,
+          },
+          {
+            "conclusion": "success",
+            "name": "Post Run pnpm/action-setup@v4",
+            "number": 15,
+          },
+          {
+            "conclusion": "success",
+            "name": "Post Run actions/checkout@v7",
+            "number": 16,
+          },
+          {
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 17,
+          },
+        ],
+      },
+    ],
+    "summary": "1 job, 1 failed, 1 failed step",
+    "truncated": undefined,
+  },
+}
+`;
+
+exports[`renderJobLogs > reports an empty job list 1`] = `
+{
+  "content": [
+    {
+      "text": "No jobs found for run 31026014828",
+      "type": "text",
+    },
+  ],
+  "details": {},
+}
+`;
+
+exports[`renderJobLogs > reports an unknown job name 1`] = `
+{
+  "content": [
+    {
+      "text": "Job "no-such-job" not found. Available: test (id: 92374541741), build (id: 92374541801), lint (id: 92374541920)",
+      "type": "text",
+    },
+  ],
+  "details": {},
+}
+`;
+
+exports[`renderJobLogs > returns a JSON array of jobs; failed steps carry output 1`] = `
+{
+  "content": [
+    {
+      "text": "[
+  {
+    "name": "test",
+    "steps": [
+      {
+        "name": "Set up job"
+      },
+      {
+        "name": "Run actions/checkout@v7"
+      },
+      {
+        "name": "Run pnpm/action-setup@v4"
+      },
+      {
+        "name": "Setup node"
+      },
+      {
+        "name": "Run pnpm install --frozen-lockfile"
+      },
+      {
+        "name": "Run pnpm test --coverage",
+        "output": "pnpm test --coverage\\nshell: /usr/bin/bash -e {0}\\nenv:\\n  PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin\\n$ NODE_OPTIONS=\\"--no-warnings --experimental-vm-modules\\" jest --coverage\\nFAIL test/serialize.test.ts\\n  ● Test suite failed to run\\n\\n    The TypeScript compiler \\"typescript\\" (version 7.0.2) does not expose the JavaScript compiler API required by ts-jest. To use TypeScript 7 for project type-checking, install it as \\"@typescript/native\\" and alias \\"@typescript/typescript6\\" as \\"typescript\\" for ts-jest.\\n\\n      at Importer.typescript (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/utils/importer.js:35:19)\\n      at new ConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/config/config-set.js:203:51)\\n      at TsJestTransformer._createConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:119:16)\\n      at TsJestTransformer._configsFor (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:98:34)\\n      at TsJestTransformer.getCacheKey (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:252:30)\\n      at ScriptTransformer._getCacheKey (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:188:41)\\n      at ScriptTransformer._getFileCachePath (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:224:27)\\n      at ScriptTransformer.transformSource (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:395:32)\\n      at ScriptTransformer._transformAndBuildScript (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:512:40)\\n      at ScriptTransformer.transform (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:551:19)\\n\\nFAIL test/deserialize.test.ts\\n  ● Test suite failed to run\\n\\n    The TypeScript compiler \\"typescript\\" (version 7.0.2) does not expose the JavaScript compiler API required by ts-jest. To use TypeScript 7 for project type-checking, install it as \\"@typescript/native\\" and alias \\"@typescript/typescript6\\" as \\"typescript\\" for ts-jest.\\n\\n      at Importer.typescript (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/utils/importer.js:35:19)\\n      at new ConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/config/config-set.js:203:51)\\n      at TsJestTransformer._createConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:119:16)\\n      at TsJestTransformer._configsFor (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:98:34)\\n      at TsJestTransformer.getCacheKey (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:252:30)\\n      at ScriptTransformer._getCacheKey (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:188:41)\\n      at ScriptTransformer._getFileCachePath (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:224:27)\\n      at ScriptTransformer.transformSource (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:395:32)\\n      at ScriptTransformer._transformAndBuildScript (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:512:40)\\n      at ScriptTransformer.transform (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:551:19)\\n\\n----------|---------|----------|---------|---------|-------------------\\nFile      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s\\n----------|---------|----------|---------|---------|-------------------\\nAll files |       0 |        0 |       0 |       0 |\\n----------|---------|----------|---------|---------|-------------------\\nTest Suites: 2 failed, 2 total\\nTests:       0 total\\nSnapshots:   0 total\\nTime:        0.603 s\\nRan all test suites.\\n[ELIFECYCLE] Test failed. See above for more details.\\n##[error]Process completed with exit code 1.\\nNode 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/\\nPost job cleanup.\\nPruning is unnecessary.\\nPost job cleanup.\\n[command]/usr/bin/git version\\ngit version 2.54.0\\nTemporarily overriding HOME='/home/runner/work/_temp/b76f4535-70d8-41c2-ba6a-fd9203cebf31' before making global git config changes\\nAdding repository directory to the temporary git global config as a safe directory\\n[command]/usr/bin/git config --global --add safe.directory /home/runner/work/php-serialize/php-serialize\\nRemoving SSH command configuration\\n[command]/usr/bin/git config --local --name-only --get-regexp core\\\\.sshCommand\\n[command]/usr/bin/git submodule foreach --recursive sh -c \\"git config --local --name-only --get-regexp 'core\\\\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\\"\\nRemoving HTTP extra header\\n[command]/usr/bin/git config --local --name-only --get-regexp http\\\\.https\\\\:\\\\/\\\\/github\\\\.com\\\\/\\\\.extraheader\\n[command]/usr/bin/git submodule foreach --recursive sh -c \\"git config --local --name-only --get-regexp 'http\\\\.https\\\\:\\\\/\\\\/github\\\\.com\\\\/\\\\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\\"\\nRemoving includeIf entries pointing to credentials config files\\n[command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\\\\.gitdir:\\nincludeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path\\nincludeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path\\nincludeif.gitdir:/github/workspace/.git.path\\nincludeif.gitdir:/github/workspace/.git/worktrees/*.path\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path\\n/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path \\\\/home\\\\/runner\\\\/work\\\\/_temp\\\\/git\\\\-credentials\\\\-328b5635\\\\-c71b\\\\-4b00\\\\-8135\\\\-c6eb2b621a60\\\\.config\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path\\n/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path \\\\/home\\\\/runner\\\\/work\\\\/_temp\\\\/git\\\\-credentials\\\\-328b5635\\\\-c71b\\\\-4b00\\\\-8135\\\\-c6eb2b621a60\\\\.config\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path\\n/github/runner_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \\\\/github\\\\/runner_temp\\\\/git\\\\-credentials\\\\-328b5635\\\\-c71b\\\\-4b00\\\\-8135\\\\-c6eb2b621a60\\\\.config\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path\\n/github/runner_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \\\\/github\\\\/runner_temp\\\\/git\\\\-credentials\\\\-328b5635\\\\-c71b\\\\-4b00\\\\-8135\\\\-c6eb2b621a60\\\\.config\\n[command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url\\nRemoving credentials config '/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config'\\nCleaning up orphan processes\\n##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/"
+      },
+      {
+        "name": "Upload Coverage to Codecov"
+      },
+      {
+        "name": "Post Setup node"
+      },
+      {
+        "name": "Post Run pnpm/action-setup@v4"
+      },
+      {
+        "name": "Post Run actions/checkout@v7"
+      },
+      {
+        "name": "Complete job"
+      }
+    ]
+  },
+  {
+    "name": "build",
+    "steps": [
+      {
+        "name": "Set up job"
+      },
+      {
+        "name": "Run actions/checkout@v7"
+      },
+      {
+        "name": "Run pnpm/action-setup@v4"
+      },
+      {
+        "name": "Setup node"
+      },
+      {
+        "name": "Run pnpm install --frozen-lockfile"
+      },
+      {
+        "name": "Run pnpm build"
+      },
+      {
+        "name": "Post Setup node"
+      },
+      {
+        "name": "Post Run pnpm/action-setup@v4"
+      },
+      {
+        "name": "Post Run actions/checkout@v7"
+      },
+      {
+        "name": "Complete job"
+      }
+    ]
+  },
+  {
+    "name": "lint",
+    "steps": [
+      {
+        "name": "Set up job"
+      },
+      {
+        "name": "Run actions/checkout@v7"
+      },
+      {
+        "name": "Run pnpm/action-setup@v4"
+      },
+      {
+        "name": "Setup node"
+      },
+      {
+        "name": "Run pnpm install --frozen-lockfile"
+      },
+      {
+        "name": "Run npx prettier --check ./",
+        "output": "npx prettier --check ./\\nshell: /usr/bin/bash -e {0}\\nenv:\\n  PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin\\nChecking formatting...\\n[warn] pnpm-lock.yaml\\n[warn] Code style issues found in the above file. Run Prettier with --write to fix.\\n##[error]Process completed with exit code 1.\\nNode 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/\\nPost job cleanup.\\nPruning is unnecessary.\\nPost job cleanup.\\n[command]/usr/bin/git version\\ngit version 2.54.0\\nTemporarily overriding HOME='/home/runner/work/_temp/7d82f6ce-5bb3-42a4-a456-5f3b8dd8b309' before making global git config changes\\nAdding repository directory to the temporary git global config as a safe directory\\n[command]/usr/bin/git config --global --add safe.directory /home/runner/work/php-serialize/php-serialize\\nRemoving SSH command configuration\\n[command]/usr/bin/git config --local --name-only --get-regexp core\\\\.sshCommand\\n[command]/usr/bin/git submodule foreach --recursive sh -c \\"git config --local --name-only --get-regexp 'core\\\\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\\"\\nRemoving HTTP extra header\\n[command]/usr/bin/git config --local --name-only --get-regexp http\\\\.https\\\\:\\\\/\\\\/github\\\\.com\\\\/\\\\.extraheader\\n[command]/usr/bin/git submodule foreach --recursive sh -c \\"git config --local --name-only --get-regexp 'http\\\\.https\\\\:\\\\/\\\\/github\\\\.com\\\\/\\\\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\\"\\nRemoving includeIf entries pointing to credentials config files\\n[command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\\\\.gitdir:\\nincludeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path\\nincludeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path\\nincludeif.gitdir:/github/workspace/.git.path\\nincludeif.gitdir:/github/workspace/.git/worktrees/*.path\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path\\n/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path \\\\/home\\\\/runner\\\\/work\\\\/_temp\\\\/git\\\\-credentials\\\\-816cf3b4\\\\-e793\\\\-4cb2\\\\-ac44\\\\-31ccfe0b488f\\\\.config\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path\\n/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path \\\\/home\\\\/runner\\\\/work\\\\/_temp\\\\/git\\\\-credentials\\\\-816cf3b4\\\\-e793\\\\-4cb2\\\\-ac44\\\\-31ccfe0b488f\\\\.config\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path\\n/github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \\\\/github\\\\/runner_temp\\\\/git\\\\-credentials\\\\-816cf3b4\\\\-e793\\\\-4cb2\\\\-ac44\\\\-31ccfe0b488f\\\\.config\\n[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path\\n/github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config\\n[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \\\\/github\\\\/runner_temp\\\\/git\\\\-credentials\\\\-816cf3b4\\\\-e793\\\\-4cb2\\\\-ac44\\\\-31ccfe0b488f\\\\.config\\n[command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url\\nRemoving credentials config '/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config'\\nCleaning up orphan processes\\n##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/"
+      },
+      {
+        "name": "Run npx tsc --pretty"
+      },
+      {
+        "name": "Run pnpm lint"
+      },
+      {
+        "name": "Post Setup node"
+      },
+      {
+        "name": "Post Run pnpm/action-setup@v4"
+      },
+      {
+        "name": "Post Run actions/checkout@v7"
+      },
+      {
+        "name": "Complete job"
+      }
+    ]
+  }
+]",
+      "type": "text",
+    },
+  ],
+  "details": {
+    "jobs": [
+      {
+        "conclusion": "failure",
+        "name": "test",
+        "steps": [
+          {
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run actions/checkout@v7",
+            "number": 2,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run pnpm/action-setup@v4",
+            "number": 3,
+          },
+          {
+            "conclusion": "success",
+            "name": "Setup node",
+            "number": 4,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run pnpm install --frozen-lockfile",
+            "number": 5,
+          },
+          {
+            "conclusion": "failure",
+            "name": "Run pnpm test --coverage",
+            "number": 6,
+          },
+          {
+            "conclusion": "skipped",
+            "name": "Upload Coverage to Codecov",
+            "number": 7,
+          },
+          {
+            "conclusion": "skipped",
+            "name": "Post Setup node",
+            "number": 12,
+          },
+          {
+            "conclusion": "success",
+            "name": "Post Run pnpm/action-setup@v4",
+            "number": 13,
+          },
+          {
+            "conclusion": "success",
+            "name": "Post Run actions/checkout@v7",
+            "number": 14,
+          },
+          {
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 15,
+          },
+        ],
+      },
+      {
+        "conclusion": "success",
+        "name": "build",
+        "steps": [
+          {
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run actions/checkout@v7",
+            "number": 2,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run pnpm/action-setup@v4",
+            "number": 3,
+          },
+          {
+            "conclusion": "success",
+            "name": "Setup node",
+            "number": 4,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run pnpm install --frozen-lockfile",
+            "number": 5,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run pnpm build",
+            "number": 6,
+          },
+          {
+            "conclusion": "success",
+            "name": "Post Setup node",
+            "number": 10,
+          },
+          {
+            "conclusion": "success",
+            "name": "Post Run pnpm/action-setup@v4",
+            "number": 11,
+          },
+          {
+            "conclusion": "success",
+            "name": "Post Run actions/checkout@v7",
+            "number": 12,
+          },
+          {
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 13,
+          },
+        ],
+      },
+      {
+        "conclusion": "failure",
+        "name": "lint",
+        "steps": [
+          {
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run actions/checkout@v7",
+            "number": 2,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run pnpm/action-setup@v4",
+            "number": 3,
+          },
+          {
+            "conclusion": "success",
+            "name": "Setup node",
+            "number": 4,
+          },
+          {
+            "conclusion": "success",
+            "name": "Run pnpm install --frozen-lockfile",
+            "number": 5,
+          },
+          {
+            "conclusion": "failure",
+            "name": "Run npx prettier --check ./",
+            "number": 6,
+          },
+          {
+            "conclusion": "skipped",
+            "name": "Run npx tsc --pretty",
+            "number": 7,
+          },
+          {
+            "conclusion": "skipped",
+            "name": "Run pnpm lint",
+            "number": 8,
+          },
+          {
+            "conclusion": "skipped",
+            "name": "Post Setup node",
+            "number": 14,
+          },
+          {
+            "conclusion": "success",
+            "name": "Post Run pnpm/action-setup@v4",
+            "number": 15,
+          },
+          {
+            "conclusion": "success",
+            "name": "Post Run actions/checkout@v7",
+            "number": 16,
+          },
+          {
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 17,
+          },
+        ],
+      },
+    ],
+    "summary": "3 jobs, 2 failed, 2 failed steps",
+    "truncated": undefined,
+  },
+}
+`;
+
+exports[`renderStepLog (test job 92374541741) > extracts explicitly named action step (test step 4: Setup node) 1`] = `
+{
+  "content": [
+    {
+      "text": "with:
+  node-version: 24
+  cache: pnpm
+  check-latest: false
+  token: ***
+  package-manager-cache: true
+env:
+  PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+Found in cache @ /opt/hostedtoolcache/node/24.18.0/x64
+node: v24.18.0
+npm: 11.16.0
+yarn: 1.22.22
+[command]/home/runner/setup-pnpm/node_modules/.bin/pnpm store path --silent
+/home/runner/setup-pnpm/node_modules/.bin/store/v11
+pnpm cache is not found",
+      "type": "text",
+    },
+  ],
+  "details": {
+    "job": {
+      "conclusion": "failure",
+      "name": "test",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run pnpm/action-setup@v4",
+          "number": 3,
+        },
+        {
+          "conclusion": "success",
+          "expanded": true,
+          "name": "Setup node",
+          "number": 4,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run pnpm install --frozen-lockfile",
+          "number": 5,
+        },
+        {
+          "conclusion": "failure",
+          "name": "Run pnpm test --coverage",
+          "number": 6,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Upload Coverage to Codecov",
+          "number": 7,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Post Setup node",
+          "number": 12,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run pnpm/action-setup@v4",
+          "number": 13,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 14,
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+        },
+      ],
+    },
+    "offset": undefined,
+    "shownLines": 15,
+    "summary": "Step 4 — test / Setup node: 15 of 15 lines",
+    "totalLines": 15,
+    "truncated": false,
+  },
+}
+`;
+
+exports[`renderStepLog (test job 92374541741) > honors offset within a step log 1`] = `
+{
+  "content": [
+    {
+      "text": "$ NODE_OPTIONS="--no-warnings --experimental-vm-modules" jest --coverage
+FAIL test/serialize.test.ts
+  ● Test suite failed to run
+
+    The TypeScript compiler "typescript" (version 7.0.2) does not expose the JavaScript compiler API required by ts-jest. To use TypeScript 7 for project type-checking, install it as "@typescript/native" and alias "@typescript/typescript6" as "typescript" for ts-jest.
+
+      at Importer.typescript (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/utils/importer.js:35:19)
+      at new ConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/config/config-set.js:203:51)
+      at TsJestTransformer._createConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:119:16)
+      at TsJestTransformer._configsFor (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:98:34)
+      at TsJestTransformer.getCacheKey (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:252:30)
+      at ScriptTransformer._getCacheKey (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:188:41)
+      at ScriptTransformer._getFileCachePath (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:224:27)
+      at ScriptTransformer.transformSource (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:395:32)
+      at ScriptTransformer._transformAndBuildScript (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:512:40)
+      at ScriptTransformer.transform (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:551:19)
+
+FAIL test/deserialize.test.ts
+  ● Test suite failed to run
+
+    The TypeScript compiler "typescript" (version 7.0.2) does not expose the JavaScript compiler API required by ts-jest. To use TypeScript 7 for project type-checking, install it as "@typescript/native" and alias "@typescript/typescript6" as "typescript" for ts-jest.
+
+      at Importer.typescript (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/utils/importer.js:35:19)
+      at new ConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/config/config-set.js:203:51)
+      at TsJestTransformer._createConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:119:16)
+      at TsJestTransformer._configsFor (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:98:34)
+      at TsJestTransformer.getCacheKey (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:252:30)
+      at ScriptTransformer._getCacheKey (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:188:41)
+      at ScriptTransformer._getFileCachePath (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:224:27)
+      at ScriptTransformer.transformSource (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:395:32)
+      at ScriptTransformer._transformAndBuildScript (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:512:40)
+      at ScriptTransformer.transform (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:551:19)
+
+----------|---------|----------|---------|---------|-------------------
+File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+----------|---------|----------|---------|---------|-------------------
+All files |       0 |        0 |       0 |       0 |
+----------|---------|----------|---------|---------|-------------------
+Test Suites: 2 failed, 2 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        0.603 s
+Ran all test suites.
+[ELIFECYCLE] Test failed. See above for more details.
+##[error]Process completed with exit code 1.
+Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Post job cleanup.
+Pruning is unnecessary.
+Post job cleanup.
+[command]/usr/bin/git version
+git version 2.54.0
+Temporarily overriding HOME='/home/runner/work/_temp/b76f4535-70d8-41c2-ba6a-fd9203cebf31' before making global git config changes
+Adding repository directory to the temporary git global config as a safe directory
+[command]/usr/bin/git config --global --add safe.directory /home/runner/work/php-serialize/php-serialize
+Removing SSH command configuration
+[command]/usr/bin/git config --local --name-only --get-regexp core\\.sshCommand
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Removing HTTP extra header
+[command]/usr/bin/git config --local --name-only --get-regexp http\\.https\\:\\/\\/github\\.com\\/\\.extraheader
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\\.https\\:\\/\\/github\\.com\\/\\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Removing includeIf entries pointing to credentials config files
+[command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\\.gitdir:
+includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+includeif.gitdir:/github/workspace/.git.path
+includeif.gitdir:/github/workspace/.git/worktrees/*.path
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path \\/home\\/runner\\/work\\/_temp\\/git\\-credentials\\-328b5635\\-c71b\\-4b00\\-8135\\-c6eb2b621a60\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path \\/home\\/runner\\/work\\/_temp\\/git\\-credentials\\-328b5635\\-c71b\\-4b00\\-8135\\-c6eb2b621a60\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+/github/runner_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \\/github\\/runner_temp\\/git\\-credentials\\-328b5635\\-c71b\\-4b00\\-8135\\-c6eb2b621a60\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+/github/runner_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \\/github\\/runner_temp\\/git\\-credentials\\-328b5635\\-c71b\\-4b00\\-8135\\-c6eb2b621a60\\.config
+[command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Removing credentials config '/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config'
+Cleaning up orphan processes
+##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+      "type": "text",
+    },
+  ],
+  "details": {
+    "job": {
+      "conclusion": "failure",
+      "name": "test",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run pnpm/action-setup@v4",
+          "number": 3,
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup node",
+          "number": 4,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run pnpm install --frozen-lockfile",
+          "number": 5,
+        },
+        {
+          "conclusion": "failure",
+          "expanded": true,
+          "name": "Run pnpm test --coverage",
+          "number": 6,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Upload Coverage to Codecov",
+          "number": 7,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Post Setup node",
+          "number": 12,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run pnpm/action-setup@v4",
+          "number": 13,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 14,
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+        },
+      ],
+    },
+    "offset": 5,
+    "shownLines": 82,
+    "summary": "Step 6 — test / Run pnpm test --coverage: 82 of 86 lines",
+    "totalLines": 86,
+    "truncated": false,
+  },
+}
+`;
+
+exports[`renderStepLog (test job 92374541741) > reports offset beyond the step log length 1`] = `
+{
+  "content": [
+    {
+      "text": "Offset 9999 exceeds step log length (86 lines).",
+      "type": "text",
+    },
+  ],
+  "details": {},
+}
+`;
+
+exports[`renderStepLog (test job 92374541741) > returns the failing test step's log (test step 6) 1`] = `
+{
+  "content": [
+    {
+      "text": "pnpm test --coverage
+shell: /usr/bin/bash -e {0}
+env:
+  PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+$ NODE_OPTIONS="--no-warnings --experimental-vm-modules" jest --coverage
+FAIL test/serialize.test.ts
+  ● Test suite failed to run
+
+    The TypeScript compiler "typescript" (version 7.0.2) does not expose the JavaScript compiler API required by ts-jest. To use TypeScript 7 for project type-checking, install it as "@typescript/native" and alias "@typescript/typescript6" as "typescript" for ts-jest.
+
+      at Importer.typescript (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/utils/importer.js:35:19)
+      at new ConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/config/config-set.js:203:51)
+      at TsJestTransformer._createConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:119:16)
+      at TsJestTransformer._configsFor (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:98:34)
+      at TsJestTransformer.getCacheKey (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:252:30)
+      at ScriptTransformer._getCacheKey (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:188:41)
+      at ScriptTransformer._getFileCachePath (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:224:27)
+      at ScriptTransformer.transformSource (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:395:32)
+      at ScriptTransformer._transformAndBuildScript (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:512:40)
+      at ScriptTransformer.transform (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:551:19)
+
+FAIL test/deserialize.test.ts
+  ● Test suite failed to run
+
+    The TypeScript compiler "typescript" (version 7.0.2) does not expose the JavaScript compiler API required by ts-jest. To use TypeScript 7 for project type-checking, install it as "@typescript/native" and alias "@typescript/typescript6" as "typescript" for ts-jest.
+
+      at Importer.typescript (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/utils/importer.js:35:19)
+      at new ConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/config/config-set.js:203:51)
+      at TsJestTransformer._createConfigSet (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:119:16)
+      at TsJestTransformer._configsFor (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:98:34)
+      at TsJestTransformer.getCacheKey (node_modules/.pnpm/ts-jest@29.4.12_@babel+core@7.29.7_supports-color@8.1.1__@jest+transform@30.4.1_support_6f57780c8b47041e0e04b405a5b07703/node_modules/ts-jest/dist/legacy/ts-jest-transformer.js:252:30)
+      at ScriptTransformer._getCacheKey (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:188:41)
+      at ScriptTransformer._getFileCachePath (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:224:27)
+      at ScriptTransformer.transformSource (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:395:32)
+      at ScriptTransformer._transformAndBuildScript (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:512:40)
+      at ScriptTransformer.transform (node_modules/.pnpm/@jest+transform@30.4.1_supports-color@8.1.1/node_modules/@jest/transform/build/index.js:551:19)
+
+----------|---------|----------|---------|---------|-------------------
+File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+----------|---------|----------|---------|---------|-------------------
+All files |       0 |        0 |       0 |       0 |
+----------|---------|----------|---------|---------|-------------------
+Test Suites: 2 failed, 2 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        0.603 s
+Ran all test suites.
+[ELIFECYCLE] Test failed. See above for more details.
+##[error]Process completed with exit code 1.
+Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Post job cleanup.
+Pruning is unnecessary.
+Post job cleanup.
+[command]/usr/bin/git version
+git version 2.54.0
+Temporarily overriding HOME='/home/runner/work/_temp/b76f4535-70d8-41c2-ba6a-fd9203cebf31' before making global git config changes
+Adding repository directory to the temporary git global config as a safe directory
+[command]/usr/bin/git config --global --add safe.directory /home/runner/work/php-serialize/php-serialize
+Removing SSH command configuration
+[command]/usr/bin/git config --local --name-only --get-regexp core\\.sshCommand
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Removing HTTP extra header
+[command]/usr/bin/git config --local --name-only --get-regexp http\\.https\\:\\/\\/github\\.com\\/\\.extraheader
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\\.https\\:\\/\\/github\\.com\\/\\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Removing includeIf entries pointing to credentials config files
+[command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\\.gitdir:
+includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+includeif.gitdir:/github/workspace/.git.path
+includeif.gitdir:/github/workspace/.git/worktrees/*.path
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path \\/home\\/runner\\/work\\/_temp\\/git\\-credentials\\-328b5635\\-c71b\\-4b00\\-8135\\-c6eb2b621a60\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path \\/home\\/runner\\/work\\/_temp\\/git\\-credentials\\-328b5635\\-c71b\\-4b00\\-8135\\-c6eb2b621a60\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+/github/runner_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \\/github\\/runner_temp\\/git\\-credentials\\-328b5635\\-c71b\\-4b00\\-8135\\-c6eb2b621a60\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+/github/runner_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \\/github\\/runner_temp\\/git\\-credentials\\-328b5635\\-c71b\\-4b00\\-8135\\-c6eb2b621a60\\.config
+[command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Removing credentials config '/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config'
+Cleaning up orphan processes
+##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+      "type": "text",
+    },
+  ],
+  "details": {
+    "job": {
+      "conclusion": "failure",
+      "name": "test",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run pnpm/action-setup@v4",
+          "number": 3,
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup node",
+          "number": 4,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run pnpm install --frozen-lockfile",
+          "number": 5,
+        },
+        {
+          "conclusion": "failure",
+          "expanded": true,
+          "name": "Run pnpm test --coverage",
+          "number": 6,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Upload Coverage to Codecov",
+          "number": 7,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Post Setup node",
+          "number": 12,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run pnpm/action-setup@v4",
+          "number": 13,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 14,
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+        },
+      ],
+    },
+    "offset": undefined,
+    "shownLines": 86,
+    "summary": "Step 6 — test / Run pnpm test --coverage: 86 of 86 lines",
+    "totalLines": 86,
+    "truncated": false,
+  },
+}
+`;
+
+exports[`renderStepLog > matches job by id 1`] = `
+{
+  "content": [
+    {
+      "text": "npx prettier --check ./
+shell: /usr/bin/bash -e {0}
+env:
+  PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+Checking formatting...
+[warn] pnpm-lock.yaml
+[warn] Code style issues found in the above file. Run Prettier with --write to fix.
+##[error]Process completed with exit code 1.
+Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Post job cleanup.
+Pruning is unnecessary.
+Post job cleanup.
+[command]/usr/bin/git version
+git version 2.54.0
+Temporarily overriding HOME='/home/runner/work/_temp/7d82f6ce-5bb3-42a4-a456-5f3b8dd8b309' before making global git config changes
+Adding repository directory to the temporary git global config as a safe directory
+[command]/usr/bin/git config --global --add safe.directory /home/runner/work/php-serialize/php-serialize
+Removing SSH command configuration
+[command]/usr/bin/git config --local --name-only --get-regexp core\\.sshCommand
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Removing HTTP extra header
+[command]/usr/bin/git config --local --name-only --get-regexp http\\.https\\:\\/\\/github\\.com\\/\\.extraheader
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\\.https\\:\\/\\/github\\.com\\/\\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Removing includeIf entries pointing to credentials config files
+[command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\\.gitdir:
+includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+includeif.gitdir:/github/workspace/.git.path
+includeif.gitdir:/github/workspace/.git/worktrees/*.path
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path \\/home\\/runner\\/work\\/_temp\\/git\\-credentials\\-816cf3b4\\-e793\\-4cb2\\-ac44\\-31ccfe0b488f\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path \\/home\\/runner\\/work\\/_temp\\/git\\-credentials\\-816cf3b4\\-e793\\-4cb2\\-ac44\\-31ccfe0b488f\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+/github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \\/github\\/runner_temp\\/git\\-credentials\\-816cf3b4\\-e793\\-4cb2\\-ac44\\-31ccfe0b488f\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+/github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \\/github\\/runner_temp\\/git\\-credentials\\-816cf3b4\\-e793\\-4cb2\\-ac44\\-31ccfe0b488f\\.config
+[command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Removing credentials config '/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config'
+Cleaning up orphan processes
+##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+      "type": "text",
+    },
+  ],
+  "details": {
+    "job": {
+      "conclusion": "failure",
+      "name": "lint",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run pnpm/action-setup@v4",
+          "number": 3,
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup node",
+          "number": 4,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run pnpm install --frozen-lockfile",
+          "number": 5,
+        },
+        {
+          "conclusion": "failure",
+          "expanded": true,
+          "name": "Run npx prettier --check ./",
+          "number": 6,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run npx tsc --pretty",
+          "number": 7,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run pnpm lint",
+          "number": 8,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Post Setup node",
+          "number": 14,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run pnpm/action-setup@v4",
+          "number": 15,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 16,
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 17,
+        },
+      ],
+    },
+    "offset": undefined,
+    "shownLines": 45,
+    "summary": "Step 6 — lint / Run npx prettier --check ./: 45 of 45 lines",
+    "totalLines": 45,
+    "truncated": false,
+  },
+}
+`;
+
+exports[`renderStepLog > reports an unknown job name 1`] = `
+{
+  "content": [
+    {
+      "text": "Job "no-such-job" not found. Available: test (id: 92374541741), build (id: 92374541801), lint (id: 92374541920)",
+      "type": "text",
+    },
+  ],
+  "details": {},
+}
+`;
+
+exports[`renderStepLog > reports an unknown step name 1`] = `
+{
+  "content": [
+    {
+      "text": "Step "no-such-step" not found. Available: Set up job (1), Run actions/checkout@v7 (2), Run pnpm/action-setup@v4 (3), Setup node (4), Run pnpm install --frozen-lockfile (5), Run npx prettier --check ./ (6), Run npx tsc --pretty (7), Run pnpm lint (8), Post Setup node (14), Post Run pnpm/action-setup@v4 (15), Post Run actions/checkout@v7 (16), Complete job (17)",
+      "type": "text",
+    },
+  ],
+  "details": {},
+}
+`;
+
+exports[`renderStepLog > requires job when fetching a step's logs 1`] = `
+{
+  "content": [
+    {
+      "text": "\`job\` is required when fetching a step's logs.",
+      "type": "text",
+    },
+  ],
+  "details": {},
+}
+`;
+
+exports[`renderStepLog > returns a failing step's complete plain-text log (lint step 6) 1`] = `
+{
+  "content": [
+    {
+      "text": "npx prettier --check ./
+shell: /usr/bin/bash -e {0}
+env:
+  PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+Checking formatting...
+[warn] pnpm-lock.yaml
+[warn] Code style issues found in the above file. Run Prettier with --write to fix.
+##[error]Process completed with exit code 1.
+Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Post job cleanup.
+Pruning is unnecessary.
+Post job cleanup.
+[command]/usr/bin/git version
+git version 2.54.0
+Temporarily overriding HOME='/home/runner/work/_temp/7d82f6ce-5bb3-42a4-a456-5f3b8dd8b309' before making global git config changes
+Adding repository directory to the temporary git global config as a safe directory
+[command]/usr/bin/git config --global --add safe.directory /home/runner/work/php-serialize/php-serialize
+Removing SSH command configuration
+[command]/usr/bin/git config --local --name-only --get-regexp core\\.sshCommand
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Removing HTTP extra header
+[command]/usr/bin/git config --local --name-only --get-regexp http\\.https\\:\\/\\/github\\.com\\/\\.extraheader
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\\.https\\:\\/\\/github\\.com\\/\\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Removing includeIf entries pointing to credentials config files
+[command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\\.gitdir:
+includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+includeif.gitdir:/github/workspace/.git.path
+includeif.gitdir:/github/workspace/.git/worktrees/*.path
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path \\/home\\/runner\\/work\\/_temp\\/git\\-credentials\\-816cf3b4\\-e793\\-4cb2\\-ac44\\-31ccfe0b488f\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path \\/home\\/runner\\/work\\/_temp\\/git\\-credentials\\-816cf3b4\\-e793\\-4cb2\\-ac44\\-31ccfe0b488f\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+/github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \\/github\\/runner_temp\\/git\\-credentials\\-816cf3b4\\-e793\\-4cb2\\-ac44\\-31ccfe0b488f\\.config
+[command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+/github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+[command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \\/github\\/runner_temp\\/git\\-credentials\\-816cf3b4\\-e793\\-4cb2\\-ac44\\-31ccfe0b488f\\.config
+[command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Removing credentials config '/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config'
+Cleaning up orphan processes
+##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+      "type": "text",
+    },
+  ],
+  "details": {
+    "job": {
+      "conclusion": "failure",
+      "name": "lint",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run pnpm/action-setup@v4",
+          "number": 3,
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup node",
+          "number": 4,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run pnpm install --frozen-lockfile",
+          "number": 5,
+        },
+        {
+          "conclusion": "failure",
+          "expanded": true,
+          "name": "Run npx prettier --check ./",
+          "number": 6,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run npx tsc --pretty",
+          "number": 7,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run pnpm lint",
+          "number": 8,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Post Setup node",
+          "number": 14,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run pnpm/action-setup@v4",
+          "number": 15,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 16,
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 17,
+        },
+      ],
+    },
+    "offset": undefined,
+    "shownLines": 45,
+    "summary": "Step 6 — lint / Run npx prettier --check ./: 45 of 45 lines",
+    "totalLines": 45,
+    "truncated": false,
+  },
+}
+`;
+
+exports[`renderStepLog > returns a passing step's complete plain-text log (lint step 5) 1`] = `
+{
+  "content": [
+    {
+      "text": "pnpm install --frozen-lockfile
+shell: /usr/bin/bash -e {0}
+env:
+  PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+? Verifying lockfile against supply-chain policies (564 entries)...
+Lockfile is up to date, resolution step is skipped
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Packages: +493
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 493, reused 492, downloaded 0, added 0
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: /home/runner/setup-pnpm/node_modules/.bin/store/v11
+  Virtual store is at:             node_modules/.pnpm
+Progress: resolved 493, reused 493, downloaded 0, added 493, done
+✓ Lockfile passes supply-chain policies (564 entries in 2.8s)
+.../node_modules/unrs-resolver postinstall$ node postinstall.js
+.../node_modules/unrs-resolver postinstall: Done
+
+devDependencies:
++ @eslint/js 10.0.1
++ @jest/globals 30.4.1
++ @types/node 24.13.3
++ esbuild 0.28.1
++ eslint 10.8.0
++ eslint-config-prettier 10.1.8
++ eslint-plugin-import 2.32.0
++ eslint-plugin-n 18.2.2
++ eslint-plugin-promise 7.3.0
++ husky 9.1.7
++ jest 30.4.2
++ lint-staged 17.3.0
++ prettier 3.9.6
++ ts-jest 29.4.12
++ tslib 2.8.1
++ typescript 7.0.2
++ typescript-eslint 8.66.0
+
+. prepare$ husky
+. prepare: Done
+Done in 3.8s using pnpm v11.20.0",
+      "type": "text",
+    },
+  ],
+  "details": {
+    "job": {
+      "conclusion": "failure",
+      "name": "lint",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run actions/checkout@v7",
+          "number": 2,
+        },
+        {
+          "conclusion": "success",
+          "name": "Run pnpm/action-setup@v4",
+          "number": 3,
+        },
+        {
+          "conclusion": "success",
+          "name": "Setup node",
+          "number": 4,
+        },
+        {
+          "conclusion": "success",
+          "expanded": true,
+          "name": "Run pnpm install --frozen-lockfile",
+          "number": 5,
+        },
+        {
+          "conclusion": "failure",
+          "name": "Run npx prettier --check ./",
+          "number": 6,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run npx tsc --pretty",
+          "number": 7,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Run pnpm lint",
+          "number": 8,
+        },
+        {
+          "conclusion": "skipped",
+          "name": "Post Setup node",
+          "number": 14,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run pnpm/action-setup@v4",
+          "number": 15,
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v7",
+          "number": 16,
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 17,
+        },
+      ],
+    },
+    "offset": undefined,
+    "shownLines": 40,
+    "summary": "Step 5 — lint / Run pnpm install --frozen-lockfile: 40 of 40 lines",
+    "totalLines": 40,
+    "truncated": false,
+  },
+}
+`;

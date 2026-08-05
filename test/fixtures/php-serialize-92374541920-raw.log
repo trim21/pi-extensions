@@ -1,0 +1,274 @@
+﻿2026-08-05T16:35:50.8358826Z Current runner version: '2.336.0'
+2026-08-05T16:35:50.8382938Z ##[group]Runner Image Provisioner
+2026-08-05T16:35:50.8383854Z Hosted Compute Agent
+2026-08-05T16:35:50.8384399Z Version: 20260707.563
+2026-08-05T16:35:50.8384986Z Commit: 02667638d2b423fbc733a8e32a88b44996a3ba6e
+2026-08-05T16:35:50.8385687Z Build Date: 2026-07-07T19:33:50Z
+2026-08-05T16:35:50.8386304Z Worker ID: {bca33047-b114-4c18-b38d-423ae15eb077}
+2026-08-05T16:35:50.8386960Z Azure Region: westus3
+2026-08-05T16:35:50.8387488Z ##[endgroup]
+2026-08-05T16:35:50.8388807Z ##[group]Operating System
+2026-08-05T16:35:50.8389432Z Ubuntu
+2026-08-05T16:35:50.8389913Z 24.04.4
+2026-08-05T16:35:50.8390369Z LTS
+2026-08-05T16:35:50.8390925Z ##[endgroup]
+2026-08-05T16:35:50.8391685Z ##[group]Runner Image
+2026-08-05T16:35:50.8392306Z Image: ubuntu-24.04
+2026-08-05T16:35:50.8392835Z Version: 20260720.247.2
+2026-08-05T16:35:50.8393980Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260720.247/images/ubuntu/Ubuntu2404-Readme.md
+2026-08-05T16:35:50.8395391Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260720.247
+2026-08-05T16:35:50.8396282Z ##[endgroup]
+2026-08-05T16:35:50.8397388Z ##[group]GITHUB_TOKEN Permissions
+2026-08-05T16:35:50.8399288Z Contents: read
+2026-08-05T16:35:50.8399850Z Metadata: read
+2026-08-05T16:35:50.8400355Z Packages: read
+2026-08-05T16:35:50.8400892Z ##[endgroup]
+2026-08-05T16:35:50.8403160Z Secret source: Actions
+2026-08-05T16:35:50.8404274Z Prepare workflow directory
+2026-08-05T16:35:50.8715292Z Prepare all required actions
+2026-08-05T16:35:50.8764005Z Getting action download info
+2026-08-05T16:35:51.2280155Z Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-08-05T16:35:52.2557166Z Download action repository 'pnpm/action-setup@v4' (SHA:b906affcce14559ad1aafd4ab0e942779e9f58b1)
+2026-08-05T16:35:53.1397029Z Download action repository 'actions/setup-node@v7' (SHA:820762786026740c76f36085b0efc47a31fe5020)
+2026-08-05T16:35:53.9535568Z Complete job name: lint
+2026-08-05T16:35:54.0252187Z ##[group]Run actions/checkout@v7
+2026-08-05T16:35:54.0252788Z with:
+2026-08-05T16:35:54.0253030Z   repository: trim21/php-serialize
+2026-08-05T16:35:54.0255827Z   token: ***
+2026-08-05T16:35:54.0256028Z   ssh-strict: true
+2026-08-05T16:35:54.0256238Z   ssh-user: git
+2026-08-05T16:35:54.0256451Z   persist-credentials: true
+2026-08-05T16:35:54.0256685Z   clean: true
+2026-08-05T16:35:54.0256902Z   sparse-checkout-cone-mode: true
+2026-08-05T16:35:54.0257155Z   fetch-depth: 1
+2026-08-05T16:35:54.0257357Z   fetch-tags: false
+2026-08-05T16:35:54.0257568Z   show-progress: true
+2026-08-05T16:35:54.0257784Z   lfs: false
+2026-08-05T16:35:54.0257972Z   submodules: false
+2026-08-05T16:35:54.0258176Z   set-safe-directory: true
+2026-08-05T16:35:54.0258420Z   allow-unsafe-pr-checkout: false
+2026-08-05T16:35:54.0258858Z ##[endgroup]
+2026-08-05T16:35:54.1261764Z Syncing repository: trim21/php-serialize
+2026-08-05T16:35:54.1263123Z ##[group]Getting Git version info
+2026-08-05T16:35:54.1263622Z Working directory is '/home/runner/work/php-serialize/php-serialize'
+2026-08-05T16:35:54.1264245Z [command]/usr/bin/git version
+2026-08-05T16:35:54.1312788Z git version 2.54.0
+2026-08-05T16:35:54.1334162Z ##[endgroup]
+2026-08-05T16:35:54.1349340Z Temporarily overriding HOME='/home/runner/work/_temp/d38d9033-83e4-4e4a-a831-7ad403259350' before making global git config changes
+2026-08-05T16:35:54.1350149Z Adding repository directory to the temporary git global config as a safe directory
+2026-08-05T16:35:54.1354727Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/php-serialize/php-serialize
+2026-08-05T16:35:54.1396734Z Deleting the contents of '/home/runner/work/php-serialize/php-serialize'
+2026-08-05T16:35:54.1399562Z ##[group]Determining repository object format
+2026-08-05T16:35:54.1401101Z ##[endgroup]
+2026-08-05T16:35:54.1401637Z ##[group]Initializing the repository
+2026-08-05T16:35:54.1405079Z [command]/usr/bin/git init /home/runner/work/php-serialize/php-serialize
+2026-08-05T16:35:54.1519941Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-08-05T16:35:54.1520620Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-08-05T16:35:54.1521195Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-08-05T16:35:54.1521859Z hint: call:
+2026-08-05T16:35:54.1522089Z hint:
+2026-08-05T16:35:54.1522424Z hint: 	git config --global init.defaultBranch <name>
+2026-08-05T16:35:54.1522773Z hint:
+2026-08-05T16:35:54.1523110Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-08-05T16:35:54.1523964Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-08-05T16:35:54.1524968Z hint:
+2026-08-05T16:35:54.1525802Z hint: 	git branch -m <name>
+2026-08-05T16:35:54.1526263Z hint:
+2026-08-05T16:35:54.1526905Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-08-05T16:35:54.1528090Z Initialized empty Git repository in /home/runner/work/php-serialize/php-serialize/.git/
+2026-08-05T16:35:54.1535911Z [command]/usr/bin/git remote add origin https://github.com/trim21/php-serialize
+2026-08-05T16:35:54.1574365Z ##[endgroup]
+2026-08-05T16:35:54.1575002Z ##[group]Disabling automatic garbage collection
+2026-08-05T16:35:54.1578587Z [command]/usr/bin/git config --local gc.auto 0
+2026-08-05T16:35:54.1601650Z ##[endgroup]
+2026-08-05T16:35:54.1602273Z ##[group]Setting up auth
+2026-08-05T16:35:54.1602695Z Removing SSH command configuration
+2026-08-05T16:35:54.1607637Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-08-05T16:35:54.1637271Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-08-05T16:35:54.1941146Z Removing HTTP extra header
+2026-08-05T16:35:54.1945975Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-08-05T16:35:54.1972968Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-08-05T16:35:54.2133851Z Removing includeIf entries pointing to credentials config files
+2026-08-05T16:35:54.2138486Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-08-05T16:35:54.2163174Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-08-05T16:35:54.2327424Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-08-05T16:35:54.2355214Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path /home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+2026-08-05T16:35:54.2378241Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+2026-08-05T16:35:54.2407594Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+2026-08-05T16:35:54.2434052Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+2026-08-05T16:35:54.2455323Z ##[endgroup]
+2026-08-05T16:35:54.2456073Z ##[group]Fetching the repository
+2026-08-05T16:35:54.2462839Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +c075a5cef7b1f96b89183568f0b702f521aa674a:refs/remotes/pull/303/merge
+2026-08-05T16:35:54.7546704Z From https://github.com/trim21/php-serialize
+2026-08-05T16:35:54.7548221Z  * [new ref]         c075a5cef7b1f96b89183568f0b702f521aa674a -> pull/303/merge
+2026-08-05T16:35:54.7580626Z ##[endgroup]
+2026-08-05T16:35:54.7581275Z ##[group]Determining the checkout info
+2026-08-05T16:35:54.7582301Z ##[endgroup]
+2026-08-05T16:35:54.7587530Z [command]/usr/bin/git sparse-checkout disable
+2026-08-05T16:35:54.7628942Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-08-05T16:35:54.7651972Z ##[group]Checking out the ref
+2026-08-05T16:35:54.7656416Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/303/merge
+2026-08-05T16:35:54.7712301Z Note: switching to 'refs/remotes/pull/303/merge'.
+2026-08-05T16:35:54.7712973Z 
+2026-08-05T16:35:54.7713483Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-08-05T16:35:54.7714104Z changes and commit them, and you can discard any commits you make in this
+2026-08-05T16:35:54.7714691Z state without impacting any branches by switching back to a branch.
+2026-08-05T16:35:54.7715083Z 
+2026-08-05T16:35:54.7715398Z If you want to create a new branch to retain commits you create, you may
+2026-08-05T16:35:54.7715939Z do so (now or later) by using -c with the switch command. Example:
+2026-08-05T16:35:54.7716281Z 
+2026-08-05T16:35:54.7716505Z   git switch -c <new-branch-name>
+2026-08-05T16:35:54.7716786Z 
+2026-08-05T16:35:54.7717003Z Or undo this operation with:
+2026-08-05T16:35:54.7717299Z 
+2026-08-05T16:35:54.7717492Z   git switch -
+2026-08-05T16:35:54.7718562Z 
+2026-08-05T16:35:54.7718941Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-08-05T16:35:54.7719440Z 
+2026-08-05T16:35:54.7720173Z HEAD is now at c075a5c Merge d33233a4d73e4e25b1fc602846760b159813c1b5 into 51c91633e6e2dd31980eced66114a8d713f2aef4
+2026-08-05T16:35:54.7721877Z ##[endgroup]
+2026-08-05T16:35:54.7755817Z [command]/usr/bin/git log -1 --format=%H
+2026-08-05T16:35:54.7776161Z c075a5cef7b1f96b89183568f0b702f521aa674a
+2026-08-05T16:35:54.7977396Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-05T16:35:54.7979305Z ##[group]Run pnpm/action-setup@v4
+2026-08-05T16:35:54.7979569Z with:
+2026-08-05T16:35:54.7979770Z   dest: ~/setup-pnpm
+2026-08-05T16:35:54.7979978Z   run_install: null
+2026-08-05T16:35:54.7980195Z   cache: false
+2026-08-05T16:35:54.7980416Z   cache_dependency_path: pnpm-lock.yaml
+2026-08-05T16:35:54.7980693Z   package_json_file: package.json
+2026-08-05T16:35:54.7980938Z   standalone: false
+2026-08-05T16:35:54.7981134Z ##[endgroup]
+2026-08-05T16:35:54.9333800Z ##[group]Running self-installer...
+2026-08-05T16:35:55.3185674Z (node:2252) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-08-05T16:35:55.3187211Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-08-05T16:35:55.6161787Z Progress: resolved 1, reused 0, downloaded 0, added 0
+2026-08-05T16:35:55.6277179Z Packages: +1
+2026-08-05T16:35:55.6279249Z +
+2026-08-05T16:35:56.2858498Z Progress: resolved 1, reused 0, downloaded 1, added 1, done
+2026-08-05T16:35:56.3101567Z 
+2026-08-05T16:35:56.3102088Z dependencies:
+2026-08-05T16:35:56.3102512Z + pnpm 11.20.0
+2026-08-05T16:35:56.3102704Z 
+2026-08-05T16:35:56.3125044Z Done in 1.2s
+2026-08-05T16:35:56.3506122Z ##[endgroup]
+2026-08-05T16:35:56.3506596Z Installation Completed!
+2026-08-05T16:35:56.3673501Z ##[group]Run actions/setup-node@v7
+2026-08-05T16:35:56.3673779Z with:
+2026-08-05T16:35:56.3673978Z   node-version: 24
+2026-08-05T16:35:56.3674179Z   cache: pnpm
+2026-08-05T16:35:56.3674378Z   check-latest: false
+2026-08-05T16:35:56.3676631Z   token: ***
+2026-08-05T16:35:56.3676999Z   package-manager-cache: true
+2026-08-05T16:35:56.3677235Z env:
+2026-08-05T16:35:56.3677482Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-08-05T16:35:56.3677790Z ##[endgroup]
+2026-08-05T16:35:56.4914249Z Found in cache @ /opt/hostedtoolcache/node/24.18.0/x64
+2026-08-05T16:35:56.4916568Z ##[group]Environment details
+2026-08-05T16:35:56.8729148Z node: v24.18.0
+2026-08-05T16:35:56.8729565Z npm: 11.16.0
+2026-08-05T16:35:56.8729809Z yarn: 1.22.22
+2026-08-05T16:35:56.8730417Z ##[endgroup]
+2026-08-05T16:35:56.8748414Z [command]/home/runner/setup-pnpm/node_modules/.bin/pnpm store path --silent
+2026-08-05T16:35:57.4404619Z /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-08-05T16:35:57.6613119Z Cache hit for: node-cache-Linux-x64-pnpm-288e36242b678c5ee9fdae363e666368334244168a057201c0438e366a8fa335
+2026-08-05T16:35:58.8918144Z Received 4488498 of 33848626 (13.3%), 4.3 MBs/sec
+2026-08-05T16:35:59.8923732Z Received 8682802 of 33848626 (25.7%), 4.1 MBs/sec
+2026-08-05T16:36:00.8937380Z Received 8682802 of 33848626 (25.7%), 2.8 MBs/sec
+2026-08-05T16:36:01.8950322Z Received 8682802 of 33848626 (25.7%), 2.1 MBs/sec
+2026-08-05T16:36:02.8960948Z Received 8682802 of 33848626 (25.7%), 1.7 MBs/sec
+2026-08-05T16:36:03.8959782Z Received 21265714 of 33848626 (62.8%), 3.4 MBs/sec
+2026-08-05T16:36:03.9864376Z Received 33848626 of 33848626 (100.0%), 5.3 MBs/sec
+2026-08-05T16:36:03.9865343Z Cache Size: ~32 MB (33848626 B)
+2026-08-05T16:36:03.9899914Z [command]/usr/bin/tar -xf /home/runner/work/_temp/a06474c2-5e56-4ce1-a451-3d62f70b019b/cache.tzst -P -C /home/runner/work/php-serialize/php-serialize --use-compress-program unzstd
+2026-08-05T16:36:04.2735250Z Cache restored successfully
+2026-08-05T16:36:04.2755628Z Cache restored from key: node-cache-Linux-x64-pnpm-288e36242b678c5ee9fdae363e666368334244168a057201c0438e366a8fa335
+2026-08-05T16:36:04.2868412Z ##[group]Run pnpm install --frozen-lockfile
+2026-08-05T16:36:04.2868953Z [36;1mpnpm install --frozen-lockfile[0m
+2026-08-05T16:36:04.2907112Z shell: /usr/bin/bash -e {0}
+2026-08-05T16:36:04.2907465Z env:
+2026-08-05T16:36:04.2907793Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-08-05T16:36:04.2908234Z ##[endgroup]
+2026-08-05T16:36:04.7831246Z ? Verifying lockfile against supply-chain policies (564 entries)...
+2026-08-05T16:36:04.7905911Z Lockfile is up to date, resolution step is skipped
+2026-08-05T16:36:04.9004166Z Progress: resolved 1, reused 0, downloaded 0, added 0
+2026-08-05T16:36:04.9692852Z Packages: +493
+2026-08-05T16:36:04.9718566Z ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+2026-08-05T16:36:05.9053448Z Progress: resolved 493, reused 492, downloaded 0, added 0
+2026-08-05T16:36:05.9123814Z Packages are hard linked from the content-addressable store to the virtual store.
+2026-08-05T16:36:05.9151976Z   Content-addressable store is at: /home/runner/setup-pnpm/node_modules/.bin/store/v11
+2026-08-05T16:36:05.9162691Z   Virtual store is at:             node_modules/.pnpm
+2026-08-05T16:36:06.5389540Z Progress: resolved 493, reused 493, downloaded 0, added 493, done
+2026-08-05T16:36:07.6150982Z ✓ Lockfile passes supply-chain policies (564 entries in 2.8s)
+2026-08-05T16:36:07.6319191Z .../node_modules/unrs-resolver postinstall$ node postinstall.js
+2026-08-05T16:36:07.6839978Z .../node_modules/unrs-resolver postinstall: Done
+2026-08-05T16:36:07.9925341Z 
+2026-08-05T16:36:07.9926082Z devDependencies:
+2026-08-05T16:36:07.9926862Z + @eslint/js 10.0.1
+2026-08-05T16:36:07.9927324Z + @jest/globals 30.4.1
+2026-08-05T16:36:07.9927804Z + @types/node 24.13.3
+2026-08-05T16:36:07.9928233Z + esbuild 0.28.1
+2026-08-05T16:36:07.9928650Z + eslint 10.8.0
+2026-08-05T16:36:07.9929193Z + eslint-config-prettier 10.1.8
+2026-08-05T16:36:07.9929716Z + eslint-plugin-import 2.32.0
+2026-08-05T16:36:07.9930260Z + eslint-plugin-n 18.2.2
+2026-08-05T16:36:07.9930863Z + eslint-plugin-promise 7.3.0
+2026-08-05T16:36:07.9931562Z + husky 9.1.7
+2026-08-05T16:36:07.9932094Z + jest 30.4.2
+2026-08-05T16:36:07.9932533Z + lint-staged 17.3.0
+2026-08-05T16:36:07.9933426Z + prettier 3.9.6
+2026-08-05T16:36:07.9933940Z + ts-jest 29.4.12
+2026-08-05T16:36:07.9934402Z + tslib 2.8.1
+2026-08-05T16:36:07.9934953Z + typescript 7.0.2
+2026-08-05T16:36:07.9935460Z + typescript-eslint 8.66.0
+2026-08-05T16:36:07.9935808Z 
+2026-08-05T16:36:08.0879565Z . prepare$ husky
+2026-08-05T16:36:08.1301673Z . prepare: Done
+2026-08-05T16:36:08.1446120Z Done in 3.8s using pnpm v11.20.0
+2026-08-05T16:36:08.1842645Z ##[group]Run npx prettier --check ./
+2026-08-05T16:36:08.1843040Z [36;1mnpx prettier --check ./[0m
+2026-08-05T16:36:08.1868383Z shell: /usr/bin/bash -e {0}
+2026-08-05T16:36:08.1868789Z env:
+2026-08-05T16:36:08.1869150Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-08-05T16:36:08.1869541Z ##[endgroup]
+2026-08-05T16:36:09.2942526Z Checking formatting...
+2026-08-05T16:36:09.8046392Z [[33mwarn[39m] pnpm-lock.yaml
+2026-08-05T16:36:09.9848974Z [[33mwarn[39m] Code style issues found in the above file. Run Prettier with --write to fix.
+2026-08-05T16:36:10.0260911Z ##[error]Process completed with exit code 1.
+2026-08-05T16:36:10.0446921Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-08-05T16:36:10.0448080Z Post job cleanup.
+2026-08-05T16:36:10.1866235Z Pruning is unnecessary.
+2026-08-05T16:36:10.1987404Z Post job cleanup.
+2026-08-05T16:36:10.2824408Z [command]/usr/bin/git version
+2026-08-05T16:36:10.2859895Z git version 2.54.0
+2026-08-05T16:36:10.2892539Z Temporarily overriding HOME='/home/runner/work/_temp/7d82f6ce-5bb3-42a4-a456-5f3b8dd8b309' before making global git config changes
+2026-08-05T16:36:10.2894062Z Adding repository directory to the temporary git global config as a safe directory
+2026-08-05T16:36:10.2896725Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/php-serialize/php-serialize
+2026-08-05T16:36:10.2923134Z Removing SSH command configuration
+2026-08-05T16:36:10.2928528Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-08-05T16:36:10.2957823Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-08-05T16:36:10.3130584Z Removing HTTP extra header
+2026-08-05T16:36:10.3136956Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-08-05T16:36:10.3171029Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-08-05T16:36:10.3331631Z Removing includeIf entries pointing to credentials config files
+2026-08-05T16:36:10.3337660Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-08-05T16:36:10.3361056Z includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+2026-08-05T16:36:10.3362312Z includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+2026-08-05T16:36:10.3363121Z includeif.gitdir:/github/workspace/.git.path
+2026-08-05T16:36:10.3363929Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-08-05T16:36:10.3370664Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path
+2026-08-05T16:36:10.3389415Z /home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+2026-08-05T16:36:10.3397214Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-816cf3b4\-e793\-4cb2\-ac44\-31ccfe0b488f\.config
+2026-08-05T16:36:10.3425824Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path
+2026-08-05T16:36:10.3449674Z /home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+2026-08-05T16:36:10.3456949Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/php-serialize/php-serialize/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-816cf3b4\-e793\-4cb2\-ac44\-31ccfe0b488f\.config
+2026-08-05T16:36:10.3480299Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-08-05T16:36:10.3497411Z /github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+2026-08-05T16:36:10.3505185Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-816cf3b4\-e793\-4cb2\-ac44\-31ccfe0b488f\.config
+2026-08-05T16:36:10.3531542Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-08-05T16:36:10.3549442Z /github/runner_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config
+2026-08-05T16:36:10.3554976Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-816cf3b4\-e793\-4cb2\-ac44\-31ccfe0b488f\.config
+2026-08-05T16:36:10.3582214Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-08-05T16:36:10.3746299Z Removing credentials config '/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config'
+2026-08-05T16:36:10.3863251Z Cleaning up orphan processes
+2026-08-05T16:36:10.4095605Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

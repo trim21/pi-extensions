@@ -429,15 +429,22 @@ export function statusIcon(conclusion: string | null): string {
 /**
  * Extract step content from raw job log by matching step names to "Run " groups.
  *
- * User-defined steps (actions, shell commands) each emit a `##[group]Run <name>`
- * at depth 1. We match API step names against these group names by stripping the
- * "Run " / "Post Run " prefix and comparing the action name.
+ * Each top-level step emits a `##[group]Run <name>` / `##[group]Post Run <name>`
+ * marker at depth 1. Composite actions emit their internal steps as *additional*
+ * depth-1 groups *after* the composite's own `##[endgroup]` (e.g. the internal
+ * `Run actions/setup-python@…` groups inside `Run pypa/cibuildwheel@…`), so the
+ * log's "Run " groups are NOT one-per-step.
  *
- * This handles composite actions correctly: their internal actions produce extra
- * "Run " groups that don't match any API step name, so they are naturally skipped.
+ * To handle that we treat a group as an *anchor* only when its action name
+ * (after stripping the "Run "/"Post Run " prefix) matches a top-level API step
+ * name. Composite-action internals match no API step and are absorbed into the
+ * span of the enclosing step instead of truncating it.
  *
- * Step 1 ("Set up job") maps to everything before the first matched "Run "/"Post Run " group.
- * Steps 2+ map to the "Run "/"Post Run " group whose action name matches the step name.
+ * Step 1 ("Set up job") maps to everything before the first anchor group.
+ * Steps with an anchor map to the span from their anchor to the next anchor.
+ * Explicitly named steps that lack a "Run " prefix (e.g. a step named
+ * "Setup node" running actions/setup-node) are located between the previous
+ * and next anchor's groups.
  * Steps that were skipped and never executed return null.
  *
  * Returns null if no matching group is found.
@@ -452,34 +459,7 @@ export function extractStepFromLog(
 
   const lines = log.split("\n");
 
-  // Step 1 ("Set up job"): everything before the first "Run " or "Post Run " group at depth 1
-  if (stepNumber === 1) {
-    let depth = 0;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.includes("##[endgroup]")) {
-        if (depth > 0) depth--;
-        continue;
-      }
-      if (line.includes("##[group]")) {
-        depth++;
-        if (depth === 1) {
-          const m = line.match(/##\[group\](.*)/);
-          const name = m ? m[1].trim() : "";
-          if (name.startsWith("Run ") || name.startsWith("Post Run ")) {
-            return lines.slice(0, i).join("\n").trimEnd();
-          }
-        }
-      }
-    }
-    return lines.join("\n").trimEnd();
-  }
-
-  // Steps 2+: match "Run "/"Post Run " group by comparing the action name
-  // (the part after "Run " or "Post Run " prefix)
-  const stepAction = targetStep.name.replace(/^(Run |Post Run )/, "").trim();
-
-  // Collect all "Run "/"Post Run " groups at depth 1
+  // Collect depth-1 "Run "/"Post Run " groups in log order.
   const groups: Array<{ line: number; action: string }> = [];
   let depth = 0;
   for (let i = 0; i < lines.length; i++) {
@@ -494,20 +474,386 @@ export function extractStepFromLog(
         const m = line.match(/##\[group\](.*)/);
         const name = m ? m[1].trim() : "";
         if (name.startsWith("Run ") || name.startsWith("Post Run ")) {
-          const action = name.replace(/^(Run |Post Run )/, "").trim();
-          groups.push({ line: i, action });
+          groups.push({ line: i, action: name.replace(/^(Run |Post Run )/, "").trim() });
         }
       }
     }
   }
 
-  // Find the matching group by action name
-  const matchedIdx = groups.findIndex((g) => g.action === stepAction);
-  if (matchedIdx === -1) return null;
+  // Step 1 ("Set up job"): everything before the first "Run "/"Post Run " group.
+  if (stepNumber === 1) {
+    return lines
+      .slice(0, groups[0]?.line ?? lines.length)
+      .join("\n")
+      .trimEnd();
+  }
 
-  const start = groups[matchedIdx].line;
-  const end = matchedIdx + 1 < groups.length ? groups[matchedIdx + 1].line : lines.length;
-  return lines.slice(start, end).join("\n").trimEnd();
+  // API steps that produce a "Run "/"Post Run " log group, in step order.
+  const runSteps = apiSteps
+    .filter((s) => /^(Run |Post Run )/.test(s.name))
+    .map((s) => ({ number: s.number, action: s.name.replace(/^(Run |Post Run )/, "").trim() }))
+    .sort((a, b) => a.number - b.number);
+
+  // Greedily assign each run step the first unclaimed group whose action name
+  // matches (log order). Leftover groups are composite-action internals.
+  const used = new Set<number>();
+  const stepToGroup = new Map<number, number>(); // api step number -> group index
+  for (const rs of runSteps) {
+    const gi = groups.findIndex((g, idx) => !used.has(idx) && g.action === rs.action);
+    if (gi !== -1) {
+      used.add(gi);
+      stepToGroup.set(rs.number, gi);
+    }
+  }
+
+  // Anchor sequence in log order.
+  const anchors = [...stepToGroup.entries()]
+    .map(([stepNum, gi]) => ({ stepNum, line: groups[gi].line }))
+    .sort((a, b) => a.line - b.line);
+
+  // Direct anchor hit: span from this anchor to the next one.
+  const anchorIdx = anchors.findIndex((a) => a.stepNum === stepNumber);
+  if (anchorIdx !== -1) {
+    const start = anchors[anchorIdx].line;
+    const end = anchorIdx + 1 < anchors.length ? anchors[anchorIdx + 1].line : lines.length;
+    return lines.slice(start, end).join("\n").trimEnd();
+  }
+
+  // Non-anchor step (explicitly named, e.g. "Setup node"): its group sits in
+  // the gap between the previous and next anchors' groups. Take the first
+  // unclaimed group in that span.
+  const prevAnchor = anchors.reduce<{ stepNum: number; line: number } | undefined>(
+    (acc, a) => (a.stepNum < stepNumber ? a : acc),
+    undefined,
+  );
+  const nextAnchor = anchors.find((a) => a.stepNum > stepNumber);
+
+  const spanStart = prevAnchor ? prevAnchor.line + 1 : 0;
+  const spanEnd = nextAnchor ? nextAnchor.line : lines.length;
+
+  for (let gi = 0; gi < groups.length; gi++) {
+    if (used.has(gi)) continue;
+    const g = groups[gi];
+    if (g.line >= spanStart && g.line < spanEnd) {
+      return lines.slice(g.line, spanEnd).join("\n").trimEnd();
+    }
+  }
+
+  return null;
+}
+
+// ── ci-logs rendering (pure, testable) ──────────────────────────────────────
+
+export interface CiLogsJob {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  steps: StepInfo[];
+}
+
+export type CiLogsResult = {
+  content: Array<{ type: "text"; text: string }>;
+  details: Record<string, unknown>;
+};
+
+/** GitHub Actions runner line prefix: `2026-08-05T16:35:50.8358826Z `. */
+const RUNNER_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z /;
+/** ANSI color escape sequences. */
+const ANSI_RE = /\u001b\[[0-9;]*m/g;
+
+/**
+ * Strip the runner framing from a step's raw log, leaving the command's own
+ * output as plain text: removes the per-line timestamp prefix, ANSI color
+ * escapes and `##[group]` / `##[endgroup]` marker lines. `##[error]` /
+ * `##[warning]` lines are kept — their message is part of the output.
+ */
+export function cleanStepOutput(stepLog: string): string {
+  return stepLog
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/^\uFEFF/, "") // UTF-8 BOM on the first line
+        .replace(RUNNER_TIMESTAMP_RE, "")
+        .replace(ANSI_RE, "")
+        .replace(/\r$/, "")
+        .trimEnd(),
+    )
+    .filter((line) => !line.startsWith("##[group]") && !line.startsWith("##[endgroup]"))
+    .join("\n")
+    .trim();
+}
+
+export interface StepLogParams {
+  runId: string;
+  job?: string;
+  step: string;
+  offset?: number;
+  limit?: number;
+}
+
+/**
+ * Render the result of `read-github-ci-logs` for a single step: the step's
+ * complete log as plain text (no runner framing). `job` is required — a step
+ * only exists inside a specific job. `offset`/`limit` control the returned
+ * text. Pure — no network, no `gh`.
+ */
+export async function renderStepLog(
+  params: StepLogParams,
+  jobs: CiLogsJob[],
+  fetchJobLog: (jobId: number) => Promise<string>,
+  onUpdate?: (msg: CiLogsResult) => void,
+): Promise<CiLogsResult> {
+  const { job, step, offset, limit } = params;
+
+  if (!job) {
+    return {
+      content: [{ type: "text", text: "`job` is required when fetching a step's logs." }],
+      details: {},
+    };
+  }
+
+  const isNumeric = /^\d+$/.test(job);
+  const targetJob = jobs.find((j) => (isNumeric ? String(j.id) === job : j.name === job));
+  if (!targetJob) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Job "${job}" not found. Available: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
+        },
+      ],
+      details: {},
+    };
+  }
+
+  if (targetJob.status === "queued") {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Job "${targetJob.name}" is still queued — no logs available yet. Use \`watch-github-run\` to wait for it to start, then retry.`,
+        },
+      ],
+      details: {},
+    };
+  }
+
+  // Resolve step name → number
+  const found = targetJob.steps.find((s) => s.name.toLowerCase() === step.toLowerCase());
+  if (!found) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Step "${step}" not found. Available: ${targetJob.steps.map((s) => `${s.name} (${s.number})`).join(", ")}`,
+        },
+      ],
+      details: {},
+    };
+  }
+  const stepNum = found.number;
+
+  if (stepNum < 1 || stepNum > targetJob.steps.length) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Step ${stepNum} out of range. Job "${targetJob.name}" has ${targetJob.steps.length} steps (1-${targetJob.steps.length}).`,
+        },
+      ],
+      details: {},
+    };
+  }
+
+  onUpdate?.({
+    content: [{ type: "text", text: `Fetching logs for step ${stepNum}...` }],
+    details: {},
+  });
+
+  const rawLog = await fetchJobLog(targetJob.id);
+
+  const stepLog = extractStepFromLog(rawLog, stepNum, targetJob.steps);
+  if (stepLog === null) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Could not extract step ${stepNum} from job "${targetJob.name}" logs. The log may be malformed or empty. Try fetching without \`step\` to see the full job log.`,
+        },
+      ],
+      details: {},
+    };
+  }
+
+  const clean = cleanStepOutput(stepLog);
+
+  // Apply offset on the cleaned text, then truncate.
+  const totalLines = clean.split("\n").length;
+  let logToShow = clean;
+  let appliedOffset = false;
+  if (offset !== undefined && offset !== null && offset > 1) {
+    if (offset > totalLines) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Offset ${offset} exceeds step log length (${totalLines} lines).`,
+          },
+        ],
+        details: {},
+      };
+    }
+    logToShow = clean
+      .split("\n")
+      .slice(offset - 1)
+      .join("\n");
+    appliedOffset = true;
+  }
+
+  const maxLines = limit ?? 500;
+  const maxBytes = 60 * 1024;
+  const { text, truncated: tr } = truncate(logToShow, maxLines, maxBytes);
+  const shownLines = text.split("\n").length;
+
+  return {
+    content: [{ type: "text", text }],
+    details: {
+      summary: `Step ${stepNum} — ${targetJob.name} / ${found.name}: ${shownLines} of ${totalLines} lines${tr ? " (truncated)" : ""}`,
+      truncated: tr,
+      job: {
+        name: targetJob.name,
+        conclusion: targetJob.conclusion,
+        steps: stepsDetail(targetJob, new Set([stepNum])),
+      },
+      totalLines,
+      shownLines,
+      offset: appliedOffset ? offset : undefined,
+    },
+  };
+}
+
+export interface JobLogsParams {
+  runId: string;
+  job?: string;
+  offset?: number;
+  limit?: number;
+}
+
+export interface JobLogsStep {
+  name: string;
+  output?: string;
+}
+
+export interface JobLogsOutput {
+  name: string;
+  steps: JobLogsStep[];
+}
+
+/**
+ * Render the result of `read-github-ci-logs` without a `step`: a JSON array of
+ * jobs `[{ name, steps: [{ name, output? }] }]`. Every step is listed by name;
+ * only failed steps carry an `output` (their log as plain text). `job` is an
+ * optional filter; `offset`/`limit` control the size of each `output` text.
+ * Pure — no network, no `gh`.
+ */
+export async function renderJobLogs(
+  params: JobLogsParams,
+  jobs: CiLogsJob[],
+  fetchJobLog: (jobId: number) => Promise<string>,
+): Promise<CiLogsResult> {
+  const { job, offset, limit } = params;
+
+  if (!jobs || jobs.length === 0) {
+    return {
+      content: [{ type: "text", text: `No jobs found for run ${params.runId}` }],
+      details: {},
+    };
+  }
+
+  let targetJobs = jobs;
+  if (job) {
+    const isNumeric = /^\d+$/.test(job);
+    targetJobs = jobs.filter((j) => (isNumeric ? String(j.id) === job : j.name === job));
+    if (targetJobs.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Job "${job}" not found. Available: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
+          },
+        ],
+        details: {},
+      };
+    }
+  }
+
+  const output: JobLogsOutput[] = [];
+
+  for (const j of targetJobs) {
+    const steps: JobLogsStep[] = [];
+    let rawLog: string | null = null;
+
+    for (const s of j.steps) {
+      if (s.conclusion !== "failure") {
+        steps.push({ name: s.name });
+        continue;
+      }
+
+      try {
+        rawLog ??= await fetchJobLog(j.id);
+        const stepLog = extractStepFromLog(rawLog, s.number, j.steps);
+        if (!stepLog) {
+          steps.push({ name: s.name });
+          continue;
+        }
+
+        const clean = cleanStepOutput(stepLog);
+        const totalLines = clean.split("\n").length;
+
+        // Apply offset on the cleaned text, then truncate.
+        let logToShow = clean;
+        if (offset !== undefined && offset !== null && offset > 1) {
+          if (offset > totalLines) {
+            steps.push({ name: s.name });
+            continue;
+          }
+          logToShow = clean
+            .split("\n")
+            .slice(offset - 1)
+            .join("\n");
+        }
+
+        const { text } = truncate(logToShow, limit ?? 500, 60 * 1024);
+        steps.push({ name: s.name, ...(text ? { output: text } : {}) });
+      } catch {
+        // Log fetch failed — list the step without an output.
+        steps.push({ name: s.name });
+      }
+    }
+
+    output.push({ name: j.name, steps });
+  }
+
+  const totalJobs = output.length;
+  const failedJobs = output.filter((j) => j.steps.some((s) => s.output !== undefined)).length;
+  const totalFailedSteps = output.reduce(
+    (acc, j) => acc + j.steps.filter((s) => s.output !== undefined).length,
+    0,
+  );
+
+  return {
+    content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
+    details: {
+      summary: `${totalJobs} job${totalJobs > 1 ? "s" : ""}, ${failedJobs} failed, ${totalFailedSteps} failed step${totalFailedSteps > 1 ? "s" : ""}`,
+      truncated: undefined,
+      jobs: targetJobs.map((j) => ({
+        name: j.name,
+        conclusion: j.conclusion,
+        steps: stepsDetail(j, undefined),
+      })),
+    },
+  };
 }
 
 // ── tools ────────────────────────────────────────────────────────────────────
@@ -777,7 +1123,7 @@ export default function (pi: ExtensionAPI) {
     name: "read-github-ci-logs",
     label: "GitHub CI Logs",
     description:
-      "Get CI logs from a GitHub Actions workflow run. Without step: shows a summary of jobs and steps with their statuses. With step: returns logs for that specific step only, supports offset/limit for long steps. Use run_id from list-github-workflow-runs. Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
+      "Get CI logs from a GitHub Actions workflow run. Without step: returns a JSON array of jobs [{name, steps:[{name, output?}]}] where every step is listed by name and failed steps carry their log as plain text in `output`. With step (requires job): returns that step's complete log as plain text. offset/limit control the size of every expanded output. Use run_id from list-github-workflow-runs. Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
     promptSnippet: "Read GitHub CI logs",
     parameters: Type.Object({
       run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),
@@ -785,208 +1131,31 @@ export default function (pi: ExtensionAPI) {
       job: Type.Optional(
         Type.String({
           description:
-            "Job name or ID. Required when multiple jobs exist and fetching step logs. Optional when showing summary (filters to that job).",
+            "Job name or ID. Optional filter when listing jobs; required when fetching a specific step's logs.",
         }),
       ),
       step: Type.Optional(
         Type.String({
           description:
-            "Step name to fetch logs for (from summary table). Omit to show job/step summary instead of raw logs.",
+            "Step name to fetch the complete log for. Requires `job`. Omit to list jobs/steps with failed step logs expanded.",
         }),
       ),
       offset: Type.Optional(
         Type.Number({
           description:
-            "Line number to start reading from within the step's log (1-indexed). Useful for long steps where the error is at the end. Only meaningful with step.",
+            "Line number to start each output text from (1-indexed). Useful for long outputs where the error is at the end.",
         }),
       ),
       limit: Type.Optional(
         Type.Number({
-          description:
-            "Maximum number of lines to return from the step's log. Only meaningful with step.",
+          description: "Maximum number of lines per output text (default 500).",
         }),
       ),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const { run_id, repo, job, step, offset, limit } = params;
 
-      // ── Fetch specific step logs ───────────────────────────────────────
-      if (step !== undefined && step !== null) {
-        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-
-        const jobsOut = await ghExec(
-          ["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`],
-          { cwd: ctx.cwd, signal, input: params },
-        );
-        const { jobs } = Value.Parse(jobsResponseSchema, JSON.parse(jobsOut));
-
-        if (!jobs || jobs.length === 0) {
-          return {
-            content: [{ type: "text", text: `No jobs found for run ${run_id}` }],
-            details: {},
-          };
-        }
-
-        let targetJob: (typeof jobs)[0] | undefined;
-        if (job) {
-          const isNumeric = /^\d+$/.test(job);
-          targetJob = jobs.find((j) => (isNumeric ? String(j.id) === job : j.name === job));
-          if (!targetJob) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Job "${job}" not found. Available: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
-                },
-              ],
-              details: {},
-            };
-          }
-        } else if (jobs.length === 1) {
-          targetJob = jobs[0];
-        } else {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Multiple jobs found. Specify \`job\`: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
-              },
-            ],
-            details: {},
-          };
-        }
-
-        if (targetJob.status === "queued") {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Job "${targetJob.name}" is still queued — no logs available yet. Use \`watch-github-run\` to wait for it to start, then retry.`,
-              },
-            ],
-            details: {},
-          };
-        }
-
-        // Resolve step name → number
-        const found = targetJob.steps.find((s) => s.name.toLowerCase() === step.toLowerCase());
-        if (!found) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Step "${step}" not found. Available: ${targetJob.steps.map((s) => `${s.name} (${s.number})`).join(", ")}`,
-              },
-            ],
-            details: {},
-          };
-        }
-        const stepNum = found.number;
-
-        if (stepNum < 1 || stepNum > targetJob.steps.length) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Step ${stepNum} out of range. Job "${targetJob.name}" has ${targetJob.steps.length} steps (1-${targetJob.steps.length}).`,
-              },
-            ],
-            details: {},
-          };
-        }
-
-        onUpdate?.({
-          content: [{ type: "text", text: `Fetching logs for step ${stepNum}...` }],
-          details: {},
-        });
-
-        const rawLog = await getJobLog(
-          String(run_id),
-          targetJob.id,
-          effectiveRepo,
-          signal,
-          ctx.cwd,
-          params,
-        );
-
-        const stepLog = extractStepFromLog(rawLog, stepNum, targetJob.steps);
-        if (stepLog === null) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Could not extract step ${stepNum} from job "${targetJob.name}" logs. The log may be malformed or empty. Try fetching without \`step\` to see the full job log.`,
-              },
-            ],
-            details: {},
-          };
-        }
-
-        // Calculate full step stats
-        const totalLines = stepLog.split("\n").length;
-
-        // Apply offset — slice lines before truncation
-        let logToShow = stepLog;
-        let appliedOffset = false;
-        if (offset !== undefined && offset !== null && offset > 1) {
-          if (offset > totalLines) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Offset ${offset} exceeds step log length (${totalLines} lines).`,
-                },
-              ],
-              details: {},
-            };
-          }
-          logToShow = stepLog
-            .split("\n")
-            .slice(offset - 1)
-            .join("\n");
-          appliedOffset = true;
-        }
-
-        const maxLines = limit ?? 3000;
-        const maxBytes = 80 * 1024;
-        const { text, truncated: tr } = truncate(logToShow, maxLines, maxBytes);
-
-        const shownLines = text.split("\n").length;
-        const stepName = targetJob.steps[stepNum - 1]?.name ?? `Step ${stepNum}`;
-        const offsetNote = appliedOffset ? ` (lines ${offset!}-${offset! + shownLines - 1})` : "";
-        const meta = [
-          `## ${targetJob.name} / ${stepName} (step ${stepNum}${offsetNote})`,
-          `Total: ${totalLines} lines | Shown: ${shownLines} lines${tr ? " (truncated)" : ""}`,
-        ].join("\n");
-
-        return {
-          content: [
-            { type: "text", text: meta },
-            { type: "text", text },
-          ],
-          details: {
-            summary: `Step ${stepNum} — ${targetJob.name} / ${stepName}: ${shownLines} of ${totalLines} lines${tr ? " (truncated)" : ""}`,
-            truncated: tr,
-            job: {
-              name: targetJob.name,
-              conclusion: targetJob.conclusion,
-              steps: stepsDetail(targetJob, new Set([stepNum])),
-            },
-            totalLines,
-            shownLines,
-            offset: appliedOffset ? offset : undefined,
-          },
-        };
-      }
-
-      // ── Show step summary ──────────────────────────────────────────────
-      onUpdate?.({
-        content: [{ type: "text", text: `Fetching job list...` }],
-        details: {},
-      });
-
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-
       const jobsOut = await ghExec(["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`], {
         cwd: ctx.cwd,
         signal,
@@ -994,121 +1163,29 @@ export default function (pi: ExtensionAPI) {
       });
       const { jobs } = Value.Parse(jobsResponseSchema, JSON.parse(jobsOut));
 
-      if (!jobs || jobs.length === 0) {
-        return {
-          content: [{ type: "text", text: `No jobs found for run ${run_id}` }],
+      const fetchJobLog = (jobId: number): Promise<string> =>
+        getJobLog(String(run_id), jobId, effectiveRepo, signal, ctx.cwd, params);
+
+      // ── Fetch a specific step's logs (requires `job`) ─────────────────
+      if (step !== undefined && step !== null) {
+        onUpdate?.({
+          content: [{ type: "text", text: `Fetching job list...` }],
           details: {},
-        };
+        });
+        return renderStepLog(
+          { runId: String(run_id), job, step, offset, limit },
+          jobs,
+          fetchJobLog,
+          onUpdate,
+        );
       }
 
-      let targetJobs = jobs;
-      if (job) {
-        const isNumeric = /^\d+$/.test(job);
-        targetJobs = jobs.filter((j) => (isNumeric ? String(j.id) === job : j.name === job));
-        if (targetJobs.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Job "${job}" not found. Available: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
-              },
-            ],
-            details: {},
-          };
-        }
-      }
-
-      let output = `## CI Summary for Run ${run_id}\n\n`;
-
-      for (const j of targetJobs) {
-        const jIcon = statusIcon(j.conclusion);
-        output += `### ${jIcon} Job: \`${j.name}\` (id: ${j.id}) — ${j.conclusion ?? j.status}\n\n`;
-        output += `| Step# | Name | Status |\n|-------|------|--------|\n`;
-        for (const s of j.steps) {
-          const sIcon = statusIcon(s.conclusion);
-          output += `| ${s.number} | ${s.name} | ${sIcon} ${s.conclusion ?? s.status} |\n`;
-        }
-        output += `\n`;
-      }
-
-      output += `---\n`;
-      output += `To view a specific step's logs, call again with \`step=<number>\` (and \`job="<name>"\` if multiple jobs).\n`;
-
-      // ── Auto-include failed step logs ──────────────────────────────────
-      const contents: Array<{ type: "text"; text: string }> = [{ type: "text", text: output }];
-      let fetchedCount = 0;
-      const maxFailed = 5;
-      const expandedSteps = new Map<number, Set<number>>(); // jobId → step numbers
-
-      for (const j of targetJobs) {
-        if (fetchedCount >= maxFailed) {
-          contents.push({
-            type: "text",
-            text: `(... ${maxFailed} failed step logs shown; use \`step\` to fetch more)`,
-          });
-          break;
-        }
-
-        const failedSteps = j.steps.filter((s) => s.conclusion === "failure");
-        if (failedSteps.length === 0) continue;
-
-        try {
-          const rawLog = await getJobLog(
-            String(run_id),
-            j.id,
-            effectiveRepo,
-            signal,
-            ctx.cwd,
-            params,
-          );
-
-          for (const fs of failedSteps) {
-            if (fetchedCount >= maxFailed) break;
-            fetchedCount++;
-
-            const stepLog = extractStepFromLog(rawLog, fs.number, j.steps);
-            if (!stepLog) continue;
-
-            const totalLines = stepLog.split("\n").length;
-            const maxLines = 500; // tighter limit for auto-included logs
-            const { text: logText, truncated: logTr } = truncate(stepLog, maxLines, 60 * 1024);
-            const shownLines = logText.split("\n").length;
-            const trNote = logTr ? " (truncated)" : "";
-
-            contents.push({
-              type: "text",
-              text: `\n### ❌ ${j.name} / ${fs.name} (step ${fs.number})\nTotal: ${totalLines} lines | Shown: ${shownLines} lines${trNote}\n`,
-            });
-            contents.push({ type: "text", text: logText });
-            if (!expandedSteps.has(j.id)) expandedSteps.set(j.id, new Set());
-            expandedSteps.get(j.id)!.add(fs.number);
-          }
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          contents.push({
-            type: "text",
-            text: `\n⚠️ Could not auto-fetch logs for ${j.name}: ${msg}`,
-          });
-        }
-      }
-
-      const totalJobs = targetJobs.length;
-      const failedJobs = targetJobs.filter((j) => j.conclusion === "failure").length;
-      const totalFailedSteps = targetJobs.reduce(
-        (acc, j) => acc + j.steps.filter((s) => s.conclusion === "failure").length,
-        0,
-      );
-      return {
-        content: contents,
-        details: {
-          summary: `${totalJobs} job${totalJobs > 1 ? "s" : ""}, ${failedJobs} failed, ${totalFailedSteps} failed step${totalFailedSteps > 1 ? "s" : ""}`,
-          jobs: targetJobs.map((j) => ({
-            name: j.name,
-            conclusion: j.conclusion,
-            steps: stepsDetail(j, expandedSteps.get(j.id)),
-          })),
-        },
-      };
+      // ── List jobs/steps, with failed step logs expanded ────────────────
+      onUpdate?.({
+        content: [{ type: "text", text: `Fetching job list...` }],
+        details: {},
+      });
+      return renderJobLogs({ runId: String(run_id), job, offset, limit }, jobs, fetchJobLog);
     },
   });
 
