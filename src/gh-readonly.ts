@@ -258,12 +258,18 @@ function truncate(
  * Format a successful gh invocation's stdout into a tool result.
  * Failures are thrown by `ghExec` as `GhError`, so only the success path lives here.
  */
-function toToolResult(stdout: string): {
+function toToolResult(
+  stdout: string,
+  input?: unknown,
+): {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;
 } {
   const { text, truncated } = truncate(stdout);
-  return { content: [{ type: "text", text }], details: { truncated } };
+  return {
+    content: [{ type: "text", text }],
+    details: { ...(input !== undefined ? { input } : {}), truncated },
+  };
 }
 
 interface ListFilters {
@@ -883,6 +889,7 @@ export default function (pi: ExtensionAPI) {
           ],
           { cwd: ctx.cwd, signal, input: params },
         ),
+        params,
       );
     },
   });
@@ -907,6 +914,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       return toToolResult(
         await listGithub("issue", params, { cwd: ctx.cwd, signal, input: params }),
+        params,
       );
     },
   });
@@ -935,6 +943,7 @@ export default function (pi: ExtensionAPI) {
           ],
           { cwd: ctx.cwd, signal, input: params },
         ),
+        params,
       );
     },
   });
@@ -959,7 +968,10 @@ export default function (pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Max results (default 30)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      return toToolResult(await listGithub("pr", params, { cwd: ctx.cwd, signal, input: params }));
+      return toToolResult(
+        await listGithub("pr", params, { cwd: ctx.cwd, signal, input: params }),
+        params,
+      );
     },
   });
 
@@ -976,7 +988,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params;
       const args = ["pr", "diff", String(number), ...repoArgs(repo)];
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));
+      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }), params);
     },
   });
 
@@ -1003,7 +1015,7 @@ export default function (pi: ExtensionAPI) {
         // Anything else is a real error (cancelled, auth, network, ...)
         throw new GhError(args, final, params);
       }
-      return toToolResult(final.stdout);
+      return toToolResult(final.stdout, params);
     },
   });
 
@@ -1067,7 +1079,7 @@ export default function (pi: ExtensionAPI) {
       const { text, truncated } = truncate(out);
       return {
         content: [{ type: "text", text }],
-        details: { truncated },
+        details: { input: params, truncated },
       };
     },
   });
@@ -1090,6 +1102,7 @@ export default function (pi: ExtensionAPI) {
           signal,
           input: params,
         }),
+        params,
       );
     },
   });
@@ -1114,7 +1127,7 @@ export default function (pi: ExtensionAPI) {
       if (limit) args.push("--limit", String(limit));
       if (status) args.push("--status", status);
       if (workflow) args.push("--workflow", workflow);
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));
+      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }), params);
     },
   });
 
@@ -1172,12 +1185,13 @@ export default function (pi: ExtensionAPI) {
           content: [{ type: "text", text: `Fetching job list...` }],
           details: {},
         });
-        return renderStepLog(
+        const stepResult = await renderStepLog(
           { runId: String(run_id), job, step, offset, limit },
           jobs,
           fetchJobLog,
           onUpdate,
         );
+        return { ...stepResult, details: { ...stepResult.details, input: params } };
       }
 
       // ── List jobs/steps, with failed step logs expanded ────────────────
@@ -1185,7 +1199,12 @@ export default function (pi: ExtensionAPI) {
         content: [{ type: "text", text: `Fetching job list...` }],
         details: {},
       });
-      return renderJobLogs({ runId: String(run_id), job, offset, limit }, jobs, fetchJobLog);
+      const jobsResult = await renderJobLogs(
+        { runId: String(run_id), job, offset, limit },
+        jobs,
+        fetchJobLog,
+      );
+      return { ...jobsResult, details: { ...jobsResult.details, input: params } };
     },
   });
 
@@ -1209,6 +1228,7 @@ export default function (pi: ExtensionAPI) {
           signal,
           input: params,
         }),
+        params,
       );
     },
   });
@@ -1226,7 +1246,7 @@ export default function (pi: ExtensionAPI) {
       const { repo } = params;
       const args = ["repo", "view"];
       if (repo) args.push(repo);
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));
+      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }), params);
     },
   });
 
@@ -1244,7 +1264,7 @@ export default function (pi: ExtensionAPI) {
       const { repo, limit } = params;
       const args = ["release", "list", ...repoArgs(repo)];
       if (limit) args.push("--limit", String(limit));
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }));
+      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }), params);
     },
   });
 
@@ -1266,6 +1286,7 @@ export default function (pi: ExtensionAPI) {
           signal,
           input: params,
         }),
+        params,
       );
     },
   });
@@ -1308,7 +1329,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             { type: "text", text: `## PR #${number} CI Checks - FAILED\n\n${stdout}\n${stderr}` },
           ],
-          details: { status: "failure", exitCode },
+          details: { status: "failure", exitCode, input: params },
         };
       }
 
@@ -1318,7 +1339,7 @@ export default function (pi: ExtensionAPI) {
 
       return {
         content: [{ type: "text", text: `## PR #${number} CI Checks - PASSED\n\n${stdout}` }],
-        details: { status: "success", exitCode: 0 },
+        details: { status: "success", exitCode: 0, input: params },
       };
     },
   });
@@ -1357,7 +1378,7 @@ export default function (pi: ExtensionAPI) {
         content: [
           { type: "text", text: `## Workflow Run ${run_id} Completed\n\n${result.stdout}` },
         ],
-        details: { exitCode: 0 },
+        details: { exitCode: 0, input: params },
       };
     },
   });
