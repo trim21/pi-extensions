@@ -43,11 +43,13 @@ interface GhResult {
   code: number;
   killed: boolean;
   combined: string;
+  /** Why the process was killed, when `killed` is true. */
+  reason?: "timeout" | "abort";
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function runGh(
+export function runGh(
   args: string[],
   ctx: { cwd?: string; signal?: AbortSignal; timeout?: number },
 ): Promise<GhResult> {
@@ -63,11 +65,14 @@ function runGh(
     let stderr = "";
     const combined: string[] = [];
     let killed = false;
+    let killReason: "timeout" | "abort" | undefined;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
 
-    const killProcess = () => {
+    const killProcess = (reason: "timeout" | "abort") => {
       if (!killed) {
         killed = true;
+        killReason = reason;
         proc.kill("SIGTERM");
         setTimeout(() => {
           if (!proc.killed) proc.kill("SIGKILL");
@@ -76,16 +81,21 @@ function runGh(
     };
 
     if (ctx.signal) {
+      onAbort = () => killProcess("abort");
       if (ctx.signal.aborted) {
-        killProcess();
+        killProcess("abort");
       } else {
-        ctx.signal.addEventListener("abort", killProcess, { once: true });
+        ctx.signal.addEventListener("abort", onAbort, { once: true });
       }
     }
 
-    const timeout = ctx.timeout ?? 30_000;
+    // Default timeout: 10 minutes. Long operations like downloading a CI job's
+    // full log routinely take well over 30s, so a short default would kill them
+    // mid-transfer; combined with `code ?? 0` that would silently cache a
+    // truncated log as success. A killed process must never look successful.
+    const timeout = ctx.timeout ?? 600_000;
     if (timeout > 0) {
-      timeoutId = setTimeout(killProcess, timeout);
+      timeoutId = setTimeout(() => killProcess("timeout"), timeout);
     }
 
     proc.stdout?.on("data", (data: Buffer) => {
@@ -101,18 +111,29 @@ function runGh(
 
     proc.on("close", (code) => {
       if (timeoutId) clearTimeout(timeoutId);
-      if (ctx.signal) {
-        ctx.signal.removeEventListener("abort", killProcess);
+      if (ctx.signal && onAbort) {
+        ctx.signal.removeEventListener("abort", onAbort);
       }
-      resolve({ stdout, stderr, code: code ?? 0, killed, combined: combined.join("") });
+      resolve({
+        stdout,
+        stderr,
+        // When killed by a signal the close event's code is null; report the
+        // process as failed instead of pretending it succeeded. -1 is a
+        // sentinel for "did not exit normally" — distinct from a real gh
+        // failure exit code (1), which is always in 0-255.
+        code: code ?? (killed ? -1 : 0),
+        killed,
+        combined: combined.join(""),
+        reason: killReason,
+      });
     });
 
     proc.on("error", () => {
       if (timeoutId) clearTimeout(timeoutId);
-      if (ctx.signal) {
-        ctx.signal.removeEventListener("abort", killProcess);
+      if (ctx.signal && onAbort) {
+        ctx.signal.removeEventListener("abort", onAbort);
       }
-      resolve({ stdout, stderr, code: 1, killed, combined: combined.join("") });
+      resolve({ stdout, stderr, code: 1, killed, combined: combined.join(""), reason: killReason });
     });
   });
 }
@@ -131,7 +152,16 @@ export class GhError extends Error {
 
   constructor(args: string[], result: GhResult, input?: unknown) {
     const inputText = input === undefined ? "" : `<input>${JSON.stringify(input)}<input>\n`;
-    super(`${inputText}<output>${result.combined.trim() || `exit code ${result.code}`}<output>`);
+    const killedText = result.killed
+      ? result.reason === "timeout"
+        ? " (command timed out)"
+        : result.reason === "abort"
+          ? " (command aborted)"
+          : ""
+      : "";
+    super(
+      `${inputText}<output>${result.combined.trim() || `exit code ${result.code}`}${killedText}<output>`,
+    );
     this.name = "GhError";
     this.args = args;
     this.code = result.code;
@@ -196,7 +226,7 @@ export async function pollChecksResult<R extends { code: number; stdout: string 
 }
 
 /** Run `gh` and return stdout. On non-zero exit, throws a `GhError` carrying the toolcall input and raw command. */
-async function ghExec(
+export async function ghExec(
   args: string[],
   ctx: { cwd?: string; signal?: AbortSignal; input?: unknown },
 ): Promise<string> {
