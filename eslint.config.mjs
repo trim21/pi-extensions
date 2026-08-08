@@ -104,6 +104,7 @@ export default defineConfig(
       "unicorn/no-useless-recursion": "off",
       "unicorn/prefer-iterator-to-array": "off",
       "unicorn/no-non-function-verb-prefix": "off",
+      "unicorn/single-line-block-comment-style": "off",
       "unicorn/require-array-sort-compare": "off",
       "unicorn/no-unreadable-for-of-expression": "off",
       "unicorn/prefer-includes-over-repeated-comparisons": "off",
