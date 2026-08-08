@@ -407,11 +407,20 @@ async function getJobLog(
       // Not cached, fetch from GitHub
     }
 
-    const log = await ghExec(["api", `/repos/${effectiveRepo}/actions/jobs/${jobId}/logs`], {
-      cwd,
-      signal,
-      input,
-    });
+    // `gh api` refuses to print responses that contain terminal escape
+    // sequences unless `--allow-escape-sequences` is passed. Job logs are a
+    // binary zip, so without this flag the download always fails with
+    // "the response contains terminal escape sequences; pass
+    // --allow-escape-sequences to output it anyway". The ANSI escapes are
+    // stripped later by `cleanStepOutput`, so there is no injection surface.
+    const log = await ghExec(
+      ["api", "--allow-escape-sequences", `/repos/${effectiveRepo}/actions/jobs/${jobId}/logs`],
+      {
+        cwd,
+        signal,
+        input,
+      },
+    );
 
     // Write to cache
     await mkdir(cacheDir, { recursive: true });
