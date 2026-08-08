@@ -1,103 +1,119 @@
 /**
- * Tests for `pollChecksResult` — the polling core of `read-github-pr-status`.
+ * Tests for `read-github-pr-status` — it must return the current snapshot of
+ * `gh pr checks` immediately, without polling.
  *
- * `gh pr checks` exits 8 when checks are pending — that is a state, not an
- * error. The tool must poll every 30s until checks fail (exit 1) or all pass
- * (exit 0), and only throw for real errors.
+ * `gh pr checks` exit codes: 0 = all passed, 1 = some failed, 8 = some pending.
+ * All three are valid states; pending must be reported as-is (regression: it
+ * used to poll until the checks resolved, duplicating `wait-github-pr-checks`).
+ * Any other exit code is a real error and throws a GhError.
  *
  * Run: npx vitest run test/pr-status.test.ts
  */
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { pollChecksResult } from "../src/gh-readonly.js";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
-const PENDING = { code: 8, stdout: "pending table" };
-const PASSED = { code: 0, stdout: "passed table" };
-const FAILED = { code: 1, stdout: "failed table" };
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
-afterEach(() => {
-  vi.useRealTimers();
+vi.mock("node:child_process", () => ({
+  spawn: (...args: unknown[]) => spawnMock(...args),
+}));
+
+import registerTools from "../src/gh-readonly.js";
+import { GhError } from "../src/gh-readonly.js";
+
+/** A fake gh child process that exits with the given code when told. */
+class FakeChildProcess extends EventEmitter {
+  killed = false;
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+
+  kill(_signal?: NodeJS.Signals | number): boolean {
+    this.killed = true;
+    this.emit("close", null, _signal);
+    return true;
+  }
+
+  exit(code: number, stdout = ""): void {
+    if (stdout) this.stdout.write(stdout);
+    this.emit("close", code);
+  }
+}
+
+let fakeProc: FakeChildProcess;
+
+interface ToolDef {
+  name: string;
+  execute: (
+    _id: string,
+    params: { number: number | string; repo?: string },
+    signal: AbortSignal | undefined,
+    _onUpdate: unknown,
+    ctx: { cwd?: string },
+  ) => Promise<{
+    content: Array<{ type: "text"; text: string }>;
+    details: Record<string, unknown>;
+  }>;
+}
+
+function getPrStatusExecutor(): ToolDef["execute"] {
+  const tools: unknown[] = [];
+  const pi = {
+    registerTool: (t: unknown) => tools.push(t),
+  };
+  registerTools(pi as Parameters<typeof registerTools>[0]);
+  const tool = tools.find(
+    (t): t is ToolDef => (t as { name?: string }).name === "read-github-pr-status",
+  );
+  if (!tool) throw new Error("read-github-pr-status not registered");
+  return tool.execute;
+}
+
+const exec = getPrStatusExecutor();
+const call = () => exec("id", { number: 1 }, undefined, undefined, { cwd: undefined });
+
+beforeEach(() => {
+  fakeProc = new FakeChildProcess();
+  spawnMock.mockReturnValue(fakeProc);
 });
 
-describe("pollChecksResult", () => {
-  it("returns immediately when all checks pass (exit 0)", async () => {
-    const query = vi.fn().mockResolvedValue(PASSED);
-    const result = await pollChecksResult(query);
-    expect(result).toEqual(PASSED);
-    expect(query).toHaveBeenCalledTimes(1);
-  });
+afterEach(() => {
+  spawnMock.mockClear();
+});
 
-  it("returns immediately when a check fails (exit 1), no polling", async () => {
-    const query = vi.fn().mockResolvedValue(FAILED);
-    const result = await pollChecksResult(query);
-    expect(result).toEqual(FAILED);
-    expect(query).toHaveBeenCalledTimes(1);
-  });
-
-  it("polls every 30s while pending (exit 8) until all checks pass", async () => {
-    vi.useFakeTimers();
-    const query = vi
-      .fn()
-      .mockResolvedValueOnce(PENDING)
-      .mockResolvedValueOnce(PENDING)
-      .mockResolvedValueOnce(PASSED);
-
-    const promise = pollChecksResult(query);
-    await vi.advanceTimersByTimeAsync(0); // first gh call resolves
-    await vi.advanceTimersByTimeAsync(30_000); // sleep 1
-    await vi.advanceTimersByTimeAsync(30_000); // sleep 2
+describe("read-github-pr-status", () => {
+  it("returns the current checks immediately when all checks pass (exit 0)", async () => {
+    const promise = call();
+    fakeProc.exit(0, "passed table");
 
     const result = await promise;
-    expect(result).toEqual(PASSED);
-    expect(query).toHaveBeenCalledTimes(3);
+    expect(result.content[0].text).toBe("passed table");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
-  it("polls while pending and reports failure once a check fails (exit 1)", async () => {
-    vi.useFakeTimers();
-    const query = vi.fn().mockResolvedValueOnce(PENDING).mockResolvedValueOnce(FAILED);
-
-    const promise = pollChecksResult(query);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(30_000);
+  it("returns the current checks immediately when a check fails (exit 1)", async () => {
+    const promise = call();
+    fakeProc.exit(1, "failed table");
 
     const result = await promise;
-    expect(result).toEqual(FAILED);
-    expect(query).toHaveBeenCalledTimes(2);
+    expect(result.content[0].text).toBe("failed table");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
-  it("stops polling and returns the current table after the timeout", async () => {
-    vi.useFakeTimers();
-    const query = vi.fn().mockResolvedValue(PENDING);
-
-    const promise = pollChecksResult(query, { intervalMs: 30_000, timeoutMs: 60_000 });
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(30_000); // poll 2
-    await vi.advanceTimersByTimeAsync(30_000); // poll 3, deadline passed
+  it("returns pending checks as-is without polling (exit 8)", async () => {
+    const promise = call();
+    fakeProc.exit(8, "pending table");
 
     const result = await promise;
-    expect(result).toEqual(PENDING);
-    expect(query).toHaveBeenCalledTimes(3);
+    expect(result.content[0].text).toBe("pending table");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
-  it("returns a real error exit code immediately without polling it", async () => {
-    const query = vi.fn().mockResolvedValue({ code: 4, stdout: "" });
-    const result = await pollChecksResult(query);
-    expect(result.code).toBe(4);
-    expect(query).toHaveBeenCalledTimes(1);
-  });
+  it("throws GhError for any other exit code", async () => {
+    const promise = call();
+    fakeProc.exit(2);
 
-  it("throws when aborted while waiting on pending checks", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const query = vi.fn().mockResolvedValue(PENDING);
-
-    const promise = pollChecksResult(query, {
-      signal: controller.signal,
-      intervalMs: 30_000,
-      timeoutMs: 600_000,
-    });
-    await vi.advanceTimersByTimeAsync(0); // first gh call resolves, sleep starts
-    controller.abort();
-
-    await expect(promise).rejects.toThrow(/aborted/);
+    await expect(promise).rejects.toThrow(GhError);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 });

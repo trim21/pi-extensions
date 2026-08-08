@@ -171,60 +171,6 @@ export class GhError extends Error {
   }
 }
 
-/** How long `read-github-pr-status` waits for pending checks to resolve. */
-const POLL_INTERVAL_MS = 30_000;
-const POLL_TIMEOUT_MS = 30 * 60_000;
-
-/** Sleep for `ms`, resolving early if `signal` is aborted. */
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
-    }
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-/**
- * Poll a `gh pr checks` query until it reaches a final state.
- *
- * `gh pr checks` exit codes: 0 = all passed, 1 = some failed, 8 = some pending.
- * Pending (8) is polled every `intervalMs` until `timeoutMs` elapses, at which
- * point the current result is returned as-is. Any other code is returned
- * immediately; the caller decides whether it is an error.
- */
-export async function pollChecksResult<R extends { code: number; stdout: string }>(
-  query: () => Promise<R>,
-  opts: { signal?: AbortSignal; intervalMs?: number; timeoutMs?: number } = {},
-): Promise<R> {
-  const { signal, intervalMs = POLL_INTERVAL_MS, timeoutMs = POLL_TIMEOUT_MS } = opts;
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if (signal?.aborted) {
-      throw new Error("read-github-pr-status aborted");
-    }
-    const result = await query();
-    if (result.code !== 8) {
-      // 0 = all passed, 1 = some failed, anything else is a real error
-      return result;
-    }
-    // Still pending — keep waiting unless the overall timeout expired
-    if (Date.now() >= deadline) {
-      return result;
-    }
-    await sleep(intervalMs, signal);
-  }
-}
-
 /** Run `gh` and return stdout. On non-zero exit, throws a `GhError` carrying the toolcall input and raw command. */
 export async function ghExec(
   args: string[],
@@ -1035,7 +981,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "read-github-pr-status",
     label: "GitHub PR Status",
-    description: "Get status checks and CI results for a GitHub pull request.",
+    description:
+      "Get the current status checks and CI results for a GitHub pull request. Returns the current snapshot immediately; pending checks are reported as-is, not waited on. Use wait-github-pr-checks to block until checks finish.",
     promptSnippet: "Read GitHub PR status checks",
     parameters: Type.Object({
       number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
@@ -1045,16 +992,16 @@ export default function (pi: ExtensionAPI) {
       const { number, repo } = params;
       const args = ["pr", "checks", String(number), ...repoArgs(repo)];
 
-      // Pending is not an error — poll until checks fail or all pass.
-      const final = await pollChecksResult(() => runGh(args, { cwd: ctx.cwd, signal }), {
-        signal,
-      });
+      // `gh pr checks` exit codes: 0 = all passed, 1 = some failed, 8 = some
+      // pending. All three are valid states — return the current snapshot
+      // as-is without waiting. `wait-github-pr-checks` is the blocking variant.
+      const result = await runGh(args, { cwd: ctx.cwd, signal });
 
-      if (final.code !== 0 && final.code !== 1 && final.code !== 8) {
+      if (result.code !== 0 && result.code !== 1 && result.code !== 8) {
         // Anything else is a real error (cancelled, auth, network, ...)
-        throw new GhError(args, final, params);
+        throw new GhError(args, result, params);
       }
-      return toToolResult(final.stdout, params);
+      return toToolResult(result.stdout, params);
     },
   });
 
