@@ -157,7 +157,7 @@ export async function buildDiffPreview(
       const newContent = replace(normalized, pair.oldString, pair.newString, pair.replaceAll);
       // The full path is shown in the dialog title, so the patch header only
       // carries the file name.
-      return wrapDiff(generateUnifiedPatch(basename(resolvedPath), normalized, newContent));
+      return wrapDiff(generateUnifiedPatch(basename(resolvedPath), normalized, newContent, 3));
     } catch {
       const removed = pair.oldString.split("\n").map((line) => `-${line}`);
       const added = pair.newString.split("\n").map((line) => `+${line}`);
@@ -168,7 +168,7 @@ export async function buildDiffPreview(
   const newContent = applyChange(toolName, input, oldContent);
   if (newContent === undefined) return undefined;
 
-  return wrapDiff(generateUnifiedPatch(basename(resolvedPath), oldContent, newContent));
+  return wrapDiff(generateUnifiedPatch(basename(resolvedPath), oldContent, newContent, 3));
 }
 
 export default function (pi: ExtensionAPI) {
