@@ -24,6 +24,7 @@
 import { constants } from "node:fs";
 import { access, open, readdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, resolve as resolvePath, sep } from "node:path";
+
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -71,10 +72,10 @@ const BINARY_EXTENSIONS = new Set([
   ".pyo",
 ]);
 
-const IMAGE_SIGNATURES: Array<{
+const IMAGE_SIGNATURES: {
   signature: Uint8Array | ((buf: Uint8Array) => boolean);
   mimeType: string;
-}> = [
+}[] = [
   { signature: new Uint8Array([0xff, 0xd8, 0xff]), mimeType: "image/jpeg" },
   {
     signature: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -108,7 +109,7 @@ const IMAGE_SIGNATURES: Array<{
 function startsWithAscii(buf: Uint8Array, offset: number, text: string): boolean {
   if (buf.length < offset + text.length) return false;
   for (let i = 0; i < text.length; i++) {
-    if (buf[offset + i] !== text.charCodeAt(i)) return false;
+    if (buf[offset + i] !== text.codePointAt(i)) return false;
   }
   return true;
 }
@@ -144,7 +145,7 @@ async function detectImageMimeTypeFromFile(filePath: string): Promise<string | n
 
 function isBinaryExtension(filePath: string): boolean {
   const dotIndex = filePath.lastIndexOf(".");
-  if (dotIndex < 0) return false;
+  if (dotIndex === -1) return false;
   return BINARY_EXTENSIONS.has(filePath.slice(dotIndex).toLowerCase());
 }
 
@@ -186,7 +187,7 @@ function truncateHead(
   const lines = content ? content.split("\n") : [];
   if (content.endsWith("\n")) lines.pop();
   const totalLines = lines.length;
-  const totalBytes = Buffer.byteLength(content, "utf-8");
+  const totalBytes = Buffer.byteLength(content, "utf8");
 
   if (totalLines <= maxLines && totalBytes <= maxBytes) {
     return {
@@ -204,7 +205,7 @@ function truncateHead(
     };
   }
 
-  const firstLineBytes = lines.length > 0 ? Buffer.byteLength(lines[0], "utf-8") : 0;
+  const firstLineBytes = lines.length > 0 ? Buffer.byteLength(lines[0], "utf8") : 0;
   if (firstLineBytes > maxBytes) {
     return {
       content: "",
@@ -226,7 +227,7 @@ function truncateHead(
   let truncatedBy: "lines" | "bytes" = "lines";
 
   for (let i = 0; i < lines.length && i < maxLines; i++) {
-    const lineBytes = Buffer.byteLength(lines[i], "utf-8") + (i > 0 ? 1 : 0);
+    const lineBytes = Buffer.byteLength(lines[i], "utf8") + (i > 0 ? 1 : 0);
     if (outputBytesCount + lineBytes > maxBytes) {
       truncatedBy = "bytes";
       break;
@@ -247,7 +248,7 @@ function truncateHead(
     totalLines,
     totalBytes,
     outputLines: outputLinesArr.length,
-    outputBytes: Buffer.byteLength(outputContent, "utf-8"),
+    outputBytes: Buffer.byteLength(outputContent, "utf8"),
     lastLinePartial: false,
     firstLineExceedsLimit: false,
     maxLines,
@@ -300,7 +301,7 @@ async function formatDirectoryEntries(dirPath: string): Promise<string[]> {
   return results;
 }
 
-export default function (pi: ExtensionAPI) {
+export default function opencodeRead(pi: ExtensionAPI) {
   pi.registerTool({
     name: "read",
     label: "read",
@@ -317,13 +318,13 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const { filePath: rawPath, offset, limit } = params;
-
-      const absolutePath = isAbsolute(rawPath) ? rawPath : resolvePath(ctx.cwd, rawPath);
-
       if (signal?.aborted) {
         throw new Error("Operation aborted");
       }
+
+      const { filePath: rawPath, offset, limit } = params;
+
+      const absolutePath = isAbsolute(rawPath) ? rawPath : resolvePath(ctx.cwd, rawPath);
 
       // Check if path exists
       let fileStat: Awaited<ReturnType<typeof stat>>;
@@ -366,8 +367,6 @@ export default function (pi: ExtensionAPI) {
       }
 
       // --- File read ---
-      let content: (TextContent | ImageContent)[];
-      let details: { truncation?: TruncationResult } | undefined;
 
       // Check accessibility
       try {
@@ -378,6 +377,8 @@ export default function (pi: ExtensionAPI) {
           details: undefined,
         };
       }
+
+      let content: (TextContent | ImageContent)[];
 
       // Check for images
       const mimeType = await detectImageMimeTypeFromFile(absolutePath);
@@ -403,13 +404,12 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      const textContent = buffer.toString("utf-8");
+      const textContent = buffer.toString("utf8");
       const allLines = textContent.split("\n");
       const totalFileLines = allLines.length;
 
       // Apply offset
       const startLine = offset ? Math.max(0, offset - 1) : 0;
-      const startLineDisplay = startLine + 1;
 
       if (startLine >= allLines.length) {
         return {
@@ -423,16 +423,20 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
+      const startLineDisplay = startLine + 1;
+
+      let details: { truncation?: TruncationResult } | undefined;
+
       // Apply user-specified limit or default truncation
       let selectedContent: string;
       let userLimitedLines: number | undefined;
 
-      if (limit !== undefined) {
+      if (limit === undefined) {
+        selectedContent = allLines.slice(startLine).join("\n");
+      } else {
         const endLine = Math.min(startLine + limit, allLines.length);
         selectedContent = allLines.slice(startLine, endLine).join("\n");
         userLimitedLines = endLine - startLine;
-      } else {
-        selectedContent = allLines.slice(startLine).join("\n");
       }
 
       // Apply byte/line truncation
@@ -442,7 +446,7 @@ export default function (pi: ExtensionAPI) {
       const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
 
       if (truncation.firstLineExceedsLimit) {
-        const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf-8"));
+        const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf8"));
         outputText = `<path>${absolutePath}</path>\n<type>file</type>\n`;
         outputText += `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash to read this line.]`;
         details = { truncation };

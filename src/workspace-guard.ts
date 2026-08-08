@@ -4,7 +4,7 @@
  * File-modifying tools (write, edit) are gated:
  * - Paths inside the workspace or /tmp are auto-allowed.
  * - Paths outside require user approval via confirmation dialog.
- *   The dialog shows a ```diff code block preview of the pending change.
+ *   The dialog shows a `diff` code block preview of the pending change.
  *
  * Read tools (read, ls, find, grep) are unrestricted.
  *
@@ -12,14 +12,16 @@
  *   pi -e workspace-guard
  */
 
-import { basename, isAbsolute, join, resolve, relative, sep } from "node:path";
-import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+
 import {
-  generateUnifiedPatch,
   type ExtensionAPI,
+  generateUnifiedPatch,
   type ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
+
 import { normalizeForEdit, replace } from "./opencode-edit-engine.js";
 
 const WRITE_TOOLS = new Set(["write", "edit"]);
@@ -113,7 +115,7 @@ function applyChange(
     for (const edit of input.edits) {
       if (!isEditPair(edit)) return undefined;
       if (!next.includes(edit.oldText)) return undefined;
-      next = next.replace(edit.oldText, edit.newText);
+      next = next.replace(edit.oldText, () => edit.newText);
     }
     return next;
   }
@@ -121,7 +123,7 @@ function applyChange(
   return undefined;
 }
 
-/** Wrap patch text in a ```diff code block, truncating very large diffs. */
+/** Wrap patch text in a `diff` code block, truncating very large diffs. */
 function wrapDiff(patch: string): string {
   const lines = patch.split("\n");
   if (lines.length > MAX_PREVIEW_LINES) {
@@ -132,7 +134,7 @@ function wrapDiff(patch: string): string {
 }
 
 /**
- * Build a ```diff code block preview of the pending change.
+ * Build a `diff` code block preview of the pending change.
  * Returns undefined when the diff cannot be computed.
  */
 export async function buildDiffPreview(
@@ -142,7 +144,7 @@ export async function buildDiffPreview(
 ): Promise<string | undefined> {
   let oldContent = "";
   try {
-    oldContent = await readFile(resolvedPath, "utf-8");
+    oldContent = await readFile(resolvedPath, "utf8");
   } catch {
     // Unreadable or missing file: treat as empty so writes show as full additions.
   }
@@ -171,7 +173,7 @@ export async function buildDiffPreview(
   return wrapDiff(generateUnifiedPatch(basename(resolvedPath), oldContent, newContent, 2));
 }
 
-export default function (pi: ExtensionAPI) {
+export default function workspaceGuard(pi: ExtensionAPI) {
   pi.on("before_agent_start", (event, ctx) => {
     const currentCwd = ctx.cwd;
     return {
@@ -214,7 +216,7 @@ export default function (pi: ExtensionAPI) {
 
       choice = await ctx.ui.select(title, ["Approve once", "Block", "Block with reason"]);
 
-      if (typeof choice === "undefined") {
+      if (choice === undefined) {
         ctx.abort();
         return { block: true, reason: "Write outside workspace cancelled by user." };
       }

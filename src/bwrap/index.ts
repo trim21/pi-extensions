@@ -52,22 +52,18 @@
  *   pi -e ./bwrap --no-bwrap
  */
 
-import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { constants } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
-import { existsSync, readFileSync, openSync, closeSync } from "node:fs";
-import { join, delimiter } from "node:path";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import { type BashOperations, createBashTool, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-  type BashOperations,
-  createBashTool,
-  getAgentDir,
-  Theme,
-} from "@earendil-works/pi-coding-agent";
 
 const SANDBOX_PROMPT = `
 ## Command Execution
@@ -110,31 +106,18 @@ and set \`request_full_access_reason\` to describe the failure.
 
 const PROTECTED_DIRS = [".git", ".pi", ".agent"];
 
-let bwrapPath = "";
+const bwrapPath = findDefaultBwrap();
 
-function findBwrap(override?: string): string {
-  if (override) {
-    if (existsSync(override)) return override;
-    throw new Error(`bwrap not found at configured path: ${override}`);
-  }
-
-  if (bwrapPath) return bwrapPath;
-
+function findDefaultBwrap(): string {
   const pathEnv = process.env.PATH ?? "";
   for (const dir of pathEnv.split(delimiter)) {
     const p = join(dir, "bwrap");
-    if (existsSync(p)) {
-      bwrapPath = p;
-      return p;
-    }
+    if (existsSync(p)) return p;
   }
 
   const candidates = ["/usr/bin/bwrap", "/usr/local/bin/bwrap", "/run/current-system/sw/bin/bwrap"];
   for (const p of candidates) {
-    if (existsSync(p)) {
-      bwrapPath = p;
-      return p;
-    }
+    if (existsSync(p)) return p;
   }
 
   throw new Error(
@@ -143,6 +126,10 @@ function findBwrap(override?: string): string {
       "  pacman -S bubblewrap (Arch)\n" +
       "  dnf install bubblewrap (Fedora)",
   );
+}
+
+function findBwrap(override?: string): string {
+  return override ?? bwrapPath;
 }
 
 type BwrapMode = "allow-all" | "workspace-write" | "readonly";
@@ -177,12 +164,15 @@ function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
     extraArgs: config.extraArgs ?? [],
   };
   switch (config.mode) {
-    case "allow-all":
+    case "allow-all": {
       return { ...base, bwrapEnabled: false, network: true };
-    case "workspace-write":
+    }
+    case "workspace-write": {
       return { ...base, bwrapEnabled: true, network: false };
-    case "readonly":
+    }
+    case "readonly": {
       return { ...base, bwrapEnabled: true, network: false, writablePaths: [] };
+    }
   }
 }
 
@@ -207,7 +197,8 @@ function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapCon
 
 function expandPath(p: string): string {
   if (p.startsWith("~/")) {
-    const home = process.env.HOME!;
+    const home = process.env.HOME;
+    if (home === undefined) return p;
     return join(home, p.slice(2));
   }
   return p;
@@ -232,9 +223,10 @@ function loadConfig(cwd: string): BwrapConfig {
   ] as const) {
     if (existsSync(path)) {
       try {
-        Object.assign(target, JSON.parse(readFileSync(path, "utf-8")));
-      } catch (e) {
-        console.error(`Warning: Could not parse ${path}: ${String(e)}`);
+        Object.assign(target, JSON.parse(readFileSync(path, "utf8")));
+      } catch (error) {
+        // eslint-disable-next-line no-console -- config parse warnings go to stderr
+        console.error(`Warning: Could not parse ${path}: ${String(error)}`);
       }
     }
   }
@@ -316,7 +308,7 @@ function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
       // ── seccomp: block AF_UNIX + network syscalls ───────────────
       // bwrap --unshare-net handles IP; seccomp closes the UNIX socket
       // gap (Docker CLI, mysqld, etc.). Filter is generated once.
-      const seccompFd = !resolved.network ? getSeccompFd() : undefined;
+      const seccompFd = resolved.network ? undefined : getSeccompFd();
 
       const baseArgs: string[] = [
         "--ro-bind",
@@ -331,8 +323,14 @@ function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
 
       // Two spawn paths so TypeScript can infer the correct child type.
       const child: ChildProcess =
-        seccompFd !== undefined
-          ? spawn(
+        seccompFd === undefined
+          ? spawn(findBwrap(resolved.bwrapPath), [...baseArgs, "--", "bash", "-c", command], {
+              cwd,
+              detached: true,
+              stdio: ["ignore", "pipe", "pipe"],
+              env: process.env,
+            })
+          : spawn(
               findBwrap(resolved.bwrapPath),
               [...baseArgs, "--seccomp", "3", "--", "bash", "-c", command],
               {
@@ -341,13 +339,7 @@ function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
                 stdio: ["ignore", "pipe", "pipe", seccompFd],
                 env: process.env,
               },
-            )
-          : spawn(findBwrap(resolved.bwrapPath), [...baseArgs, "--", "bash", "-c", command], {
-              cwd,
-              detached: true,
-              stdio: ["ignore", "pipe", "pipe"],
-              env: process.env,
-            });
+            );
 
       return new Promise((resolve, reject) => {
         let timedOut = false;
@@ -393,7 +385,7 @@ function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
         // (potentially) exits. --die-with-parent already covers the
         // case where the parent actually dies.
         const forwardedSignals: NodeJS.Signals[] = ["SIGHUP", "SIGINT", "SIGTERM"];
-        const signalForwarders: Array<() => void> = [];
+        const signalForwarders: (() => void)[] = [];
 
         for (const sig of forwardedSignals) {
           const handler = () => {
@@ -445,10 +437,10 @@ function createBwrapBashOps(resolved: ResolvedBwrap): BashOperations {
 
 function escapeHtml(text: string): string {
   return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 /**
@@ -469,7 +461,7 @@ function maxConsecutiveBackticks(text: string): number {
 }
 
 /**
- * Wrap code in fenced code blocks (```) for literal plain-text rendering.
+ * Wrap code in fenced code blocks for literal plain-text rendering.
  * Uses N+1 backticks for the fence where N is the longest consecutive
  * backtick sequence in the code, so no escaping is needed.
  */
@@ -512,7 +504,7 @@ const sandboxedBashSchema = Type.Object({
   ),
 });
 
-export default function (pi: ExtensionAPI) {
+export default function bwrapExtension(pi: ExtensionAPI) {
   pi.registerFlag("no-bwrap", {
     description: "Disable bwrap sandboxing for bash commands",
     type: "boolean",
@@ -569,7 +561,7 @@ export default function (pi: ExtensionAPI) {
           let choice: string | undefined;
           while (!choice) {
             choice = await ctx.ui.select(desc, ["Approve once", "Block", "Block with reason"]);
-            if (typeof choice === "undefined") {
+            if (choice === undefined) {
               ctx.abort();
               throw new Error("User denied the command execution.");
             }
@@ -625,9 +617,9 @@ export default function (pi: ExtensionAPI) {
     if (resolved.bwrapEnabled) {
       try {
         findBwrap(resolved.bwrapPath);
-      } catch (err) {
+      } catch (error) {
         resolved = null;
-        ctx.ui.notify(err instanceof Error ? err.message : "bwrap not found", "error");
+        ctx.ui.notify(error instanceof Error ? error.message : "bwrap not found", "error");
         return;
       }
     }
@@ -689,13 +681,8 @@ export default function (pi: ExtensionAPI) {
     },
   ) {
     setMode(mode);
-    const r = getResolved();
 
-    if (!r.bwrapEnabled) {
-      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode}`));
-    } else {
-      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode}`));
-    }
+    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode}`));
 
     notifyMode(ctx, mode);
     pi.sendMessage({

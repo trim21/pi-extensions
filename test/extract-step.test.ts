@@ -4,10 +4,12 @@
  *
  * Run: npx vitest run test/extract-step.test.ts
  */
-import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
+
 import { extractStepFromLog } from "../src/gh-readonly.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -27,9 +29,9 @@ interface StepInfo {
 function extractStepFromLog_current(
   log: string,
   stepNumber: number,
-  apiSteps: Array<{ number: number; name: string }>,
+  apiSteps: { number: number; name: string }[],
 ): string | null {
-  const sorted = [...apiSteps].sort((a, b) => a.number - b.number);
+  const sorted = [...apiSteps].toSorted((a, b) => a.number - b.number);
   const stepIdx = sorted.findIndex((s) => s.number === stepNumber);
   if (stepIdx === -1) return null;
 
@@ -37,15 +39,14 @@ function extractStepFromLog_current(
   const runStarts: number[] = [];
   let depth = 0;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  for (const [i, line] of lines.entries()) {
     if (line.includes("##[endgroup]")) {
       if (depth > 0) depth--;
       continue;
     }
     if (line.includes("##[group]")) {
       if (depth === 0) {
-        const m = line.match(/##\[group\](.*)/);
+        const m = /##\[group\](.*)/.exec(line);
         const name = m ? m[1].trim() : "";
         if (name.startsWith("Run ")) runStarts.push(i);
       }
@@ -69,11 +70,11 @@ function extractStepFromLog_current(
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 function loadFixture(name: string): string {
-  return readFileSync(join(fixturesDir, name), "utf-8");
+  return readFileSync(join(fixturesDir, name), "utf8");
 }
 
 function firstLine(text: string): string {
-  const m = text.match(/^.*$/m);
+  const m = /^.*$/m.exec(text);
   return m ? m[0].trim() : "";
 }
 
@@ -190,10 +191,9 @@ describe("extractStepFromLog — fuzz-download-2 job", () => {
 describe("log structure analysis", () => {
   it("has more Run groups than API Run steps (composite action internal groups)", () => {
     const lines = log.split("\n");
-    const runGroups: Array<{ line: number; name: string }> = [];
+    const runGroups: { line: number; name: string }[] = [];
     let depth = 0;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+    for (const [i, line] of lines.entries()) {
       if (line.includes("##[endgroup]")) {
         if (depth > 0) depth--;
         continue;
@@ -201,7 +201,7 @@ describe("log structure analysis", () => {
       if (line.includes("##[group]")) {
         depth++;
         if (depth === 1) {
-          const m = line.match(/##\[group\](.*)/);
+          const m = /##\[group\](.*)/.exec(line);
           const name = m ? m[1].trim() : "";
           if (name.startsWith("Run ") || name.startsWith("Post Run ")) {
             runGroups.push({ line: i + 1, name });

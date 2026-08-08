@@ -65,12 +65,12 @@ function formatTaskLine(t: Task): string {
 // Extension
 // ---------------------------------------------------------------------------
 
-export default function (pi: ExtensionAPI) {
+export default function todoPendant(pi: ExtensionAPI) {
   pi.on("tool_result", (event, ctx) => {
     if (event.toolName !== "todo") return;
 
     const details = event.details;
-    if (!isTaskDetails(details) || !details.tasks.length) {
+    if (!isTaskDetails(details) || details.tasks.length === 0) {
       ctx.ui.setWidget("todo-pendant", undefined);
       return;
     }
@@ -81,6 +81,9 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    ctx.ui.setWidget("todo-pendant", [...visible.map(formatTaskLine)]);
+    ctx.ui.setWidget(
+      "todo-pendant",
+      visible.map((t) => formatTaskLine(t)),
+    );
   });
 }

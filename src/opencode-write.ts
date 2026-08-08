@@ -16,11 +16,12 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve as resolvePath } from "node:path";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-export default function (pi: ExtensionAPI) {
+export default function opencodeWrite(pi: ExtensionAPI) {
   pi.registerTool({
     name: "write",
     label: "write",
@@ -39,15 +40,15 @@ export default function (pi: ExtensionAPI) {
       const absolutePath = resolvePath(ctx.cwd, rawPath);
       const dir = dirname(absolutePath);
 
-      return withFileMutationQueue(absolutePath, async () => {
-        const throwIfAborted = () => {
-          if (signal?.aborted) throw new Error("Operation aborted");
-        };
+      const throwIfAborted = () => {
+        if (signal?.aborted) throw new Error("Operation aborted");
+      };
 
+      return withFileMutationQueue(absolutePath, async () => {
         throwIfAborted();
         await mkdir(dir, { recursive: true });
         throwIfAborted();
-        await writeFile(absolutePath, content, "utf-8");
+        await writeFile(absolutePath, content, "utf8");
         throwIfAborted();
 
         return {

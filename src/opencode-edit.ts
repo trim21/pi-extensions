@@ -9,12 +9,18 @@
  *   pi -e ./opencode-edit.ts
  */
 
+import { constants } from "node:fs";
+import { access, readFile, writeFile } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   generateDiffString,
   generateUnifiedPatch,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+
 import {
   detectLineEnding,
   normalizeToLF,
@@ -22,10 +28,6 @@ import {
   restoreLineEndings,
   stripBom,
 } from "./opencode-edit-engine.js";
-import { constants } from "fs";
-import { access, readFile, writeFile } from "fs/promises";
-import { isAbsolute, resolve } from "path";
-import { Type } from "typebox";
 
 // ── schema ────────────────────────────────────────────────────────────────────
 
@@ -42,7 +44,7 @@ const editSchema = Type.Object({
 
 // ── extension ─────────────────────────────────────────────────────────────────
 
-export default function (pi: ExtensionAPI) {
+export default function opencodeEdit(pi: ExtensionAPI) {
   pi.registerTool({
     name: "edit",
     label: "edit",
@@ -69,10 +71,11 @@ export default function (pi: ExtensionAPI) {
 
       const absolutePath = isAbsolute(filePath) ? filePath : resolve(ctx.cwd, filePath);
 
+      const throwIfAborted = (): void => {
+        if (signal?.aborted) throw new Error("Operation aborted");
+      };
+
       return withFileMutationQueue(absolutePath, async () => {
-        const throwIfAborted = (): void => {
-          if (signal?.aborted) throw new Error("Operation aborted");
-        };
         throwIfAborted();
 
         try {
@@ -83,12 +86,12 @@ export default function (pi: ExtensionAPI) {
             error instanceof Error && "code" in error && typeof error.code === "string"
               ? `Error code: ${error.code}`
               : String(error);
-          throw new Error(`Could not edit file: ${filePath}. ${msg}.`);
+          throw new Error(`Could not edit file: ${filePath}. ${msg}.`, { cause: error });
         }
         throwIfAborted();
 
         const buffer = await readFile(absolutePath);
-        const rawContent = buffer.toString("utf-8");
+        const rawContent = buffer.toString("utf8");
         throwIfAborted();
 
         // Strip BOM then normalize line endings to LF.
@@ -101,7 +104,7 @@ export default function (pi: ExtensionAPI) {
         throwIfAborted();
 
         const finalContent = bom + restoreLineEndings(newContent, originalEnding);
-        await writeFile(absolutePath, finalContent, "utf-8");
+        await writeFile(absolutePath, finalContent, "utf8");
         throwIfAborted();
 
         const diffResult = generateDiffString(normalizedContent, newContent);

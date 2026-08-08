@@ -7,10 +7,12 @@
  * Paths are fixed (not mkdtemp) so the `--- a/...` patch headers stay stable
  * across runs and the snapshots remain reproducible.
  */
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+
 import { buildDiffPreview, getWriteTarget } from "../src/workspace-guard.js";
 
 const SNAPSHOT_DIR = join(tmpdir(), "workspace-guard-inline-snapshot");
@@ -78,7 +80,7 @@ describe("buildDiffPreview", () => {
   });
 
   it("built-in edit format (edits[]) produces a patch", async () => {
-    await writeFile(TARGET, "one\ntwo\nthree\n", "utf-8");
+    await writeFile(TARGET, "one\ntwo\nthree\n", "utf8");
 
     const preview = await buildDiffPreview(
       "edit",
@@ -101,7 +103,7 @@ describe("buildDiffPreview", () => {
   });
 
   it("built-in edit applies multiple edits in order", async () => {
-    await writeFile(TARGET, "one\ntwo\nthree\n", "utf-8");
+    await writeFile(TARGET, "one\ntwo\nthree\n", "utf8");
 
     const preview = await buildDiffPreview(
       "edit",
@@ -131,7 +133,7 @@ describe("buildDiffPreview", () => {
   });
 
   it("opencode edit with a verbatim oldString shows a line-numbered patch", async () => {
-    await writeFile(TARGET, "line one\nline two\nline three\n", "utf-8");
+    await writeFile(TARGET, "line one\nline two\nline three\n", "utf8");
 
     const preview = await buildDiffPreview(
       "edit",
@@ -154,7 +156,7 @@ describe("buildDiffPreview", () => {
   });
 
   it("opencode edit replaceAll shows every occurrence changed", async () => {
-    await writeFile(TARGET, "alpha\nbeta\nalpha\n", "utf-8");
+    await writeFile(TARGET, "alpha\nbeta\nalpha\n", "utf8");
 
     const preview = await buildDiffPreview(
       "edit",
@@ -178,7 +180,7 @@ describe("buildDiffPreview", () => {
   });
 
   it("opencode edit preview falls back to a parameter diff when oldString is not matched", async () => {
-    await writeFile(TARGET, "one\ntwo\n", "utf-8");
+    await writeFile(TARGET, "one\ntwo\n", "utf8");
 
     const preview = await buildDiffPreview(
       "edit",
@@ -211,7 +213,7 @@ describe("buildDiffPreview", () => {
   });
 
   it("multiline opencode edit parameters become a multiline diff", async () => {
-    await writeFile(TARGET, "unused\n", "utf-8");
+    await writeFile(TARGET, "unused\n", "utf8");
 
     const preview = await buildDiffPreview(
       "edit",

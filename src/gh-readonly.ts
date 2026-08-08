@@ -28,14 +28,15 @@
  *   cp gh-readonly.ts .pi/extensions/
  */
 
+import { spawn } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { spawn } from "node:child_process";
-import { homedir } from "node:os";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 
 interface GhResult {
   stdout: string;
@@ -70,14 +71,16 @@ export function runGh(
     let onAbort: (() => void) | undefined;
 
     const killProcess = (reason: "timeout" | "abort") => {
-      if (!killed) {
-        killed = true;
-        killReason = reason;
-        proc.kill("SIGTERM");
-        setTimeout(() => {
-          if (!proc.killed) proc.kill("SIGKILL");
-        }, 5000);
+      if (killed) {
+        return;
       }
+
+      killed = true;
+      killReason = reason;
+      proc.kill("SIGTERM");
+      setTimeout(() => {
+        if (!proc.killed) proc.kill("SIGKILL");
+      }, 5000);
     };
 
     if (ctx.signal) {
@@ -214,7 +217,7 @@ function truncate(
   maxBytes = 50 * 1024,
 ): { text: string; truncated: boolean } {
   const lines = text.split("\n");
-  if (lines.length <= maxLines && Buffer.byteLength(text, "utf-8") <= maxBytes) {
+  if (lines.length <= maxLines && Buffer.byteLength(text, "utf8") <= maxBytes) {
     return { text, truncated: false };
   }
 
@@ -222,7 +225,7 @@ function truncate(
   let bytes = 0;
   for (const line of lines) {
     if (out.length >= maxLines) break;
-    const lineBytes = Buffer.byteLength(line + "\n", "utf-8");
+    const lineBytes = Buffer.byteLength(line + "\n", "utf8");
     if (bytes + lineBytes > maxBytes) break;
     out.push(line);
     bytes += lineBytes;
@@ -238,13 +241,13 @@ function toToolResult(
   stdout: string,
   input?: unknown,
 ): {
-  content: Array<{ type: "text"; text: string }>;
+  content: { type: "text"; text: string }[];
   details: Record<string, unknown>;
 } {
   const { text, truncated } = truncate(stdout);
   return {
     content: [{ type: "text", text }],
-    details: { ...(input !== undefined ? { input } : {}), truncated },
+    details: { ...(input !== undefined && { input }), truncated },
   };
 }
 
@@ -317,12 +320,12 @@ export interface JobInfo {
 export function stepsDetail(
   job: JobInfo,
   expandedSteps?: Set<number>,
-): Array<{ number: number; name: string; conclusion: string | null; expanded?: boolean }> {
+): { number: number; name: string; conclusion: string | null; expanded?: boolean }[] {
   return job.steps.map((s) => ({
     number: s.number,
     name: s.name,
     conclusion: s.conclusion,
-    ...(expandedSteps?.has(s.number) ? { expanded: true } : {}),
+    ...(expandedSteps?.has(s.number) && { expanded: true }),
   }));
 }
 
@@ -348,7 +351,7 @@ async function getJobLog(
   const fetchAndCache = async (): Promise<string> => {
     // Check file cache
     try {
-      return await readFile(cacheFile, "utf-8");
+      return await readFile(cacheFile, "utf8");
     } catch {
       // Not cached, fetch from GitHub
     }
@@ -400,20 +403,27 @@ async function resolveRepo(
 
 export function statusIcon(conclusion: string | null): string {
   switch (conclusion) {
-    case "success":
+    case "success": {
       return "✅";
-    case "failure":
+    }
+    case "failure": {
       return "❌";
-    case "cancelled":
+    }
+    case "cancelled": {
       return "🚫";
-    case "skipped":
+    }
+    case "skipped": {
       return "⏭️";
-    case "timed_out":
+    }
+    case "timed_out": {
       return "⏰";
-    case "action_required":
+    }
+    case "action_required": {
       return "⚠️";
-    default:
+    }
+    default: {
       return "🔄";
+    }
   }
 }
 
@@ -443,18 +453,16 @@ export function statusIcon(conclusion: string | null): string {
 export function extractStepFromLog(
   log: string,
   stepNumber: number,
-  apiSteps: Array<{ number: number; name: string }>,
+  apiSteps: { number: number; name: string }[],
 ): string | null {
-  const targetStep = apiSteps.find((s) => s.number === stepNumber);
-  if (!targetStep) return null;
+  if (apiSteps.every((s) => s.number !== stepNumber)) return null;
 
   const lines = log.split("\n");
 
   // Collect depth-1 "Run "/"Post Run " groups in log order.
-  const groups: Array<{ line: number; action: string }> = [];
+  const groups: { line: number; action: string }[] = [];
   let depth = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  for (const [i, line] of lines.entries()) {
     if (line.includes("##[endgroup]")) {
       if (depth > 0) depth--;
       continue;
@@ -462,7 +470,7 @@ export function extractStepFromLog(
     if (line.includes("##[group]")) {
       depth++;
       if (depth === 1) {
-        const m = line.match(/##\[group\](.*)/);
+        const m = /##\[group\](.*)/.exec(line);
         const name = m ? m[1].trim() : "";
         if (name.startsWith("Run ") || name.startsWith("Post Run ")) {
           groups.push({ line: i, action: name.replace(/^(Run |Post Run )/, "").trim() });
@@ -483,7 +491,7 @@ export function extractStepFromLog(
   const runSteps = apiSteps
     .filter((s) => /^(Run |Post Run )/.test(s.name))
     .map((s) => ({ number: s.number, action: s.name.replace(/^(Run |Post Run )/, "").trim() }))
-    .sort((a, b) => a.number - b.number);
+    .toSorted((a, b) => a.number - b.number);
 
   // Greedily assign each run step the first unclaimed group whose action name
   // matches (log order). Leftover groups are composite-action internals.
@@ -498,9 +506,9 @@ export function extractStepFromLog(
   }
 
   // Anchor sequence in log order.
-  const anchors = [...stepToGroup.entries()]
+  const anchors = [...stepToGroup]
     .map(([stepNum, gi]) => ({ stepNum, line: groups[gi].line }))
-    .sort((a, b) => a.line - b.line);
+    .toSorted((a, b) => a.line - b.line);
 
   // Direct anchor hit: span from this anchor to the next one.
   const anchorIdx = anchors.findIndex((a) => a.stepNum === stepNumber);
@@ -522,9 +530,8 @@ export function extractStepFromLog(
   const spanStart = prevAnchor ? prevAnchor.line + 1 : 0;
   const spanEnd = nextAnchor ? nextAnchor.line : lines.length;
 
-  for (let gi = 0; gi < groups.length; gi++) {
+  for (const [gi, g] of groups.entries()) {
     if (used.has(gi)) continue;
-    const g = groups[gi];
     if (g.line >= spanStart && g.line < spanEnd) {
       return lines.slice(g.line, spanEnd).join("\n").trimEnd();
     }
@@ -543,15 +550,16 @@ export interface CiLogsJob {
   steps: StepInfo[];
 }
 
-export type CiLogsResult = {
-  content: Array<{ type: "text"; text: string }>;
+export interface CiLogsResult {
+  content: { type: "text"; text: string }[];
   details: Record<string, unknown>;
-};
+}
 
 /** GitHub Actions runner line prefix: `2026-08-05T16:35:50.8358826Z `. */
 const RUNNER_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z /;
 /** ANSI color escape sequences. */
-const ANSI_RE = /\u001b\[[0-9;]*m/g;
+// eslint-disable-next-line no-control-regex -- intentional: matching raw ESC sequences in runner logs
+const ANSI_RE = /\u001B\[[0-9;]*m/g;
 
 /**
  * Strip the runner framing from a step's raw log, leaving the command's own
@@ -566,7 +574,7 @@ export function cleanStepOutput(stepLog: string): string {
       line
         .replace(/^\uFEFF/, "") // UTF-8 BOM on the first line
         .replace(RUNNER_TIMESTAMP_RE, "")
-        .replace(ANSI_RE, "")
+        .replaceAll(ANSI_RE, "")
         .replace(/\r$/, "")
         .trimEnd(),
     )
@@ -605,7 +613,7 @@ export async function renderStepLog(
   }
 
   const isNumeric = /^\d+$/.test(job);
-  const targetJob = jobs.find((j) => (isNumeric ? String(j.id) === job : j.name === job));
+  const targetJob = jobs.find((j) => (isNumeric ? String(j.id) : j.name) === job);
   if (!targetJob) {
     return {
       content: [
@@ -765,7 +773,7 @@ export async function renderJobLogs(
   let targetJobs = jobs;
   if (job) {
     const isNumeric = /^\d+$/.test(job);
-    targetJobs = jobs.filter((j) => (isNumeric ? String(j.id) === job : j.name === job));
+    targetJobs = jobs.filter((j) => (isNumeric ? String(j.id) : j.name) === job);
     if (targetJobs.length === 0) {
       return {
         content: [
@@ -816,7 +824,7 @@ export async function renderJobLogs(
         }
 
         const { text } = truncate(logToShow, limit ?? 500, 60 * 1024);
-        steps.push({ name: s.name, ...(text ? { output: text } : {}) });
+        steps.push({ name: s.name, ...(text && { output: text }) });
       } catch {
         // Log fetch failed — list the step without an output.
         steps.push({ name: s.name });
@@ -849,7 +857,7 @@ export async function renderJobLogs(
 
 // ── tools ────────────────────────────────────────────────────────────────────
 
-export default function (pi: ExtensionAPI) {
+export default function ghReadonlyTools(pi: ExtensionAPI) {
   // ── read-github-issue ──────────────────────────────────────────────────────
   pi.registerTool({
     name: "read-github-issue",

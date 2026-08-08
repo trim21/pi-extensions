@@ -13,7 +13,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 
-export default function (pi: ExtensionAPI) {
+export default function agentsMdUserMessage(pi: ExtensionAPI) {
   let messageInjected = false;
 
   pi.on("before_agent_start", (event) => {

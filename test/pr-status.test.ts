@@ -9,9 +9,10 @@
  *
  * Run: npx vitest run test/pr-status.test.ts
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
@@ -51,7 +52,7 @@ interface ToolDef {
     _onUpdate: unknown,
     ctx: { cwd?: string },
   ) => Promise<{
-    content: Array<{ type: "text"; text: string }>;
+    content: { type: "text"; text: string }[];
     details: Record<string, unknown>;
   }>;
 }
@@ -59,7 +60,10 @@ interface ToolDef {
 function getPrStatusExecutor(): ToolDef["execute"] {
   const tools: unknown[] = [];
   const pi = {
-    registerTool: (t: unknown) => tools.push(t),
+    registerTool: (t: unknown) => {
+      tools.push(t);
+      return tools.length;
+    },
   };
   registerTools(pi as Parameters<typeof registerTools>[0]);
   const tool = tools.find(

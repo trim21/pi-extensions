@@ -13,23 +13,25 @@
  *
  * Run: npx vitest run test/ci-logs.test.ts
  */
-import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
+
 import {
-  renderJobLogs,
-  renderStepLog,
+  type CiLogsJob,
   cleanStepOutput,
   extractStepFromLog,
-  type CiLogsJob,
+  renderJobLogs,
+  renderStepLog,
 } from "../src/gh-readonly.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, "fixtures");
 
 function loadFixture(name: string): string {
-  return readFileSync(join(fixturesDir, name), "utf-8");
+  return readFileSync(join(fixturesDir, name), "utf8");
 }
 
 const jobs = (
@@ -43,12 +45,15 @@ const testJob = jobs.find((j) => j.id === 92374541741)!;
 
 function fetchJobLog(jobId: number): Promise<string> {
   switch (jobId) {
-    case 92374541920:
+    case 92374541920: {
       return Promise.resolve(lintRawLog);
-    case 92374541741:
+    }
+    case 92374541741: {
       return Promise.resolve(testRawLog);
-    default:
+    }
+    default: {
       return Promise.reject(new Error(`no fixture for job ${jobId}`));
+    }
   }
 }
 
@@ -56,11 +61,11 @@ describe("cleanStepOutput", () => {
   it("strips timestamps, ANSI escapes and group markers", () => {
     const raw = [
       "\uFEFF2026-08-05T16:36:08.1842645Z ##[group]Run npx prettier --check ./",
-      "2026-08-05T16:36:08.1843040Z \u001b[36;1mnpx prettier --check ./\u001b[0m",
+      "2026-08-05T16:36:08.1843040Z \u001B[36;1mnpx prettier --check ./\u001B[0m",
       "2026-08-05T16:36:08.1868383Z shell: /usr/bin/bash -e {0}",
       "2026-08-05T16:36:08.1869541Z ##[endgroup]",
       "2026-08-05T16:36:09.2942526Z Checking formatting...",
-      "2026-08-05T16:36:09.8046392Z [\u001b[33mwarn\u001b[39m] pnpm-lock.yaml",
+      "2026-08-05T16:36:09.8046392Z [\u001B[33mwarn\u001B[39m] pnpm-lock.yaml",
       "2026-08-05T16:36:10.0260911Z ##[error]Process completed with exit code 1.",
     ].join("\n");
 
@@ -82,10 +87,10 @@ describe("renderJobLogs", () => {
     expect(result.content).toHaveLength(1);
     expect(result.content[0].type).toBe("text");
     // must be parseable JSON with the expected shape
-    const parsed = JSON.parse(result.content[0].text) as Array<{
+    const parsed = JSON.parse(result.content[0].text) as {
       name: string;
-      steps: Array<{ name: string; output?: string }>;
-    }>;
+      steps: { name: string; output?: string }[];
+    }[];
     expect(parsed.map((j) => j.name)).toEqual(["test", "build", "lint"]);
     for (const job of parsed) {
       for (const step of job.steps) {
@@ -98,7 +103,7 @@ describe("renderJobLogs", () => {
 
   it("filters to a single job with job=lint", async () => {
     const result = await renderJobLogs({ runId: "31026014828", job: "lint" }, jobs, fetchJobLog);
-    const parsed = JSON.parse(result.content[0].text) as Array<{ name: string }>;
+    const parsed = JSON.parse(result.content[0].text) as { name: string }[];
     expect(parsed.map((j) => j.name)).toEqual(["lint"]);
     expect(result).toMatchSnapshot();
   });

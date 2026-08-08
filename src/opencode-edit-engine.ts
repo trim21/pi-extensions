@@ -70,14 +70,14 @@ const SimpleReplacer: Replacer = function* (_content, find) {
 const LineTrimmedReplacer: Replacer = function* (content, find) {
   const originalLines = content.split("\n");
   const searchLines = find.split("\n");
-  if (searchLines[searchLines.length - 1] === "") {
+  if (searchLines.at(-1) === "") {
     searchLines.pop();
   }
   for (let i = 0; i <= originalLines.length - searchLines.length; i++) {
     let matches = true;
-    for (let j = 0; j < searchLines.length; j++) {
+    for (const [j, searchLine] of searchLines.entries()) {
       const originalTrimmed = originalLines[i + j].trim();
-      const searchTrimmed = searchLines[j].trim();
+      const searchTrimmed = searchLine.trim();
       if (originalTrimmed !== searchTrimmed) {
         matches = false;
         break;
@@ -95,7 +95,7 @@ const LineTrimmedReplacer: Replacer = function* (content, find) {
           matchEndIndex += 1;
         }
       }
-      yield content.substring(matchStartIndex, matchEndIndex);
+      yield content.slice(matchStartIndex, matchEndIndex);
     }
   }
 };
@@ -106,15 +106,15 @@ const BlockAnchorReplacer: Replacer = function* (content, find) {
   if (searchLines.length < 3) {
     return;
   }
-  if (searchLines[searchLines.length - 1] === "") {
+  if (searchLines.at(-1) === "") {
     searchLines.pop();
   }
   const firstLineSearch = searchLines[0].trim();
-  const lastLineSearch = searchLines[searchLines.length - 1].trim();
+  const lastLineSearch = searchLines.at(-1)?.trim() ?? "";
   const searchBlockSize = searchLines.length;
   const maxLineDelta = Math.max(1, Math.floor(searchBlockSize * 0.25));
 
-  const candidates: Array<{ startLine: number; endLine: number }> = [];
+  const candidates: { startLine: number; endLine: number }[] = [];
   for (let i = 0; i < originalLines.length; i++) {
     if (originalLines[i].trim() !== firstLineSearch) {
       continue;
@@ -153,7 +153,7 @@ const BlockAnchorReplacer: Replacer = function* (content, find) {
         }
       }
     } else {
-      similarity = 1.0;
+      similarity = 1;
     }
     if (similarity >= SINGLE_CANDIDATE_SIMILARITY_THRESHOLD) {
       let matchStartIndex = 0;
@@ -167,7 +167,7 @@ const BlockAnchorReplacer: Replacer = function* (content, find) {
           matchEndIndex += 1;
         }
       }
-      yield content.substring(matchStartIndex, matchEndIndex);
+      yield content.slice(matchStartIndex, matchEndIndex);
     }
     return;
   }
@@ -192,7 +192,7 @@ const BlockAnchorReplacer: Replacer = function* (content, find) {
       }
       similarity /= linesToCheck;
     } else {
-      similarity = 1.0;
+      similarity = 1;
     }
     if (similarity > maxSimilarity) {
       maxSimilarity = similarity;
@@ -212,16 +212,18 @@ const BlockAnchorReplacer: Replacer = function* (content, find) {
         matchEndIndex += 1;
       }
     }
-    yield content.substring(matchStartIndex, matchEndIndex);
+    yield content.slice(matchStartIndex, matchEndIndex);
   }
 };
 
+function normalizeWhitespace(text: string): string {
+  return text.replaceAll(/\s+/g, " ").trim();
+}
+
 const WhitespaceNormalizedReplacer: Replacer = function* (content, find) {
-  const normalizeWhitespace = (text: string) => text.replace(/\s+/g, " ").trim();
   const normalizedFind = normalizeWhitespace(find);
   const lines = content.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  for (const line of lines) {
     if (normalizeWhitespace(line) === normalizedFind) {
       yield line;
     } else {
@@ -230,8 +232,8 @@ const WhitespaceNormalizedReplacer: Replacer = function* (content, find) {
         const words = find.trim().split(/\s+/);
         if (words.length > 0) {
           const pattern = words
-            .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-            .join("\\s+");
+            .map((word) => word.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))
+            .join(String.raw`\s+`);
           try {
             const regex = new RegExp(pattern);
             const match = line.match(regex);
@@ -256,21 +258,20 @@ const WhitespaceNormalizedReplacer: Replacer = function* (content, find) {
   }
 };
 
+function removeIndentation(text: string): string {
+  const lines = text.split("\n");
+  const nonEmptyLines = lines.filter((line) => line.trim().length > 0);
+  if (nonEmptyLines.length === 0) return text;
+  const minIndent = Math.min(
+    ...nonEmptyLines.map((line) => {
+      const match = /^(\s*)/.exec(line);
+      return match ? match[1].length : 0;
+    }),
+  );
+  return lines.map((line) => (line.trim().length === 0 ? line : line.slice(minIndent))).join("\n");
+}
+
 const IndentationFlexibleReplacer: Replacer = function* (content, find) {
-  const removeIndentation = (text: string) => {
-    const lines = text.split("\n");
-    const nonEmptyLines = lines.filter((line) => line.trim().length > 0);
-    if (nonEmptyLines.length === 0) return text;
-    const minIndent = Math.min(
-      ...nonEmptyLines.map((line) => {
-        const match = line.match(/^(\s*)/);
-        return match ? match[1].length : 0;
-      }),
-    );
-    return lines
-      .map((line) => (line.trim().length === 0 ? line : line.slice(minIndent)))
-      .join("\n");
-  };
   const normalizedFind = removeIndentation(find);
   const contentLines = content.split("\n");
   const findLines = find.split("\n");
@@ -282,33 +283,44 @@ const IndentationFlexibleReplacer: Replacer = function* (content, find) {
   }
 };
 
-const EscapeNormalizedReplacer: Replacer = function* (content, find) {
-  const unescapeString = (str: string): string => {
-    return str.replace(/\\(n|t|r|'|"|`|\\|\n|\$)/g, (_match, capturedChar) => {
-      switch (capturedChar) {
-        case "n":
-          return "\n";
-        case "t":
-          return "\t";
-        case "r":
-          return "\r";
-        case "'":
-          return "'";
-        case '"':
-          return '"';
-        case "`":
-          return "`";
-        case "\\":
-          return "\\";
-        case "\n":
-          return "\n";
-        case "$":
-          return "$";
-        default:
-          return _match;
+function unescapeString(str: string): string {
+  return str.replaceAll(/\\(n|t|r|'|"|`|\\|\n|\$)/g, (_match, capturedChar) => {
+    switch (capturedChar) {
+      case "n": {
+        return "\n";
       }
-    });
-  };
+      case "t": {
+        return "\t";
+      }
+      case "r": {
+        return "\r";
+      }
+      case "'": {
+        return "'";
+      }
+      case '"': {
+        return '"';
+      }
+      case "`": {
+        return "`";
+      }
+      case "\\": {
+        return "\\";
+      }
+      case "\n": {
+        return "\n";
+      }
+      case "$": {
+        return "$";
+      }
+      default: {
+        return _match;
+      }
+    }
+  });
+}
+
+const EscapeNormalizedReplacer: Replacer = function* (content, find) {
   const unescapedFind = unescapeString(find);
   if (content.includes(unescapedFind)) {
     yield unescapedFind;
@@ -357,12 +369,12 @@ const ContextAwareReplacer: Replacer = function* (content, find) {
   if (findLines.length < 3) {
     return;
   }
-  if (findLines[findLines.length - 1] === "") {
+  if (findLines.at(-1) === "") {
     findLines.pop();
   }
   const contentLines = content.split("\n");
   const firstLine = findLines[0].trim();
-  const lastLine = findLines[findLines.length - 1].trim();
+  const lastLine = findLines.at(-1)?.trim() ?? "";
   for (let i = 0; i < contentLines.length; i++) {
     if (contentLines[i].trim() !== firstLine) continue;
     for (let j = i + 2; j < contentLines.length; j++) {
@@ -446,11 +458,15 @@ export function replace(
         );
       }
       if (replaceAll) {
-        return content.replaceAll(search, newString);
+        return content.replaceAll(search, () => newString);
       }
       const lastIndex = content.lastIndexOf(search);
       if (index !== lastIndex) continue;
-      return content.substring(0, index) + newString + content.substring(index + search.length);
+      return (
+        content.slice(0, Math.max(0, index)) +
+        newString +
+        content.slice(Math.max(0, index + search.length))
+      );
     }
   }
 

@@ -14,9 +14,10 @@
  *
  * Run: npx vitest run test/run-gh-timeout.test.ts
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
@@ -24,7 +25,7 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import { runGh, ghExec, GhError } from "../src/gh-readonly.js";
+import { GhError, ghExec, runGh } from "../src/gh-readonly.js";
 
 /** A fake gh child process that never produces output and only exits when told. */
 class FakeChildProcess extends EventEmitter {
@@ -95,7 +96,9 @@ describe("runGh timeout", () => {
 
 describe("ghExec timeout", () => {
   it("throws GhError instead of returning partial output as success", async () => {
-    const err = await ghExec(["api", "slow-endpoint"], { timeout: 50 }).catch((e: unknown) => e);
+    const err = await ghExec(["api", "slow-endpoint"], { timeout: 50 }).catch(
+      (error: unknown) => error,
+    );
     expect(err).toBeInstanceOf(GhError);
     expect((err as GhError).message).toContain("command timed out");
     expect((err as GhError).code).toBe(-1);
