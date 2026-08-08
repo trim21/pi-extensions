@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     branches: [master]
+    paths:
+      - src/**/*
+      - package.json
 
 concurrency:
   group: release-master
