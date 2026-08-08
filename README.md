@@ -85,7 +85,7 @@ pi -e ./src/bwrap/index.ts
 阻止 `write` 和 `edit` 工具写入 workspace 外部的路径。读取工具（`read`、`ls`、`find`、`grep`）不受限制。
 
 - workspace 内或 `/tmp` 下的路径自动放行
-- 外部路径需通过确认对话框由用户审批
+- 外部路径需通过确认对话框由用户审批,对话框内以 ```diff 代码块展示将要发生的变更预览(与 opencode-edit 共享匹配引擎,能定位时显示带行号的真实 patch,否则退化为参数 diff)
 - 无需配置
 
 ### 使用
@@ -98,7 +98,7 @@ pi -e ./src/workspace-guard.ts
 
 ## opencode-edit
 
-替换内置 `edit` 工具，使用 [opencode](https://github.com/anomalyco/opencode) 的 schema 和模糊匹配引擎。核心 replacer 和 `replace()` 函数直接复制自 opencode，行为与原版完全一致。
+替换内置 `edit` 工具，使用 [opencode](https://github.com/anomalyco/opencode) 的 schema 和模糊匹配引擎。核心 replacer 和 `replace()` 函数直接复制自 opencode，行为与原版完全一致。匹配引擎位于 `src/opencode-edit-engine.ts`，与 workspace-guard 的审批弹窗 diff 预览共享。
 
 支持的匹配策略：
 
