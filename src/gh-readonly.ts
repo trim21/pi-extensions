@@ -114,7 +114,7 @@ export function runGh(
 
     proc.on("close", (code) => {
       if (timeoutId) clearTimeout(timeoutId);
-      if (ctx.signal && onAbort) {
+      if (onAbort && ctx.signal) {
         ctx.signal.removeEventListener("abort", onAbort);
       }
       resolve({
@@ -133,7 +133,7 @@ export function runGh(
 
     proc.on("error", () => {
       if (timeoutId) clearTimeout(timeoutId);
-      if (ctx.signal && onAbort) {
+      if (onAbort && ctx.signal) {
         ctx.signal.removeEventListener("abort", onAbort);
       }
       resolve({ stdout, stderr, code: 1, killed, combined: combined.join(""), reason: killReason });

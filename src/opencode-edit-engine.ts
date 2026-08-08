@@ -199,7 +199,7 @@ const BlockAnchorReplacer: Replacer = function* (content, find) {
       bestMatch = candidate;
     }
   }
-  if (maxSimilarity >= MULTIPLE_CANDIDATES_SIMILARITY_THRESHOLD && bestMatch) {
+  if (bestMatch && maxSimilarity >= MULTIPLE_CANDIDATES_SIMILARITY_THRESHOLD) {
     const { startLine, endLine } = bestMatch;
     let matchStartIndex = 0;
     for (let k = 0; k < startLine; k++) {
