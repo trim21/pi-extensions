@@ -4,13 +4,12 @@
 
 ## 扩展概览
 
-| 扩展                                              | 描述                                                         |
-| ------------------------------------------------- | ------------------------------------------------------------ |
-| [bwrap](#bwrap)                                   | 基于 bubblewrap 的 OS 级沙箱，提供文件系统和网络隔离         |
-| [workspace-guard](#workspace-guard)               | 限制文件写入在 workspace 内，外部写入需用户审批              |
-| [opencode-edit](#opencode-edit)                   | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎       |
-| [bash-default-timeout](#bash-default-timeout)     | 为 bash 工具设置默认超时（180 秒）                           |
-| [agents-md-user-message](#agents-md-user-message) | 将项目级 AGENTS.md 移至 user message，避免占用 system prompt |
+| 扩展                                          | 描述                                                   |
+| --------------------------------------------- | ------------------------------------------------------ |
+| [bwrap](#bwrap)                               | 基于 bubblewrap 的 OS 级沙箱，提供文件系统和网络隔离   |
+| [workspace-guard](#workspace-guard)           | 限制文件写入在 workspace 内，外部写入需用户审批        |
+| [opencode-edit](#opencode-edit)               | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎 |
+| [bash-default-timeout](#bash-default-timeout) | 为 bash 工具设置默认超时（180 秒）                     |
 
 ---
 
@@ -130,23 +129,6 @@ pi -e ./src/opencode-edit.ts
 
 ```bash
 pi -e ./src/bash-default-timeout.ts
-```
-
----
-
-## agents-md-user-message
-
-将项目级 `AGENTS.md` 从 system prompt 移至 user message，减少 system prompt 占用。
-
-- 项目级 `AGENTS.md` → 放入 user message（仅首次消息注入一次）
-- 全局 `~/.pi/agent/AGENTS.md` → 保留在 system prompt
-
-需要配合 `--no-context-files` 参数禁用 pi 默认的上下文文件加载。
-
-### 使用
-
-```bash
-pi -e ./src/agents-md-user-message.ts --no-context-files
 ```
 
 ---
