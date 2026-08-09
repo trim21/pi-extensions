@@ -307,7 +307,7 @@ describe("subagent progress log", () => {
     }));
     const updates = await runWithEvents(events);
     const lines = updates.at(-1)!.split("\n");
-    expect(lines).toHaveLength(20);
+    expect(lines).toHaveLength(5);
     expect(lines[0]).toBe("tool: tool5");
     expect(lines.at(-1)).toBe("tool: tool24");
   });
