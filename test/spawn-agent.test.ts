@@ -11,7 +11,11 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { buildSubagentArgs, formatAgentListSection } from "../src/spawn-agent.js";
+import {
+  buildSubagentArgs,
+  formatAgentListSection,
+  forwardSubagentUIRequest,
+} from "../src/spawn-agent.js";
 import { discoverAgents } from "../src/spawn-agent-agents.js";
 
 function withTempDir(files: Record<string, string>, fn: (dir: string) => void) {
@@ -114,11 +118,13 @@ describe("buildSubagentArgs", () => {
 
   it("uses the read-only default toolset when the agent declares none", () => {
     const args = buildSubagentArgs(baseAgent, "find the config", undefined);
+    expect(args).toContain("rpc");
+    expect(args).not.toContain("-p");
     expect(args).toContain("--no-extensions");
     expect(args).toContain("--tools");
     const toolsIdx = args.indexOf("--tools");
     expect(args[toolsIdx + 1]).toBe("read,grep,find,ls");
-    expect(args.at(-1)).toBe("Task: find the config");
+    expect(args).not.toContain("Task: find the config");
   });
 
   it("always loads the protection extensions (write guard + bwrap)", () => {
@@ -255,6 +261,13 @@ describe("tool registration", () => {
 
 function fakeProc() {
   const proc = new EventEmitter() as ReturnType<typeof import("node:child_process").spawn>;
+  const stdin = new EventEmitter() as EventEmitter & {
+    write: ReturnType<typeof vi.fn>;
+    end: ReturnType<typeof vi.fn>;
+  };
+  stdin.write = vi.fn(() => true);
+  stdin.end = vi.fn();
+  (proc as unknown as { stdin: EventEmitter }).stdin = stdin;
   (proc as unknown as { stdout: EventEmitter }).stdout = new EventEmitter();
   (proc as unknown as { stderr: EventEmitter }).stderr = new EventEmitter();
   (proc as unknown as { kill: () => boolean }).kill = () => true;
@@ -262,8 +275,8 @@ function fakeProc() {
   return proc;
 }
 
-describe("subagent process environment", () => {
-  it("marks the child with PI_SUBAGENT_CHILD=1", async () => {
+describe("subagent RPC process", () => {
+  it("sends the task over stdin", async () => {
     vi.resetModules();
     const spawnMock = vi.fn();
     vi.doMock("node:child_process", async (importOriginal) => {
@@ -280,12 +293,173 @@ describe("subagent process environment", () => {
     const options = (
       spawnMock.mock.calls[0] as [string, string[], { env: Record<string, string> }]
     )[2];
-    expect(options.env.PI_SUBAGENT_CHILD).toBe("1");
     expect(options.env.PATH).toBe(process.env.PATH);
+
+    const proc = spawnMock.mock.results[0].value as unknown as {
+      stdin: { write: ReturnType<typeof vi.fn> };
+    };
+    expect(proc.stdin.write).toHaveBeenCalledWith(
+      `${JSON.stringify({ type: "prompt", message: "Task: task" })}\n`,
+    );
 
     (spawnMock.mock.results[0].value as EventEmitter).emit("close", 0);
     const result = await running;
     expect(result.exitCode).toBe(0);
+    vi.resetModules();
+  });
+});
+
+describe("subagent UI forwarding", () => {
+  it("forwards every RPC-supported UI method to the parent UI", async () => {
+    const ui = {
+      select: vi.fn(async () => "Allow"),
+      confirm: vi.fn(async () => true),
+      input: vi.fn(async () => "because"),
+      editor: vi.fn(async () => "edited"),
+      notify: vi.fn(),
+      setStatus: vi.fn(),
+      setWidget: vi.fn(),
+      setTitle: vi.fn(),
+      setEditorText: vi.fn(),
+    };
+
+    await expect(
+      forwardSubagentUIRequest(
+        {
+          type: "extension_ui_request",
+          id: "1",
+          method: "select",
+          title: "Pick",
+          options: ["Allow"],
+        },
+        ui as never,
+      ),
+    ).resolves.toEqual({ type: "extension_ui_response", id: "1", value: "Allow" });
+    await expect(
+      forwardSubagentUIRequest(
+        {
+          type: "extension_ui_request",
+          id: "2",
+          method: "confirm",
+          title: "Sure?",
+          message: "Really?",
+        },
+        ui as never,
+      ),
+    ).resolves.toEqual({ type: "extension_ui_response", id: "2", confirmed: true });
+    await expect(
+      forwardSubagentUIRequest(
+        { type: "extension_ui_request", id: "3", method: "input", title: "Why?" },
+        ui as never,
+      ),
+    ).resolves.toEqual({ type: "extension_ui_response", id: "3", value: "because" });
+    await expect(
+      forwardSubagentUIRequest(
+        { type: "extension_ui_request", id: "4", method: "editor", title: "Edit" },
+        ui as never,
+      ),
+    ).resolves.toEqual({ type: "extension_ui_response", id: "4", value: "edited" });
+
+    await forwardSubagentUIRequest(
+      {
+        type: "extension_ui_request",
+        id: "5",
+        method: "notify",
+        message: "Done",
+        notifyType: "info",
+      },
+      ui as never,
+    );
+    await forwardSubagentUIRequest(
+      {
+        type: "extension_ui_request",
+        id: "6",
+        method: "setStatus",
+        statusKey: "child",
+        statusText: "busy",
+      },
+      ui as never,
+    );
+    await forwardSubagentUIRequest(
+      {
+        type: "extension_ui_request",
+        id: "7",
+        method: "setWidget",
+        widgetKey: "child",
+        widgetLines: ["one"],
+        widgetPlacement: "belowEditor",
+      },
+      ui as never,
+    );
+    await forwardSubagentUIRequest(
+      { type: "extension_ui_request", id: "8", method: "setTitle", title: "Child" },
+      ui as never,
+    );
+    await forwardSubagentUIRequest(
+      { type: "extension_ui_request", id: "9", method: "set_editor_text", text: "draft" },
+      ui as never,
+    );
+
+    expect(ui.notify).toHaveBeenCalledWith("Done", "info");
+    expect(ui.setStatus).toHaveBeenCalledWith("child", "busy");
+    expect(ui.setWidget).toHaveBeenCalledWith("child", ["one"], {
+      placement: "belowEditor",
+    });
+    expect(ui.setTitle).toHaveBeenCalledWith("Child");
+    expect(ui.setEditorText).toHaveBeenCalledWith("draft");
+  });
+
+  it("writes dialog responses back to the child RPC process", async () => {
+    vi.resetModules();
+    const spawnMock = vi.fn();
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const mod = await importOriginal<typeof import("node:child_process")>();
+      spawnMock.mockImplementation(fakeProc);
+      return { ...mod, spawn: spawnMock };
+    });
+
+    const { runAgent } = await import("../src/spawn-agent.js");
+    const agent = {
+      name: "scout",
+      description: "desc",
+      systemPrompt: "",
+      filePath: "/x/scout.md",
+    };
+    const parentUI = { select: vi.fn(async () => "Approve once") };
+    const running = runAgent(agent, "task", "/cwd", undefined, undefined, parentUI as never);
+
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+    const proc = spawnMock.mock.results[0].value as unknown as {
+      stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+      stdout: EventEmitter;
+      emit: (event: string, ...args: unknown[]) => boolean;
+    };
+    proc.stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          type: "extension_ui_request",
+          id: "approval",
+          method: "select",
+          title: "Allow?",
+          options: ["Approve once", "Block"],
+        })}\n`,
+      ),
+    );
+
+    await vi.waitFor(() =>
+      expect(proc.stdin.write).toHaveBeenCalledWith(
+        `${JSON.stringify({
+          type: "extension_ui_response",
+          id: "approval",
+          value: "Approve once",
+        })}\n`,
+      ),
+    );
+    proc.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "agent_settled" })}\n`));
+    expect(proc.stdin.end).toHaveBeenCalledOnce();
+    proc.emit("close", 0);
+    await running;
     vi.resetModules();
   });
 });

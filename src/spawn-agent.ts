@@ -29,7 +29,10 @@ import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-cor
 import {
   type AgentSessionEvent,
   type ExtensionAPI,
+  type ExtensionUIContext,
   getMarkdownTheme,
+  type RpcExtensionUIRequest,
+  type RpcExtensionUIResponse,
   truncateTail,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
@@ -176,18 +179,18 @@ async function writePromptToTempFile(agentName: string, prompt: string): Promise
 
 export function buildSubagentArgs(
   agent: AgentConfig,
-  task: string,
+  _task: string,
   systemPromptPath: string | undefined,
 ): string[] {
-  // --mode json: emit events as JSON lines; -p: single-shot answer;
-  // --no-session: ephemeral, do not persist. --no-extensions disables
+  // RPC mode emits agent and extension UI events as JSON lines and accepts
+  // dialog responses over stdin. --no-session keeps the child ephemeral.
+  // --no-extensions disables
   // extension discovery; only the extensions explicitly loaded below (the
   // unconditional guards plus per-tool overrides) run inside the subagent.
-  const args: string[] = ["--mode", "json", "-p", "--no-session", "--no-extensions"];
+  const args: string[] = ["--mode", "rpc", "--no-session", "--no-extensions"];
 
   // Protection layers that must be present in every subagent regardless of
-  // its declared toolset: the workspace write guard and the bwrap sandbox
-  // (forced read-only for subagents via PI_SUBAGENT_CHILD=1).
+  // its declared toolset: the workspace write guard and the bwrap sandbox.
   for (const ext of UNCONDITIONAL_EXTENSIONS) {
     args.push("-e", extensionPath(ext));
   }
@@ -210,7 +213,6 @@ export function buildSubagentArgs(
   }
   args.push("--tools", tools.join(","));
   if (systemPromptPath) args.push("--append-system-prompt", systemPromptPath);
-  args.push(`Task: ${task}`);
   return args;
 }
 
@@ -218,12 +220,86 @@ export function buildSubagentArgs(
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
+function dialogOptions(signal: AbortSignal | undefined, timeout: number | undefined) {
+  return {
+    ...(signal && { signal }),
+    ...(timeout !== undefined && { timeout }),
+  };
+}
+
+/** Forward one RPC extension UI request to the parent session. */
+export async function forwardSubagentUIRequest(
+  request: RpcExtensionUIRequest,
+  ui: ExtensionUIContext,
+  signal?: AbortSignal,
+): Promise<RpcExtensionUIResponse | undefined> {
+  switch (request.method) {
+    case "select": {
+      const value = await ui.select(
+        request.title,
+        request.options,
+        dialogOptions(signal, request.timeout),
+      );
+      return value === undefined
+        ? { type: "extension_ui_response", id: request.id, cancelled: true }
+        : { type: "extension_ui_response", id: request.id, value };
+    }
+    case "confirm": {
+      const confirmed = await ui.confirm(
+        request.title,
+        request.message,
+        dialogOptions(signal, request.timeout),
+      );
+      return { type: "extension_ui_response", id: request.id, confirmed };
+    }
+    case "input": {
+      const value = await ui.input(
+        request.title,
+        request.placeholder,
+        dialogOptions(signal, request.timeout),
+      );
+      return value === undefined
+        ? { type: "extension_ui_response", id: request.id, cancelled: true }
+        : { type: "extension_ui_response", id: request.id, value };
+    }
+    case "editor": {
+      const value = await ui.editor(request.title, request.prefill);
+      return value === undefined
+        ? { type: "extension_ui_response", id: request.id, cancelled: true }
+        : { type: "extension_ui_response", id: request.id, value };
+    }
+    case "notify": {
+      ui.notify(request.message, request.notifyType);
+      return undefined;
+    }
+    case "setStatus": {
+      ui.setStatus(request.statusKey, request.statusText);
+      return undefined;
+    }
+    case "setWidget": {
+      ui.setWidget(request.widgetKey, request.widgetLines, {
+        placement: request.widgetPlacement,
+      });
+      return undefined;
+    }
+    case "setTitle": {
+      ui.setTitle(request.title);
+      return undefined;
+    }
+    case "set_editor_text": {
+      ui.setEditorText(request.text);
+      return undefined;
+    }
+  }
+}
+
 export async function runAgent(
   agent: AgentConfig,
   task: string,
   cwd: string,
   signal: AbortSignal | undefined,
   onUpdate: OnUpdateCallback | undefined,
+  parentUI?: ExtensionUIContext,
 ): Promise<SubagentDetails> {
   const result: SubagentDetails = {
     agent: agent.name,
@@ -253,10 +329,8 @@ export async function runAgent(
     const proc = spawn(invocation.command, invocation.args, {
       cwd,
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-      // Mark the child as a subagent so extensions running inside it (e.g.
-      // bwrap's subagent policy) can recognize and treat it accordingly.
-      env: { ...process.env, PI_SUBAGENT_CHILD: "1" },
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env },
     });
 
     let logLines: string[] = [];
@@ -281,10 +355,57 @@ export async function runAgent(
 
     let buffer = "";
 
+    const sendRpc = (message: object) => {
+      proc.stdin.write(`${JSON.stringify(message)}\n`);
+    };
+
+    let requestedShutdown = false;
+    const requestShutdown = () => {
+      if (requestedShutdown) return;
+      requestedShutdown = true;
+      proc.stdin.end();
+    };
+
     const processLine = (line: string) => {
       if (!line.trim()) return;
-      const event = parseJsonEvent(line);
-      if (!event) return;
+      const record = parseJsonRecord(line);
+      if (!record) return;
+
+      if (record.type === "extension_ui_request") {
+        const request = record as RpcExtensionUIRequest;
+        if (!parentUI) {
+          if (
+            request.method === "select" ||
+            request.method === "confirm" ||
+            request.method === "input" ||
+            request.method === "editor"
+          ) {
+            sendRpc({ type: "extension_ui_response", id: request.id, cancelled: true });
+          }
+          return;
+        }
+        void forwardSubagentUIRequest(request, parentUI, signal)
+          .then((response) => {
+            if (response) sendRpc(response);
+            return;
+          })
+          .catch(() => {
+            sendRpc({ type: "extension_ui_response", id: request.id, cancelled: true });
+          });
+        return;
+      }
+
+      if (record.type === "response") {
+        if (record.command === "prompt" && record.success === false) {
+          result.errorMessage =
+            typeof record.error === "string" ? record.error : "Subagent prompt was rejected";
+          result.stopReason = "error";
+          requestShutdown();
+        }
+        return;
+      }
+
+      const event = record as AgentSessionEvent;
 
       switch (event.type) {
         case "message_update": {
@@ -323,6 +444,10 @@ export async function runAgent(
 
           break;
         }
+        case "agent_settled": {
+          requestShutdown();
+          break;
+        }
         // No default
       }
     };
@@ -337,6 +462,12 @@ export async function runAgent(
     proc.stderr.on("data", (data: Buffer) => {
       result.stderr += data.toString();
     });
+
+    proc.stdin.on("error", (error) => {
+      if (!requestedShutdown) result.stderr += error.message;
+    });
+
+    sendRpc({ type: "prompt", message: `Task: ${task}` });
 
     const exitCode = await new Promise<number>((resolve) => {
       proc.on("close", (code) => {
@@ -372,12 +503,10 @@ export async function runAgent(
 }
 
 /**
- * Parse one line of the subagent's `--mode json` event stream into a typed
- * event. Non-JSON lines and non-event records (e.g. the session header) are
- * rejected. The cast here is the single trust boundary: downstream branches
- * are fully type-narrowed via the `AgentSessionEvent` discriminated union.
+ * Parse one line of the subagent's RPC stream into a JSON object. Non-JSON
+ * lines and records without a type discriminator are rejected.
  */
-function parseJsonEvent(line: string): AgentSessionEvent | null {
+function parseJsonRecord(line: string): Record<string, unknown> | null {
   let raw: unknown;
   try {
     raw = JSON.parse(line);
@@ -386,7 +515,7 @@ function parseJsonEvent(line: string): AgentSessionEvent | null {
   }
   if (typeof raw !== "object" || raw === null) return null;
   if (typeof (raw as Record<string, unknown>).type !== "string") return null;
-  return raw as AgentSessionEvent;
+  return raw as Record<string, unknown>;
 }
 
 /** Session entry customType used to mark the injected subagent list. */
@@ -395,7 +524,7 @@ export function formatAgentListSection(agents: AgentConfig[]): string {
   return [
     "## Available subagents",
     "",
-    "You can delegate tasks to the following subagent types by calling the `spawn_agent` tool with their name in the `agent` parameter:",
+    "You can delegate tasks to the following subagent types by calling the `spawn-agent` tool with their name in the `agent` parameter:",
     "",
     ...lines,
   ].join("\n");
@@ -460,7 +589,14 @@ export default function spawnAgent(pi: ExtensionAPI) {
         };
       }
 
-      const result = await runAgent(agent, params.task, ctx.cwd, signal, onUpdate);
+      const result = await runAgent(
+        agent,
+        params.task,
+        ctx.cwd,
+        signal,
+        onUpdate,
+        ctx.hasUI ? ctx.ui : undefined,
+      );
 
       const isError =
         result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
