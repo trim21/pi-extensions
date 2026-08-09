@@ -95,6 +95,15 @@ Just read files.
   });
 });
 
+/** Extract the file paths passed via `-e` flags. */
+function loadedExtensions(args: string[]): string[] {
+  const exts: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "-e" && args[i + 1]) exts.push(args[i + 1]);
+  }
+  return exts;
+}
+
 describe("buildSubagentArgs", () => {
   const baseAgent = {
     name: "scout",
@@ -110,6 +119,43 @@ describe("buildSubagentArgs", () => {
     const toolsIdx = args.indexOf("--tools");
     expect(args[toolsIdx + 1]).toBe("read,grep,find,ls");
     expect(args.at(-1)).toBe("Task: find the config");
+  });
+
+  it("always loads the protection extensions (write guard + bwrap)", () => {
+    for (const agent of [
+      baseAgent,
+      { ...baseAgent, tools: ["bash", "edit"] },
+      { ...baseAgent, tools: ["write"] },
+    ]) {
+      const exts = loadedExtensions(buildSubagentArgs(agent, "task", undefined));
+      expect(exts.some((p) => p.endsWith("workspace-guard.ts"))).toBe(true);
+      expect(exts.some((p) => p.endsWith("bwrap/index.ts"))).toBe(true);
+    }
+  });
+
+  it("loads opencode-read for the default read-only toolset", () => {
+    const exts = loadedExtensions(buildSubagentArgs(baseAgent, "task", undefined));
+    expect(exts.some((p) => p.endsWith("opencode-read.ts"))).toBe(true);
+    expect(exts.some((p) => p.endsWith("opencode-edit.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode-write.ts"))).toBe(false);
+  });
+
+  it("loads opencode overrides for each declared tool (read/edit/write)", () => {
+    const exts = loadedExtensions(
+      buildSubagentArgs({ ...baseAgent, tools: ["read", "edit", "write"] }, "task", undefined),
+    );
+    expect(exts.some((p) => p.endsWith("opencode-read.ts"))).toBe(true);
+    expect(exts.some((p) => p.endsWith("opencode-edit.ts"))).toBe(true);
+    expect(exts.some((p) => p.endsWith("opencode-write.ts"))).toBe(true);
+  });
+
+  it("does not load opencode overrides for tools the agent did not declare", () => {
+    const exts = loadedExtensions(
+      buildSubagentArgs({ ...baseAgent, tools: ["bash"] }, "task", undefined),
+    );
+    expect(exts.some((p) => p.endsWith("opencode-read.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode-edit.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode-write.ts"))).toBe(false);
   });
 
   it("uses the agent's declared toolset and model when present", () => {

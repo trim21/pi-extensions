@@ -23,6 +23,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
@@ -45,6 +46,24 @@ const MAX_OUTPUT_BYTES = 50 * 1024;
 const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
 /** Progress log keeps only the most recent lines (rolling window). */
 const MAX_PROGRESS_LINES = 5;
+
+/**
+ * Extensions loaded unconditionally into every subagent: the workspace write
+ * guard and the bwrap sandbox. Both are protection layers and must not depend
+ * on the agent's declared toolset.
+ */
+const UNCONDITIONAL_EXTENSIONS = ["workspace-guard.ts", "bwrap/index.ts"] as const;
+
+/**
+ * Tool → extension override map: when a subagent's frontmatter enables a
+ * built-in tool, the matching opencode extension is loaded via `-e` so the
+ * subagent uses the enhanced implementation instead of the built-in one.
+ */
+const TOOL_EXTENSION_OVERRIDES: Record<string, string> = {
+  read: "opencode-read.ts",
+  edit: "opencode-edit.ts",
+  write: "opencode-write.ts",
+};
 
 // ── schema ───────────────────────────────────────────────────────────────────
 
@@ -131,6 +150,20 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
   return { command: "pi", args };
 }
 
+/**
+ * Resolve a sibling extension file (relative to this module) to an absolute
+ * path, so `-e` works both when running from the source tree and from an
+ * installed pi package (node_modules). A missing extension is fatal: silently
+ * skipping a guard (e.g. bwrap) would leave the subagent unprotected.
+ */
+function extensionPath(fileName: string): string {
+  const abs = fileURLToPath(new URL(fileName, import.meta.url));
+  if (!existsSync(abs)) {
+    throw new Error(`Extension file not found: ${abs}`);
+  }
+  return abs;
+}
+
 async function writePromptToTempFile(agentName: string, prompt: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "pi-spawn-agent-"));
   const safeName = agentName.replaceAll(/[^\w.-]+/g, "_");
@@ -147,9 +180,18 @@ export function buildSubagentArgs(
   systemPromptPath: string | undefined,
 ): string[] {
   // --mode json: emit events as JSON lines; -p: single-shot answer;
-  // --no-session: ephemeral, do not persist. --no-extensions keeps the
-  // subagent clean (no recursive spawn_agent, no sandbox surprises).
+  // --no-session: ephemeral, do not persist. --no-extensions disables
+  // extension discovery; only the extensions explicitly loaded below (the
+  // unconditional guards plus per-tool overrides) run inside the subagent.
   const args: string[] = ["--mode", "json", "-p", "--no-session", "--no-extensions"];
+
+  // Protection layers that must be present in every subagent regardless of
+  // its declared toolset: the workspace write guard and the bwrap sandbox
+  // (forced read-only for subagents via PI_SUBAGENT_CHILD=1).
+  for (const ext of UNCONDITIONAL_EXTENSIONS) {
+    args.push("-e", extensionPath(ext));
+  }
+
   // Thinking level rides on the model shorthand ("model:level"); it cannot be
   // set without a model, so a level without a model is ignored.
   const model =
@@ -159,6 +201,13 @@ export function buildSubagentArgs(
   if (model) args.push("--model", model);
   // Read-only default unless the agent explicitly declares a toolset.
   const tools = agent.tools ?? DEFAULT_TOOLS;
+  // Load the opencode override for each built-in tool the agent declares
+  // (read/edit/write), so the subagent uses the enhanced implementation
+  // instead of the built-in one.
+  for (const tool of tools) {
+    const ext = TOOL_EXTENSION_OVERRIDES[tool];
+    if (ext) args.push("-e", extensionPath(ext));
+  }
   args.push("--tools", tools.join(","));
   if (systemPromptPath) args.push("--append-system-prompt", systemPromptPath);
   args.push(`Task: ${task}`);
