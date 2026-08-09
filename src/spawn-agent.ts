@@ -24,9 +24,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { Message } from "@earendil-works/pi-ai";
+import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
+  type AgentSessionEvent,
   type ExtensionAPI,
   getMarkdownTheme,
   truncateTail,
@@ -72,7 +72,7 @@ interface SubagentDetails {
   agent: string;
   task: string;
   exitCode: number;
-  messages: Message[];
+  messages: AgentMessage[];
   stderr: string;
   usage: UsageStats;
   model?: string;
@@ -82,7 +82,7 @@ interface SubagentDetails {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function getFinalOutput(messages: Message[]): string {
+function getFinalOutput(messages: AgentMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role === "assistant") {
@@ -234,42 +234,47 @@ export async function runAgent(
 
     const processLine = (line: string) => {
       if (!line.trim()) return;
-      let event: unknown;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        return; // not a JSON event line
-      }
-      if (!isRecord(event)) return;
+      const event = parseJsonEvent(line);
+      if (!event) return;
 
-      if (event.type === "message_update" && isRecord(event.assistantMessageEvent)) {
-        // A completed text block (text_end carries the full content) becomes a
-        // `text:` log line. Deltas/thinking are intentionally not logged.
-        const delta = event.assistantMessageEvent;
-        if (delta.type === "text_end" && typeof delta.content === "string") {
-          pushLogLine(`text: ${delta.content}`);
+      switch (event.type) {
+        case "message_update": {
+          // A completed text block (text_end carries the full content) becomes a
+          // `text:` log line. Deltas/thinking are intentionally not logged.
+          const delta = event.assistantMessageEvent;
+          if (delta.type === "text_end") {
+            pushLogLine(`text: ${delta.content}`);
+            emitUpdate();
+          }
+
+          break;
+        }
+        case "tool_execution_start": {
+          pushLogLine(`tool: ${event.toolName}`);
           emitUpdate();
+
+          break;
         }
-      } else if (event.type === "tool_execution_start" && typeof event.toolName === "string") {
-        pushLogLine(`tool: ${event.toolName}`);
-        emitUpdate();
-      } else if (event.type === "message_end" && isRecord(event.message)) {
-        const msg = event.message as unknown as Message;
-        result.messages.push(msg);
-        if (msg.role === "assistant") {
-          result.usage.turns++;
-          const usage: Record<string, unknown> = isRecord(msg.usage) ? msg.usage : {};
-          result.usage.input += num(usage.input);
-          result.usage.output += num(usage.output);
-          result.usage.cacheRead += num(usage.cacheRead);
-          result.usage.cacheWrite += num(usage.cacheWrite);
-          result.usage.cost += num(isRecord(usage.cost) ? usage.cost.total : undefined);
-          result.usage.contextTokens = num(usage.totalTokens);
-          if (!result.model && typeof msg.model === "string") result.model = msg.model;
-          if (typeof msg.stopReason === "string") result.stopReason = msg.stopReason;
-          if (typeof msg.errorMessage === "string") result.errorMessage = msg.errorMessage;
+        case "message_end": {
+          const msg = event.message;
+          result.messages.push(msg);
+          if (msg.role === "assistant") {
+            result.usage.turns++;
+            result.usage.input += msg.usage.input;
+            result.usage.output += msg.usage.output;
+            result.usage.cacheRead += msg.usage.cacheRead;
+            result.usage.cacheWrite += msg.usage.cacheWrite;
+            result.usage.cost += msg.usage.cost.total;
+            result.usage.contextTokens = msg.usage.totalTokens;
+            if (!result.model) result.model = msg.model;
+            result.stopReason = msg.stopReason;
+            if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+          }
+          emitUpdate();
+
+          break;
         }
-        emitUpdate();
+        // No default
       }
     };
 
@@ -317,12 +322,22 @@ export async function runAgent(
   }
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
-
-function num(v: unknown): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+/**
+ * Parse one line of the subagent's `--mode json` event stream into a typed
+ * event. Non-JSON lines and non-event records (e.g. the session header) are
+ * rejected. The cast here is the single trust boundary: downstream branches
+ * are fully type-narrowed via the `AgentSessionEvent` discriminated union.
+ */
+function parseJsonEvent(line: string): AgentSessionEvent | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof raw !== "object" || raw === null) return null;
+  if (typeof (raw as Record<string, unknown>).type !== "string") return null;
+  return raw as AgentSessionEvent;
 }
 
 /** Session entry customType used to mark the injected subagent list. */
