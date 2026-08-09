@@ -155,12 +155,12 @@ describe("formatAgentListSection", () => {
     expect(section).toContain("## Available subagents");
     expect(section).toContain("`scout`: Fast codebase recon");
     expect(section).toContain("`reviewer`: Code review");
-    expect(section).toContain("spawn_agent");
+    expect(section).toContain("spawn-agent");
   });
 });
 
 describe("tool registration", () => {
-  it("registers a spawn_agent tool with agent and task parameters", async () => {
+  it("registers a spawn-agent tool with agent and task parameters", async () => {
     const { default: spawnAgent } = await import("../src/spawn-agent.js");
     let tool: { name: string; parameters: unknown } | undefined;
     spawnAgent({
@@ -170,7 +170,7 @@ describe("tool registration", () => {
       on: () => false,
     } as never);
 
-    expect(tool?.name).toBe("spawn_agent");
+    expect(tool?.name).toBe("spawn-agent");
     expect(tool?.parameters).toBeDefined();
   });
 

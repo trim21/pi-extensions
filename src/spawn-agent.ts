@@ -372,8 +372,8 @@ export default function spawnAgent(pi: ExtensionAPI) {
   }
 
   pi.registerTool<typeof spawnAgentSchema, SubagentDetails>({
-    name: "spawn_agent",
-    label: "spawn_agent",
+    name: "spawn-agent",
+    label: "spawn-agent",
     description: [
       "Delegate a task to a subagent running in a separate pi process with an isolated context window.",
       "The `agent` parameter must be one of the available subagent types listed in the system prompt.",
