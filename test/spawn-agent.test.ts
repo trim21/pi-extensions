@@ -243,3 +243,103 @@ describe("subagent process environment", () => {
     vi.resetModules();
   });
 });
+
+describe("subagent progress log", () => {
+  it("logs completed text blocks as text: lines", async () => {
+    const updates = await runWithEvents([
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: {
+          type: "text_end",
+          contentIndex: 0,
+          content: "Let me inspect the config.",
+        },
+      },
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "text_end", contentIndex: 1, content: "Found the flag." },
+      },
+    ]);
+    expect(updates.at(-1)).toContain("text: Let me inspect the config.");
+    expect(updates.at(-1)).toContain("text: Found the flag.");
+  });
+
+  it("logs tool executions as tool: lines", async () => {
+    const updates = await runWithEvents([
+      {
+        type: "tool_execution_start",
+        toolCallId: "1",
+        toolName: "read",
+        args: { path: "/x/config.ts" },
+      },
+    ]);
+    expect(updates.at(-1)).toContain("tool: read");
+  });
+
+  it("interleaves tool: and text: lines in event order", async () => {
+    const updates = await runWithEvents([
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "Reading now." },
+      },
+      { type: "tool_execution_start", toolCallId: "1", toolName: "grep", args: { pattern: "x" } },
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "Done." },
+      },
+    ]);
+    const lines = updates.at(-1)!.split("\n");
+    expect(lines[0]).toBe("text: Reading now.");
+    expect(lines[1]).toBe("tool: grep");
+    expect(lines[2]).toBe("text: Done.");
+  });
+
+  it("keeps only the most recent 20 lines", async () => {
+    const events = Array.from({ length: 25 }, (_, i) => ({
+      type: "tool_execution_start",
+      toolCallId: String(i),
+      toolName: `tool${i}`,
+      args: {},
+    }));
+    const updates = await runWithEvents(events);
+    const lines = updates.at(-1)!.split("\n");
+    expect(lines).toHaveLength(20);
+    expect(lines[0]).toBe("tool: tool5");
+    expect(lines.at(-1)).toBe("tool: tool24");
+  });
+});
+
+async function runWithEvents(events: unknown[]) {
+  vi.resetModules();
+  const spawnMock = vi.fn();
+  vi.doMock("node:child_process", async (importOriginal) => {
+    const mod = await importOriginal<typeof import("node:child_process")>();
+    spawnMock.mockImplementation(fakeProc);
+    return { ...mod, spawn: spawnMock };
+  });
+
+  const { runAgent } = await import("../src/spawn-agent.js");
+  const agent = { name: "scout", description: "desc", systemPrompt: "", filePath: "/x/scout.md" };
+  const updates: string[] = [];
+  const running = runAgent(agent, "task", "/cwd", undefined, (u) => {
+    const part = u.content[0];
+    if (part.type === "text") updates.push(part.text);
+  });
+
+  await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+  const proc = spawnMock.mock.results[0].value as unknown as {
+    stdout: EventEmitter;
+    emit: (event: string, ...args: unknown[]) => boolean;
+  };
+  for (const event of events) {
+    proc.stdout.emit("data", Buffer.from(`${JSON.stringify(event)}\n`));
+  }
+  proc.emit("close", 0);
+  await running;
+  vi.resetModules();
+  return updates;
+}

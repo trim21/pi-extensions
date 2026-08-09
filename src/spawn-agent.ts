@@ -10,6 +10,9 @@
  * is blocking: the tool awaits the subagent process until it exits and
  * returns its final output to the parent model. Progress is streamed through
  * `onUpdate`, the same channel the built-in bash tool uses for live output.
+ * Progress is a rolling log: `tool: <name>` lines for tool calls and
+ * `text: <content>` lines for completed text blocks, keeping the last
+ * `MAX_PROGRESS_LINES` lines.
  *
  * Security default: without an explicit `tools:` in the frontmatter, the
  * subagent only gets read-only tools (read/grep/find/ls) — no bash/write/edit.
@@ -40,6 +43,8 @@ import { type AgentConfig, discoverAgents, formatAgentList } from "./spawn-agent
 const MAX_OUTPUT_BYTES = 50 * 1024;
 /** Read-only toolset used when an agent does not declare `tools`. */
 const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
+/** Progress log keeps only the most recent lines (rolling window). */
+const MAX_PROGRESS_LINES = 5;
 
 // ── schema ───────────────────────────────────────────────────────────────────
 
@@ -205,9 +210,22 @@ export async function runAgent(
       env: { ...process.env, PI_SUBAGENT_CHILD: "1" },
     });
 
+    let logLines: string[] = [];
+
+    const pushLogLine = (line: string) => {
+      logLines.push(line);
+      if (logLines.length > MAX_PROGRESS_LINES) {
+        logLines = logLines.slice(-MAX_PROGRESS_LINES);
+      }
+    };
+
     const emitUpdate = () => {
+      // Usage line rides on the last row so the TUI always shows live token
+      // cost; it lives outside the rolling window so it is never trimmed.
+      const usageLine = formatUsageStats(result.usage, result.model);
+      const lines = usageLine ? [...logLines, usageLine] : logLines;
       onUpdate?.({
-        content: [{ type: "text", text: getFinalOutput(result.messages) || "(running...)" }],
+        content: [{ type: "text", text: lines.join("\n") || "(running...)" }],
         details: { ...result },
       });
     };
@@ -224,7 +242,18 @@ export async function runAgent(
       }
       if (!isRecord(event)) return;
 
-      if (event.type === "message_end" && isRecord(event.message)) {
+      if (event.type === "message_update" && isRecord(event.assistantMessageEvent)) {
+        // A completed text block (text_end carries the full content) becomes a
+        // `text:` log line. Deltas/thinking are intentionally not logged.
+        const delta = event.assistantMessageEvent;
+        if (delta.type === "text_end" && typeof delta.content === "string") {
+          pushLogLine(`text: ${delta.content}`);
+          emitUpdate();
+        }
+      } else if (event.type === "tool_execution_start" && typeof event.toolName === "string") {
+        pushLogLine(`tool: ${event.toolName}`);
+        emitUpdate();
+      } else if (event.type === "message_end" && isRecord(event.message)) {
         const msg = event.message as unknown as Message;
         result.messages.push(msg);
         if (msg.role === "assistant") {
@@ -240,9 +269,6 @@ export async function runAgent(
           if (typeof msg.stopReason === "string") result.stopReason = msg.stopReason;
           if (typeof msg.errorMessage === "string") result.errorMessage = msg.errorMessage;
         }
-        emitUpdate();
-      } else if (event.type === "tool_result_end" && isRecord(event.message)) {
-        result.messages.push(event.message as unknown as Message);
         emitUpdate();
       }
     };
