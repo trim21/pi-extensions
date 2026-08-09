@@ -27,13 +27,6 @@ import { normalizeForEdit, replace } from "./opencode-edit-engine.js";
 const WRITE_TOOLS = new Set(["write", "edit"]);
 const ALWAYS_ALLOW = ["/tmp"];
 
-/**
- * pi-subagents sets PI_SUBAGENT_CHILD=1 in every spawned child session.
- * Subagents are headless, so there is no approval path: writes outside the
- * workspace are rejected outright instead of asking for approval.
- */
-const isSubagentChild = process.env.PI_SUBAGENT_CHILD === "1";
-
 /** Maximum lines of the diff preview shown in the approval dialog. */
 const MAX_PREVIEW_LINES = 100;
 
@@ -187,19 +180,11 @@ export interface WriteGuardDecision {
 
 /**
  * Decide how to handle a write outside the workspace.
- * Subagent sessions (and any other headless session) have no approval path,
- * so the write is rejected outright.
  */
 export function decideOutsideWorkspaceWrite(
   rawPath: string,
-  opts: { hasUI: boolean; isSubagentChild: boolean },
+  opts: { hasUI: boolean },
 ): WriteGuardDecision {
-  if (opts.isSubagentChild) {
-    return {
-      block: true,
-      reason: `Path "${rawPath}" is outside the subagent workspace. Writes outside the workspace are rejected in subagent sessions; ask the parent session to apply this change.`,
-    };
-  }
   if (!opts.hasUI) {
     return {
       block: true,
@@ -213,15 +198,13 @@ export default function workspaceGuard(pi: ExtensionAPI) {
   pi.on("before_agent_start", (event, ctx) => {
     const currentCwd = ctx.cwd;
     return {
-      systemPrompt: isSubagentChild
-        ? event.systemPrompt +
-          `\nSubagent write protection is active. ` +
-          `write and edit are allowed inside "${currentCwd}" and /tmp. ` +
-          `Writes outside the workspace are rejected without approval — ask the parent session to make such changes.`
-        : event.systemPrompt +
-          `\nWorkspace write protection is active. ` +
-          `write and edit to paths inside the workspace "${currentCwd}" or /tmp are auto-allowed. ` +
-          `Paths outside require user approval before execution.`,
+      systemPrompt:
+        event.systemPrompt +
+        `\nWorkspace write protection is active. ` +
+        `write and edit to paths inside the workspace "${currentCwd}" or /tmp are auto-allowed. ` +
+        (ctx.hasUI
+          ? `Paths outside require user approval before execution.`
+          : `Writes outside the workspace are rejected because no UI is available for approval.`),
     };
   });
 
@@ -237,7 +220,6 @@ export default function workspaceGuard(pi: ExtensionAPI) {
 
     const decision = decideOutsideWorkspaceWrite(rawPath, {
       hasUI: ctx.hasUI,
-      isSubagentChild,
     });
     if (decision.block) return decision;
 

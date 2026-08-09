@@ -248,20 +248,9 @@ describe("buildDiffPreview", () => {
 });
 
 describe("decideOutsideWorkspaceWrite", () => {
-  it("rejects writes outside the workspace in subagent sessions", () => {
-    const decision = decideOutsideWorkspaceWrite("/etc/passwd", {
-      hasUI: false,
-      isSubagentChild: true,
-    });
-
-    expect(decision.block).toBe(true);
-    expect(decision.reason).toContain("subagent");
-  });
-
   it("rejects writes in headless sessions without UI", () => {
     const decision = decideOutsideWorkspaceWrite("/etc/passwd", {
       hasUI: false,
-      isSubagentChild: false,
     });
 
     expect(decision.block).toBe(true);
@@ -270,7 +259,6 @@ describe("decideOutsideWorkspaceWrite", () => {
   it("allows the approval flow when interactive UI is available", () => {
     const decision = decideOutsideWorkspaceWrite("/etc/passwd", {
       hasUI: true,
-      isSubagentChild: false,
     });
 
     expect(decision.block).toBe(false);
