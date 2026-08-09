@@ -177,7 +177,7 @@ export class GhError extends Error {
 /** Run `gh` and return stdout. On non-zero exit, throws a `GhError` carrying the toolcall input and raw command. */
 export async function ghExec(
   args: string[],
-  ctx: { cwd?: string; signal?: AbortSignal; input?: unknown },
+  ctx: { cwd?: string; signal?: AbortSignal; input?: unknown; timeout?: number },
 ): Promise<string> {
   const result = await runGh(args, ctx);
   if (result.code !== 0) {

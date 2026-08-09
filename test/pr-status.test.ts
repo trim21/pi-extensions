@@ -65,7 +65,7 @@ function getPrStatusExecutor(): ToolDef["execute"] {
       return tools.length;
     },
   };
-  registerTools(pi as Parameters<typeof registerTools>[0]);
+  registerTools(pi as unknown as Parameters<typeof registerTools>[0]);
   const tool = tools.find(
     (t): t is ToolDef => (t as { name?: string }).name === "read-github-pr-status",
   );

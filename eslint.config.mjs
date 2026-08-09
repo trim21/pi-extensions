@@ -47,7 +47,7 @@ export default defineConfig(
       parserOptions: {
         projectService: {
           defaultProject: "tsconfig.json",
-          allowDefaultProject: ["test/*.ts", "vitest.config.ts", "eslint.config.mjs"],
+          allowDefaultProject: ["vitest.config.ts", "eslint.config.mjs"],
         },
         tsconfigRootDir: import.meta.dirname,
       },
