@@ -298,7 +298,7 @@ describe("subagent progress log", () => {
     expect(lines[2]).toBe("text: Done.");
   });
 
-  it("keeps only the most recent 20 lines", async () => {
+  it("keeps only the most recent 5 lines", async () => {
     const events = Array.from({ length: 25 }, (_, i) => ({
       type: "tool_execution_start",
       toolCallId: String(i),
@@ -308,7 +308,7 @@ describe("subagent progress log", () => {
     const updates = await runWithEvents(events);
     const lines = updates.at(-1)!.split("\n");
     expect(lines).toHaveLength(5);
-    expect(lines[0]).toBe("tool: tool5");
+    expect(lines[0]).toBe("tool: tool20");
     expect(lines.at(-1)).toBe("tool: tool24");
   });
 });
