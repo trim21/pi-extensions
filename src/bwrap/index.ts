@@ -104,28 +104,21 @@ work inside the sandbox, run it WITHOUT full access first. If it fails with
 and set \`request_full_access_reason\` to describe the failure.
 `;
 
-const SUBAGENT_SANDBOX_PROMPT = `
-## Command Execution (subagent sandbox)
+const HEADLESS_SANDBOX_PROMPT = `
+## Command Execution (headless sandbox)
 
-You are running inside a read-only sandbox in a subagent session.
+You are running inside a read-only sandbox without an interactive UI.
 
 - The bash tool is read-only: no filesystem writes, no network access, and
   \`request_full_access\` is denied. Do not pass \`request_full_access\`.
 - Use the write/edit tools for file changes inside your workspace.
-- Writes outside the workspace are rejected. If a change outside the
-  workspace is needed, ask the parent session to apply it.
-- If a command truly requires network or system-level access, stop and ask
-  the parent session to run it, where the user can approve it.
+- Writes outside the workspace are rejected because no UI is available for
+  approval.
+- If a command truly requires network or system-level access, explain that it
+  cannot be approved in this session.
 `;
 
 const PROTECTED_DIRS = [".git", ".pi", ".agent"];
-
-/**
- * pi-subagents sets PI_SUBAGENT_CHILD=1 in every spawned child session
- * (foreground and async alike). Subagent sessions are headless and must not
- * be able to bypass the sandbox, so bwrap forces read-only bash there.
- */
-const isSubagentChild = process.env.PI_SUBAGENT_CHILD === "1";
 
 const bwrapPath = findDefaultBwrap();
 
@@ -198,11 +191,11 @@ function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
 }
 
 /**
- * Subagent sessions are forced read-only regardless of config: no writable
+ * Headless sessions are forced read-only regardless of config: no writable
  * paths (including configured extraWritablePaths), no network, and no
  * user-supplied extra args that could add writable mounts.
  */
-export function resolveSubagentBwrap(config: BwrapConfig): ResolvedBwrap {
+export function resolveHeadlessBwrap(config: BwrapConfig): ResolvedBwrap {
   return resolveBwrap({
     ...config,
     mode: "readonly",
@@ -524,22 +517,10 @@ export type EscalationDecision = { kind: "dialog" } | { kind: "deny"; reason: st
 
 /**
  * Escalation (`request_full_access`) policy:
- * - Subagent sessions are always denied: bash is read-only there and there is
- *   no approval path (headless), so escalation would silently bypass the sandbox.
- * - Any other headless session is denied: there is no user to approve.
- * - Interactive sessions require the user approval dialog.
+ * - Headless sessions are denied because there is no user to approve.
+ * - Sessions with UI require the user approval dialog.
  */
-export function resolveEscalation(opts: {
-  hasUI: boolean;
-  isSubagentChild: boolean;
-}): EscalationDecision {
-  if (opts.isSubagentChild) {
-    return {
-      kind: "deny",
-      reason:
-        "request_full_access is disabled in subagent sessions: the bash tool is read-only and cannot escalate. Ask the parent session to run this command.",
-    };
-  }
+export function resolveEscalation(opts: { hasUI: boolean }): EscalationDecision {
   if (!opts.hasUI) {
     return {
       kind: "deny",
@@ -583,10 +564,10 @@ export default function bwrapExtension(pi: ExtensionAPI) {
 
   let resolved: ResolvedBwrap | null = null;
 
-  function getResolved(): ResolvedBwrap {
-    // Subagents ignore config and runtime switches: bash is always read-only.
-    if (isSubagentChild) {
-      return resolveSubagentBwrap(loadConfig(localCwd));
+  function getResolved(hasUI: boolean): ResolvedBwrap {
+    // Without an approval path, ignore config and force bash read-only.
+    if (!hasUI) {
+      return resolveHeadlessBwrap(loadConfig(localCwd));
     }
     if (!resolved) {
       resolved = resolveBwrap(loadConfig(localCwd));
@@ -595,7 +576,6 @@ export default function bwrapExtension(pi: ExtensionAPI) {
   }
 
   function setMode(mode: BwrapMode) {
-    if (isSubagentChild) return; // mode switching is not allowed in subagents
     const config = loadConfig(localCwd);
     config.mode = mode;
     resolved = resolveBwrap(config);
@@ -613,7 +593,8 @@ export default function bwrapExtension(pi: ExtensionAPI) {
     },
     executionMode: localBash.executionMode,
     async execute(id, params, signal, onUpdate, ctx) {
-      const r = getResolved();
+      const hasUI = ctx?.hasUI ?? false;
+      const r = getResolved(hasUI);
 
       if (!r.bwrapEnabled) {
         return localBash.execute(id, params, signal, onUpdate);
@@ -622,7 +603,7 @@ export default function bwrapExtension(pi: ExtensionAPI) {
       const escalate = params.request_full_access === true;
 
       if (escalate) {
-        const policy = resolveEscalation({ hasUI: ctx?.hasUI ?? false, isSubagentChild });
+        const policy = resolveEscalation({ hasUI });
         if (policy.kind === "deny") {
           throw new Error(policy.reason);
         }
@@ -672,9 +653,9 @@ export default function bwrapExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     const noBwrap = pi.getFlag("no-bwrap") === true;
 
-    // Subagent sessions are always sandboxed read-only; --no-bwrap must not
-    // disable that (the flag is only honored in the parent session).
-    if (noBwrap && !isSubagentChild) {
+    // Headless sessions are always sandboxed read-only because they cannot
+    // approve disabling the sandbox.
+    if (noBwrap && ctx.hasUI) {
       resolved = null;
       ctx.ui.notify("bwrap sandbox disabled via --no-bwrap", "warning");
       return;
@@ -691,7 +672,7 @@ export default function bwrapExtension(pi: ExtensionAPI) {
     }
 
     const config = loadConfig(ctx.cwd);
-    resolved = isSubagentChild ? resolveSubagentBwrap(config) : resolveBwrap(config);
+    resolved = ctx.hasUI ? resolveBwrap(config) : resolveHeadlessBwrap(config);
 
     if (resolved.bwrapEnabled) {
       try {
@@ -719,20 +700,20 @@ export default function bwrapExtension(pi: ExtensionAPI) {
     resolved = null;
   });
 
-  pi.on("before_agent_start", (event) => {
-    const r = getResolved();
+  pi.on("before_agent_start", (event, ctx) => {
+    const r = getResolved(ctx.hasUI);
 
     return {
-      systemPrompt: isSubagentChild
-        ? event.systemPrompt + "\n\n" + SUBAGENT_SANDBOX_PROMPT
-        : event.systemPrompt + "\n\n" + SANDBOX_PROMPT + `\n\nCurrent mode: **${r.mode}**\n`,
+      systemPrompt: ctx.hasUI
+        ? event.systemPrompt + "\n\n" + SANDBOX_PROMPT + `\n\nCurrent mode: **${r.mode}**\n`
+        : event.systemPrompt + "\n\n" + HEADLESS_SANDBOX_PROMPT,
     };
   });
 
   pi.registerCommand("bwrap", {
     description: "Show bwrap sandbox configuration",
     handler: (_args, ctx) => {
-      const r = getResolved();
+      const r = getResolved(ctx.hasUI);
       if (!r.bwrapEnabled) {
         ctx.ui.notify(`bwrap disabled (mode: ${r.mode})`, "info");
         return Promise.resolve();
@@ -758,8 +739,13 @@ export default function bwrapExtension(pi: ExtensionAPI) {
         theme: Theme;
         setStatus: (k: string, t: string | undefined) => void;
       };
+      hasUI: boolean;
     },
   ) {
+    if (!ctx.hasUI) {
+      ctx.ui.notify("bwrap mode cannot be changed without an interactive UI", "warning");
+      return;
+    }
     setMode(mode);
 
     ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode}`));
