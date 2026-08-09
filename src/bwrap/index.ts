@@ -104,7 +104,28 @@ work inside the sandbox, run it WITHOUT full access first. If it fails with
 and set \`request_full_access_reason\` to describe the failure.
 `;
 
+const SUBAGENT_SANDBOX_PROMPT = `
+## Command Execution (subagent sandbox)
+
+You are running inside a read-only sandbox in a subagent session.
+
+- The bash tool is read-only: no filesystem writes, no network access, and
+  \`request_full_access\` is denied. Do not pass \`request_full_access\`.
+- Use the write/edit tools for file changes inside your workspace.
+- Writes outside the workspace are rejected. If a change outside the
+  workspace is needed, ask the parent session to apply it.
+- If a command truly requires network or system-level access, stop and ask
+  the parent session to run it, where the user can approve it.
+`;
+
 const PROTECTED_DIRS = [".git", ".pi", ".agent"];
+
+/**
+ * pi-subagents sets PI_SUBAGENT_CHILD=1 in every spawned child session
+ * (foreground and async alike). Subagent sessions are headless and must not
+ * be able to bypass the sandbox, so bwrap forces read-only bash there.
+ */
+const isSubagentChild = process.env.PI_SUBAGENT_CHILD === "1";
 
 const bwrapPath = findDefaultBwrap();
 
@@ -134,7 +155,7 @@ function findBwrap(override?: string): string {
 
 type BwrapMode = "allow-all" | "workspace-write" | "readonly";
 
-interface BwrapConfig {
+export interface BwrapConfig {
   mode: BwrapMode;
   bwrapPath?: string;
   writablePaths?: string[];
@@ -143,7 +164,7 @@ interface BwrapConfig {
   extraArgs?: string[];
 }
 
-interface ResolvedBwrap {
+export interface ResolvedBwrap {
   mode: BwrapMode;
   bwrapEnabled: boolean;
   network: boolean;
@@ -174,6 +195,22 @@ function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
       return { ...base, bwrapEnabled: true, network: false, writablePaths: [] };
     }
   }
+}
+
+/**
+ * Subagent sessions are forced read-only regardless of config: no writable
+ * paths (including configured extraWritablePaths), no network, and no
+ * user-supplied extra args that could add writable mounts.
+ */
+export function resolveSubagentBwrap(config: BwrapConfig): ResolvedBwrap {
+  return resolveBwrap({
+    ...config,
+    mode: "readonly",
+    writablePaths: [],
+    extraWritablePaths: [],
+    tmpfsPaths: [],
+    extraArgs: [],
+  });
 }
 
 const DEFAULT_CONFIG: BwrapConfig = {
@@ -483,6 +520,36 @@ function notifyMode(
   ctx.ui.notify(labels[mode], "info");
 }
 
+export type EscalationDecision = { kind: "dialog" } | { kind: "deny"; reason: string };
+
+/**
+ * Escalation (`request_full_access`) policy:
+ * - Subagent sessions are always denied: bash is read-only there and there is
+ *   no approval path (headless), so escalation would silently bypass the sandbox.
+ * - Any other headless session is denied: there is no user to approve.
+ * - Interactive sessions require the user approval dialog.
+ */
+export function resolveEscalation(opts: {
+  hasUI: boolean;
+  isSubagentChild: boolean;
+}): EscalationDecision {
+  if (opts.isSubagentChild) {
+    return {
+      kind: "deny",
+      reason:
+        "request_full_access is disabled in subagent sessions: the bash tool is read-only and cannot escalate. Ask the parent session to run this command.",
+    };
+  }
+  if (!opts.hasUI) {
+    return {
+      kind: "deny",
+      reason:
+        "request_full_access requires an interactive session with user approval; no UI is available in this session.",
+    };
+  }
+  return { kind: "dialog" };
+}
+
 const sandboxedBashSchema = Type.Object({
   command: Type.String({ description: "Bash command to execute" }),
   timeout: Type.Optional(
@@ -517,6 +584,10 @@ export default function bwrapExtension(pi: ExtensionAPI) {
   let resolved: ResolvedBwrap | null = null;
 
   function getResolved(): ResolvedBwrap {
+    // Subagents ignore config and runtime switches: bash is always read-only.
+    if (isSubagentChild) {
+      return resolveSubagentBwrap(loadConfig(localCwd));
+    }
     if (!resolved) {
       resolved = resolveBwrap(loadConfig(localCwd));
     }
@@ -524,6 +595,7 @@ export default function bwrapExtension(pi: ExtensionAPI) {
   }
 
   function setMode(mode: BwrapMode) {
+    if (isSubagentChild) return; // mode switching is not allowed in subagents
     const config = loadConfig(localCwd);
     config.mode = mode;
     resolved = resolveBwrap(config);
@@ -550,6 +622,11 @@ export default function bwrapExtension(pi: ExtensionAPI) {
       const escalate = params.request_full_access === true;
 
       if (escalate) {
+        const policy = resolveEscalation({ hasUI: ctx?.hasUI ?? false, isSubagentChild });
+        if (policy.kind === "deny") {
+          throw new Error(policy.reason);
+        }
+
         if (ctx?.hasUI) {
           const reason = params.request_full_access_reason;
           const reasonText = reason
@@ -595,7 +672,9 @@ export default function bwrapExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     const noBwrap = pi.getFlag("no-bwrap") === true;
 
-    if (noBwrap) {
+    // Subagent sessions are always sandboxed read-only; --no-bwrap must not
+    // disable that (the flag is only honored in the parent session).
+    if (noBwrap && !isSubagentChild) {
       resolved = null;
       ctx.ui.notify("bwrap sandbox disabled via --no-bwrap", "warning");
       return;
@@ -612,7 +691,7 @@ export default function bwrapExtension(pi: ExtensionAPI) {
     }
 
     const config = loadConfig(ctx.cwd);
-    resolved = resolveBwrap(config);
+    resolved = isSubagentChild ? resolveSubagentBwrap(config) : resolveBwrap(config);
 
     if (resolved.bwrapEnabled) {
       try {
@@ -644,8 +723,9 @@ export default function bwrapExtension(pi: ExtensionAPI) {
     const r = getResolved();
 
     return {
-      systemPrompt:
-        event.systemPrompt + "\n\n" + SANDBOX_PROMPT + `\n\nCurrent mode: **${r.mode}**\n`,
+      systemPrompt: isSubagentChild
+        ? event.systemPrompt + "\n\n" + SUBAGENT_SANDBOX_PROMPT
+        : event.systemPrompt + "\n\n" + SANDBOX_PROMPT + `\n\nCurrent mode: **${r.mode}**\n`,
     };
   });
 

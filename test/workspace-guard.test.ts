@@ -13,7 +13,11 @@ import { join } from "node:path";
 
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { buildDiffPreview, getWriteTarget } from "../src/workspace-guard.js";
+import {
+  buildDiffPreview,
+  decideOutsideWorkspaceWrite,
+  getWriteTarget,
+} from "../src/workspace-guard.js";
 
 const SNAPSHOT_DIR = join(tmpdir(), "workspace-guard-inline-snapshot");
 const TARGET = join(SNAPSHOT_DIR, "target.txt");
@@ -240,5 +244,35 @@ describe("buildDiffPreview", () => {
     expect(preview).toContain("preview truncated to 100 lines");
     const lines = preview!.split("\n");
     expect(lines.length).toBe(103); // 100 diff lines + truncation note + ``` fences
+  });
+});
+
+describe("decideOutsideWorkspaceWrite", () => {
+  it("rejects writes outside the workspace in subagent sessions", () => {
+    const decision = decideOutsideWorkspaceWrite("/etc/passwd", {
+      hasUI: false,
+      isSubagentChild: true,
+    });
+
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("subagent");
+  });
+
+  it("rejects writes in headless sessions without UI", () => {
+    const decision = decideOutsideWorkspaceWrite("/etc/passwd", {
+      hasUI: false,
+      isSubagentChild: false,
+    });
+
+    expect(decision.block).toBe(true);
+  });
+
+  it("allows the approval flow when interactive UI is available", () => {
+    const decision = decideOutsideWorkspaceWrite("/etc/passwd", {
+      hasUI: true,
+      isSubagentChild: false,
+    });
+
+    expect(decision.block).toBe(false);
   });
 });
