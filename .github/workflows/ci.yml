@@ -24,3 +24,12 @@ jobs:
       - run: pnpm run lint
 
       - run: pnpm run check
+
+      # bwrap.test.ts imports src/bwrap which resolves the bwrap binary at
+      # module load time; bubblewrap is not preinstalled on ubuntu-latest.
+      # Cache the apt package to avoid re-downloading on every run.
+      - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: bubblewrap
+
+      - run: pnpm test

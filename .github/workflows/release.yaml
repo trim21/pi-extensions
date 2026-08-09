@@ -37,8 +37,6 @@ jobs:
 
       - run: pnpm run check
 
-      - run: pnpm test
-
       - name: Set version from commit count
         run: |
           COMMIT_COUNT=$(git rev-list --count HEAD)
