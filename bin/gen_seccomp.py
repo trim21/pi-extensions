@@ -6,9 +6,10 @@ Usage:
 Produces `seccomp-<arch>.bpf` for the native architecture.
 The other arch's file should be generated on-target.
 
-The filter denies syscalls that establish or use network connections
-(socket, connect, accept, accept4, bind, listen, sendto, sendmsg, sendmmsg)
-while allowing all others — including socketpair (needed by cargo/rustc IPC).
+The filter denies syscalls that create or accept connections (socket,
+connect, accept, accept4, bind, listen) while allowing all others —
+including socketpair (needed by cargo/rustc IPC) and sending on existing
+sockets (sendto/sendmsg/sendmmsg).
 `connect` is the core containment: it stops Docker-style clients from
 reaching host AF_UNIX sockets (/var/run/docker.sock, etc.).
 """
@@ -21,15 +22,26 @@ import seccomp
 OUT_DIR = Path(__file__).resolve().parent.parent / "src" / "bwrap"
 
 # Syscalls to deny.
-#   socket/network: socketpair intentionally excluded for process-local IPC.
-#   connect:        core containment — blocks clients from reaching host
-#                   AF_UNIX sockets (/var/run/docker.sock, etc.).
+#   socket/network: blocks creating sockets (socket), establishing
+#                   connections (connect), and listening/accepting
+#                   (bind, listen, accept, accept4). connect is the core
+#                   containment — it stops Docker-style clients from
+#                   reaching host AF_UNIX sockets (/var/run/docker.sock, etc.).
 #   ptrace/vm:      prevent cross-process memory access / code injection.
+#
+# sendto/sendmsg/sendmmsg are NOT blocked: they only send data on
+# already-existing fds. With socket/connect blocked there is no socket that
+# could reach the host, inherited stdio socketpairs are writable via plain
+# write() anyway, and sendmsg's msghdr can carry a destination address just
+# like sendto — so blocking them adds no containment while breaking tools
+# (e.g. node's console.log writes to a socket stdout via sendmsg).
 #
 # getsockname/getpeername/getsockopt/setsockopt/shutdown are NOT blocked:
 # they only query or tune already-existing fds (e.g. Node's stdio socketpair)
 # and cannot establish connections, so blocking them just breaks tooling
 # (node's spawn uses socketpair stdio pipes and calls these).
+#
+# socketpair is NOT blocked: process-local IPC (cargo/rustc, node, etc.).
 #
 # io_uring (setup/enter/register) is intentionally NOT blocked: Node.js 22+
 # uses it for async fs by default, and bwrap's mount/network namespace
@@ -42,9 +54,6 @@ BLOCKED_SYSCALLS = [
     "accept4",
     "bind",
     "listen",
-    "sendto",
-    "sendmsg",
-    "sendmmsg",
     "ptrace",
     "process_vm_readv",
     "process_vm_writev",
