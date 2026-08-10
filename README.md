@@ -10,6 +10,7 @@
 | [workspace-guard](#workspace-guard)           | 限制文件写入在 workspace 内，外部写入需用户审批        |
 | [opencode-edit](#opencode-edit)               | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎 |
 | [bash-default-timeout](#bash-default-timeout) | 为 bash 工具设置默认超时（180 秒）                     |
+| [vision-agent](#vision-agent)                 | 视觉代理：主模型不支持视觉时，spawn 子 agent 识别图片  |
 
 ---
 
@@ -130,6 +131,41 @@ pi -e ./src/opencode-edit.ts
 ```bash
 pi -e ./src/bash-default-timeout.ts
 ```
+
+---
+
+## vision-agent
+
+视觉代理扩展。主模型不支持视觉（如 DeepSeek）时自动启用 `describe_image` 工具；主模型支持视觉时自动隐藏，图片由 pi 原生透传。
+
+`describe_image` 工具只接收本地图片路径（`path`，单个或数组，一次可识别多张），图片直接以 base64 data URL 放进请求体，由视觉模型按顺序逐张描述，中间不经过任何 read 工具或 agent。内置默认 system prompt（图像识别助手），并支持 `prompt` 参数追加具体描述要求（如「图中验证码是什么」「逐字翻译图中的文字」），缺省时自动生成通用描述指令。功能与 [pi-vlm-proxy](https://github.com/lawrencewzen/pi-vlm-proxy) 一致，但配置不单独维护。
+
+### 配置
+
+不需要独立配置文件，直接复用 pi 已有的配置：
+
+```jsonc
+// ~/.pi/agent/settings.json —— 指定视觉模型
+{
+  "defaultProvider": "axonhub",
+  "visionConfig": {
+    "provider": "axonhub", // 可选，缺省回退到 defaultProvider
+    "model": "mimo-v2.5",
+  },
+}
+```
+
+`provider` 的 `baseUrl` / `apiKey` 从 `~/.pi/agent/models.json`（pi 自定义 provider 配置）解析，认证、代理、网络全部复用 pi 自身配置。
+
+**未配置 `visionConfig`（或 provider 缺失）时扩展不会注册 `describe_image` 工具**，agent 看不到也调不到，避免一个必然失败的僵尸工具；配置好后 `/reload` 即可生效。
+
+### 使用
+
+```bash
+pi -e ./src/vision-agent.ts
+```
+
+**注意：** 本扩展与 pi-vlm-proxy 都注册同名 `describe_image` 工具，启用前请先从 `~/.pi/agent/settings.json` 的 `packages` 中移除 `pi-vlm-proxy`，避免工具注册冲突。
 
 ---
 

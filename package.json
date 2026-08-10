@@ -55,6 +55,7 @@
   },
   "pi": {
     "extensions": [
+      "src/vision-agent.ts",
       "src/bwrap/index.ts",
       "src/workspace-guard.ts",
       "src/opencode-edit.ts",
