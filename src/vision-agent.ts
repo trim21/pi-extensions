@@ -457,7 +457,7 @@ export default function visionAgent(pi: ExtensionAPI) {
       ),
     }),
 
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       try {
         const paths = resolveImagePaths({ path: params.path });
         if (paths.length === 0) {
@@ -502,10 +502,17 @@ export default function visionAgent(pi: ExtensionAPI) {
           };
         }
 
+        const prompt = buildPrompt(params.prompt, paths.length);
+        // 把发给视觉模型的 prompt 实时透传给主会话，识别要求对主模型可见
+        onUpdate?.({
+          content: [{ type: "text", text: `视觉识别 prompt: ${prompt}` }],
+          details: { prompt },
+        });
+
         const description = await callVision(
           { ...provider, model: visionConfig.model },
           paths,
-          buildPrompt(params.prompt, paths.length),
+          prompt,
           signal ?? ctx.signal,
         );
         return {
@@ -513,6 +520,8 @@ export default function visionAgent(pi: ExtensionAPI) {
           details: {
             provider: providerName,
             model: visionConfig.model,
+            prompt,
+            output: description,
             paths,
             count: paths.length,
           },

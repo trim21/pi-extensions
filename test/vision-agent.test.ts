@@ -485,6 +485,7 @@ describe("execute", () => {
     execute: (...args: unknown[]) => Promise<{
       content: { type: string; text: string }[];
       isError?: boolean;
+      details?: Record<string, unknown>;
     }>;
   }
 
@@ -522,16 +523,26 @@ describe("execute", () => {
     const imgDir = mkdtempSync(join(tmpdir(), "vision-agent-img-"));
     try {
       const imgPath = writePng(imgDir, "cat.png");
+      const onUpdate = vi.fn();
       const result = await tool.execute(
         "id",
         { path: imgPath, prompt: "图中有什么动物？" },
         undefined,
-        undefined,
+        onUpdate,
         { cwd: "/cwd", hasUI: false },
       );
       expect(result.isError).toBeFalsy();
       expect(result.content[0].text).toContain("图中有一只猫");
       expect(result.content[0].text).toContain("mimo-v2.5");
+
+      // onUpdate 透传发给视觉模型的 prompt
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+      expect(onUpdate.mock.calls[0][0].content[0].text).toContain("图中有什么动物？");
+
+      // details 携带 prompt 与视觉模型输出
+      expect(result.details?.prompt).toBe("图中有什么动物？");
+      expect(String(result.details?.output)).toContain("图中有一只猫");
+      expect(result.details?.count).toBe(1);
 
       // 请求体：system 携带默认提示词，user 携带自定义 prompt
       const [, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
