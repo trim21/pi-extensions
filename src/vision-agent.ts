@@ -223,6 +223,39 @@ export function isMultimodal(model: { input?: readonly string[] } | undefined): 
   return !!model && Array.isArray(model.input) && model.input.includes("image");
 }
 
+/**
+ * 把识别结果整理成 pendant 渲染用的 markdown。
+ * description 格式为 callVision 拼装的 `[label]\n<正文>\n[模型: ...]`，
+ * 第一行是图片标签、最后一行是模型/ token 元信息，中间是视觉模型输出正文。
+ */
+export function buildPendantMarkdown(params: {
+  paths: string[];
+  prompt: string;
+  description: string;
+  provider: string;
+  model: string;
+}): string {
+  const lines = params.description.split("\n");
+  const labels = lines[0]?.trim().replaceAll(/^\[|\]$/g, "") ?? "";
+  const footer = lines.at(-1)?.trim() ?? "";
+  const body = lines.slice(1, -1).join("\n").trim();
+  const files = params.paths.map((p) => `\`${basename(p)}\``).join(", ");
+  return [
+    "## 图片识别",
+    "",
+    `**图片**: ${files || labels}`,
+    `**视觉模型**: \`${params.provider}/${params.model}\``,
+    `**Prompt**: ${params.prompt}`,
+    "",
+    "### 识别结果",
+    "",
+    body || params.description,
+    footer ? `\n---\n${footer}` : "",
+  ]
+    .join("\n")
+    .trim();
+}
+
 // ── 图片加载与 API 调用 ─────────────────────────────────────────────────────
 
 /** 按文件头识别真实图片类型，识别不出返回 undefined */
@@ -515,6 +548,13 @@ export default function visionAgent(pi: ExtensionAPI) {
           prompt,
           signal ?? ctx.signal,
         );
+        const markdown = buildPendantMarkdown({
+          paths,
+          prompt,
+          description,
+          provider: providerName,
+          model: visionConfig.model,
+        });
         return {
           content: [{ type: "text", text: description }],
           details: {
@@ -524,6 +564,10 @@ export default function visionAgent(pi: ExtensionAPI) {
             output: description,
             paths,
             count: paths.length,
+            pendant: {
+              markdown,
+              expanded: true,
+            },
           },
         };
       } catch (error) {
@@ -538,7 +582,13 @@ export default function visionAgent(pi: ExtensionAPI) {
         return {
           isError: true,
           content: [{ type: "text", text: `识别失败: ${message}` }],
-          details: { error: message },
+          details: {
+            error: message,
+            pendant: {
+              markdown: `## 图片识别失败\n\n${message}`,
+              expanded: true,
+            },
+          },
         };
       }
     },

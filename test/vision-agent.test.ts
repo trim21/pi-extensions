@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildPendantMarkdown,
   buildPrompt,
   callVision,
   isMultimodal,
@@ -228,6 +229,35 @@ describe("isMultimodal", () => {
     expect(isMultimodal({ input: ["text", "image"] })).toBe(true);
     expect(isMultimodal({ input: ["text"] })).toBe(false);
     expect(isMultimodal(undefined)).toBe(false);
+  });
+});
+
+describe("buildPendantMarkdown", () => {
+  it("summarizes paths, prompt, description and model metadata", () => {
+    const markdown = buildPendantMarkdown({
+      paths: ["/tmp/cat.png", "/tmp/dog.png"],
+      prompt: "每张图各有什么动物？",
+      description: "[cat.png, dog.png]\n图1 是猫，图2 是狗\n[模型: mimo, tokens: 42]",
+      provider: "axonhub",
+      model: "mimo",
+    });
+    expect(markdown).toContain("## 图片识别");
+    expect(markdown).toContain("`cat.png`, `dog.png`");
+    expect(markdown).toContain("`axonhub/mimo`");
+    expect(markdown).toContain("每张图各有什么动物？");
+    expect(markdown).toContain("图1 是猫，图2 是狗");
+    expect(markdown).toContain("tokens: 42");
+  });
+
+  it("falls back to the full description when it has no body", () => {
+    const markdown = buildPendantMarkdown({
+      paths: ["/tmp/a.png"],
+      prompt: "p",
+      description: "[a.png]\n[模型: m, tokens: ?]",
+      provider: "axonhub",
+      model: "m",
+    });
+    expect(markdown).toContain("[a.png]");
   });
 });
 
@@ -543,6 +573,14 @@ describe("execute", () => {
       expect(result.details?.prompt).toBe("图中有什么动物？");
       expect(String(result.details?.output)).toContain("图中有一只猫");
       expect(result.details?.count).toBe(1);
+
+      // pendant markdown 总结关键信息并自动展开
+      const pendant = result.details?.pendant as { markdown?: string; expanded?: boolean };
+      expect(pendant?.expanded).toBe(true);
+      expect(pendant?.markdown).toContain("## 图片识别");
+      expect(pendant?.markdown).toContain("cat.png");
+      expect(pendant?.markdown).toContain("图中有什么动物？");
+      expect(pendant?.markdown).toContain("图中有一只猫");
 
       // 请求体：system 携带默认提示词，user 携带自定义 prompt
       const [, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
