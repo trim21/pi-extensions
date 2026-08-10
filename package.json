@@ -36,7 +36,7 @@
     "@earendil-works/pi-coding-agent": "^0.80.10",
     "@eslint/js": "10.0.1",
     "@types/node": "^24.13.3",
-    "@typescript-eslint/utils": "8.66.0",
+    "@typescript-eslint/utils": "8.67.0",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-erasable-syntax-only": "0.4.2",
