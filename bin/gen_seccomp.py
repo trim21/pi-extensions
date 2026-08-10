@@ -6,9 +6,11 @@ Usage:
 Produces `seccomp-<arch>.bpf` for the native architecture.
 The other arch's file should be generated on-target.
 
-The filter denies socket-related syscalls (socket, connect, accept, accept4,
-bind, listen, sendto, sendmsg, sendmmsg, getpeername, getsockname, shutdown)
+The filter denies syscalls that establish or use network connections
+(socket, connect, accept, accept4, bind, listen, sendto, sendmsg, sendmmsg)
 while allowing all others — including socketpair (needed by cargo/rustc IPC).
+`connect` is the core containment: it stops Docker-style clients from
+reaching host AF_UNIX sockets (/var/run/docker.sock, etc.).
 """
 
 import sys
@@ -20,8 +22,14 @@ OUT_DIR = Path(__file__).resolve().parent.parent / "src" / "bwrap"
 
 # Syscalls to deny.
 #   socket/network: socketpair intentionally excluded for process-local IPC.
+#   connect:        core containment — blocks clients from reaching host
+#                   AF_UNIX sockets (/var/run/docker.sock, etc.).
 #   ptrace/vm:      prevent cross-process memory access / code injection.
-#   sockopt:        prevent socket option manipulation.
+#
+# getsockname/getpeername/getsockopt/setsockopt/shutdown are NOT blocked:
+# they only query or tune already-existing fds (e.g. Node's stdio socketpair)
+# and cannot establish connections, so blocking them just breaks tooling
+# (node's spawn uses socketpair stdio pipes and calls these).
 #
 # io_uring (setup/enter/register) is intentionally NOT blocked: Node.js 22+
 # uses it for async fs by default, and bwrap's mount/network namespace
@@ -37,11 +45,6 @@ BLOCKED_SYSCALLS = [
     "sendto",
     "sendmsg",
     "sendmmsg",
-    "getpeername",
-    "getsockname",
-    "shutdown",
-    "getsockopt",
-    "setsockopt",
     "ptrace",
     "process_vm_readv",
     "process_vm_writev",
