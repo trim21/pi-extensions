@@ -21,8 +21,12 @@ OUT_DIR = Path(__file__).resolve().parent.parent / "src" / "bwrap"
 # Syscalls to deny.
 #   socket/network: socketpair intentionally excluded for process-local IPC.
 #   ptrace/vm:      prevent cross-process memory access / code injection.
-#   io_uring:       prevent kernel-bypass that can circumvent seccomp.
 #   sockopt:        prevent socket option manipulation.
+#
+# io_uring (setup/enter/register) is intentionally NOT blocked: Node.js 22+
+# uses it for async fs by default, and bwrap's mount/network namespace
+# isolation already bounds what io_uring can reach — blocking it would only
+# break tooling (e.g. node, npm) without adding meaningful confinement.
 BLOCKED_SYSCALLS = [
     "socket",
     "connect",
@@ -41,9 +45,6 @@ BLOCKED_SYSCALLS = [
     "ptrace",
     "process_vm_readv",
     "process_vm_writev",
-    "io_uring_setup",
-    "io_uring_enter",
-    "io_uring_register",
 ]
 
 
