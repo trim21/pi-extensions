@@ -206,10 +206,21 @@ const jobRunSchema = Type.Object({
   name: Type.String(),
   status: Type.String(),
   conclusion: Type.Union([Type.String(), Type.Null()]),
+  html_url: Type.Optional(Type.String()),
   steps: Type.Array(stepSchema),
 });
 
 const jobsResponseSchema = Type.Object({ jobs: Type.Array(jobRunSchema) });
+
+const prHeadSchema = Type.Object({ headRefOid: Type.String() });
+
+const workflowRunSchema = Type.Object({
+  id: Type.Number(),
+  name: Type.String(),
+  html_url: Type.String(),
+});
+
+const workflowRunsSchema = Type.Object({ workflow_runs: Type.Array(workflowRunSchema) });
 
 function truncate(
   text: string,
@@ -400,6 +411,15 @@ async function resolveRepo(
   const { nameWithOwner } = Value.Parse(repoViewSchema, JSON.parse(stdout));
   return nameWithOwner;
 }
+
+/** Job conclusions that count as "did not succeed" for CI result reporting. */
+const FAILED_JOB_CONCLUSIONS = new Set([
+  "failure",
+  "timed_out",
+  "action_required",
+  "startup_failure",
+  "cancelled",
+]);
 
 export function statusIcon(conclusion: string | null): string {
   switch (conclusion) {
@@ -1311,29 +1331,115 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       const args = ["pr", "checks", String(number), ...repoArgs(repo), "--watch"];
       if (fail_fast) args.push("--fail-fast");
 
+      // gh 的退出码语义不可靠：checks 失败时返回 exit 1（SilentError），挂起时
+      // 返回 exit 8（PendingError），且失败详情只在非结构化的 stdout 表格里。
+      // 因此 watch 退出后直接用 Actions API 抓取该 PR head 提交关联的所有
+      // workflow job，以 job 的真实 conclusion 为准判断成功/失败。
       const result = await runGh(args, { cwd: ctx.cwd, signal, timeout: 600_000 });
+      if (result.killed) {
+        throw new Error(
+          result.reason === "timeout"
+            ? "gh pr checks --watch timed out after 10 minutes"
+            : "gh pr checks --watch was aborted",
+        );
+      }
 
-      const exitCode = result.code;
-      const stdout = result.stdout;
-      const stderr = result.stderr;
+      const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+      const prOut = await ghExec(
+        ["pr", "view", String(number), "--repo", effectiveRepo, "--json", "headRefOid"],
+        { cwd: ctx.cwd, signal, input: params },
+      );
+      const { headRefOid } = Value.Parse(prHeadSchema, JSON.parse(prOut));
 
-      // Exit code 2 means one or more checks failed
-      if (exitCode === 2) {
+      onUpdate?.({
+        content: [{ type: "text", text: `Fetching workflow jobs for PR #${number}...` }],
+        details: {},
+      });
+
+      const runsOut = await ghExec(
+        ["api", `/repos/${effectiveRepo}/actions/runs?head_sha=${headRefOid}&per_page=100`],
+        { cwd: ctx.cwd, signal, input: params },
+      );
+      const { workflow_runs } = Value.Parse(workflowRunsSchema, JSON.parse(runsOut));
+
+      const failedJobs: {
+        runId: number;
+        runName: string;
+        runUrl: string;
+        jobId: number;
+        jobName: string;
+        conclusion: string;
+        jobUrl?: string;
+      }[] = [];
+      let totalJobs = 0;
+
+      for (const run of workflow_runs) {
+        const jobsOut = await ghExec(
+          ["api", `/repos/${effectiveRepo}/actions/runs/${run.id}/jobs?per_page=100`],
+          { cwd: ctx.cwd, signal, input: params },
+        );
+        const { jobs } = Value.Parse(jobsResponseSchema, JSON.parse(jobsOut));
+        totalJobs += jobs.length;
+
+        for (const job of jobs) {
+          if (!job.conclusion || FAILED_JOB_CONCLUSIONS.has(job.conclusion)) {
+            failedJobs.push({
+              runId: run.id,
+              runName: run.name,
+              runUrl: run.html_url,
+              jobId: job.id,
+              jobName: job.name,
+              conclusion: job.conclusion ?? "in_progress",
+              jobUrl: job.html_url,
+            });
+          }
+        }
+      }
+
+      if (totalJobs === 0) {
         return {
           content: [
-            { type: "text", text: `## PR #${number} CI Checks - FAILED\n\n${stdout}\n${stderr}` },
+            {
+              type: "text",
+              text: `## PR #${number} CI Checks\n\nNo workflow runs found for head commit ${headRefOid.slice(0, 7)}.`,
+            },
           ],
-          details: { status: "failure", exitCode, input: params },
+          details: { status: "no-jobs", totalJobs: 0, input: params },
         };
       }
 
-      if (exitCode !== 0) {
-        throw new Error(`gh pr checks --watch failed: ${stderr || `exit code ${exitCode}`}`);
+      if (failedJobs.length > 0) {
+        const lines = failedJobs.map(
+          (j) =>
+            `- ${statusIcon(j.conclusion)} **${j.jobName}** (${j.conclusion}) — [job #${j.jobId}](${j.jobUrl ?? j.runUrl})\n` +
+            `  - workflow: [${j.runName} (#${j.runId})](${j.runUrl})`,
+        );
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `## PR #${number} CI Checks - FAILED\n\n` +
+                `${failedJobs.length} of ${totalJobs} job(s) did not succeed:\n\n${lines.join("\n")}`,
+            },
+          ],
+          details: {
+            status: "failure",
+            totalJobs,
+            failedJobs,
+            input: params,
+          },
+        };
       }
 
       return {
-        content: [{ type: "text", text: `## PR #${number} CI Checks - PASSED\n\n${stdout}` }],
-        details: { status: "success", exitCode: 0, input: params },
+        content: [
+          {
+            type: "text",
+            text: `## PR #${number} CI Checks - PASSED\n\nAll ${totalJobs} job(s) succeeded.`,
+          },
+        ],
+        details: { status: "success", totalJobs, input: params },
       };
     },
   });
