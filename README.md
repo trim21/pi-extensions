@@ -11,6 +11,7 @@
 | [opencode-edit](#opencode-edit)               | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎 |
 | [bash-default-timeout](#bash-default-timeout) | 为 bash 工具设置默认超时（180 秒）                     |
 | [vision-agent](#vision-agent)                 | 视觉代理：主模型不支持视觉时，spawn 子 agent 识别图片  |
+| [todowrite](#todowrite)                       | opencode 风格的任务列表工具，完整列表替换语义          |
 
 ---
 
@@ -166,6 +167,27 @@ pi -e ./src/vision-agent.ts
 ```
 
 **注意：** 本扩展与 pi-vlm-proxy 都注册同名 `describe_image` 工具，启用前请先从 `~/.pi/agent/settings.json` 的 `packages` 中移除 `pi-vlm-proxy`，避免工具注册冲突。
+
+---
+
+## todowrite
+
+opencode 风格的任务列表工具，参数与语义和 opencode 的 [`todowrite`](https://github.com/anomalyco/opencode) 工具一致。取代原 `todo-pendant.ts` 的 widget 输出方式，改用 `details.pendant.markdown` 渲染（与 vision-agent 相同的 pendant 约定）。
+
+- **完整列表替换语义**：模型每次调用都传完整的 todo 列表，工具整体替换当前列表
+- **参数**：`todos: Array<{ content, status, priority }>`
+  - `status`：`pending` | `in_progress` | `completed` | `cancelled`
+  - `priority`：`high` | `medium` | `low`
+- **持久化**：列表存进工具结果 `details.todos`，跟随会话分支自动恢复
+- **渲染**：每次调用用完整 markdown 列表输出对应的任务（pendant 面板自动展开）
+
+与 pi 内置 `todo` 工具（`create`/`update`/`list`/… 单条动作）不同，本工具没有单条增删改动作，模型必须每次都传完整列表。
+
+### 使用
+
+```bash
+pi -e ./src/todowrite.ts
+```
 
 ---
 

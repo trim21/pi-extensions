@@ -64,7 +64,7 @@
       "src/bash-default-timeout.ts",
       "src/gh-readonly.ts",
       "src/spawn-agent.ts",
-      "src/todo-pendant.ts"
+      "src/todowrite.ts"
     ]
   },
   "lint-staged": {
