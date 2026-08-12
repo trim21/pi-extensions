@@ -143,7 +143,7 @@ export function buildTodoMarkdown(todos: readonly TodoInfo[]): string {
  * 过滤 cancelled（对应旧版 deleted），全部被过滤时返回 undefined 以清除 widget。
  */
 export function buildTodoWidgetLines(todos: readonly TodoInfo[]): string[] | undefined {
-  const visible = todos.filter((t) => t.status !== "cancelled");
+  const visible = todos;
   if (visible.length === 0) return undefined;
   return visible.map((t) => formatTodoLine(t));
 }
