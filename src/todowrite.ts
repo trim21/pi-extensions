@@ -8,9 +8,9 @@
  *   priority: high | medium | low
  *
  * 状态存在工具结果 details 里（跟随会话分支），同时把任务列表渲染成
- * pendant.markdown（与 vision-agent 相同的 pendant 约定），每次调用都用
- * 完整的 markdown 列表输出对应的任务 —— 取代原 todo-pendant.ts 里
- * setWidget 的 widget 输出方式。
+ * pendant.markdown（与 vision-agent 相同的 pendant 约定），并用
+ * ctx.ui.setWidget 在编辑器上方渲染 widget（沿用原 todo-pendant.ts 的
+ * widget 输出方式，只是任务内容多了 priority）。
  *
  * 与 pi 内置 todo 工具（create/update/list/... 动作）不同，本工具没有
  * 单条增删改动作 —— 模型每次都要传完整的 todo 列表，语义与 opencode 对齐。
@@ -119,6 +119,11 @@ const STATUS_MARK: Record<TodoStatus, string> = {
   cancelled: "-",
 };
 
+/** 单条任务的渲染行，pendant markdown 与 widget 共用 */
+function formatTodoLine(t: TodoInfo): string {
+  return `- [${STATUS_MARK[t.status]}] ${t.content} \`${t.priority}\``;
+}
+
 /**
  * 把任务列表整理成 pendant 渲染用的 markdown。
  * 每个任务一行，与 vision-agent 的 pendant.markdown 约定一致。
@@ -129,11 +134,18 @@ export function buildTodoMarkdown(todos: readonly TodoInfo[]): string {
     lines.push("", "_No todos_");
     return lines.join("\n");
   }
-  lines.push("");
-  for (const t of todos) {
-    lines.push(`- [${STATUS_MARK[t.status]}] ${t.content} \`${t.priority}\``);
-  }
+  lines.push("", ...todos.map((t) => formatTodoLine(t)));
   return lines.join("\n");
+}
+
+/**
+ * widget 渲染用的任务行（沿用原 todo-pendant.ts 的 setWidget 语义）：
+ * 过滤 cancelled（对应旧版 deleted），全部被过滤时返回 undefined 以清除 widget。
+ */
+export function buildTodoWidgetLines(todos: readonly TodoInfo[]): string[] | undefined {
+  const visible = todos.filter((t) => t.status !== "cancelled");
+  if (visible.length === 0) return undefined;
+  return visible.map((t) => formatTodoLine(t));
 }
 
 // ── extension ────────────────────────────────────────────────────────────────
@@ -145,17 +157,19 @@ export default function todowrite(pi: ExtensionAPI) {
     description: TODOWRITE_DESCRIPTION,
     parameters: todowriteSchema,
 
-    execute(_toolCallId, params) {
+    execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       // 整体替换（opencode 语义）。
-      // 纯同步逻辑，用 Promise.resolve 满足 execute 的 Promise 返回类型。
+      // widget 渲染沿用原 todo-pendant 的 setWidget 方式：过滤 cancelled，
+      // 全部被过滤（含空列表）时清除 widget。
       const todos = normalizeTodos(params.todos);
+      ctx.ui.setWidget(TOOL_NAME, buildTodoWidgetLines(todos));
       return Promise.resolve({
         content: [{ type: "text", text: serializeTodos(todos) }],
         details: {
           todos,
           pendant: {
             markdown: buildTodoMarkdown(todos),
-            expanded: true,
+            expanded: false,
           },
         },
       });

@@ -5,16 +5,21 @@
  * - tool registration metadata
  * - execute: full-list replacement + pendant.markdown output
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import todowrite, {
   buildTodoMarkdown,
+  buildTodoWidgetLines,
   countOpen,
   normalizeTodos,
   serializeTodos,
   type TodoInfo,
   TOOL_NAME,
 } from "../src/todowrite.js";
+
+interface MockCtx {
+  ui: { setWidget: (key: string, lines: string[] | undefined) => void };
+}
 
 interface Tool {
   name: string;
@@ -26,7 +31,7 @@ interface Tool {
     params: { todos: TodoInfo[] },
     signal: AbortSignal | undefined,
     onUpdate: unknown,
-    ctx: unknown,
+    ctx: MockCtx,
   ) => Promise<{
     content: { type: string; text: string }[];
     details: { todos: TodoInfo[]; pendant: { markdown: string; expanded: boolean } };
@@ -49,6 +54,10 @@ const todo = (over: Partial<TodoInfo>): TodoInfo => ({
   priority: "medium",
   ...over,
 });
+
+function makeCtx(): MockCtx {
+  return { ui: { setWidget: vi.fn() } };
+}
 
 describe("normalizeTodos", () => {
   it("trims content and returns a clean copy", () => {
@@ -106,6 +115,20 @@ describe("pure helpers", () => {
       ["## Tasks", "", "**0 open · 0 total**", "", "_No todos_"].join("\n"),
     );
   });
+
+  it("buildTodoWidgetLines filters cancelled and keeps other tasks", () => {
+    const todos = [
+      todo({ content: "doing", status: "in_progress", priority: "high" }),
+      todo({ content: "dropped", status: "cancelled", priority: "low" }),
+      todo({ content: "done", status: "completed", priority: "medium" }),
+    ];
+    expect(buildTodoWidgetLines(todos)).toEqual(["- [>] doing `high`", "- [x] done `medium`"]);
+  });
+
+  it("buildTodoWidgetLines returns undefined when all tasks are cancelled or the list is empty", () => {
+    expect(buildTodoWidgetLines([])).toBeUndefined();
+    expect(buildTodoWidgetLines([todo({ status: "cancelled" })])).toBeUndefined();
+  });
 });
 
 describe("tool registration", () => {
@@ -125,29 +148,42 @@ describe("tool registration", () => {
 describe("execute", () => {
   it("replaces the list and returns JSON content plus a pendant markdown", async () => {
     const { tool } = loadTool();
+    const ctx = makeCtx();
 
     const first = [todo({ content: "one", status: "in_progress", priority: "high" })];
-    const result1 = await tool.execute("id-1", { todos: first }, undefined, undefined, undefined);
+    const result1 = await tool.execute("id-1", { todos: first }, undefined, undefined, ctx);
     expect(result1.content[0].text).toBe(JSON.stringify(first, null, 2));
     expect(result1.details.todos).toEqual(first);
-    expect(result1.details.pendant.expanded).toBe(true);
+    expect(result1.details.pendant.expanded).toBe(false);
     expect(result1.details.pendant.markdown).toBe(
       ["## Tasks", "", "**1 open · 1 total**", "", "- [>] one `high`"].join("\n"),
     );
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith(TOOL_NAME, ["- [>] one `high`"]);
 
     // 第二次调用整体替换，不再包含第一条
     const second = [todo({ content: "two", status: "completed", priority: "low" })];
-    const result2 = await tool.execute("id-2", { todos: second }, undefined, undefined, undefined);
+    const result2 = await tool.execute("id-2", { todos: second }, undefined, undefined, ctx);
     expect(result2.details.todos).toEqual(second);
     expect(result2.content[0].text).toBe(JSON.stringify(second, null, 2));
     expect(result2.details.pendant.markdown).toContain("- [x] two `low`");
+    expect(ctx.ui.setWidget).toHaveBeenLastCalledWith(TOOL_NAME, ["- [x] two `low`"]);
   });
 
-  it("renders an empty pendant for an empty list", async () => {
+  it("renders an empty pendant and clears the widget for an empty list", async () => {
     const { tool } = loadTool();
-    const result = await tool.execute("id", { todos: [] }, undefined, undefined, undefined);
+    const ctx = makeCtx();
+    const result = await tool.execute("id", { todos: [] }, undefined, undefined, ctx);
     expect(result.content[0].text).toBe("[]");
     expect(result.details.todos).toEqual([]);
     expect(result.details.pendant.markdown).toContain("_No todos_");
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith(TOOL_NAME, undefined);
+  });
+
+  it("clears the widget when all tasks are cancelled", async () => {
+    const { tool } = loadTool();
+    const ctx = makeCtx();
+    const todos = [todo({ content: "dropped", status: "cancelled", priority: "low" })];
+    await tool.execute("id", { todos }, undefined, undefined, ctx);
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith(TOOL_NAME, undefined);
   });
 });
