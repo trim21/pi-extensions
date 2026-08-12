@@ -103,7 +103,7 @@ describe("pure helpers", () => {
         "**3 open · 4 total**",
         "",
         "- [ ] pending task `high`",
-        "- [>] doing `medium`",
+        "- [ ] doing `medium`",
         "- [x] done `low`",
         "- [-] dropped `low`",
       ].join("\n"),
@@ -122,7 +122,7 @@ describe("pure helpers", () => {
       todo({ content: "dropped", status: "cancelled", priority: "low" }),
       todo({ content: "done", status: "completed", priority: "medium" }),
     ];
-    expect(buildTodoWidgetLines(todos)).toEqual(["- [>] doing `high`", "- [x] done `medium`"]);
+    expect(buildTodoWidgetLines(todos)).toEqual(["- [ ] doing `high`", "- [x] done `medium`"]);
   });
 
   it("buildTodoWidgetLines returns undefined when all tasks are cancelled or the list is empty", () => {
@@ -156,9 +156,9 @@ describe("execute", () => {
     expect(result1.details.todos).toEqual(first);
     expect(result1.details.pendant.expanded).toBe(false);
     expect(result1.details.pendant.markdown).toBe(
-      ["## Tasks", "", "**1 open · 1 total**", "", "- [>] one `high`"].join("\n"),
+      ["## Tasks", "", "**1 open · 1 total**", "", "- [ ] one `high`"].join("\n"),
     );
-    expect(ctx.ui.setWidget).toHaveBeenCalledWith(TOOL_NAME, ["- [>] one `high`"]);
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith(TOOL_NAME, ["- [ ] one `high`"]);
 
     // 第二次调用整体替换，不再包含第一条
     const second = [todo({ content: "two", status: "completed", priority: "low" })];

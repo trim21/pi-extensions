@@ -114,7 +114,7 @@ export function serializeTodos(todos: readonly TodoInfo[]): string {
 
 const STATUS_MARK: Record<TodoStatus, string> = {
   pending: " ",
-  in_progress: ">",
+  in_progress: " ",
   completed: "x",
   cancelled: "-",
 };
