@@ -116,18 +116,24 @@ describe("pure helpers", () => {
     );
   });
 
-  it("buildTodoWidgetLines filters cancelled and keeps other tasks", () => {
+  it("buildTodoWidgetLines renders every task including cancelled", () => {
     const todos = [
       todo({ content: "doing", status: "in_progress", priority: "high" }),
       todo({ content: "dropped", status: "cancelled", priority: "low" }),
       todo({ content: "done", status: "completed", priority: "medium" }),
     ];
-    expect(buildTodoWidgetLines(todos)).toEqual(["- [ ] doing `high`", "- [x] done `medium`"]);
+    expect(buildTodoWidgetLines(todos)).toEqual([
+      "- [ ] doing `high`",
+      "- [-] dropped `low`",
+      "- [x] done `medium`",
+    ]);
   });
 
-  it("buildTodoWidgetLines returns undefined when all tasks are cancelled or the list is empty", () => {
+  it("buildTodoWidgetLines returns undefined only for an empty list", () => {
     expect(buildTodoWidgetLines([])).toBeUndefined();
-    expect(buildTodoWidgetLines([todo({ status: "cancelled" })])).toBeUndefined();
+    expect(buildTodoWidgetLines([todo({ status: "cancelled" })])).toEqual([
+      "- [-] Write tests `medium`",
+    ]);
   });
 });
 
@@ -179,11 +185,11 @@ describe("execute", () => {
     expect(ctx.ui.setWidget).toHaveBeenCalledWith(TOOL_NAME, undefined);
   });
 
-  it("clears the widget when all tasks are cancelled", async () => {
+  it("renders cancelled tasks in the widget", async () => {
     const { tool } = loadTool();
     const ctx = makeCtx();
     const todos = [todo({ content: "dropped", status: "cancelled", priority: "low" })];
     await tool.execute("id", { todos }, undefined, undefined, ctx);
-    expect(ctx.ui.setWidget).toHaveBeenCalledWith(TOOL_NAME, undefined);
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith(TOOL_NAME, ["- [-] dropped `low`"]);
   });
 });
