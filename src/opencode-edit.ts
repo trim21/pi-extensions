@@ -2,6 +2,14 @@
  * Opencode Edit Extension — Replaces the built-in edit tool with opencode's
  * schema and matching engine.
  *
+ * Aligned with opencode commit 999be62662 (v1.2.25-1672-g999be62662, 2026-08-12):
+ *   https://github.com/anomalyco/opencode/blob/999be62662/packages/opencode/src/tool/edit.ts
+ * The matching engine (replacers + replace()) is byte-for-byte aligned with
+ * opencode (9 replacers, 0.65 similarity threshold, 0.25 line-delta, identical
+ * error messages), and empty-oldString file creation is implemented.
+ * Known gaps (intentionally not implemented): LSP diagnostics in the result,
+ * formatter run.
+ *
  * The matching engine (replacers + replace()) lives in opencode-edit-engine.ts
  * and is also used by workspace-guard for the diff preview.
  *
@@ -10,8 +18,8 @@
  */
 
 import { constants } from "node:fs";
-import { access, readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -78,6 +86,36 @@ export default function opencodeEdit(pi: ExtensionAPI) {
       return withFileMutationQueue(absolutePath, async () => {
         throwIfAborted();
 
+        // opencode: 前置校验，先于空 oldString 分支
+        if (oldString === newString) {
+          throw new Error("No changes to apply: oldString and newString are identical.");
+        }
+
+        // opencode: 空 oldString + 文件不存在 → 创建新文件；文件存在 → 报错
+        if (oldString === "") {
+          let exists = true;
+          try {
+            await access(absolutePath, constants.F_OK);
+          } catch {
+            exists = false;
+          }
+          throwIfAborted();
+          if (exists) {
+            throw new Error(
+              "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
+            );
+          }
+          // opencode: writeWithDirs 自动创建父目录；newString 开头的 BOM 原样保留
+          await mkdir(dirname(absolutePath), { recursive: true });
+          throwIfAborted();
+          await writeFile(absolutePath, newString, "utf8");
+          throwIfAborted();
+          return {
+            content: [{ type: "text" as const, text: "Edit applied successfully." }],
+            details: { diff: "", patch: "", firstChangedLine: 0 },
+          };
+        }
+
         try {
           await access(absolutePath, constants.R_OK | constants.W_OK);
         } catch (error: unknown) {
@@ -113,7 +151,7 @@ export default function opencodeEdit(pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: `Successfully edited ${filePath}`,
+              text: "Edit applied successfully.",
             },
           ],
           details: { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },

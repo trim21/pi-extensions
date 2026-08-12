@@ -1,6 +1,11 @@
 /**
  * question —— opencode 风格的提问工具
  *
+ * Aligned with opencode commit 999be62662 (v1.2.25-1672-g999be62662, 2026-08-12):
+ *   https://github.com/anomalyco/opencode/blob/999be62662/packages/opencode/src/tool/question.ts
+ * 与 opencode 的差异：opencode 输出 title "Asked N question(s)"，这里未设置；
+ * 多选交互是平台差异（opencode 用 checkbox，这里循环 ctx.ui.select 勾选）。
+ *
  * 参数与语义和 opencode 的 `question` 工具一致：
  *   questions 数组，每项含 question / header / options / multiple：
  *   - options 每项为 label / description

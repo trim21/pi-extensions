@@ -1,8 +1,9 @@
 /**
  * Opencode edit matching engine.
  *
- * The core replacers and replace() function are copied directly from
- * https://github.com/anomalyco/opencode (packages/opencode/src/tool/edit.ts)
+ * The core replacers and replace() function are copied directly from opencode
+ * commit 999be62662 (v1.2.25-1672-g999be62662, 2026-08-12):
+ *   https://github.com/anomalyco/opencode/blob/999be62662/packages/opencode/src/tool/edit.ts
  * and wrapped in a pi extension so the behaviour is identical to opencode.
  *
  * Shared by:

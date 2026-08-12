@@ -187,7 +187,7 @@ opencode 风格的任务列表工具，参数与语义和 opencode 的 [`todowri
 ### 使用
 
 ```bash
-pi -e ./src/todowrite.ts
+pi -e ./src/opencode-todo.ts
 ```
 
 ---

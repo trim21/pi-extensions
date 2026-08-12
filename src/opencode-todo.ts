@@ -1,6 +1,12 @@
 /**
  * todowrite —— opencode 风格的任务列表工具
  *
+ * Aligned with opencode commit 999be62662 (v1.2.25-1672-g999be62662, 2026-08-12):
+ *   https://github.com/anomalyco/opencode/blob/999be62662/packages/opencode/src/tool/todo.ts
+ * 与 opencode 的差异：status/priority 这里用 StringEnum 做运行时校验
+ * （opencode schema 层不校验）；opencode 输出 title "N todos"，这里未设置；
+ * widget/pendant 渲染为本仓库增强（pi 特有）。
+ *
  * 完整列表替换语义（与 opencode 的 todowrite 工具一致）：
  *   每次调用用给定的 todos 数组整体替换当前任务列表。
  *   todos 数组，每项含 content / status / priority 三个字段：

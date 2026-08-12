@@ -1,6 +1,17 @@
 /**
  * Enhanced Read Tool Extension
  *
+ * Aligned with opencode commit 999be62662 (v1.2.25-1672-g999be62662, 2026-08-12):
+ *   https://github.com/anomalyco/opencode/blob/999be62662/packages/opencode/src/tool/read.ts
+ * Aligned behaviours: per-line `N: ` line-number prefix, single-line 2000-char
+ * truncation, 1-based offset (0 treated as 1), out-of-range offset error,
+ * cut/more/end truncation messages, `localeCompare` directory sorting.
+ * Known gaps (intentionally not implemented): PDF attachment support,
+ * instruction (AGENTS.md) loading and LSP warm-up.
+ * BMP sniffing is kept but `image/bmp` is NOT in SUPPORTED_IMAGE_MIMES, so a
+ * .bmp file falls through to binary detection — matching opencode, which only
+ * serves jpeg/png/gif/webp as attachments.
+ *
  * Overrides the built-in `read` tool with additional features inspired by
  * opencode's read implementation:
  *
@@ -31,15 +42,12 @@ import { Type } from "typebox";
 
 const DEFAULT_MAX_LINES = 2000;
 const DEFAULT_MAX_BYTES = 50 * 1024;
+const MAX_LINE_LENGTH = 2000;
+const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`;
+const MAX_BYTES_LABEL = `${DEFAULT_MAX_BYTES / 1024} KB`;
 const SAMPLE_BYTES = 4096;
 
-const SUPPORTED_IMAGE_MIMES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "image/bmp",
-]);
+const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 const BINARY_EXTENSIONS = new Set([
   ".zip",
@@ -159,13 +167,7 @@ function isBinaryFileBySample(sample: Uint8Array): boolean {
   return nonPrintableCount / sample.length > 0.3;
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-}
-
-interface TruncationResult {
+export interface TruncationResult {
   content: string;
   truncated: boolean;
   truncatedBy: "lines" | "bytes" | null;
@@ -173,13 +175,17 @@ interface TruncationResult {
   totalBytes: number;
   outputLines: number;
   outputBytes: number;
-  lastLinePartial: boolean;
-  firstLineExceedsLimit: boolean;
   maxLines: number;
   maxBytes: number;
 }
 
-function truncateHead(
+/**
+ * Truncate the head of `content` the way opencode's ReadTool.lines does:
+ * - per-line truncation to MAX_LINE_LENGTH chars (with MAX_LINE_SUFFIX)
+ * - line cap via maxLines (more)
+ * - byte cap via maxBytes, computed on the truncated lines (cut)
+ */
+export function truncateHead(
   content: string,
   maxLines: number = DEFAULT_MAX_LINES,
   maxBytes: number = DEFAULT_MAX_BYTES,
@@ -189,68 +195,43 @@ function truncateHead(
   const totalLines = lines.length;
   const totalBytes = Buffer.byteLength(content, "utf8");
 
-  if (totalLines <= maxLines && totalBytes <= maxBytes) {
-    return {
-      content,
-      truncated: false,
-      truncatedBy: null,
-      totalLines,
-      totalBytes,
-      outputLines: totalLines,
-      outputBytes: totalBytes,
-      lastLinePartial: false,
-      firstLineExceedsLimit: false,
-      maxLines,
-      maxBytes,
-    };
-  }
-
-  const firstLineBytes = lines.length > 0 ? Buffer.byteLength(lines[0], "utf8") : 0;
-  if (firstLineBytes > maxBytes) {
-    return {
-      content: "",
-      truncated: true,
-      truncatedBy: "bytes",
-      totalLines,
-      totalBytes,
-      outputLines: 0,
-      outputBytes: 0,
-      lastLinePartial: false,
-      firstLineExceedsLimit: true,
-      maxLines,
-      maxBytes,
-    };
-  }
-
   const outputLinesArr: string[] = [];
   let outputBytesCount = 0;
-  let truncatedBy: "lines" | "bytes" = "lines";
+  let truncated = false;
+  let truncatedBy: "lines" | "bytes" | null = null;
 
-  for (let i = 0; i < lines.length && i < maxLines; i++) {
-    const lineBytes = Buffer.byteLength(lines[i], "utf8") + (i > 0 ? 1 : 0);
+  for (const rawLine of lines) {
+    // opencode: 行数到达 limit 即截断（more）
+    if (outputLinesArr.length >= maxLines) {
+      truncated = true;
+      truncatedBy = "lines";
+      break;
+    }
+    // opencode: 单行超过 MAX_LINE_LENGTH 截断并追加提示
+    const line =
+      rawLine.length > MAX_LINE_LENGTH
+        ? rawLine.slice(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX
+        : rawLine;
+    const lineBytes = Buffer.byteLength(line, "utf8") + (outputLinesArr.length > 0 ? 1 : 0);
+    // opencode: 累计字节超 MAX_BYTES 即截断（cut，优先于 more）
     if (outputBytesCount + lineBytes > maxBytes) {
+      truncated = true;
       truncatedBy = "bytes";
       break;
     }
-    outputLinesArr.push(lines[i]);
+    outputLinesArr.push(line);
     outputBytesCount += lineBytes;
-  }
-
-  if (outputLinesArr.length >= maxLines && outputBytesCount <= maxBytes) {
-    truncatedBy = "lines";
   }
 
   const outputContent = outputLinesArr.join("\n");
   return {
     content: outputContent,
-    truncated: true,
+    truncated,
     truncatedBy,
     totalLines,
     totalBytes,
     outputLines: outputLinesArr.length,
     outputBytes: Buffer.byteLength(outputContent, "utf8"),
-    lastLinePartial: false,
-    firstLineExceedsLimit: false,
     maxLines,
     maxBytes,
   };
@@ -297,7 +278,8 @@ async function formatDirectoryEntries(dirPath: string): Promise<string[]> {
     results.push(item + (isDir ? "/" : ""));
   }
 
-  results.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  // opencode: items.sort((a, b) => a.localeCompare(b))
+  results.sort((a, b) => a.localeCompare(b));
   return results;
 }
 
@@ -311,10 +293,16 @@ export default function opencodeRead(pi: ExtensionAPI) {
     parameters: Type.Object({
       filePath: Type.String({ description: "The absolute path to the file or directory to read" }),
       offset: Type.Optional(
-        Type.Number({ description: "The line number to start reading from (1-indexed)" }),
+        Type.Integer({
+          minimum: 0,
+          description: "The line number to start reading from (1-indexed)",
+        }),
       ),
       limit: Type.Optional(
-        Type.Number({ description: "The maximum number of lines to read (defaults to 2000)" }),
+        Type.Integer({
+          minimum: 0,
+          description: "The maximum number of lines to read (defaults to 2000)",
+        }),
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -342,8 +330,9 @@ export default function opencodeRead(pi: ExtensionAPI) {
       if (fileStat.isDirectory()) {
         const entries = await formatDirectoryEntries(absolutePath);
         const limitVal = limit ?? DEFAULT_MAX_LINES;
-        const offsetVal = offset ?? 1;
-        const start = offsetVal <= 0 ? 0 : offsetVal - 1;
+        // opencode: params.offset || 1（0 视为 1）
+        const offsetVal = offset || 1;
+        const start = offsetVal - 1;
         const sliced = entries.slice(start, start + limitVal);
         const totalEntries = entries.length;
         const truncated = start + sliced.length < totalEntries;
@@ -353,8 +342,7 @@ export default function opencodeRead(pi: ExtensionAPI) {
         output += `<entries>\n`;
         output += sliced.join("\n");
         if (truncated) {
-          const next = offsetVal + sliced.length;
-          output += `\n(Showing ${sliced.length} of ${totalEntries} entries. Use offset=${next} to continue.)`;
+          output += `\n(Showing ${sliced.length} of ${totalEntries} entries. Use 'offset' parameter to read beyond entry ${offsetVal + sliced.length})`;
         } else {
           output += `\n(${totalEntries} entries)`;
         }
@@ -386,7 +374,8 @@ export default function opencodeRead(pi: ExtensionAPI) {
         const buffer = await readFile(absolutePath);
         const base64 = buffer.toString("base64");
         content = [
-          { type: "text", text: `[Image: ${mimeType}, ${formatSize(buffer.length)}]` },
+          // opencode: output is "Image read successfully"
+          { type: "text", text: "Image read successfully" },
           { type: "image", data: base64, mimeType },
         ];
         return { content, details: undefined };
@@ -405,72 +394,52 @@ export default function opencodeRead(pi: ExtensionAPI) {
       }
 
       const textContent = buffer.toString("utf8");
+      // opencode 用 Stream.splitLines，不含末尾换行产生的空行
       const allLines = textContent.split("\n");
+      if (textContent.endsWith("\n")) allLines.pop();
       const totalFileLines = allLines.length;
 
-      // Apply offset
-      const startLine = offset ? Math.max(0, offset - 1) : 0;
+      // opencode: offset 1 起始，offset=0 视为 1（params.offset || 1）
+      const effectiveOffset = offset || 1;
+      const startLine = Math.max(0, effectiveOffset - 1);
 
-      if (startLine >= allLines.length) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Offset ${offset} is beyond end of file (${allLines.length} lines total)`,
-            },
-          ],
-          details: undefined,
-        };
+      // opencode: 越界报错（空文件 + offset=1 除外）
+      if (totalFileLines < effectiveOffset && !(totalFileLines === 0 && effectiveOffset === 1)) {
+        throw new Error(
+          `Offset ${effectiveOffset} is out of range for this file (${totalFileLines} lines)`,
+        );
       }
 
       const startLineDisplay = startLine + 1;
 
-      let details: { truncation?: TruncationResult } | undefined;
-
-      // Apply user-specified limit or default truncation
-      let selectedContent: string;
-      let userLimitedLines: number | undefined;
-
-      if (limit === undefined) {
-        selectedContent = allLines.slice(startLine).join("\n");
-      } else {
-        const endLine = Math.min(startLine + limit, allLines.length);
-        selectedContent = allLines.slice(startLine, endLine).join("\n");
-        userLimitedLines = endLine - startLine;
-      }
-
-      // Apply byte/line truncation
-      const truncation = truncateHead(selectedContent);
+      // opencode: limit 即行数上限（默认 2000）
+      const selectedContent = allLines.slice(startLine).join("\n");
+      const truncation = truncateHead(selectedContent, limit ?? DEFAULT_MAX_LINES);
       let outputText: string;
 
       const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
+      const header = `<path>${absolutePath}</path>\n<type>file</type>\n<content>\n`;
+      const footer = "\n</content>";
+      // opencode: 每行 `${i + offset}: ${line}` 行号前缀
+      const numbered =
+        truncation.content === ""
+          ? ""
+          : truncation.content
+              .split("\n")
+              .map((line, i) => `${startLineDisplay + i}: ${line}`)
+              .join("\n");
 
-      if (truncation.firstLineExceedsLimit) {
-        const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf8"));
-        outputText = `<path>${absolutePath}</path>\n<type>file</type>\n`;
-        outputText += `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash to read this line.]`;
+      let details: { truncation?: TruncationResult } | undefined;
+      if (truncation.truncated) {
+        const nextOffset = endLineDisplay + 1;
+        if (truncation.truncatedBy === "bytes") {
+          outputText = `${header}${numbered}\n\n(Output capped at ${MAX_BYTES_LABEL}. Showing lines ${startLineDisplay}-${endLineDisplay}. Use offset=${nextOffset} to continue.)${footer}`;
+        } else {
+          outputText = `${header}${numbered}\n\n(Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.)${footer}`;
+        }
         details = { truncation };
       } else {
-        const header = `<path>${absolutePath}</path>\n<type>file</type>\n<content>\n`;
-        const footer = "\n</content>";
-        if (truncation.truncated) {
-          const nextOffset = endLineDisplay + 1;
-          if (truncation.truncatedBy === "lines") {
-            outputText = `${header}${truncation.content}\n\n(Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.)${footer}`;
-          } else {
-            outputText = `${header}${truncation.content}\n\n(Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.)${footer}`;
-          }
-          details = { truncation };
-        } else if (
-          userLimitedLines !== undefined &&
-          startLine + userLimitedLines < allLines.length
-        ) {
-          const remaining = allLines.length - (startLine + userLimitedLines);
-          const nextOffset = startLine + userLimitedLines + 1;
-          outputText = `${header}${truncation.content}\n\n(${remaining} more lines in file. Use offset=${nextOffset} to continue.)${footer}`;
-        } else {
-          outputText = `${header}${truncation.content}\n\n(End of file - total ${totalFileLines} lines)${footer}`;
-        }
+        outputText = `${header}${numbered}\n\n(End of file - total ${totalFileLines} lines)${footer}`;
       }
 
       content = [{ type: "text", text: outputText }];
