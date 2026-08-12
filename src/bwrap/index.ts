@@ -11,11 +11,12 @@
  *
  * ## Modes
  *
- * Three modes, switchable at runtime:
+ * Four modes, switchable at runtime:
  *
  *   allow-all       No sandbox. Network allowed. All commands run natively.
  *   workspace-write Sandbox enabled, network blocked. Project dir + /tmp writable.
  *                   Model can request full access via bash tool parameter.
+ *   allow-net       Sandbox enabled, network allowed. Project dir + /tmp writable.
  *   readonly        Sandbox enabled, network blocked, no writable paths.
  *
  * ## Escalation
@@ -45,6 +46,7 @@
  *   /bwrap              Show current mode and paths
  *   /bwrap-allow-all    Full access, sandbox off
  *   /bwrap-workspace-write  Sandbox on, workspace writable
+ *   /bwrap-allow-net    Sandbox on, network on, workspace writable
  *   /bwrap-readonly     Sandbox on, no writes
  *
  * Usage:
@@ -73,8 +75,9 @@ Three sandbox modes exist:
 - allow-all: sandbox off, network on, full access
 - readonly: sandbox on, network off, nothing writable
 - workspace-write: sandbox on, network off, only workspace and /tmp writable
+- allow-net: sandbox on, network on, only workspace and /tmp writable
 
-In workspace-write and readonly modes, the bash tool has a
+In workspace-write, allow-net and readonly modes, the bash tool has a
 \`request_full_access\` boolean parameter.
 Set it to true to request execution outside the sandbox.
 The user must approve.
@@ -92,7 +95,8 @@ require request_full_access: true.
 
 the \`request_full_access\` is only needed for:
   - Writing to paths outside the configured writable directories,
-  - Operations requiring network access (curl, npm install, git push, etc.).
+  - Operations requiring network access when the current mode blocks it
+    (workspace-write or readonly; allow-all and allow-net already have network).
 Writing inside the workspace or /tmp, or reading any file, does not require escalation,
 for example, the simple \`ls\`, \`cat\`, \`find\` or \`grep\` and git command that only read from .git directory but not change .git directory and other read only commands.
 **If the command is readonly operator, do not use \`request_full_access\`**
@@ -146,7 +150,7 @@ function findBwrap(override?: string): string {
   return override ?? bwrapPath;
 }
 
-type BwrapMode = "allow-all" | "workspace-write" | "readonly";
+type BwrapMode = "allow-all" | "workspace-write" | "allow-net" | "readonly";
 
 export interface BwrapConfig {
   mode: BwrapMode;
@@ -168,7 +172,7 @@ export interface ResolvedBwrap {
   extraArgs: string[];
 }
 
-function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
+export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
   const base = {
     mode: config.mode,
     bwrapPath: config.bwrapPath,
@@ -183,6 +187,9 @@ function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
     }
     case "workspace-write": {
       return { ...base, bwrapEnabled: true, network: false };
+    }
+    case "allow-net": {
+      return { ...base, bwrapEnabled: true, network: true };
     }
     case "readonly": {
       return { ...base, bwrapEnabled: true, network: false, writablePaths: [] };
@@ -508,6 +515,7 @@ function notifyMode(
   const labels: Record<BwrapMode, string> = {
     "allow-all": "allow-all: sandbox off, network on",
     "workspace-write": "workspace-write: sandbox on, network off",
+    "allow-net": "allow-net: sandbox on, network on, workspace writable",
     readonly: "readonly: sandbox on, network off, read-only fs",
   };
   ctx.ui.notify(labels[mode], "info");
@@ -766,6 +774,11 @@ export default function bwrapExtension(pi: ExtensionAPI) {
   pi.registerCommand("bwrap-workspace-write", {
     description: "Sandbox on, network off, workspace writable",
     handler: (_args, ctx) => Promise.resolve(switchMode("workspace-write", ctx)),
+  });
+
+  pi.registerCommand("bwrap-allow-net", {
+    description: "Sandbox on, network on, workspace writable",
+    handler: (_args, ctx) => Promise.resolve(switchMode("allow-net", ctx)),
   });
 
   pi.registerCommand("bwrap-readonly", {

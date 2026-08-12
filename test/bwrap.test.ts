@@ -7,7 +7,37 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { resolveEscalation, resolveHeadlessBwrap } from "../src/bwrap/index.js";
+import { resolveBwrap, resolveEscalation, resolveHeadlessBwrap } from "../src/bwrap/index.js";
+
+describe("resolveBwrap", () => {
+  it("resolves allow-net with sandbox on and network on", () => {
+    const resolved = resolveBwrap({
+      mode: "allow-net",
+      writablePaths: [".", "/tmp"],
+      extraWritablePaths: [],
+      tmpfsPaths: [],
+      extraArgs: [],
+    });
+
+    expect(resolved.mode).toBe("allow-net");
+    expect(resolved.bwrapEnabled).toBe(true);
+    expect(resolved.network).toBe(true);
+    expect(resolved.writablePaths).toEqual([".", "/tmp"]);
+  });
+
+  it("resolves workspace-write with network off", () => {
+    const resolved = resolveBwrap({
+      mode: "workspace-write",
+      writablePaths: [".", "/tmp"],
+      extraWritablePaths: [],
+      tmpfsPaths: [],
+      extraArgs: [],
+    });
+
+    expect(resolved.bwrapEnabled).toBe(true);
+    expect(resolved.network).toBe(false);
+  });
+});
 
 describe("resolveHeadlessBwrap", () => {
   it("forces read-only regardless of the configured mode", () => {
