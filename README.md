@@ -12,6 +12,7 @@
 | [bash-default-timeout](#bash-default-timeout) | 为 bash 工具设置默认超时（180 秒）                     |
 | [vision-agent](#vision-agent)                 | 视觉代理：主模型不支持视觉时，spawn 子 agent 识别图片  |
 | [todowrite](#todowrite)                       | opencode 风格的任务列表工具，完整列表替换语义          |
+| [question](#question)                         | opencode 风格的提问工具，阻塞式询问用户选择            |
 
 ---
 
@@ -187,6 +188,27 @@ opencode 风格的任务列表工具，参数与语义和 opencode 的 [`todowri
 
 ```bash
 pi -e ./src/todowrite.ts
+```
+
+---
+
+## question
+
+opencode 风格的提问工具，参数与语义和 opencode 的 [`question`](https://github.com/anomalyco/opencode) 工具一致。阻塞式执行：工具调用挂起，等用户作答后才把答案返回给模型。
+
+- **参数**：`questions: Array<{ question, header, options, multiple? }>`
+  - `options` 每项为 `{ label, description }`
+  - `multiple` 缺省为单选，`true` 时循环用 `ui.select` 逐个勾选直到「✓ Done」
+- **自定义答案**：每个问题自动追加 `Type your own answer.` 选项，选中后走 `ui.input` 自由输入
+- **返回值**：每个问题一个 label 数组（`Answer = string[]`），跳过的为空数组
+- **输出**：与 opencode 一致 —— `User has answered your questions: "q"="a", "q2"="Unanswered"...`
+
+交互全部走 pi 内置的 `ctx.ui.select` / `ctx.ui.input`，不写自定义 TUI 渲染；`option.description` 不显示在对话框里，仅保留在 `details` 中。
+
+### 使用
+
+```bash
+pi -e ./src/question.ts
 ```
 
 ---

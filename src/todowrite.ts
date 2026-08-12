@@ -97,40 +97,9 @@ export const todowriteSchema = Type.Object({
 
 // ── 纯函数（可测试）──────────────────────────────────────────────────────────
 
-export function isTodoStatus(value: unknown): value is TodoStatus {
-  return typeof value === "string" && (TODO_STATUSES as readonly string[]).includes(value);
-}
-
-export function isTodoPriority(value: unknown): value is TodoPriority {
-  return typeof value === "string" && (TODO_PRIORITIES as readonly string[]).includes(value);
-}
-
-/**
- * 把 execute 拿到的原始 todos 规整成干净、类型安全的列表。
- * 校验失败直接抛错（execute 抛出错误会置 isError 并向模型报告），
- * 不会静默吞掉非法状态。
- */
-export function normalizeTodos(raw: unknown): TodoInfo[] {
-  if (!Array.isArray(raw)) throw new Error("todos must be an array");
-  return raw.map((item, index) => {
-    if (typeof item !== "object" || item === null || Array.isArray(item)) {
-      throw new Error(`todos[${index}] must be an object`);
-    }
-    const obj = item as Record<string, unknown>;
-    const content = typeof obj.content === "string" ? obj.content.trim() : "";
-    if (!content) throw new Error(`todos[${index}].content is required`);
-    if (!isTodoStatus(obj.status)) {
-      throw new Error(
-        `todos[${index}].status must be one of ${TODO_STATUSES.join(", ")}, got ${JSON.stringify(obj.status)}`,
-      );
-    }
-    if (!isTodoPriority(obj.priority)) {
-      throw new Error(
-        `todos[${index}].priority must be one of ${TODO_PRIORITIES.join(", ")}, got ${JSON.stringify(obj.priority)}`,
-      );
-    }
-    return { content, status: obj.status, priority: obj.priority };
-  });
+/** trim content 并返回干净副本；字段类型已由 typebox schema 推断，无需运行时校验 */
+export function normalizeTodos(todos: readonly TodoInfo[]): TodoInfo[] {
+  return todos.map((t) => ({ ...t, content: t.content.trim() }));
 }
 
 /** opencode 返回标题里的计数：未完成（status !== completed）的任务数 */
@@ -174,16 +143,10 @@ export default function todowrite(pi: ExtensionAPI) {
     name: TOOL_NAME,
     label: "Todo Write",
     description: TODOWRITE_DESCRIPTION,
-    promptSnippet: "Track multi-step work via a todo list (full-list replacement)",
-    promptGuidelines: [
-      "Use todowrite to plan and track multi-step work: mark a task in_progress before starting it and completed only after the work is actually done and verified.",
-      "todowrite replaces the entire todo list, so pass the full updated array of { content, status, priority } items every time.",
-      "Keep exactly one task in_progress at a time; if blocked, keep it in_progress and add a follow-up todo describing the blocker.",
-    ],
     parameters: todowriteSchema,
 
     execute(_toolCallId, params) {
-      // 整体替换（opencode 语义）；normalizeTodos 保证非法输入可定位报错。
+      // 整体替换（opencode 语义）。
       // 纯同步逻辑，用 Promise.resolve 满足 execute 的 Promise 返回类型。
       const todos = normalizeTodos(params.todos);
       return Promise.resolve({

@@ -1,7 +1,6 @@
 /**
  * Tests for the todowrite extension (opencode-style todo tool):
- * - schema / type guards
- * - normalizeTodos: validation + full-list semantics
+ * - normalizeTodos: content trim
  * - serializeTodos / buildTodoMarkdown / countOpen
  * - tool registration metadata
  * - execute: full-list replacement + pendant.markdown output
@@ -11,11 +10,8 @@ import { describe, expect, it } from "vitest";
 import todowrite, {
   buildTodoMarkdown,
   countOpen,
-  isTodoPriority,
-  isTodoStatus,
   normalizeTodos,
   serializeTodos,
-  TODO_STATUSES,
   type TodoInfo,
   TOOL_NAME,
 } from "../src/todowrite.js";
@@ -54,58 +50,16 @@ const todo = (over: Partial<TodoInfo>): TodoInfo => ({
   ...over,
 });
 
-describe("type guards", () => {
-  it("accepts only the opencode status / priority values", () => {
-    expect(isTodoStatus("pending")).toBe(true);
-    expect(isTodoStatus("in_progress")).toBe(true);
-    expect(isTodoStatus("completed")).toBe(true);
-    expect(isTodoStatus("cancelled")).toBe(true);
-    expect(isTodoStatus("deleted")).toBe(false);
-    expect(isTodoStatus(42)).toBe(false);
-
-    expect(isTodoPriority("high")).toBe(true);
-    expect(isTodoPriority("medium")).toBe(true);
-    expect(isTodoPriority("low")).toBe(true);
-    expect(isTodoPriority("urgent")).toBe(false);
-  });
-});
-
 describe("normalizeTodos", () => {
-  it("returns a clean copy for valid input", () => {
+  it("trims content and returns a clean copy", () => {
     const input = [
-      { content: "  Add dark mode  ", status: "in_progress", priority: "high" },
-      { content: "Run tests", status: "pending", priority: "low" },
+      { content: "  Add dark mode  ", status: "in_progress" as const, priority: "high" as const },
+      { content: "Run tests", status: "pending" as const, priority: "low" as const },
     ];
     expect(normalizeTodos(input)).toEqual([
       { content: "Add dark mode", status: "in_progress", priority: "high" },
       { content: "Run tests", status: "pending", priority: "low" },
     ]);
-  });
-
-  it("rejects a non-array", () => {
-    expect(() => normalizeTodos({})).toThrow(/array/);
-    expect(() => normalizeTodos(null)).toThrow(/array/);
-  });
-
-  it("rejects items missing content", () => {
-    expect(() => normalizeTodos([{ status: "pending", priority: "low" }])).toThrow(
-      /todos\[0\]\.content/,
-    );
-    expect(() =>
-      normalizeTodos([{ content: " ".repeat(3), status: "pending", priority: "low" }]),
-    ).toThrow(/todos\[0\]\.content/);
-  });
-
-  it("rejects invalid status and priority with context", () => {
-    expect(() => normalizeTodos([{ content: "a", status: "deleted", priority: "low" }])).toThrow(
-      /status/,
-    );
-    expect(() => normalizeTodos([{ content: "a", status: "pending", priority: "urgent" }])).toThrow(
-      /priority/,
-    );
-    expect(() => normalizeTodos([todo({ status: "deleted" as never })])).toThrow(
-      new RegExp(TODO_STATUSES.join(", ")),
-    );
   });
 });
 
@@ -195,18 +149,5 @@ describe("execute", () => {
     expect(result.content[0].text).toBe("[]");
     expect(result.details.todos).toEqual([]);
     expect(result.details.pendant.markdown).toContain("_No todos_");
-  });
-
-  it("throws synchronously on invalid input (runtime wrapper turns it into isError)", () => {
-    const { tool } = loadTool();
-    expect(() =>
-      tool.execute(
-        "id",
-        { todos: [{ content: "x", status: "deleted", priority: "low" } as never] },
-        undefined,
-        undefined,
-        undefined,
-      ),
-    ).toThrow(/status/);
   });
 });
