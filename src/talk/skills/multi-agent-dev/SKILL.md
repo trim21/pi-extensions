@@ -85,6 +85,7 @@ In the TUI: `/talk` lists sessions, `/talk-dead` marks a session as dead (shown 
 - Self-contained: background, goal, constraints — the peer has none of your context.
 - Make the ask explicit: "please review", "please implement", or "FYI only".
 - One topic per message so the reply stays focused.
+- No empty pleasantries: skip "received, thanks for the sync" / "nice collaborating with you" / "thanks, noted". An acknowledgment with no new information wastes a peer's turn — send facts, questions, or decisions, not ceremony.
 
 ## Pitfalls
 
