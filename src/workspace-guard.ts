@@ -13,8 +13,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, relative, sep } from "node:path";
 
 import {
   type ExtensionAPI,
@@ -22,6 +21,7 @@ import {
   type ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 
+import { resolveHomePath } from "./lib/path.js";
 import { normalizeForEdit, replace } from "./opencode-edit-engine.js";
 
 const WRITE_TOOLS = new Set(["write", "edit"]);
@@ -37,17 +37,6 @@ export function getWriteTarget(input: ToolCallEvent["input"]): string | undefine
   return undefined;
 }
 
-function resolvePath(filePath: string, cwd: string): string {
-  let p = filePath;
-  if (p.startsWith("~")) {
-    const rest = p.slice(1);
-    if (rest === "" || rest.startsWith("/")) {
-      p = join(homedir(), rest.slice(1));
-    }
-  }
-  return isAbsolute(p) ? resolve(p) : resolve(cwd, p);
-}
-
 function isInside(dir: string, filePath: string): boolean {
   const rel = relative(dir, filePath);
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
@@ -57,7 +46,7 @@ function isPathAllowed(resolvedPath: string, cwd: string): boolean {
   if (isInside(cwd, resolvedPath)) return true;
 
   for (const allowed of ALWAYS_ALLOW) {
-    const resolvedAllowed = resolvePath(allowed, cwd);
+    const resolvedAllowed = resolveHomePath(allowed, cwd);
     if (isInside(resolvedAllowed, resolvedPath)) return true;
   }
 
@@ -214,7 +203,7 @@ export default function workspaceGuard(pi: ExtensionAPI) {
     const rawPath = getWriteTarget(event.input);
     if (!rawPath) return;
 
-    const resolved = resolvePath(rawPath, ctx.cwd);
+    const resolved = resolveHomePath(rawPath, ctx.cwd);
 
     if (isPathAllowed(resolved, ctx.cwd)) return;
 

@@ -256,10 +256,12 @@ sqlite 文件路径按优先级取第一个可用值：
 2. global `~/.pi/agent/settings.json` 里的 `talk.db_path`
 3. 默认 `~/.pi/agent/talk.db`
 
+`db_path` 支持 `~` 展开（`~/…` → 用户主目录），相对路径相对 `~/.pi/agent` 解析；绝对路径原样使用。
+
 ```jsonc
 // ~/.pi/agent/settings.json
 {
-  "talk": { "db_path": "/path/to/talk.db" },
+  "talk": { "db_path": "~/data/talk.db" },
 }
 ```
 

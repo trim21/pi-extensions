@@ -67,6 +67,8 @@ import { type BashOperations, createBashTool, getAgentDir } from "@earendil-work
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { expandHome } from "../lib/path.js";
+
 const SANDBOX_PROMPT = `
 ## Command Execution
 You are running inside a sandbox.
@@ -232,17 +234,8 @@ function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapCon
   };
 }
 
-function expandPath(p: string): string {
-  if (p.startsWith("~/")) {
-    const home = process.env.HOME;
-    if (home === undefined) return p;
-    return join(home, p.slice(2));
-  }
-  return p;
-}
-
 function resolvePath(p: string, cwd: string): string {
-  const expanded = expandPath(p);
+  const expanded = expandHome(p);
   if (expanded === ".") return cwd;
   return expanded;
 }

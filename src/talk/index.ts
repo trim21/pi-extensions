@@ -17,6 +17,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
+import { resolveHomePath } from "../lib/path.js";
 import { TalkCore } from "./core.js";
 import { formatDelivery } from "./format.js";
 import type { Letter } from "./mailbox.js";
@@ -117,8 +118,10 @@ function readDbPathFromSettings(): string | undefined {
 }
 
 export default function talk(pi: ExtensionAPI) {
-  const dbPath =
-    process.env.PI_TALK_DB ?? readDbPathFromSettings() ?? path.join(getAgentDir(), "talk.db");
+  const configured = process.env.PI_TALK_DB ?? readDbPathFromSettings();
+  const dbPath = configured
+    ? resolveHomePath(configured, getAgentDir())
+    : path.join(getAgentDir(), "talk.db");
   const storage = new SqliteTalkStorage(dbPath);
 
   let self: SessionRecord | undefined;
