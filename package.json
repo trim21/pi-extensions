@@ -65,7 +65,8 @@
       "src/gh-readonly.ts",
       "src/spawn-agent.ts",
       "src/opencode-todo.ts",
-      "src/question.ts"
+      "src/question.ts",
+      "src/talk/index.ts"
     ]
   },
   "lint-staged": {
