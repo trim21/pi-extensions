@@ -23,7 +23,8 @@ export function age(ts: number, now: number = Date.now()): string {
 
 /** Delivery text injected into the receiving session's LLM context. */
 export function formatDelivery(letter: Letter, now: number = Date.now()): string {
-  const header = `From pi session "${letter.from.name}" (${letter.from.cwd})`;
+  const from = letter.from;
+  const header = `From pi session ${from.sessionId} (${from.cwd}) — "${from.name}"`;
   const meta = `_id ${letter.id} · ${letter.kind} · sent ${age(letter.ts, now)}_`;
   const hint =
     letter.kind === "ask" ? `\n\nReply with the talk-reply tool, replyTo: "${letter.id}"` : "";

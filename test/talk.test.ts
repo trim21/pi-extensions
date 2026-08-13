@@ -266,6 +266,11 @@ describe("format", () => {
     expect(text).toContain("talk-reply");
   });
 
+  it("formatDelivery header carries the sender session id", () => {
+    const text = formatDelivery(makeLetter());
+    expect(text).toContain('From pi session session-a (/tmp/a) — "A"');
+  });
+
   it("formatListing emits a JSON array with stable session ids", () => {
     const records: SessionRecord[] = [
       makeSelf("aaaaaaaaaaaa", {
