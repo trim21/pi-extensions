@@ -12,13 +12,12 @@
 import { isAbsolute, resolve } from "node:path";
 
 import { expandHome } from "../lib/path.js";
-import { formatDelivery, formatListing, refusalUnknown, shortAddr } from "./format.js";
+import { formatListing, refusalUnknown, shortAddr } from "./format.js";
 import {
   appendAudit,
   awaitReceipt,
   clearAsk,
   deposit,
-  type InboxItem,
   type Letter,
   type LetterKind,
   listInbox,
@@ -69,10 +68,7 @@ const HEARTBEAT_MS = 15_000;
 const WATCH_POLL_MS = 5000;
 const DELIVERY_BACKOFF_MS = 5000;
 const INITIAL_DRAIN_DELAY_MS = 1200;
-const WAIT_POLL_MS = 500;
 const SWEEP_INTERVAL_MS = 30 * 60 * 1000;
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Normalize an allowed path: expand ~, resolve relative against baseCwd, strip trailing slashes. */
 function normalizeAllowedPath(p: string, baseCwd: string): string {
@@ -205,7 +201,7 @@ export class TalkCore {
     void this.writeSelf({ status: "working" });
   }
 
-  /** Blocked on talk-wait / talk-ask — visible as "waiting-talk-message". */
+  /** Blocked on talk-ask — visible as "waiting-talk-message". */
   setWaiting(): void {
     void this.writeSelf({ status: "waiting-talk-message" });
   }
@@ -323,28 +319,6 @@ export class TalkCore {
       await auditDelivery("deliver-failed");
       return false;
     }
-  }
-
-  /** Read and consume fresh inbox letters, returning those to present to the model. */
-  private async consumeFresh(items: InboxItem[]): Promise<Letter[]> {
-    const self = this.requireSelf();
-    const fresh: Letter[] = [];
-    for (const item of items) {
-      if (this.deliveredIds.has(item.letter.id)) {
-        // Already handed out in a previous pass but the remove failed; only remove.
-        if (await removeLetter(this.storage, self.addr, item.fileName)) {
-          this.deliveredIds.delete(item.letter.id);
-        }
-        continue;
-      }
-      if (await this.processIncoming(item.letter)) fresh.push(item.letter);
-      if (await removeLetter(this.storage, self.addr, item.fileName)) {
-        // consumed
-      } else {
-        this.deliveredIds.add(item.letter.id);
-      }
-    }
-    return fresh;
   }
 
   // ── Outbound ───────────────────────────────────────────────────────────
@@ -473,26 +447,6 @@ export class TalkCore {
   }
 
   // ── Tool actions ───────────────────────────────────────────────────────
-
-  /** Block until a message arrives (or timeout/abort). */
-  async wait(timeoutMs: number, signal?: AbortSignal): Promise<string> {
-    const self = this.requireSelf();
-    const deadline = this.now() + timeoutMs;
-    this.setWaiting();
-    try {
-      for (;;) {
-        const inbox = await listInbox(this.storage, self.addr);
-        const fresh = await this.consumeFresh(inbox);
-        if (fresh.length > 0) return fresh.map((l) => formatDelivery(l)).join("\n\n");
-        if (signal?.aborted) return "aborted";
-        if (this.now() >= deadline) return `No message within ${Math.round(timeoutMs / 1000)}s.`;
-        await sleep(WAIT_POLL_MS);
-      }
-    } finally {
-      // The tool call is still part of a running agent turn.
-      this.setWorking();
-    }
-  }
 
   /**
    * JSON listing of visible peer sessions. Defaults to sessions whose

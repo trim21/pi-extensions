@@ -261,24 +261,6 @@ export default function talk(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "talk-wait",
-    label: "Wait for Talk Message",
-    description:
-      "Block until a new talk message arrives in your inbox (or until the timeout). Returns the message(s) that arrived.",
-    promptSnippet: "Wait for an incoming talk message",
-    parameters: Type.Object({
-      timeoutMs: Type.Optional(
-        Type.Number({ description: `How long to block in ms; default ${ASK_TIMEOUT_MS}` }),
-      ),
-    }),
-    async execute(_toolCallId, params, signal) {
-      const initError = requireInit();
-      if (initError) return toolResult(initError);
-      return toolResult(await core.wait(params.timeoutMs ?? ASK_TIMEOUT_MS, signal ?? undefined));
-    },
-  });
-
-  pi.registerTool({
     name: "talk-send",
     label: "Send Talk Message",
     description:
