@@ -128,6 +128,8 @@ export class TalkCore {
   private readonly deliveredIds = new Set<string>();
   /** Visibility gate over peer working directories; defaults to everything visible. */
   private isPeerVisible: (peerCwd: string) => boolean = () => true;
+  /** Manually marked dead: heartbeat stopped, lastSeenAt pinned to 0. */
+  private dead = false;
 
   private inboxPoll: ReturnType<typeof setInterval> | undefined;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -213,7 +215,8 @@ export class TalkCore {
 
   private async writeSelf(patch: Partial<SessionRecord>): Promise<void> {
     if (!this.self) return;
-    this.self = { ...this.self, ...patch, lastSeenAt: this.now() };
+    // A dead session pins lastSeenAt to 0 so no later event re-freshens it.
+    this.self = { ...this.self, ...patch, lastSeenAt: this.dead ? 0 : this.now() };
     try {
       await writeRecord(this.storage, this.self);
     } catch {
@@ -507,6 +510,44 @@ export class TalkCore {
         (includeOffline || now - r.lastSeenAt < LIST_ACTIVE_MS),
     );
     return formatListing(filtered, self.addr, (r) => presenceOf(r, now));
+  }
+
+  /** Visible peer records (excluding self), e.g. for command completions. */
+  async listPeers(): Promise<SessionRecord[]> {
+    const self = this.requireSelf();
+    const records = await listRecords(this.storage);
+    return records.filter((r) => r.addr !== self.addr && this.isPeerVisible(r.cwd));
+  }
+
+  /**
+   * Mark a session as dead by pinning lastSeenAt to 0: it vanishes from the
+   * default listing and the next sweep reaps it (empty mailbox). Without a
+   * target, marks this session — its heartbeat is stopped and later
+   * writeSelf calls no longer refresh lastSeenAt.
+   */
+  async markDead(target?: string): Promise<string> {
+    if (!target) {
+      this.dead = true;
+      if (this.heartbeat) {
+        clearInterval(this.heartbeat);
+        this.heartbeat = undefined;
+      }
+      await this.writeSelf({});
+      return "Marked this session as dead.";
+    }
+    const resolved = await this.resolveTarget(target);
+    if (!resolved.ok) return resolved.error;
+    await writeRecord(this.storage, { ...resolved.record, lastSeenAt: 0 });
+    return `Marked "${resolved.record.name}" as dead.`;
+  }
+
+  /** Mark every visible peer (except self) as dead. */
+  async markAllDead(): Promise<string> {
+    const peers = await this.listPeers();
+    for (const peer of peers) {
+      await writeRecord(this.storage, { ...peer, lastSeenAt: 0 });
+    }
+    return `Marked ${peers.length} session(s) as dead.`;
   }
 
   async send(to: string, body: string): Promise<string> {

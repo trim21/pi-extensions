@@ -242,6 +242,8 @@ index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周�
 
 **定位只认 session id**：`talk-send` / `talk-ask` / `talk-watch` 的 `to` 只接受 `talk-list-sessions` 返回的 `id`（pi 的 session uuid）精确匹配，不做 name/路径/前缀匹配。
 
+**标记废弃 session**：`/talk-dead` 把 session 的 `lastSeenAt` 置 0（从默认列表消失，下次 sweep 无 mail 即回收）：无参标记当前 session（同时停止其心跳），`/talk-dead <sessionId>` 标记指定 session，`/talk-dead --all` 标记所有其他可见 session。
+
 ### 关键设计
 
 - **心跳即活跃**：每个 session 每 15s 写一次 `lastSeenAt`；`talk-list-sessions` 默认只显示最近 15 分钟内有心跳的 session，已结束/挂起的 session 自动从默认列表消失（`includeOffline: true` 可见全部）。`status` 用 45s 心跳阈值区分 live / not responding / offline。

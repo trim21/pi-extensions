@@ -465,4 +465,48 @@ describe("TalkCore", () => {
     const result = await core.ask("session-bbbbbbbbbbbb", "question?", 1000);
     expect(result).toContain("Unknown session id");
   });
+
+  it("markDead on self pins lastSeenAt to 0 even across later writes", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    expect(await core.markDead()).toContain("this session");
+    core.setWorking(); // would normally refresh lastSeenAt
+    await vi.waitFor(async () => {
+      const rec = await readRecord(storage, "aaaaaaaaaaaa");
+      expect(rec?.lastSeenAt).toBe(0);
+    });
+    const listing = JSON.parse(await core.list()) as { id: string }[];
+    expect(listing).toEqual([]);
+  });
+
+  it("markDead by session id removes it from the default listing", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    await writeRecord(storage, makeSelf("bbbbbbbbbbbb"));
+    expect(await core.markDead("session-bbbbbbbbbbbb")).toContain("session bbbbbbbbbbbb");
+    const listing = JSON.parse(await core.list()) as { id: string }[];
+    expect(listing).toEqual([]);
+  });
+
+  it("markAllDead marks every visible peer", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    await writeRecord(storage, makeSelf("bbbbbbbbbbbb"));
+    await writeRecord(storage, makeSelf("cccccccccccc"));
+    expect(await core.markAllDead()).toContain("2 session");
+    const listing = JSON.parse(await core.list()) as { id: string }[];
+    expect(listing).toEqual([]);
+  });
+
+  it("sweep reaps a dead session with an empty mailbox immediately", async () => {
+    const { storage } = makeStorage();
+    const now = Date.now();
+    await writeRecord(storage, makeSelf("aaaaaaaaaaaa", { lastSeenAt: 0 }));
+    await sweep(storage, now);
+    const records = await listRecords(storage);
+    expect(records.map((r) => r.addr)).not.toContain("aaaaaaaaaaaa");
+  });
 });

@@ -17,6 +17,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
+import { jsoncToJson } from "../lib/jsonc.js";
 import { resolveHomePath } from "../lib/path.js";
 import { buildVisibilityFilter, TalkCore } from "./core.js";
 import { formatDelivery } from "./format.js";
@@ -104,14 +105,17 @@ function readTalkSettings(): { dbPath?: string; deliver?: "steer" | "queue" } {
  * (everything visible); an explicit `"allowed": []` hides every peer.
  */
 function readWorkspaceTalkConfig(cwd: string): { allowed?: string[] } {
+  const configPath = path.join(cwd, ".pi", "talk.json");
   try {
-    const raw = fs.readFileSync(path.join(cwd, ".pi", "talk.json"), "utf8");
-    const parsed = JSON.parse(raw) as { allowed?: unknown };
+    const raw = fs.readFileSync(configPath, "utf8");
+    const parsed = JSON.parse(jsoncToJson(raw)) as { allowed?: unknown };
     if (Array.isArray(parsed.allowed)) {
       return { allowed: parsed.allowed.filter((p): p is string => typeof p === "string") };
     }
     return {};
-  } catch {
+  } catch (error) {
+    // eslint-disable-next-line no-console -- config errors must be visible, not silent
+    console.error(`Warning: could not parse ${configPath}: ${String(error)}`);
     return {};
   }
 }
@@ -310,12 +314,29 @@ export default function talk(pi: ExtensionAPI) {
     },
   });
 
-  // ── /talk command ─────────────────────────────────────────────────────
+  // ── /talk commands ────────────────────────────────────────────────────
 
   pi.registerCommand("talk", {
     description: "List registered pi sessions",
     async handler() {
       const text = requireInit() ?? (await core.list());
+      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
+    },
+  });
+
+  pi.registerCommand("talk-dead", {
+    description:
+      "Mark a talk session as dead (removed from listings, swept soon): no arg = this session, <sessionId> = that session, --all = every other visible session",
+    async handler(args) {
+      const initError = requireInit();
+      const trimmed = args.trim();
+      const text =
+        initError ??
+        (trimmed === "--all"
+          ? await core.markAllDead()
+          : trimmed
+            ? await core.markDead(trimmed)
+            : await core.markDead());
       pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
     },
   });
