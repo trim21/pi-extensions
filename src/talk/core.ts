@@ -1,7 +1,12 @@
 /**
- * Talk core: coordinates the registry, mailbox, and policy over a storage
- * backend, and yields deliveries and notifications to an adapter through
- * events. Pi-free — the pi adapter (index.ts) owns the pi API surface.
+ * Talk core: coordinates the registry, mailbox, groups, and policy over a
+ * storage backend, and yields deliveries and notifications to an adapter
+ * through events. Pi-free — the pi adapter (index.ts) owns the pi API surface.
+ *
+ * Visibility model: groups are the only visibility boundary. A session in a
+ * group sees only its co-members; a session in no group sees only itself.
+ * Membership is read live from storage on every operation, so joining or
+ * leaving a group takes effect immediately for every session.
  *
  * Delivery model: a letter is removed from the inbox only AFTER the adapter
  * reports it was handed to the session (`events.deliver` returns true). A
@@ -9,10 +14,16 @@
  * poll — so a swallowed sendMessage error no longer destroys the letter.
  */
 
-import { isAbsolute, resolve } from "node:path";
-
-import { expandHome } from "../lib/path.js";
-import { formatListing, refusalUnknown, shortAddr } from "./format.js";
+import { age, formatListing, refusalUnknown, shortAddr } from "./format.js";
+import {
+  deleteGroup,
+  groupForSession,
+  isValidGroupName,
+  listGroups,
+  newGroupId,
+  readGroup,
+  writeGroup,
+} from "./group.js";
 import {
   appendAudit,
   awaitReceipt,
@@ -69,32 +80,6 @@ const DELIVERY_BACKOFF_MS = 5000;
 const INITIAL_DRAIN_DELAY_MS = 1200;
 const SWEEP_INTERVAL_MS = 30 * 60 * 1000;
 
-/** Normalize an allowed path: expand ~, resolve relative against baseCwd, strip trailing slashes. */
-function normalizeAllowedPath(p: string, baseCwd: string): string {
-  const expanded = expandHome(p);
-  const abs = isAbsolute(expanded) ? resolve(expanded) : resolve(baseCwd, expanded);
-  return abs.replace(/[\\/]+$/, "") || "/";
-}
-
-/**
- * Build the workspace-visibility gate for one session. `allowed` is the
- * `allowed` array from `<cwd>/.pi/talk.json` (undefined when the file or key
- * is absent). A peer session is visible when its cwd equals an allowed prefix
- * or sits below it (`prefix` or `prefix/*`); `company1` never matches
- * `company12`. An undefined list shows everything; an explicit empty list
- * shows nothing.
- */
-export function buildVisibilityFilter(
-  allowed: string[] | undefined,
-  baseCwd: string,
-): (peerCwd: string) => boolean {
-  if (allowed === undefined) return () => true;
-  if (allowed.length === 0) return () => false;
-  const prefixes = allowed.map((p) => normalizeAllowedPath(p, baseCwd));
-  return (peerCwd) =>
-    prefixes.some((prefix) => peerCwd === prefix || peerCwd.startsWith(`${prefix}/`));
-}
-
 /**
  * Mutual-ask arbitration: true when the peer asked first. The `ts` fields of
  * the two ask letters are fixed values inside the letters, so both sides
@@ -121,8 +106,6 @@ export class TalkCore {
   private readonly watched = new Map<string, Presence>();
   /** Message ids already handed to the adapter but not yet removed from the inbox. */
   private readonly deliveredIds = new Set<string>();
-  /** Visibility gate over peer working directories; defaults to everything visible. */
-  private isPeerVisible: (peerCwd: string) => boolean = () => true;
   /** Manually marked dead: offline flag set, lastSeenAt pinned to 0. */
   private dead = false;
 
@@ -139,11 +122,6 @@ export class TalkCore {
 
   get selfAddr(): string | undefined {
     return this.self?.addr;
-  }
-
-  /** Replace the peer-visibility gate (from the session's `.pi/talk.json`). */
-  setPeerVisibility(filter: (peerCwd: string) => boolean): void {
-    this.isPeerVisible = filter;
   }
 
   private requireSelf(): SessionRecord {
@@ -319,14 +297,25 @@ export class TalkCore {
   // ── Outbound ───────────────────────────────────────────────────────────
 
   /**
-   * Resolve a target by its exact session id (uuid). A peer must be visible
-   * from this session (`setPeerVisibility`); invisible peers are unreachable
-   * even with a known id.
+   * Session ids of the caller's group members, or null when the caller is in
+   * no group. Visibility is read live from storage on every operation, so a
+   * group change takes effect immediately for every session.
+   */
+  private async myGroupMemberIds(): Promise<Set<string> | null> {
+    const self = this.requireSelf();
+    const group = await groupForSession(this.storage, self.sessionId);
+    return group ? new Set(group.members) : null;
+  }
+
+  /**
+   * Resolve a target by its exact session id (uuid). Only co-members of the
+   * caller's group are reachable; a session in no group sees no peers at all.
    */
   private async resolveTarget(to: string): Promise<TargetResult> {
     const self = this.requireSelf();
     const records = await listRecords(this.storage);
-    const others = records.filter((r) => r.addr !== self.addr && this.isPeerVisible(r.cwd));
+    const memberIds = await this.myGroupMemberIds();
+    const others = records.filter((r) => r.addr !== self.addr && memberIds?.has(r.sessionId));
     const target = others.find((r) => r.sessionId === to);
     if (!target) return { ok: false, error: refusalUnknown(to) };
     return { ok: true, record: target };
@@ -445,15 +434,17 @@ export class TalkCore {
 
   /**
    * JSON listing of visible sessions, including self (marked `self: true`).
-   * Every visible record is listed, live or offline; presence decides the
-   * per-session status.
+   * Grouped sessions see only their co-members; a session in no group sees
+   * only itself. Every visible record is listed, live or offline; presence
+   * decides the per-session status.
    */
   async list(): Promise<string> {
     const self = this.requireSelf();
     const all = await listRecords(this.storage);
+    const memberIds = await this.myGroupMemberIds();
     const records = all.filter((r) => {
       if (r.addr === self.addr) return !this.dead;
-      return this.isPeerVisible(r.cwd);
+      return memberIds?.has(r.sessionId) ?? false;
     });
     return formatListing(records, self.addr, presenceOf);
   }
@@ -462,10 +453,11 @@ export class TalkCore {
   async listCwd(cwd: string): Promise<string> {
     const self = this.requireSelf();
     const records = await listRecords(this.storage);
+    const memberIds = await this.myGroupMemberIds();
     const filtered = records.filter((r) => {
       if (r.cwd !== cwd) return false;
       if (r.addr === self.addr) return !this.dead;
-      return this.isPeerVisible(r.cwd);
+      return memberIds?.has(r.sessionId) ?? false;
     });
     return formatListing(filtered, self.addr, presenceOf);
   }
@@ -474,7 +466,8 @@ export class TalkCore {
   async listPeers(): Promise<SessionRecord[]> {
     const self = this.requireSelf();
     const records = await listRecords(this.storage);
-    return records.filter((r) => r.addr !== self.addr && this.isPeerVisible(r.cwd));
+    const memberIds = await this.myGroupMemberIds();
+    return records.filter((r) => r.addr !== self.addr && (memberIds?.has(r.sessionId) ?? false));
   }
 
   /**
@@ -502,6 +495,122 @@ export class TalkCore {
       await writeRecord(this.storage, { ...peer, lastSeenAt: 0, offline: true });
     }
     return `Marked ${peers.length} session(s) as dead.`;
+  }
+
+  // ── Groups ─────────────────────────────────────────────────────────────
+
+  /** Remove the caller from its current group, deleting the group when it empties. */
+  private async leaveCurrentGroup(): Promise<boolean> {
+    const self = this.requireSelf();
+    const group = await groupForSession(this.storage, self.sessionId);
+    if (!group) return false;
+    const others = group.members.filter((m) => m !== self.sessionId);
+    if (others.length === 0) {
+      await deleteGroup(this.storage, group.id);
+    } else {
+      await writeGroup(this.storage, { ...group, members: others, updatedAt: this.now() });
+    }
+    return true;
+  }
+
+  /**
+   * Join or create a group and join it. With no name a fresh uuid is
+   * generated; with a name, the group is joined when it exists and created
+   * otherwise. Leaving any current group first keeps the single-group
+   * invariant.
+   */
+  async groupJoin(groupName?: string): Promise<string> {
+    const self = this.requireSelf();
+    const name =
+      groupName === undefined || groupName.trim() === "" ? newGroupId() : groupName.trim();
+    if (!isValidGroupName(name)) {
+      return `Invalid group name '${name}'. Allowed: letters, digits, '-' and '_' (max 64 chars).`;
+    }
+    const existing = await readGroup(this.storage, name);
+    if (existing?.members.includes(self.sessionId)) {
+      return `Already in group ${name} (${existing.members.length} member(s)).`;
+    }
+    await this.leaveCurrentGroup();
+    if (existing) {
+      await writeGroup(this.storage, {
+        ...existing,
+        members: [...existing.members, self.sessionId],
+        updatedAt: this.now(),
+      });
+      return `Joined group ${name} (${existing.members.length + 1} member(s)). You now see only co-members.`;
+    }
+    const now = this.now();
+    await writeGroup(this.storage, {
+      id: name,
+      members: [self.sessionId],
+      createdAt: now,
+      updatedAt: now,
+    });
+    return `Created group ${name}. Other sessions join it with /talk-group-join ${name}.`;
+  }
+
+  /** Join the most recently created group; no-op when already in it. */
+  async groupJoinLast(): Promise<string> {
+    const groups = await listGroups(this.storage);
+    if (groups.length === 0) return "No groups. Create one with /talk-group-join.";
+    const latest = groups.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
+    return this.groupJoin(latest.id);
+  }
+
+  /** Leave the current group; an emptied group is deleted. */
+  async groupLeave(): Promise<string> {
+    const self = this.requireSelf();
+    const group = await groupForSession(this.storage, self.sessionId);
+    if (!group) return "Not in any group.";
+    const others = group.members.filter((m) => m !== self.sessionId);
+    if (others.length === 0) {
+      await deleteGroup(this.storage, group.id);
+      return `Left group ${group.id} (deleted — it was empty).`;
+    }
+    await writeGroup(this.storage, { ...group, members: others, updatedAt: this.now() });
+    return `Left group ${group.id} (${others.length} member(s) remain).`;
+  }
+
+  /** Delete a group by name; its members become ungrouped. */
+  async groupDelete(groupName: string): Promise<string> {
+    const name = groupName.trim();
+    if (!isValidGroupName(name)) return `Invalid group name '${name}'.`;
+    const group = await readGroup(this.storage, name);
+    if (!group) return `Unknown group '${name}'. Run /talk-group-list to see groups.`;
+    await deleteGroup(this.storage, name);
+    return `Deleted group ${name} (${group.members.length} member(s)).`;
+  }
+
+  /** Delete every group; all sessions become ungrouped. */
+  async groupClear(): Promise<string> {
+    const groups = await listGroups(this.storage);
+    for (const group of groups) await deleteGroup(this.storage, group.id);
+    return groups.length === 0 ? "No groups." : `Deleted ${groups.length} group(s).`;
+  }
+
+  /**
+   * Human-readable listing of every group and its members (management view).
+   * Newest first — the oldest group is listed last.
+   */
+  async groupList(): Promise<string> {
+    const self = this.requireSelf();
+    const groups = await listGroups(this.storage);
+    if (groups.length === 0) return "No groups.";
+    const records = await listRecords(this.storage);
+    const label = (sessionId: string): string => {
+      const rec = records.find((r) => r.sessionId === sessionId);
+      const id = sessionId.length > 8 ? `${sessionId.slice(0, 8)}…` : sessionId;
+      return rec ? `${rec.name} (${id})` : `unknown session (${id})`;
+    };
+    const lines = groups
+      .toSorted((a, b) => b.createdAt - a.createdAt)
+      .map((g) => {
+        const members = g.members.map((m) =>
+          m === self.sessionId ? `${label(m)} ← you` : label(m),
+        );
+        return `- ${g.id} (created ${age(g.createdAt)}): ${members.join(", ")}`;
+      });
+    return `Groups (${groups.length}):\n${lines.join("\n")}`;
   }
 
   async send(to: string, body: string): Promise<string> {

@@ -18,9 +18,8 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { jsoncToJson } from "../lib/jsonc.js";
 import { resolveHomePath } from "../lib/path.js";
-import { buildVisibilityFilter, TalkCore } from "./core.js";
+import { TalkCore } from "./core.js";
 import { formatDelivery } from "./format.js";
 import type { Letter } from "./mailbox.js";
 import { deriveAddr, type SessionRecord } from "./registry.js";
@@ -103,27 +102,6 @@ function readTalkSettings(): { dbPath?: string; deliver?: "steer" | "queue" } {
   }
 }
 
-/**
- * Read the workspace visibility config from `<cwd>/.pi/talk.json`:
- * `{ "allowed": ["~/projects/company1/"] }`. Missing file/key → undefined
- * (everything visible); an explicit `"allowed": []` hides every peer.
- */
-function readWorkspaceTalkConfig(cwd: string): { allowed?: string[] } {
-  const configPath = path.join(cwd, ".pi", "talk.json");
-  try {
-    const raw = fs.readFileSync(configPath, "utf8");
-    const parsed = JSON.parse(jsoncToJson(raw)) as { allowed?: unknown };
-    if (Array.isArray(parsed.allowed)) {
-      return { allowed: parsed.allowed.filter((p): p is string => typeof p === "string") };
-    }
-    return {};
-  } catch (error) {
-    // eslint-disable-next-line no-console -- config errors must be visible, not silent
-    console.error(`Warning: could not parse ${configPath}: ${String(error)}`);
-    return {};
-  }
-}
-
 export default function talk(pi: ExtensionAPI) {
   const settings = readTalkSettings();
   const configured = process.env.PI_TALK_DB ?? settings.dbPath;
@@ -197,7 +175,6 @@ export default function talk(pi: ExtensionAPI) {
       lastSeenAt: now,
       status: "idle",
     };
-    core.setPeerVisibility(buildVisibilityFilter(readWorkspaceTalkConfig(cwd).allowed, cwd));
     void core.start(self);
   });
 
@@ -320,6 +297,65 @@ export default function talk(pi: ExtensionAPI) {
           : trimmed
             ? await core.markDead(trimmed)
             : await core.markDead());
+      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
+    },
+  });
+
+  pi.registerCommand("talk-group-join", {
+    description:
+      "Join or create a private session group (members see only each other; a session in no group sees only itself). No arg = new group with a generated uuid; <name> = join that group, or create it when it does not exist",
+    async handler(args) {
+      const initError = requireInit();
+      const token = args.trim();
+      const text = initError ?? (await core.groupJoin(token || undefined));
+      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
+    },
+  });
+
+  pi.registerCommand("talk-group-join-last", {
+    description: "Join the most recently created session group (no-op when already in it).",
+    async handler() {
+      const initError = requireInit();
+      const text = initError ?? (await core.groupJoinLast());
+      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
+    },
+  });
+
+  pi.registerCommand("talk-group-leave", {
+    description: "Leave the current session group (an emptied group is deleted).",
+    async handler() {
+      const initError = requireInit();
+      const text = initError ?? (await core.groupLeave());
+      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
+    },
+  });
+
+  pi.registerCommand("talk-group-list", {
+    description: "List all session groups and their members, newest first.",
+    async handler() {
+      const initError = requireInit();
+      const text = initError ?? (await core.groupList());
+      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
+    },
+  });
+
+  pi.registerCommand("talk-group-del", {
+    description:
+      "Delete a session group by name; its members become ungrouped (see only themselves).",
+    async handler(args) {
+      const initError = requireInit();
+      const name = args.trim();
+      const text =
+        initError ?? (name ? await core.groupDelete(name) : "Usage: /talk-group-del <group name>");
+      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
+    },
+  });
+
+  pi.registerCommand("talk-group-clear", {
+    description: "Delete every session group; all sessions become ungrouped.",
+    async handler() {
+      const initError = requireInit();
+      const text = initError ?? (await core.groupClear());
       pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
     },
   });

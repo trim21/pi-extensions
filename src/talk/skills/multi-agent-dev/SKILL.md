@@ -40,25 +40,26 @@ The core rule: **a peer only knows what you tell it.** Messages must be self-con
 
 ### Visibility
 
-- Each workspace controls what it can see via `allowed` in `<cwd>/.pi/talk.json` (path prefixes). Sessions outside the prefixes are neither listed nor addressable.
-- Visibility is one-way: you seeing a session does not mean it sees you.
+- Visibility is fully group-driven: a session in a group sees only its co-members; a session in no group sees only itself. Ungrouped sessions are invisible to everyone.
+- Groups are managed by the user from the TUI (`/talk-group-*` commands) — you cannot create, join, or leave a group yourself.
+- If a session you need to collaborate with is missing from `talk-list-sessions`, ask the user to pair the sessions into the same group.
 
 ## Tools
 
-| Tool                 | Purpose                                                                                |
-| -------------------- | -------------------------------------------------------------------------------------- |
-| `talk-list-sessions` | List visible sessions (`id` / `status` / `work_dir` / `name`)                          |
-| `talk-send`          | Send a plain message to a single session id (async — the main collaboration primitive) |
-| `talk-ask`           | Ask a question and block for the reply (default 30 min timeout)                        |
-| `talk-reply`         | Reply to a received ask; `replyTo` is the ask id shown in the delivered message        |
+| Tool                 | Purpose                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `talk-list-sessions` | List visible sessions (`id` / `status` / `work_dir` / `name`); only group co-members (or only yourself when ungrouped) |
+| `talk-send`          | Send a plain message to a single session id (async — the main collaboration primitive)                                 |
+| `talk-ask`           | Ask a question and block for the reply (default 30 min timeout)                                                        |
+| `talk-reply`         | Reply to a received ask; `replyTo` is the ask id shown in the delivered message                                        |
 
-In the TUI: `/talk` lists sessions, `/talk-dead` marks a session as dead (shown offline, swept soon).
+Pairing into groups is a user action (`/talk-group-*` in the TUI); you only observe its effect through `talk-list-sessions`.
 
 ## Collaboration workflows
 
 ### Split work between sessions
 
-1. `talk-list-sessions` first: see which sessions exist, their `work_dir`, and status.
+1. `talk-list-sessions` first: see which co-members exist, their `work_dir`, and status. If only yourself shows up, the peer sessions are not in your group yet — ask the user to pair them.
 2. Assign work by module/files with `talk-send` — state the scope, boundaries, and expected output.
 3. Each session completes its slice, then sends the result or a review request.
 4. Sync progress periodically to avoid overlapping edits.
@@ -92,4 +93,4 @@ In the TUI: `/talk` lists sessions, `/talk-dead` marks a session as dead (shown 
 - **Avoid message loops**: if the peer sent you something or is asking you, answer it before sending new ones. Two agents pinging each other deadlock.
 - **Address from known ids**: only run `talk-list-sessions` to discover sessions or verify an id. If you already hold a valid id (e.g. from an incoming message or a previous listing), send directly — an unknown or invisible id is refused with `Unknown session id`.
 - **Respect status**: asking an offline session blocks until the 30 min timeout. Prefer `talk-send` there — the message queues on disk and the peer receives it when it resumes.
-- **Visibility boundary**: you can only collaborate with sessions you can see; invisible sessions are unreachable by design.
+- **Visibility boundary**: you can only collaborate with sessions that share your group; ungrouped sessions and other groups' members are unreachable by design. Ask the user to pair sessions before collaborating.

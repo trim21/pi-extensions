@@ -16,6 +16,8 @@
  * blindly cast.
  */
 
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 export interface TalkStorage {
@@ -53,6 +55,10 @@ export class SqliteTalkStorage implements TalkStorage {
   private readonly db: DatabaseSync;
 
   constructor(dbPath: string) {
+    // A custom db_path may point into a directory that does not exist yet
+    // (e.g. "~/data/talk.db"); sqlite refuses to open it, so create the
+    // parent directory first.
+    mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA busy_timeout = 5000");

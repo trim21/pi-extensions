@@ -222,7 +222,7 @@ session 间消息传递：不同 pi session（同一台机器）通过一个共�
 
 ```
 storage.ts   —— 存储层：TalkStorage 接口 + SqliteTalkStorage 实现（node:sqlite，零 npm 依赖）
-core.ts      —— talk 核心：registry/mailbox/policy/format + TalkCore 协调器，只依赖存储层，通过回调 yield 投递/通知
+core.ts      —— talk 核心：registry/mailbox/group/policy/format + TalkCore 协调器，只依赖存储层，通过回调 yield 投递/通知
 index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周期事件 / 工具注册
 ```
 
@@ -230,18 +230,18 @@ index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周�
 
 ### 工具（LLM 可见）
 
-| 工具                 | 作用                                                                                                                                                                                        |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `talk-list-sessions` | 列出会话，返回 JSON 数组（`status` / `work_dir` / `id` / `name`，自己带 `self: true`）；始终列出所有可见会话，`status` 区分 live（`idle` / `working` / `waiting-talk-message`）与 `offline` |
-| `talk-ask`           | 向某个 session 提问并阻塞等待回复（默认 30 分钟超时）                                                                                                                                       |
-| `talk-send`          | 发送纯文本消息到单个 session（`to` 只接受明确的 session id，不支持广播）                                                                                                                    |
-| `talk-reply`         | 回复一个 ask（`replyTo` 为 ask id，显式关联、不推断）                                                                                                                                       |
+| 工具                 | 作用                                                                                                                                                                                                      |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `talk-list-sessions` | 列出会话，返回 JSON 数组（`status` / `work_dir` / `id` / `name`，自己带 `self: true`）；只列出同组成员（未入组时只有自己），`status` 区分 live（`idle` / `working` / `waiting-talk-message`）与 `offline` |
+| `talk-ask`           | 向某个 session 提问并阻塞等待回复（默认 30 分钟超时）                                                                                                                                                     |
+| `talk-send`          | 发送纯文本消息到单个 session（`to` 只接受明确的 session id，不支持广播）                                                                                                                                  |
+| `talk-reply`         | 回复一个 ask（`replyTo` 为 ask id，显式关联、不推断）                                                                                                                                                     |
 
 对端消息自动投递（无需主动拉取）：投递方式由 `talk.deliver` 配置，`steer` 在模型工作过程中打断/唤醒，`queue` 排队到 session 下一轮自然 turn 时注入。
 
 **定位只认 session id**：`talk-send` / `talk-ask` / `talk-watch` 的 `to` 只接受 `talk-list-sessions` 返回的 `id`（pi 的 session uuid）精确匹配，不做 name/路径/前缀匹配。
 
-**标记废弃 session**：`/talk-dead` 给 session 打 `offline` 标志并把 `lastSeenAt` 置 0（列表显示为 offline，下次 sweep 无 mail 即回收）：无参标记当前 session，`/talk-dead <sessionId>` 标记指定 session，`/talk-dead --all` 标记所有其他可见 session。
+**标记废弃 session**：`/talk-dead` 给 session 打 `offline` 标志并把 `lastSeenAt` 置 0（列表显示为 offline，下次 sweep 无 mail 即回收）：无参标记当前 session，`/talk-dead <sessionId>` 标记指定 session，`/talk-dead --all` 标记所有其他可见 session（同组成员）。
 
 ### 关键设计
 
@@ -251,7 +251,7 @@ index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周�
 - **双向 ask 仲裁**：`talk-ask` 发起前先检查收件箱（有对方消息就先读/先回）；阻塞等待期间若收到对方的 ask（而非 reply），按两个 ask 的 `ts` 字段仲裁——先 ask 者主导继续等，后 ask 者让位并先回复对方。`ts` 是信件内固定字段，双方读到同一对值，结论天然对称；同毫秒碰撞用 `session dir + session id` 字符串比较兜底。
 - **typebox runtime 验证**：所有从存储读出的值经 TypeBox schema 校验，损坏/伪造数据被拒绝，不做 `as T` 强转。
 - **安全**：纯文本 ≤32KB；10s 去重 / 30s 限速 8 条 / 50 积压上限（防环）；每条投递标注来源（来自另一个 pi session，非用户）。
-- **workspace 可见性**：每个 workspace 通过 `<cwd>/.pi/talk.json` 的 `allowed` 控制自己能看到哪些 session，见下方配置。
+- **group 可见性**：可见性完全由 group 决定——组内 session 只能看到同组成员，不在任何 group 的 session 只能看到自己。用 `/talk-group-*` 命令建组/入组，见下方「group 可见性」。
 
 ### 配置
 
@@ -277,22 +277,28 @@ sqlite 文件路径按优先级取第一个可用值：
 
 默认 `"queue"`。
 
-### workspace 可见性
+### group 可见性
 
-每个 workspace 通过 `<cwd>/.pi/talk.json` 的 `allowed` 决定自己能看到哪些 session：
+可见性完全由 group 决定，不再有路径/workspace 配置：
 
-```jsonc
-// ~/projects/company1/.pi/talk.json
-{
-  "allowed": ["~/projects/company1/"],
-}
+- 在某个 group 里的 session **只能看到同组成员**；不在任何 group 的 session **只能看到自己**。
+- group 是带 uuid 的私有房间：任何 session 都可以凭 uuid 加入任意 group，也可以自由离开，没有 owner。
+- 一个 session 只能属于一个 group：加入新 group 自动离开旧 group。
+- group 成员关系存在共享的 talk DB 里，每次 list/发送实时读取，加入/离开立即对所有 session 生效（无需重启）。
+
+通过 `/talk-group-*` 命令操作（TUI）：
+
+```
+/talk-group-join              # 无参：自动创建一个新 group（uuid 作为组名）并加入
+/talk-group-join <name>       # 加入名为 name 的 group；不存在则创建（名字允许字母/数字/-/_）
+/talk-group-join-last         # 加入最近创建的 group（方便新开 session 快速归队）
+/talk-group-leave             # 离开当前 group（组空了自动删除）
+/talk-group-list              # 列出所有 group 及其成员，最新创建的在前
+/talk-group-del <name>        # 删除指定 group（成员随之变为未入组）
+/talk-group-clear             # 删除所有 group
 ```
 
-- `allowed` 是路径前缀列表：能看到前缀本身及其子目录下的 session（`~/projects/company1/*`），看不到 `~/projects/company2/` 下的 session；`company1` 不会误匹配 `company12`
-- 路径支持 `~` 展开，相对路径相对该 workspace 的 cwd 解析
-- 无 `allowed` 字段 → 全部可见；`"allowed": []` → 谁都看不到
-- 可见性单向生效：A 的配置只决定 A 能看到谁，不影响 B
-- 不可见的 session 不仅 list 不到，也无法 `talk-send` / `talk-ask` 寻址（即使知道 id 也会被拒绝）
+典型用法：在 A session 里 `/talk-group-join`（或 `/talk-group-join mytask`）建组，把组名复制到 B、C session 里 `/talk-group-join <组名>`，此后 A/B/C 互相可见且只见彼此。
 
 | 变量              | 默认                              | 含义                            |
 | ----------------- | --------------------------------- | ------------------------------- |

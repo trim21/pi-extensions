@@ -3,14 +3,21 @@
  * format) and the mutual-ask arbitration. The pi adapter (index.ts) is not
  * exercised here — it is a thin binding to pi APIs.
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildVisibilityFilter, peerAskedFirst, TalkCore } from "../src/talk/core.js";
+import { peerAskedFirst, TalkCore } from "../src/talk/core.js";
 import { BOUNDARY_PREAMBLE, formatDelivery, formatListing } from "../src/talk/format.js";
+import {
+  deleteGroup,
+  groupForSession,
+  listGroups,
+  readGroup,
+  writeGroup,
+} from "../src/talk/group.js";
 import {
   awaitReceipt,
   clearAsk,
@@ -85,6 +92,18 @@ function selfStartTime(): number {
   return Number(fields[19]);
 }
 
+/** Extract the group name from a groupJoin "Created group" result string. */
+function groupIdFrom(result: string): string {
+  const m = /Created group ([^\s.]+)/.exec(result);
+  if (!m) throw new Error(`cannot parse group id from: ${result}`);
+  return m[1];
+}
+
+/** Extract the group name from one line of a groupList output. */
+function groupNameFromLine(line: string): string | undefined {
+  return /^- (\S+) \(/.exec(line)?.[1];
+}
+
 // ── Storage ──────────────────────────────────────────────────────────────
 
 describe("SqliteTalkStorage", () => {
@@ -110,6 +129,15 @@ describe("SqliteTalkStorage", () => {
     await storage.appendLog("audit", "second");
     expect(await storage.readLog("audit")).toEqual(["first", "second"]);
     expect(await storage.readLog("absent")).toEqual([]);
+  });
+
+  it("creates the parent directory when the db path folder is missing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "talk-test-"));
+    dirs.push(dir);
+    const nested = join(dir, "deep", "talk.db");
+    const storage = new SqliteTalkStorage(nested);
+    storage.close();
+    expect(existsSync(nested)).toBe(true);
   });
 });
 
@@ -389,29 +417,221 @@ describe("peerAskedFirst", () => {
   });
 });
 
-// ── Workspace visibility ─────────────────────────────────────────────────
+// ── Groups ──────────────────────────────────────────────────────────────
 
-describe("buildVisibilityFilter", () => {
-  it("matches allowed prefixes without crossing directory boundaries", () => {
-    const filter = buildVisibilityFilter(["/home/u/projects/company1/"], "/base");
-    expect(filter("/home/u/projects/company1")).toBe(true);
-    expect(filter("/home/u/projects/company1/repo")).toBe(true);
-    expect(filter("/home/u/projects/company2/repo")).toBe(false);
-    expect(filter("/home/u/projects/company12/repo")).toBe(false);
+describe("groups", () => {
+  it("writes, lists, reads, and deletes groups", async () => {
+    const { storage } = makeStorage();
+    const now = Date.now();
+    const group = { id: "g1", members: ["a", "b"], createdAt: now, updatedAt: now };
+    await writeGroup(storage, group);
+    expect(await listGroups(storage)).toEqual([group]);
+    expect(await readGroup(storage, "g1")).toEqual(group);
+    expect(await readGroup(storage, "missing")).toBeNull();
+    expect(await deleteGroup(storage, "g1")).toBe(true);
+    expect(await listGroups(storage)).toEqual([]);
   });
 
-  it("expands ~ and resolves relative paths against the base cwd", () => {
-    const filter = buildVisibilityFilter(
-      ["~/projects/company1", "../company1/"],
-      "/home/u/projects/company2",
-    );
-    expect(filter(join(homedir(), "projects/company1/repo"))).toBe(true);
-    expect(filter("/home/u/projects/company1/repo")).toBe(true);
+  it("skips corrupt group records", async () => {
+    const { storage } = makeStorage();
+    await storage.writeJson("groups", "bad.json", { nope: true });
+    expect(await listGroups(storage)).toEqual([]);
   });
 
-  it("treats a missing allowed list as everything visible and an empty list as nothing", () => {
-    expect(buildVisibilityFilter(undefined, "/base")("/anywhere")).toBe(true);
-    expect(buildVisibilityFilter([], "/base")("/anywhere")).toBe(false);
+  it("groupForSession finds the group containing the session", async () => {
+    const { storage } = makeStorage();
+    await writeGroup(storage, { id: "g1", members: ["a", "b"], createdAt: 1, updatedAt: 1 });
+    await writeGroup(storage, { id: "g2", members: ["c"], createdAt: 2, updatedAt: 2 });
+    const groupOfB = await groupForSession(storage, "b");
+    const groupOfC = await groupForSession(storage, "c");
+    expect(groupOfB?.id).toBe("g1");
+    expect(groupOfC?.id).toBe("g2");
+    expect(await groupForSession(storage, "nobody")).toBeNull();
+  });
+
+  it("groupJoin without a name creates a fresh group with a uuid", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    const result = await core.groupJoin();
+    const id = groupIdFrom(result);
+    expect(result).toContain(`/talk-group-join ${id}`);
+    const myGroup = await groupForSession(storage, "session-aaaaaaaaaaaa");
+    expect(myGroup?.id).toBe(id);
+  });
+
+  it("groupJoin with a custom name creates the group and a second session joins it", async () => {
+    const { storage } = makeStorage();
+    const coreA = makeCore(storage, []);
+    const coreB = makeCore(storage, []);
+    await coreA.start(makeSelf("aaaaaaaaaaaa"));
+    await coreB.start(makeSelf("bbbbbbbbbbbb"));
+    expect(await coreA.groupJoin("abc")).toContain("Created group abc");
+    expect(await coreB.groupJoin("abc")).toContain("Joined group abc");
+    const joined = await readGroup(storage, "abc");
+    expect(joined?.members).toEqual(["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb"]);
+  });
+
+  it("groupJoin with a name like 'qwe--asd' works as a group name", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    expect(await core.groupJoin("qwe--asd")).toContain("Created group qwe--asd");
+    const myGroup = await groupForSession(storage, "session-aaaaaaaaaaaa");
+    expect(myGroup?.id).toBe("qwe--asd");
+  });
+
+  it("groupJoin refuses invalid group names", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    expect(await core.groupJoin("bad name")).toContain("Invalid group name");
+    expect(await core.groupJoin("../escape")).toContain("Invalid group name");
+    expect(await core.groupJoin("")).toContain("Created group"); // empty → uuid
+  });
+
+  it("groupJoin is idempotent for the current member", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    await core.groupJoin("abc");
+    expect(await core.groupJoin("abc")).toContain("Already in group");
+  });
+
+  it("groupJoinLast joins the most recently created group", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    const now = Date.now();
+    await writeGroup(storage, {
+      id: "old",
+      members: ["session-bbbbbbbbbbbb"],
+      createdAt: now - 2000,
+      updatedAt: now - 2000,
+    });
+    await writeGroup(storage, {
+      id: "new",
+      members: ["session-cccccccccccc"],
+      createdAt: now - 1000,
+      updatedAt: now - 1000,
+    });
+    expect(await core.groupJoinLast()).toContain("Joined group new");
+    const myGroup = await groupForSession(storage, "session-aaaaaaaaaaaa");
+    expect(myGroup?.id).toBe("new");
+    // already in the newest group → no-op
+    expect(await core.groupJoinLast()).toContain("Already in group");
+    // no groups at all
+    await core.groupClear();
+    expect(await core.groupJoinLast()).toContain("No groups");
+  });
+
+  it("joining a new group leaves the old one (single group)", async () => {
+    const { storage } = makeStorage();
+    const coreA = makeCore(storage, []);
+    const coreB = makeCore(storage, []);
+    await coreA.start(makeSelf("aaaaaaaaaaaa"));
+    await coreB.start(makeSelf("bbbbbbbbbbbb"));
+    const g1 = groupIdFrom(await coreA.groupJoin());
+    await coreB.groupJoin(g1);
+    const g2 = groupIdFrom(await coreB.groupJoin());
+    expect(g2).not.toBe(g1);
+    const groupOfB = await groupForSession(storage, "session-bbbbbbbbbbbb");
+    const groupOfA = await groupForSession(storage, "session-aaaaaaaaaaaa");
+    expect(groupOfB?.id).toBe(g2);
+    // A stays in g1, now alone
+    expect(groupOfA?.id).toBe(g1);
+    const g1After = await readGroup(storage, g1);
+    expect(g1After?.members).toEqual(["session-aaaaaaaaaaaa"]);
+  });
+
+  it("groupLeave removes the member and deletes an emptied group", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    const id = groupIdFrom(await core.groupJoin());
+    expect(await core.groupLeave()).toContain("deleted");
+    expect(await readGroup(storage, id)).toBeNull();
+    expect(await core.groupLeave()).toContain("Not in any group");
+  });
+
+  it("groupLeave keeps a group with remaining members", async () => {
+    const { storage } = makeStorage();
+    const coreA = makeCore(storage, []);
+    const coreB = makeCore(storage, []);
+    await coreA.start(makeSelf("aaaaaaaaaaaa"));
+    await coreB.start(makeSelf("bbbbbbbbbbbb"));
+    const id = groupIdFrom(await coreA.groupJoin());
+    await coreB.groupJoin(id);
+    expect(await coreB.groupLeave()).toContain("1 member(s) remain");
+    const gAfterLeave = await readGroup(storage, id);
+    expect(gAfterLeave?.members).toEqual(["session-aaaaaaaaaaaa"]);
+  });
+
+  it("groupDelete removes a group by name; members become ungrouped", async () => {
+    const { storage } = makeStorage();
+    const coreA = makeCore(storage, []);
+    const coreB = makeCore(storage, []);
+    await coreA.start(makeSelf("aaaaaaaaaaaa"));
+    await coreB.start(makeSelf("bbbbbbbbbbbb"));
+    await coreA.groupJoin("abc");
+    await coreB.groupJoin("abc");
+    expect(await coreA.groupDelete("abc")).toContain("Deleted group abc (2 member(s))");
+    expect(await readGroup(storage, "abc")).toBeNull();
+    expect(await groupForSession(storage, "session-aaaaaaaaaaaa")).toBeNull();
+    expect(await groupForSession(storage, "session-bbbbbbbbbbbb")).toBeNull();
+    expect(await coreA.groupDelete("missing")).toContain("Unknown group");
+    expect(await coreA.groupDelete("bad name")).toContain("Invalid group name");
+  });
+
+  it("groupClear deletes every group", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    await writeGroup(storage, {
+      id: "g1",
+      members: ["session-bbbbbbbbbbbb"],
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await writeGroup(storage, {
+      id: "g2",
+      members: ["session-cccccccccccc"],
+      createdAt: 2,
+      updatedAt: 2,
+    });
+    expect(await core.groupClear()).toContain("Deleted 2 group(s)");
+    expect(await listGroups(storage)).toEqual([]);
+    expect(await core.groupClear()).toContain("No groups");
+  });
+
+  it("groupList shows every group, newest first, and marks the caller", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    await core.groupJoin("newest");
+    const now = Date.now();
+    await writeGroup(storage, {
+      id: "oldest",
+      members: ["session-bbbbbbbbbbbb"],
+      createdAt: now - 2000,
+      updatedAt: now - 2000,
+    });
+    await writeGroup(storage, {
+      id: "middle",
+      members: ["session-cccccccccccc"],
+      createdAt: now - 1000,
+      updatedAt: now - 1000,
+    });
+    await writeRecord(storage, makeSelf("bbbbbbbbbbbb", { name: "peer-b" }));
+    const text = await core.groupList();
+    expect(text).toContain("Groups (3)");
+    expect(text).toContain("← you");
+    expect(text).toContain("peer-b");
+    // Newest first — the oldest group is listed last.
+    const lines = text.split("\n");
+    expect(groupNameFromLine(lines[1])).toBe("newest");
+    expect(groupNameFromLine(lines[2])).toBe("middle");
+    expect(groupNameFromLine(lines[3])).toBe("oldest");
   });
 });
 
@@ -441,6 +661,7 @@ describe("TalkCore", () => {
     const coreB = makeCore(storage, deliveredB);
     await coreA.start(makeSelf("aaaaaaaaaaaa"));
     await coreB.start(makeSelf("bbbbbbbbbbbb"));
+    await coreB.groupJoin(groupIdFrom(await coreA.groupJoin()));
 
     const askPromise = coreA.ask("session-bbbbbbbbbbbb", "question?", 5000);
     // Wait until the ask letter lands in B's inbox, then let B process it.
@@ -464,6 +685,7 @@ describe("TalkCore", () => {
     const coreB = makeCore(storage, []);
     await coreA.start(makeSelf("aaaaaaaaaaaa"));
     await coreB.start(makeSelf("bbbbbbbbbbbb"));
+    await coreB.groupJoin(groupIdFrom(await coreA.groupJoin()));
 
     // Deposit a message from B directly into A's inbox (as if it just landed
     // and A's poller has not consumed it yet).
@@ -484,22 +706,28 @@ describe("TalkCore", () => {
     expect(result).toContain("reply before asking");
   });
 
-  it("list hides peers outside the allowed workspaces but keeps self", async () => {
+  it("list shows only self when not in any group", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb", { cwd: "/tmp/company1/repo" }));
     await writeRecord(storage, makeSelf("cccccccccccc", { cwd: "/tmp/company2/repo" }));
-    core.setPeerVisibility(buildVisibilityFilter(["/tmp/company1"], "/base"));
     const listing = JSON.parse(await core.list()) as { id: string; self?: boolean }[];
-    expect(listing.map((s) => s.id)).toEqual(["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb"]);
-    expect(listing.find((s) => s.self)?.id).toBe("session-aaaaaaaaaaaa");
+    expect(listing).toHaveLength(1);
+    expect(listing[0].id).toBe("session-aaaaaaaaaaaa");
+    expect(listing[0].self).toBe(true);
   });
 
-  it("list shows every visible session, live or offline", async () => {
+  it("list shows every co-member, live or offline", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
+    await writeGroup(storage, {
+      id: "g1",
+      members: ["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb", "session-cccccccccccc"],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb", { lastSeenAt: Date.now() }));
     await writeRecord(storage, makeSelf("cccccccccccc", { offline: true, lastSeenAt: 0 }));
 
@@ -512,12 +740,41 @@ describe("TalkCore", () => {
     expect(listing.find((s) => s.id === "session-cccccccccccc")?.status).toBe("offline");
   });
 
-  it("rejects asks to invisible sessions even with the exact session id", async () => {
+  it("grouped sessions see only their co-members, ungrouped ones only themselves", async () => {
+    const { storage } = makeStorage();
+    const coreA = makeCore(storage, []);
+    const coreB = makeCore(storage, []);
+    const coreC = makeCore(storage, []);
+    await coreA.start(makeSelf("aaaaaaaaaaaa"));
+    await coreB.start(makeSelf("bbbbbbbbbbbb"));
+    await coreC.start(makeSelf("cccccccccccc"));
+    await coreB.groupJoin(groupIdFrom(await coreA.groupJoin()));
+
+    const listA = JSON.parse(await coreA.list()) as { id: string }[];
+    expect(listA.map((s) => s.id).toSorted()).toEqual([
+      "session-aaaaaaaaaaaa",
+      "session-bbbbbbbbbbbb",
+    ]);
+    const listB = JSON.parse(await coreB.list()) as { id: string }[];
+    expect(listB.map((s) => s.id).toSorted()).toEqual([
+      "session-aaaaaaaaaaaa",
+      "session-bbbbbbbbbbbb",
+    ]);
+    const listC = JSON.parse(await coreC.list()) as { id: string }[];
+    expect(listC.map((s) => s.id)).toEqual(["session-cccccccccccc"]);
+  });
+
+  it("rejects asks to sessions outside the group even with the exact session id", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
+    await writeGroup(storage, {
+      id: "g1",
+      members: ["session-aaaaaaaaaaaa"],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb", { cwd: "/tmp/company2/repo" }));
-    core.setPeerVisibility(buildVisibilityFilter(["/tmp/company1"], "/base"));
     const result = await core.ask("session-bbbbbbbbbbbb", "question?", 1000);
     expect(result).toContain("Unknown session id");
   });
@@ -542,18 +799,30 @@ describe("TalkCore", () => {
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb"));
+    await writeGroup(storage, {
+      id: "g1",
+      members: ["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb"],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
     expect(await core.markDead("session-bbbbbbbbbbbb")).toContain("session bbbbbbbbbbbb");
     const listing = JSON.parse(await core.list()) as { id: string; status: string }[];
     const peer = listing.find((s) => s.id === "session-bbbbbbbbbbbb");
     expect(peer?.status).toBe("offline");
   });
 
-  it("markAllDead marks every visible peer but not self", async () => {
+  it("markAllDead marks every co-member but not self", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb"));
     await writeRecord(storage, makeSelf("cccccccccccc"));
+    await writeGroup(storage, {
+      id: "g1",
+      members: ["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb", "session-cccccccccccc"],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
     expect(await core.markAllDead()).toContain("2 session");
     const listing = JSON.parse(await core.list()) as { id: string; status: string }[];
     const statuses = Object.fromEntries(listing.map((s) => [s.id, s.status]));
