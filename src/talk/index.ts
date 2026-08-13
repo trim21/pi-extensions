@@ -18,7 +18,7 @@ import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { resolveHomePath } from "../lib/path.js";
-import { TalkCore } from "./core.js";
+import { buildVisibilityFilter, TalkCore } from "./core.js";
 import { formatDelivery } from "./format.js";
 import type { Letter } from "./mailbox.js";
 import { deriveAddr, type SessionRecord } from "./registry.js";
@@ -28,7 +28,7 @@ const DELIVERY_TYPE = "talk:delivery";
 const LIST_TYPE = "talk:list";
 const NOTIFY_TYPE = "talk:notify";
 
-const ASK_TIMEOUT_MS = 120_000;
+const ASK_TIMEOUT_MS = 30 * 60 * 1000;
 
 function toolResult(text: string) {
   return { content: [{ type: "text" as const, text }], details: {} };
@@ -106,22 +106,51 @@ function collectResumableSessionIds(): Set<string> {
   return ids;
 }
 
-/** Read the default sqlite path from global settings.json: `{ "talk": { "db_path": "..." } }`. */
-function readDbPathFromSettings(): string | undefined {
+/**
+ * Read the default sqlite path and delivery mode from global settings.json:
+ * `{ "talk": { "db_path": "...", "deliver": "steer" | "queue" } }`.
+ */
+function readTalkSettings(): { dbPath?: string; deliver?: "steer" | "queue" } {
   try {
     const raw = fs.readFileSync(path.join(getAgentDir(), "settings.json"), "utf8");
-    const parsed = JSON.parse(raw) as { talk?: { db_path?: unknown } };
-    return typeof parsed.talk?.db_path === "string" ? parsed.talk.db_path : undefined;
+    const parsed = JSON.parse(raw) as { talk?: { db_path?: unknown; deliver?: unknown } };
+    const talk = parsed.talk;
+    if (!talk) return {};
+    const dbPath = typeof talk.db_path === "string" ? talk.db_path : undefined;
+    const deliver = talk.deliver === "steer" || talk.deliver === "queue" ? talk.deliver : undefined;
+    return { dbPath, deliver };
   } catch {
-    return undefined;
+    return {};
+  }
+}
+
+/**
+ * Read the workspace visibility config from `<cwd>/.pi/talk.json`:
+ * `{ "allowed": ["~/projects/company1/"] }`. Missing file/key → undefined
+ * (everything visible); an explicit `"allowed": []` hides every peer.
+ */
+function readWorkspaceTalkConfig(cwd: string): { allowed?: string[] } {
+  try {
+    const raw = fs.readFileSync(path.join(cwd, ".pi", "talk.json"), "utf8");
+    const parsed = JSON.parse(raw) as { allowed?: unknown };
+    if (Array.isArray(parsed.allowed)) {
+      return { allowed: parsed.allowed.filter((p): p is string => typeof p === "string") };
+    }
+    return {};
+  } catch {
+    return {};
   }
 }
 
 export default function talk(pi: ExtensionAPI) {
-  const configured = process.env.PI_TALK_DB ?? readDbPathFromSettings();
+  const settings = readTalkSettings();
+  const configured = process.env.PI_TALK_DB ?? settings.dbPath;
   const dbPath = configured
     ? resolveHomePath(configured, getAgentDir())
     : path.join(getAgentDir(), "talk.db");
+  // "queue": deliver on the session's next natural turn without waking it;
+  // "steer": interrupt mid-run / wake an idle session immediately.
+  const deliverMode: "steer" | "queue" = settings.deliver ?? "queue";
   const storage = new SqliteTalkStorage(dbPath);
 
   let self: SessionRecord | undefined;
@@ -136,12 +165,13 @@ export default function talk(pi: ExtensionAPI) {
       ...(letter.replyTo !== undefined && { replyTo: letter.replyTo }),
     };
     try {
-      // steer lands between tool calls mid-run; triggerTurn wakes an idle
-      // session. The core only removes the letter from the inbox after this
-      // returns true, so a failure keeps it queued for a later poll.
+      // The core only removes the letter from the inbox after this returns
+      // true, so a failure keeps it queued for a later poll.
       pi.sendMessage(
         { customType: DELIVERY_TYPE, content: formatDelivery(letter), display: true, details },
-        { triggerTurn: true, deliverAs: "steer" },
+        deliverMode === "steer"
+          ? { triggerTurn: true, deliverAs: "steer" }
+          : { deliverAs: "nextTurn" },
       );
       return true;
     } catch {
@@ -186,6 +216,7 @@ export default function talk(pi: ExtensionAPI) {
       lastSeenAt: now,
       status: "idle",
     };
+    core.setPeerVisibility(buildVisibilityFilter(readWorkspaceTalkConfig(cwd).allowed, cwd));
     void core.start(self);
   });
 
@@ -214,24 +245,6 @@ export default function talk(pi: ExtensionAPI) {
       const initError = requireInit();
       if (initError) return toolResult(initError);
       return toolResult(params.cwd ? await core.listCwd(params.cwd) : await core.list());
-    },
-  });
-
-  pi.registerTool({
-    name: "talk-read-messages",
-    label: "Read Talk Messages",
-    description:
-      "Read and consume messages from your talk inbox. Use this to actively check for incoming messages instead of waiting for a steer notification.",
-    promptSnippet: "Read incoming talk messages",
-    parameters: Type.Object({
-      from: Type.Optional(
-        Type.String({ description: "Only read messages from this session (name/address/@alias)" }),
-      ),
-    }),
-    async execute(_toolCallId, params) {
-      const initError = requireInit();
-      if (initError) return toolResult(initError);
-      return toolResult(await core.readMessages(params.from));
     },
   });
 
@@ -303,7 +316,7 @@ export default function talk(pi: ExtensionAPI) {
     name: "talk-reply",
     label: "Reply Talk",
     description:
-      "Reply to a received ask. `replyTo` is the ask/message id (shown in the delivered message, or from talk-read-messages).",
+      "Reply to a received ask. `replyTo` is the ask/message id (shown in the delivered message).",
     promptSnippet: "Reply to a talk ask",
     parameters: Type.Object({
       replyTo: Type.String({ description: "The ask/message id to reply to" }),

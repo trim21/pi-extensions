@@ -230,16 +230,17 @@ index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周�
 
 ### 工具（LLM 可见）
 
-| 工具                 | 作用                                                              |
-| -------------------- | ----------------------------------------------------------------- |
-| `talk-list-sessions` | 列出其他 session（presence：idle/working/not responding/offline） |
-| `talk-read-messages` | 主动读收件箱（读即消费）                                          |
-| `talk-ask`           | 向某个 session 提问并阻塞等待回复（默认 120s 超时）               |
-| `talk-wait`          | 阻塞等待新消息到达                                                |
-| `talk-send`          | 发送纯文本消息（`to: "*"` 广播所有，`to: "cwd"` 广播同 cwd）      |
-| `talk-reply`         | 回复一个 ask（`replyTo` 为 ask id，显式关联、不推断）             |
+| 工具                 | 作用                                                                      |
+| -------------------- | ------------------------------------------------------------------------- |
+| `talk-list-sessions` | 列出其他 session，返回 JSON 数组（`status` / `work_dir` / `id` / `name`） |
+| `talk-ask`           | 向某个 session 提问并阻塞等待回复（默认 30 分钟超时）                     |
+| `talk-wait`          | 阻塞等待新消息到达                                                        |
+| `talk-send`          | 发送纯文本消息（`to: "*"` 广播所有，`to: "cwd"` 广播同 cwd）              |
+| `talk-reply`         | 回复一个 ask（`replyTo` 为 ask id，显式关联、不推断）                     |
 
-对端消息在模型工作过程中以 steer 方式注入上下文；模型也可主动 `talk-read-messages` 拉取。
+对端消息自动投递（无需主动拉取）：投递方式由 `talk.deliver` 配置，`steer` 在模型工作过程中打断/唤醒，`queue` 排队到 session 下一轮自然 turn 时注入。
+
+**定位只认 session id**：`talk-send` / `talk-ask` / `talk-watch` 的 `to` 只接受 `talk-list-sessions` 返回的 `id`（pi 的 session uuid）精确匹配，不做 name/路径/前缀匹配。
 
 ### 关键设计
 
@@ -247,6 +248,7 @@ index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周�
 - **双向 ask 仲裁**：`talk-ask` 发起前先检查收件箱（有对方消息就先读/先回）；阻塞等待期间若收到对方的 ask（而非 reply），按两个 ask 的 `ts` 字段仲裁——先 ask 者主导继续等，后 ask 者让位并先回复对方。`ts` 是信件内固定字段，双方读到同一对值，结论天然对称；同毫秒碰撞用 `session dir + session id` 字符串比较兜底。
 - **typebox runtime 验证**：所有从存储读出的值经 TypeBox schema 校验，损坏/伪造数据被拒绝，不做 `as T` 强转。
 - **安全**：纯文本 ≤32KB；10s 去重 / 30s 限速 8 条 / 50 积压上限（防环）；每条投递带「来自其他 session、无权威」声明。
+- **workspace 可见性**：每个 workspace 通过 `<cwd>/.pi/talk.json` 的 `allowed` 控制自己能看到哪些 session，见下方配置。
 
 ### 配置
 
@@ -261,14 +263,39 @@ sqlite 文件路径按优先级取第一个可用值：
 ```jsonc
 // ~/.pi/agent/settings.json
 {
-  "talk": { "db_path": "~/data/talk.db" },
+  "talk": { "db_path": "~/data/talk.db", "deliver": "queue" },
 }
 ```
 
-| 变量              | 默认                              | 含义                          |
-| ----------------- | --------------------------------- | ----------------------------- |
-| `PI_TALK_DB`      | settings 或 `~/.pi/agent/talk.db` | SQLite 邮箱数据库路径         |
-| `PI_TALK_INBOUND` | `accept`                          | `refuse` 时丢弃所有 peer 消息 |
+`talk.deliver` 控制对端消息的投递方式：
+
+- `"steer"`：消息到达时打断当前工作（工具调用间隙注入），空闲 session 被唤醒；
+- `"queue"`：消息排队，在 session 下一轮自然 turn（如用户发消息）时注入，不主动唤醒。
+
+默认 `"queue"`。
+
+### workspace 可见性
+
+每个 workspace 通过 `<cwd>/.pi/talk.json` 的 `allowed` 决定自己能看到哪些 session：
+
+```jsonc
+// ~/projects/company1/.pi/talk.json
+{
+  "allowed": ["~/projects/company1/"],
+}
+```
+
+- `allowed` 是路径前缀列表：能看到前缀本身及其子目录下的 session（`~/projects/company1/*`），看不到 `~/projects/company2/` 下的 session；`company1` 不会误匹配 `company12`
+- 路径支持 `~` 展开，相对路径相对该 workspace 的 cwd 解析
+- 无 `allowed` 字段 → 全部可见；`"allowed": []` → 谁都看不到
+- 可见性单向生效：A 的配置只决定 A 能看到谁，不影响 B
+- 不可见的 session 不仅 list 不到，也无法 `talk-send` / `talk-ask` 寻址（即使知道 id 也会被拒绝）
+
+| 变量              | 默认                              | 含义                            |
+| ----------------- | --------------------------------- | ------------------------------- |
+| `PI_TALK_DB`      | settings 或 `~/.pi/agent/talk.db` | SQLite 邮箱数据库路径           |
+| `PI_TALK_INBOUND` | `accept`                          | `refuse` 时丢弃所有 peer 消息   |
+| `talk.deliver`    | `queue`                           | 消息投递方式：`steer` / `queue` |
 
 ### 使用
 

@@ -30,25 +30,31 @@ export function formatDelivery(letter: Letter, now: number = Date.now()): string
   return `${BOUNDARY_PREAMBLE}\n\n${header}:\n\n${letter.body}\n\n${meta}${hint}`;
 }
 
+/** One peer session as the model sees it in a listing. `id` is the stable
+ * pi session uuid; `name` is the display name when one was set. */
+export interface SessionListItem {
+  status: string;
+  work_dir: string;
+  id: string;
+  name?: string;
+}
+
+/** Machine-readable JSON listing of peer sessions (what the model sees). */
 export function formatListing(
   records: SessionRecord[],
   selfAddr: string,
   presence: (r: SessionRecord) => Presence,
 ): string {
   const others = records.filter((r) => r.addr !== selfAddr);
-  if (others.length === 0) return "No other pi sessions registered.";
-  const rows = others.map((r) => {
+  if (others.length === 0) return "[]";
+  const items: SessionListItem[] = others.map((r) => {
     const p = presence(r);
-    const state = p === "live" ? r.status : p === "stalled" ? "not responding" : "offline";
-    return `• ${r.name} (${shortAddr(r.addr)}) — ${r.cwd} [${state}]`;
+    const status = p === "live" ? r.status : p === "stalled" ? "not responding" : "offline";
+    return { status, work_dir: r.cwd, id: r.sessionId, name: r.name };
   });
-  return rows.join("\n");
+  return JSON.stringify(items, null, 2);
 }
 
-export function refusalUnknown(to: string, reachable: string[]): string {
-  return `No session matches '${to}'. Reachable: ${reachable.length > 0 ? reachable.join(", ") : "(none)"}.`;
-}
-
-export function refusalAmbiguous(to: string, candidates: string[]): string {
-  return `'${to}' is ambiguous; matches: ${candidates.join(", ")}. Use a full name or address prefix.`;
+export function refusalUnknown(to: string): string {
+  return `Unknown session id '${to}'. Get session ids with talk-list-sessions.`;
 }

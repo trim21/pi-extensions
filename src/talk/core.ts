@@ -9,13 +9,10 @@
  * poll — so a swallowed sendMessage error no longer destroys the letter.
  */
 
-import {
-  formatDelivery,
-  formatListing,
-  refusalAmbiguous,
-  refusalUnknown,
-  shortAddr,
-} from "./format.js";
+import { isAbsolute, resolve } from "node:path";
+
+import { expandHome } from "../lib/path.js";
+import { formatDelivery, formatListing, refusalUnknown, shortAddr } from "./format.js";
 import {
   appendAudit,
   awaitReceipt,
@@ -77,8 +74,30 @@ const WAIT_POLL_MS = 500;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function recordLabel(record: SessionRecord): string {
-  return `"${record.name}" (${shortAddr(record.addr)})`;
+/** Normalize an allowed path: expand ~, resolve relative against baseCwd, strip trailing slashes. */
+function normalizeAllowedPath(p: string, baseCwd: string): string {
+  const expanded = expandHome(p);
+  const abs = isAbsolute(expanded) ? resolve(expanded) : resolve(baseCwd, expanded);
+  return abs.replace(/[\\/]+$/, "") || "/";
+}
+
+/**
+ * Build the workspace-visibility gate for one session. `allowed` is the
+ * `allowed` array from `<cwd>/.pi/talk.json` (undefined when the file or key
+ * is absent). A peer session is visible when its cwd equals an allowed prefix
+ * or sits below it (`prefix` or `prefix/*`); `company1` never matches
+ * `company12`. An undefined list shows everything; an explicit empty list
+ * shows nothing.
+ */
+export function buildVisibilityFilter(
+  allowed: string[] | undefined,
+  baseCwd: string,
+): (peerCwd: string) => boolean {
+  if (allowed === undefined) return () => true;
+  if (allowed.length === 0) return () => false;
+  const prefixes = allowed.map((p) => normalizeAllowedPath(p, baseCwd));
+  return (peerCwd) =>
+    prefixes.some((prefix) => peerCwd === prefix || peerCwd.startsWith(`${prefix}/`));
 }
 
 /**
@@ -108,6 +127,8 @@ export class TalkCore {
   private readonly watched = new Map<string, Presence>();
   /** Message ids already handed to the adapter but not yet removed from the inbox. */
   private readonly deliveredIds = new Set<string>();
+  /** Visibility gate over peer working directories; defaults to everything visible. */
+  private isPeerVisible: (peerCwd: string) => boolean = () => true;
 
   private inboxPoll: ReturnType<typeof setInterval> | undefined;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -123,6 +144,11 @@ export class TalkCore {
 
   get selfAddr(): string | undefined {
     return this.self?.addr;
+  }
+
+  /** Replace the peer-visibility gate (from the session's `.pi/talk.json`). */
+  setPeerVisibility(filter: (peerCwd: string) => boolean): void {
+    this.isPeerVisible = filter;
   }
 
   private requireSelf(): SessionRecord {
@@ -314,38 +340,18 @@ export class TalkCore {
 
   // ── Outbound ───────────────────────────────────────────────────────────
 
+  /**
+   * Resolve a target by its exact session id (uuid). A peer must be visible
+   * from this session (`setPeerVisibility`); invisible peers are unreachable
+   * even with a known id.
+   */
   private async resolveTarget(to: string): Promise<TargetResult> {
     const self = this.requireSelf();
     const records = await listRecords(this.storage);
-    const others = records.filter((r) => r.addr !== self.addr);
-    const exact = others.filter((r) => r.name.toLowerCase() === to.toLowerCase() || r.addr === to);
-    const matches = exact.length > 0 ? exact : others.filter((r) => r.addr.startsWith(to));
-    if (matches.length === 0)
-      return {
-        ok: false,
-        error: refusalUnknown(
-          to,
-          others.map((r) => recordLabel(r)),
-        ),
-      };
-    if (matches.length > 1)
-      return {
-        ok: false,
-        error: refusalAmbiguous(
-          to,
-          matches.map((r) => recordLabel(r)),
-        ),
-      };
-    const record = matches[0];
-    if (!record)
-      return {
-        ok: false,
-        error: refusalUnknown(
-          to,
-          others.map((r) => recordLabel(r)),
-        ),
-      };
-    return { ok: true, record };
+    const others = records.filter((r) => r.addr !== self.addr && this.isPeerVisible(r.cwd));
+    const target = others.find((r) => r.sessionId === to);
+    if (!target) return { ok: false, error: refusalUnknown(to) };
+    return { ok: true, record: target };
   }
 
   private async sendLetter(
@@ -459,20 +465,6 @@ export class TalkCore {
 
   // ── Tool actions ───────────────────────────────────────────────────────
 
-  /** Actively read (and consume) inbox letters. Returns delivery-formatted text. */
-  async readMessages(from?: string): Promise<string> {
-    const self = this.requireSelf();
-    let items = await listInbox(this.storage, self.addr);
-    if (from && from !== "*") {
-      const resolved = await this.resolveTarget(from);
-      if (!resolved.ok) return resolved.error;
-      items = items.filter((i) => i.letter.from.addr === resolved.record.addr);
-    }
-    const fresh = await this.consumeFresh(items);
-    if (fresh.length === 0) return "No messages.";
-    return fresh.map((l) => formatDelivery(l)).join("\n\n");
-  }
-
   /** Block until a message arrives (or timeout/abort). */
   async wait(timeoutMs: number, signal?: AbortSignal): Promise<string> {
     const self = this.requireSelf();
@@ -487,16 +479,19 @@ export class TalkCore {
     }
   }
 
+  /** JSON listing of visible peer sessions: status, work_dir, id, name per session. */
   async list(): Promise<string> {
     const self = this.requireSelf();
-    const records = await listRecords(this.storage);
+    const all = await listRecords(this.storage);
+    const records = all.filter((r) => this.isPeerVisible(r.cwd));
     return formatListing(records, self.addr, (r) => presenceOf(r));
   }
 
+  /** Same as list(), filtered to one working directory. */
   async listCwd(cwd: string): Promise<string> {
     const self = this.requireSelf();
     const records = await listRecords(this.storage);
-    const filtered = records.filter((r) => r.cwd === cwd);
+    const filtered = records.filter((r) => r.cwd === cwd && this.isPeerVisible(r.cwd));
     return formatListing(filtered, self.addr, (r) => presenceOf(r));
   }
 
@@ -510,6 +505,7 @@ export class TalkCore {
       const records = await listRecords(this.storage);
       const peers = records.filter((r) => {
         if (r.addr === self.addr) return false;
+        if (!this.isPeerVisible(r.cwd)) return false;
         return to === "*" ? true : r.cwd === self.cwd;
       });
       if (peers.length === 0) return "No other sessions to broadcast to.";
@@ -547,7 +543,7 @@ export class TalkCore {
     const inbox = await listInbox(this.storage, self.addr);
     const fromTarget = inbox.filter((item) => item.letter.from.addr === record.addr);
     if (fromTarget.length > 0) {
-      return `You have ${fromTarget.length} unread message(s) from "${record.name}". Read them with talk-read-messages and reply before asking.`;
+      return `You have ${fromTarget.length} unread message(s) from "${record.name}" — reply before asking.`;
     }
     const sent = await this.sendLetter(record, "ask", body);
     if (!sent.ok) return sent.error;
@@ -567,7 +563,7 @@ export class TalkCore {
   async reply(replyTo: string, body: string): Promise<string> {
     if (!body) return "reply requires 'message'.";
     if (!replyTo) {
-      return "reply requires 'replyTo' (the ask/message id). Use talk-read-messages to find the id.";
+      return "reply requires 'replyTo' (the ask/message id, shown in the delivered message).";
     }
     const self = this.requireSelf();
     const ask = await resolveAskByRef(this.storage, self.addr, replyTo);

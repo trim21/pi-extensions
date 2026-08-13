@@ -4,13 +4,13 @@
  * exercised here — it is a thin binding to pi APIs.
  */
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { peerAskedFirst, TalkCore } from "../src/talk/core.js";
-import { BOUNDARY_PREAMBLE, formatDelivery } from "../src/talk/format.js";
+import { buildVisibilityFilter, peerAskedFirst, TalkCore } from "../src/talk/core.js";
+import { BOUNDARY_PREAMBLE, formatDelivery, formatListing } from "../src/talk/format.js";
 import {
   awaitReceipt,
   clearAsk,
@@ -264,6 +264,44 @@ describe("format", () => {
     expect(text).toContain("the question");
     expect(text).toContain("talk-reply");
   });
+
+  it("formatListing emits a JSON array with stable session ids", () => {
+    const records: SessionRecord[] = [
+      makeSelf("aaaaaaaaaaaa", {
+        sessionId: "0193a2f5-7c4b-8c1d-9e0f-abcdef123456",
+        name: "peer-a",
+        cwd: "/tmp/proj-a",
+        status: "working",
+      }),
+      makeSelf("bbbbbbbbbbbb", {
+        sessionId: "0193a2f6-1111-2222-3333-444444444444",
+        name: "peer-b",
+        cwd: "/tmp/proj-b",
+        status: "idle",
+      }),
+    ];
+    const listing = formatListing(records, "cccccccccccc", (r) =>
+      r.status === "working" ? "live" : "stalled",
+    );
+    expect(JSON.parse(listing)).toEqual([
+      {
+        status: "working",
+        work_dir: "/tmp/proj-a",
+        id: "0193a2f5-7c4b-8c1d-9e0f-abcdef123456",
+        name: "peer-a",
+      },
+      {
+        status: "not responding",
+        work_dir: "/tmp/proj-b",
+        id: "0193a2f6-1111-2222-3333-444444444444",
+        name: "peer-b",
+      },
+    ]);
+  });
+
+  it("formatListing returns an empty array when no peers exist", () => {
+    expect(formatListing([makeSelf("aaaaaaaaaaaa")], "aaaaaaaaaaaa", () => "live")).toBe("[]");
+  });
 });
 
 // ── Arbitration ──────────────────────────────────────────────────────────
@@ -288,6 +326,32 @@ describe("peerAskedFirst", () => {
     const a = { ts: 1, cwd: "/a", sessionId: "1" };
     const b = { ts: 1, cwd: "/b", sessionId: "2" };
     expect(peerAskedFirst(a, b)).toBe(!peerAskedFirst(b, a));
+  });
+});
+
+// ── Workspace visibility ─────────────────────────────────────────────────
+
+describe("buildVisibilityFilter", () => {
+  it("matches allowed prefixes without crossing directory boundaries", () => {
+    const filter = buildVisibilityFilter(["/home/u/projects/company1/"], "/base");
+    expect(filter("/home/u/projects/company1")).toBe(true);
+    expect(filter("/home/u/projects/company1/repo")).toBe(true);
+    expect(filter("/home/u/projects/company2/repo")).toBe(false);
+    expect(filter("/home/u/projects/company12/repo")).toBe(false);
+  });
+
+  it("expands ~ and resolves relative paths against the base cwd", () => {
+    const filter = buildVisibilityFilter(
+      ["~/projects/company1", "../company1/"],
+      "/home/u/projects/company2",
+    );
+    expect(filter(join(homedir(), "projects/company1/repo"))).toBe(true);
+    expect(filter("/home/u/projects/company1/repo")).toBe(true);
+  });
+
+  it("treats a missing allowed list as everything visible and an empty list as nothing", () => {
+    expect(buildVisibilityFilter(undefined, "/base")("/anywhere")).toBe(true);
+    expect(buildVisibilityFilter([], "/base")("/anywhere")).toBe(false);
   });
 });
 
@@ -318,7 +382,7 @@ describe("TalkCore", () => {
     await coreA.start(makeSelf("aaaaaaaaaaaa"));
     await coreB.start(makeSelf("bbbbbbbbbbbb"));
 
-    const askPromise = coreA.ask("bbbbbbbbbbbb", "question?", 5000);
+    const askPromise = coreA.ask("session-bbbbbbbbbbbb", "question?", 5000);
     // Wait until the ask letter lands in B's inbox, then let B process it.
     await vi.waitFor(async () => {
       expect(await listInbox(storage, "bbbbbbbbbbbb")).toHaveLength(1);
@@ -355,8 +419,29 @@ describe("TalkCore", () => {
         },
       }),
     );
-    const result = await coreA.ask("bbbbbbbbbbbb", "question?", 1000);
+    const result = await coreA.ask("session-bbbbbbbbbbbb", "question?", 1000);
     expect(result).toContain("unread message(s)");
-    expect(result).toContain("talk-read-messages");
+    expect(result).toContain("reply before asking");
+  });
+
+  it("list hides peers outside the allowed workspaces", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    await writeRecord(storage, makeSelf("bbbbbbbbbbbb", { cwd: "/tmp/company1/repo" }));
+    await writeRecord(storage, makeSelf("cccccccccccc", { cwd: "/tmp/company2/repo" }));
+    core.setPeerVisibility(buildVisibilityFilter(["/tmp/company1"], "/base"));
+    const listing = JSON.parse(await core.list()) as { id: string }[];
+    expect(listing.map((s) => s.id)).toEqual(["session-bbbbbbbbbbbb"]);
+  });
+
+  it("rejects asks to invisible sessions even with the exact session id", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    await writeRecord(storage, makeSelf("bbbbbbbbbbbb", { cwd: "/tmp/company2/repo" }));
+    core.setPeerVisibility(buildVisibilityFilter(["/tmp/company1"], "/base"));
+    const result = await core.ask("session-bbbbbbbbbbbb", "question?", 1000);
+    expect(result).toContain("Unknown session id");
   });
 });
