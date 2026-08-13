@@ -247,7 +247,7 @@ export async function pendingAsks(storage: TalkStorage, addr: string): Promise<L
   return out;
 }
 
-/** Outgoing ask ids, used by the adapter for prefix resolution. */
+/** Outgoing ask ids, used by the core for interlock arbitration. */
 export async function outgoingAskIds(storage: TalkStorage, addr: string): Promise<string[]> {
   const out: string[] = [];
   for (const key of await storage.listKeys(asksNs(addr))) {
@@ -257,15 +257,19 @@ export async function outgoingAskIds(storage: TalkStorage, addr: string): Promis
   return out;
 }
 
-/** Resolve a pending ask by explicit replyTo id or unique prefix. No inference. */
+/**
+ * Resolve a pending ask by explicit replyTo id or unique suffix. No inference.
+ * Matching is on the suffix: the prefix of a time-ordered (v7-style) id is the
+ * timestamp part and collides easily, the suffix is the random part.
+ */
 export async function resolveAskByRef(
   storage: TalkStorage,
   addr: string,
   replyTo: string,
 ): Promise<Letter | null> {
-  if (!replyTo) return null; // empty prefix matches every id — an explicit ref is required
+  if (!replyTo) return null; // empty suffix matches every id — an explicit ref is required
   const asks = await pendingAsks(storage, addr);
-  return asks.find((a) => a.id === replyTo || a.id.startsWith(replyTo)) ?? null;
+  return asks.find((a) => a.id === replyTo || a.id.endsWith(replyTo)) ?? null;
 }
 
 // ── Audit log ────────────────────────────────────────────────────────────

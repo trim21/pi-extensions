@@ -51,7 +51,7 @@ export function formatListing(
   if (records.length === 0) return "[]";
   const items: SessionListItem[] = records.map((r) => {
     const p = presence(r);
-    const status = p === "live" ? r.status : p === "stalled" ? "not responding" : "offline";
+    const status = p === "live" ? r.status : "offline";
     const item: SessionListItem = { status, work_dir: r.cwd, id: r.sessionId, name: r.name };
     if (r.addr === selfAddr) item.self = true;
     return item;

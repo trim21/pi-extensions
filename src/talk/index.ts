@@ -224,24 +224,15 @@ export default function talk(pi: ExtensionAPI) {
   pi.registerTool({
     name: "talk-list-sessions",
     label: "List Talk Sessions",
-    description:
-      "List other pi sessions with a recent heartbeat (id, status, work_dir, name). Pass includeOffline to also list stale sessions.",
+    description: "List visible pi sessions (id, status, work_dir, name).",
     promptSnippet: "List other pi sessions on this machine",
     parameters: Type.Object({
       cwd: Type.Optional(Type.String({ description: "Only list sessions in this directory" })),
-      includeOffline: Type.Optional(
-        Type.Boolean({ description: "Include sessions without a recent heartbeat" }),
-      ),
     }),
     async execute(_toolCallId, params) {
       const initError = requireInit();
       if (initError) return toolResult(initError);
-      const includeOffline = params.includeOffline === true;
-      return toolResult(
-        params.cwd
-          ? await core.listCwd(params.cwd, includeOffline)
-          : await core.list(includeOffline),
-      );
+      return toolResult(params.cwd ? await core.listCwd(params.cwd) : await core.list());
     },
   });
 
@@ -276,12 +267,10 @@ export default function talk(pi: ExtensionAPI) {
     name: "talk-send",
     label: "Send Talk Message",
     description:
-      'Send a plain-text message to another pi session. Plain text only, ≤32KB — send a summary and a path, never file contents. `to: "*"` broadcasts to every session; `to: "cwd"` broadcasts to sessions in this cwd.',
+      "Send a plain-text message to a single pi session. Plain text only, ≤32KB — send a summary and a path, never file contents.",
     promptSnippet: "Send a message to another pi session",
     parameters: Type.Object({
-      to: Type.String({
-        description: 'Target session (name/address/@alias; "*" or "cwd" to broadcast)',
-      }),
+      to: Type.String({ description: "Target session id (from talk-list-sessions)" }),
       message: Type.String({ description: "Message body" }),
     }),
     async execute(_toolCallId, params) {
@@ -320,7 +309,7 @@ export default function talk(pi: ExtensionAPI) {
 
   pi.registerCommand("talk-dead", {
     description:
-      "Mark a talk session as dead (removed from listings, swept soon): no arg = this session, <sessionId> = that session, --all = every other visible session",
+      "Mark a talk session as dead (shown offline, swept soon): no arg = this session, <sessionId> = that session, --all = every other visible session",
     async handler(args) {
       const initError = requireInit();
       const trimmed = args.trim();
@@ -348,13 +337,13 @@ export default function talk(pi: ExtensionAPI) {
     ) {
       return; // pre-renderer entries: keep pi's default custom-message box
     }
-    const id8 = d.id.slice(0, 8);
+    const idTail = d.id.slice(-8);
     const chip = theme.inverse(` ${d.kind.toUpperCase()} `);
     const header = `${theme.fg("accent", theme.bold(displayName(d.from.name)))} ${theme.fg("dim", `(${shortCwd(d.from.cwd)})`)} ${chip}`;
-    const footer = theme.fg("dim", `id ${id8} · ${d.kind} · ${relativeTime(d.ts)}`);
+    const footer = theme.fg("dim", `id ${idTail} · ${d.kind} · ${relativeTime(d.ts)}`);
     const out = [header, sanitizeTerminal(d.body), "", footer];
     if (d.kind === "ask") {
-      out.push(theme.fg("dim", `└─ reply via talk-reply, replyTo: "${id8}"`));
+      out.push(theme.fg("dim", `└─ reply via talk-reply, replyTo: "${idTail}"`));
     }
     const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
     box.addChild(new Text(out.join("\n"), 0, 0));

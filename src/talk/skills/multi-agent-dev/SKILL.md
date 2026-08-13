@@ -35,8 +35,8 @@ The core rule: **a peer only knows what you tell it.** Messages must be self-con
 ### Status
 
 - `idle` / `working` (agent actively running) / `waiting-talk-message` (blocked in `talk-ask` waiting for a reply)
-- `not responding` (heartbeat stale, process alive but unresponsive) / `offline` (process exited or marked dead)
-- The default listing shows only sessions with a heartbeat in the last 15 minutes; pass `includeOffline: true` for everything.
+- `offline` (process exited or marked dead)
+- `talk-list-sessions` lists every visible session — live or offline — with its current status.
 
 ### Visibility
 
@@ -45,14 +45,14 @@ The core rule: **a peer only knows what you tell it.** Messages must be self-con
 
 ## Tools
 
-| Tool                 | Purpose                                                                                                                             |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `talk-list-sessions` | List visible sessions (`id` / `status` / `work_dir` / `name`)                                                                       |
-| `talk-send`          | Send a plain message (async — the main collaboration primitive). `to: "*"` broadcasts, `to: "cwd"` broadcasts to the same directory |
-| `talk-ask`           | Ask a question and block for the reply (default 30 min timeout)                                                                     |
-| `talk-reply`         | Reply to a received ask; `replyTo` is the ask id shown in the delivered message                                                     |
+| Tool                 | Purpose                                                                                |
+| -------------------- | -------------------------------------------------------------------------------------- |
+| `talk-list-sessions` | List visible sessions (`id` / `status` / `work_dir` / `name`)                          |
+| `talk-send`          | Send a plain message to a single session id (async — the main collaboration primitive) |
+| `talk-ask`           | Ask a question and block for the reply (default 30 min timeout)                        |
+| `talk-reply`         | Reply to a received ask; `replyTo` is the ask id shown in the delivered message        |
 
-In the TUI: `/talk` lists sessions, `/talk-dead` marks a session as dead (removes it from listings and sweeps it).
+In the TUI: `/talk` lists sessions, `/talk-dead` marks a session as dead (shown offline, swept soon).
 
 ## Collaboration workflows
 
@@ -90,5 +90,5 @@ In the TUI: `/talk` lists sessions, `/talk-dead` marks a session as dead (remove
 
 - **Avoid message loops**: if the peer sent you something or is asking you, answer it before sending new ones. Two agents pinging each other deadlock.
 - **Address from known ids**: only run `talk-list-sessions` to discover sessions or verify an id. If you already hold a valid id (e.g. from an incoming message or a previous listing), send directly — an unknown or invisible id is refused with `Unknown session id`.
-- **Respect status**: asking an offline/not-responding session blocks up to 30 min. Prefer `talk-send` there — the message queues on disk and the peer receives it when it resumes.
+- **Respect status**: asking an offline session blocks until the 30 min timeout. Prefer `talk-send` there — the message queues on disk and the peer receives it when it resumes.
 - **Visibility boundary**: you can only collaborate with sessions you can see; invisible sessions are unreachable by design.

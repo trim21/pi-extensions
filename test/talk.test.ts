@@ -3,7 +3,7 @@
  * format) and the mutual-ask arbitration. The pi adapter (index.ts) is not
  * exercised here — it is a thin binding to pi APIs.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -78,6 +78,13 @@ function makeSelf(addr: string, overrides: Partial<SessionRecord> = {}): Session
   };
 }
 
+/** This test process's own start time, from /proc/self/stat (Linux only). */
+function selfStartTime(): number {
+  const stat = readFileSync("/proc/self/stat", "utf8");
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  return Number(fields[19]);
+}
+
 // ── Storage ──────────────────────────────────────────────────────────────
 
 describe("SqliteTalkStorage", () => {
@@ -124,37 +131,59 @@ describe("registry", () => {
     expect(await readRecord(storage, "bbbbbbbbbbbb")).toBeNull();
   });
 
-  it("presence reflects offline flag, pid, and heartbeat", async () => {
+  it("presence reflects the offline flag and pid liveness", () => {
     const base = makeSelf("aaaaaaaaaaaa");
     expect(presenceOf({ ...base, offline: true })).toBe("offline");
     // pid 0 is never alive
     expect(presenceOf({ ...base, pid: 0 })).toBe("offline");
-    expect(presenceOf({ ...base, lastSeenAt: Date.now() })).toBe("live");
-    expect(presenceOf({ ...base, lastSeenAt: Date.now() - 60_000 })).toBe("stalled");
+    // a live process is live regardless of lastSeenAt (no heartbeat)
+    expect(presenceOf(base)).toBe("live");
+    expect(presenceOf({ ...base, lastSeenAt: 0 })).toBe("live");
   });
 
-  it("sweep keeps recent records and mail, reaps long-quiet empty ones", async () => {
+  it("presence treats a reused pid (start time mismatch) as offline", () => {
+    if (process.platform !== "linux") return; // /proc start time is Linux-only
+    const base = makeSelf("aaaaaaaaaaaa");
+    const start = selfStartTime();
+    expect(start).toBeGreaterThan(0);
+    // matching start time → the same process → live
+    expect(presenceOf({ ...base, pidStart: start })).toBe("live");
+    // an alive pid with a different start time is a pid-reuse phantom → offline
+    expect(presenceOf({ ...base, pidStart: start + 1 })).toBe("offline");
+  });
+
+  it("sweep keeps live and recent records and mail, reaps long-quiet dead empty ones", async () => {
     const { storage } = makeStorage();
     const now = Date.now();
-    const recent = makeSelf("aaaaaaaaaaaa", { lastSeenAt: now - 1000 }); // heartbeat 1s ago
-    const quietEmpty = makeSelf("bbbbbbbbbbbb", { lastSeenAt: now - 25 * 3600 * 1000 });
-    const quietWithMail = makeSelf("cccccccccccc", { lastSeenAt: now - 25 * 3600 * 1000 });
-    const ancient = makeSelf("dddddddddddd", { lastSeenAt: now - 31 * 24 * 3600 * 1000 });
-    await writeRecord(storage, recent);
-    await writeRecord(storage, quietEmpty);
-    await writeRecord(storage, quietWithMail);
-    await writeRecord(storage, ancient);
-    await deposit(storage, quietWithMail.addr, makeLetter());
-    await deposit(storage, ancient.addr, makeLetter());
+    // pid 0 = process is dead; the test's own pid = process is alive.
+    const liveQuiet = makeSelf("aaaaaaaaaaaa", { lastSeenAt: now - 25 * 3600 * 1000 });
+    const deadRecent = makeSelf("bbbbbbbbbbbb", { pid: 0, lastSeenAt: now - 1000 });
+    const deadQuietEmpty = makeSelf("cccccccccccc", { pid: 0, lastSeenAt: now - 25 * 3600 * 1000 });
+    const deadQuietWithMail = makeSelf("dddddddddddd", {
+      pid: 0,
+      lastSeenAt: now - 25 * 3600 * 1000,
+    });
+    const deadAncient = makeSelf("eeeeeeeeeeee", {
+      pid: 0,
+      lastSeenAt: now - 31 * 24 * 3600 * 1000,
+    });
+    await writeRecord(storage, liveQuiet);
+    await writeRecord(storage, deadRecent);
+    await writeRecord(storage, deadQuietEmpty);
+    await writeRecord(storage, deadQuietWithMail);
+    await writeRecord(storage, deadAncient);
+    await deposit(storage, deadQuietWithMail.addr, makeLetter());
+    await deposit(storage, deadAncient.addr, makeLetter());
 
     await sweep(storage, now);
 
     const records = await listRecords(storage);
     const addrs = records.map((r) => r.addr);
-    expect(addrs).toContain("aaaaaaaaaaaa"); // heartbeat still fresh → untouched
-    expect(addrs).not.toContain("bbbbbbbbbbbb"); // quiet > 24h + empty → reaped
-    expect(addrs).toContain("cccccccccccc"); // quiet but has undelivered mail → kept
-    expect(addrs).not.toContain("dddddddddddd"); // mail older than 30 days → reaped
+    expect(addrs).toContain("aaaaaaaaaaaa"); // alive process → never reaped
+    expect(addrs).toContain("bbbbbbbbbbbb"); // dead but quiet < 24h → untouched
+    expect(addrs).not.toContain("cccccccccccc"); // dead, quiet > 24h + empty → reaped
+    expect(addrs).toContain("dddddddddddd"); // dead, quiet but has undelivered mail → kept
+    expect(addrs).not.toContain("eeeeeeeeeeee"); // mail older than 30 days → reaped
   });
 });
 
@@ -191,7 +220,7 @@ describe("mailbox", () => {
     });
     const pending = await pendingAsks(storage, "bbbbbbbbbbbb");
     expect(pending.map((a) => a.id)).toEqual([ask.id]);
-    expect(await resolveAskByRef(storage, "bbbbbbbbbbbb", ask.id.slice(0, 8))).not.toBeNull();
+    expect(await resolveAskByRef(storage, "bbbbbbbbbbbb", ask.id.slice(-8))).not.toBeNull();
     expect(await resolveAskByRef(storage, "bbbbbbbbbbbb", "nope")).toBeNull();
     await clearAsk(storage, "bbbbbbbbbbbb", ask.id);
     expect(await pendingAsks(storage, "bbbbbbbbbbbb")).toEqual([]);
@@ -287,7 +316,7 @@ describe("format", () => {
       }),
     ];
     const listing = formatListing(records, "cccccccccccc", (r) =>
-      r.status === "working" ? "live" : "stalled",
+      r.status === "working" ? "live" : "offline",
     );
     expect(JSON.parse(listing)).toEqual([
       {
@@ -297,7 +326,7 @@ describe("format", () => {
         name: "peer-a",
       },
       {
-        status: "not responding",
+        status: "offline",
         work_dir: "/tmp/proj-b",
         id: "0193a2f6-1111-2222-3333-444444444444",
         name: "peer-b",
@@ -467,25 +496,20 @@ describe("TalkCore", () => {
     expect(listing.find((s) => s.self)?.id).toBe("session-aaaaaaaaaaaa");
   });
 
-  it("list hides stale sessions unless includeOffline is set", async () => {
+  it("list shows every visible session, live or offline", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb", { lastSeenAt: Date.now() }));
-    await writeRecord(
-      storage,
-      makeSelf("cccccccccccc", { lastSeenAt: Date.now() - 60 * 60 * 1000 }),
-    );
+    await writeRecord(storage, makeSelf("cccccccccccc", { offline: true, lastSeenAt: 0 }));
 
-    const listing = JSON.parse(await core.list()) as { id: string }[];
-    expect(listing.map((s) => s.id)).toEqual(["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb"]);
-
-    const all = JSON.parse(await core.list(true)) as { id: string }[];
-    expect(all.map((s) => s.id).toSorted()).toEqual([
+    const listing = JSON.parse(await core.list()) as { id: string; status: string }[];
+    expect(listing.map((s) => s.id).toSorted()).toEqual([
       "session-aaaaaaaaaaaa",
       "session-bbbbbbbbbbbb",
       "session-cccccccccccc",
     ]);
+    expect(listing.find((s) => s.id === "session-cccccccccccc")?.status).toBe("offline");
   });
 
   it("rejects asks to invisible sessions even with the exact session id", async () => {
@@ -507,19 +531,21 @@ describe("TalkCore", () => {
     await vi.waitFor(async () => {
       const rec = await readRecord(storage, "aaaaaaaaaaaa");
       expect(rec?.lastSeenAt).toBe(0);
+      expect(rec?.offline).toBe(true);
     });
     const listing = JSON.parse(await core.list()) as { id: string }[];
     expect(listing).toEqual([]);
   });
 
-  it("markDead by session id removes it from the default listing", async () => {
+  it("markDead by session id marks the peer offline", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb"));
     expect(await core.markDead("session-bbbbbbbbbbbb")).toContain("session bbbbbbbbbbbb");
-    const listing = JSON.parse(await core.list()) as { id: string }[];
-    expect(listing.map((s) => s.id)).toEqual(["session-aaaaaaaaaaaa"]);
+    const listing = JSON.parse(await core.list()) as { id: string; status: string }[];
+    const peer = listing.find((s) => s.id === "session-bbbbbbbbbbbb");
+    expect(peer?.status).toBe("offline");
   });
 
   it("markAllDead marks every visible peer but not self", async () => {
@@ -529,14 +555,19 @@ describe("TalkCore", () => {
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb"));
     await writeRecord(storage, makeSelf("cccccccccccc"));
     expect(await core.markAllDead()).toContain("2 session");
-    const listing = JSON.parse(await core.list()) as { id: string }[];
-    expect(listing.map((s) => s.id)).toEqual(["session-aaaaaaaaaaaa"]);
+    const listing = JSON.parse(await core.list()) as { id: string; status: string }[];
+    const statuses = Object.fromEntries(listing.map((s) => [s.id, s.status]));
+    expect(statuses).toEqual({
+      "session-aaaaaaaaaaaa": "idle",
+      "session-bbbbbbbbbbbb": "offline",
+      "session-cccccccccccc": "offline",
+    });
   });
 
   it("sweep reaps a dead session with an empty mailbox immediately", async () => {
     const { storage } = makeStorage();
     const now = Date.now();
-    await writeRecord(storage, makeSelf("aaaaaaaaaaaa", { lastSeenAt: 0 }));
+    await writeRecord(storage, makeSelf("aaaaaaaaaaaa", { pid: 0, lastSeenAt: 0 }));
     await sweep(storage, now);
     const records = await listRecords(storage);
     expect(records.map((r) => r.addr)).not.toContain("aaaaaaaaaaaa");

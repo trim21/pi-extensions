@@ -34,11 +34,11 @@ import {
 } from "./mailbox.js";
 import { inboundAccepts, OutboundPolicy } from "./policy.js";
 import {
-  LIST_ACTIVE_MS,
   listRecords,
   type Presence,
   presenceOf,
   readRecord,
+  readStartTime,
   type SessionRecord,
   sweep,
   writeRecord,
@@ -64,7 +64,6 @@ export interface TalkCoreOptions {
 }
 
 const INBOX_POLL_MS = 3000;
-const HEARTBEAT_MS = 15_000;
 const WATCH_POLL_MS = 5000;
 const DELIVERY_BACKOFF_MS = 5000;
 const INITIAL_DRAIN_DELAY_MS = 1200;
@@ -124,11 +123,10 @@ export class TalkCore {
   private readonly deliveredIds = new Set<string>();
   /** Visibility gate over peer working directories; defaults to everything visible. */
   private isPeerVisible: (peerCwd: string) => boolean = () => true;
-  /** Manually marked dead: heartbeat stopped, lastSeenAt pinned to 0. */
+  /** Manually marked dead: offline flag set, lastSeenAt pinned to 0. */
   private dead = false;
 
   private inboxPoll: ReturnType<typeof setInterval> | undefined;
-  private heartbeat: ReturnType<typeof setInterval> | undefined;
   private watchPoller: ReturnType<typeof setInterval> | undefined;
   private sweeper: ReturnType<typeof setInterval> | undefined;
   private lastDeliveryFailureAt = 0;
@@ -158,18 +156,16 @@ export class TalkCore {
 
   async start(self: SessionRecord): Promise<void> {
     await this.storage.init();
-    this.self = self;
-    await writeRecord(this.storage, self);
+    // Record the process start time so presence can rule out pid reuse later.
+    const pidStart = readStartTime(self.pid);
+    this.self = pidStart === undefined ? self : { ...self, pidStart };
+    await writeRecord(this.storage, this.self);
     try {
       await sweep(this.storage, this.now());
     } catch {
       // sweep failure never breaks the session
     }
     this.startInboxPoll();
-    this.heartbeat = setInterval(() => {
-      void this.writeSelf({});
-    }, HEARTBEAT_MS);
-    this.heartbeat.unref();
     // Reclaim dead records periodically, not just at startup.
     this.sweeper = setInterval(() => {
       void sweep(this.storage, this.now());
@@ -184,7 +180,6 @@ export class TalkCore {
   }
 
   async stop(): Promise<void> {
-    if (this.heartbeat) clearInterval(this.heartbeat);
     if (this.watchPoller) clearInterval(this.watchPoller);
     if (this.inboxPoll) clearInterval(this.inboxPoll);
     if (this.sweeper) clearInterval(this.sweeper);
@@ -221,7 +216,7 @@ export class TalkCore {
     try {
       await writeRecord(this.storage, this.self);
     } catch {
-      // heartbeat/registration failures never break the session
+      // registration failures never break the session
     }
   }
 
@@ -375,7 +370,7 @@ export class TalkCore {
     return {
       ok: true,
       letter,
-      verdict: `queued (target ${presence === "stalled" ? "is not responding" : "is offline"} — waits on disk)`,
+      verdict: `queued (target is offline — waits on disk)`,
     };
   }
 
@@ -441,7 +436,7 @@ export class TalkCore {
     this.askWaiters.delete(myAsk.askId);
     waiter({
       replied: false,
-      reason: `peer asked first (their ask id ${letter.id.slice(0, 8)}) — answer it with talk-reply before re-asking`,
+      reason: `peer asked first (their ask id ${letter.id.slice(-8)}) — answer it with talk-reply before re-asking`,
     });
     await clearAsk(this.storage, self.addr, myAsk.askId);
   }
@@ -450,31 +445,29 @@ export class TalkCore {
 
   /**
    * JSON listing of visible sessions, including self (marked `self: true`).
-   * Defaults to sessions whose heartbeat is fresh (within LIST_ACTIVE_MS);
-   * pass includeOffline to show every visible peer regardless of last contact.
+   * Every visible record is listed, live or offline; presence decides the
+   * per-session status.
    */
-  async list(includeOffline = false): Promise<string> {
+  async list(): Promise<string> {
     const self = this.requireSelf();
-    const now = this.now();
     const all = await listRecords(this.storage);
     const records = all.filter((r) => {
       if (r.addr === self.addr) return !this.dead;
-      return this.isPeerVisible(r.cwd) && (includeOffline || now - r.lastSeenAt < LIST_ACTIVE_MS);
+      return this.isPeerVisible(r.cwd);
     });
-    return formatListing(records, self.addr, (r) => presenceOf(r, now));
+    return formatListing(records, self.addr, presenceOf);
   }
 
   /** Same as list(), filtered to one working directory. */
-  async listCwd(cwd: string, includeOffline = false): Promise<string> {
+  async listCwd(cwd: string): Promise<string> {
     const self = this.requireSelf();
-    const now = this.now();
     const records = await listRecords(this.storage);
     const filtered = records.filter((r) => {
       if (r.cwd !== cwd) return false;
       if (r.addr === self.addr) return !this.dead;
-      return this.isPeerVisible(r.cwd) && (includeOffline || now - r.lastSeenAt < LIST_ACTIVE_MS);
+      return this.isPeerVisible(r.cwd);
     });
-    return formatListing(filtered, self.addr, (r) => presenceOf(r, now));
+    return formatListing(filtered, self.addr, presenceOf);
   }
 
   /** Visible peer records (excluding self), e.g. for command completions. */
@@ -485,24 +478,20 @@ export class TalkCore {
   }
 
   /**
-   * Mark a session as dead by pinning lastSeenAt to 0: it vanishes from the
-   * default listing and the next sweep reaps it (empty mailbox). Without a
-   * target, marks this session — its heartbeat is stopped and later
-   * writeSelf calls no longer refresh lastSeenAt.
+   * Mark a session as dead: set its offline flag and pin lastSeenAt to 0 so
+   * the next sweep reaps it (empty mailbox). Without a target, marks this
+   * session — later writeSelf calls no longer refresh lastSeenAt, and the
+   * record stays offline for peers.
    */
   async markDead(target?: string): Promise<string> {
     if (!target) {
       this.dead = true;
-      if (this.heartbeat) {
-        clearInterval(this.heartbeat);
-        this.heartbeat = undefined;
-      }
-      await this.writeSelf({});
+      await this.writeSelf({ offline: true });
       return "Marked this session as dead.";
     }
     const resolved = await this.resolveTarget(target);
     if (!resolved.ok) return resolved.error;
-    await writeRecord(this.storage, { ...resolved.record, lastSeenAt: 0 });
+    await writeRecord(this.storage, { ...resolved.record, lastSeenAt: 0, offline: true });
     return `Marked "${resolved.record.name}" as dead.`;
   }
 
@@ -510,7 +499,7 @@ export class TalkCore {
   async markAllDead(): Promise<string> {
     const peers = await this.listPeers();
     for (const peer of peers) {
-      await writeRecord(this.storage, { ...peer, lastSeenAt: 0 });
+      await writeRecord(this.storage, { ...peer, lastSeenAt: 0, offline: true });
     }
     return `Marked ${peers.length} session(s) as dead.`;
   }
@@ -518,40 +507,21 @@ export class TalkCore {
   async send(to: string, body: string): Promise<string> {
     if (!to) return 'send requires "to".';
     if (!body) return 'send requires "message".';
-    const self = this.requireSelf();
-    // Broadcast: N atomic deposits through the existing deposit path so
-    // rate/dedupe caps still bind (per-peer dedupe; rate caps total fan-out).
     if (to === "*" || to === "cwd") {
-      const records = await listRecords(this.storage);
-      const peers = records.filter((r) => {
-        if (r.addr === self.addr) return false;
-        if (!this.isPeerVisible(r.cwd)) return false;
-        return to === "*" ? true : r.cwd === self.cwd;
-      });
-      if (peers.length === 0) return "No other sessions to broadcast to.";
-      const ok: string[] = [];
-      const failed: string[] = [];
-      for (const peer of peers) {
-        const sent = await this.sendLetter(peer, "message", body);
-        if (sent.ok) ok.push(`"${peer.name}"`);
-        else failed.push(`"${peer.name}": ${sent.error}`);
-      }
-      const head = `Broadcast to ${ok.length}/${peers.length} session${peers.length === 1 ? "" : "s"}.`;
-      const detail = failed.length > 0 ? ` Refused: ${failed.join("; ")}.` : "";
-      return head + detail;
+      return "send requires a single session id; broadcasting is disabled.";
     }
     const resolved = await this.resolveTarget(to);
     if (!resolved.ok) return resolved.error;
     const sent = await this.sendLetter(resolved.record, "message", body);
     if (!sent.ok) return sent.error;
-    return `Sent to "${resolved.record.name}" (${shortAddr(resolved.record.addr)}) [id ${sent.letter.id.slice(0, 8)}]: ${sent.verdict}.`;
+    return `Sent to "${resolved.record.name}" (${shortAddr(resolved.record.addr)}) [id ${sent.letter.id.slice(-8)}]: ${sent.verdict}.`;
   }
 
   async ask(to: string, body: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
     if (!to) return 'ask requires "to".';
     if (!body) return 'ask requires "message".';
     if (to === "*" || to === "cwd") {
-      return 'ask is 1:1 and cannot broadcast; use send with to: "*" or "cwd".';
+      return "ask is 1:1 and cannot broadcast.";
     }
     const self = this.requireSelf();
     const resolved = await this.resolveTarget(to);
@@ -578,7 +548,7 @@ export class TalkCore {
       const outcome = await this.waitForReply(sent.letter.id, Math.max(1000, timeoutMs), signal);
       await clearAsk(this.storage, self.addr, sent.letter.id);
       if (!outcome.replied)
-        return `Ask ${sent.letter.id.slice(0, 8)} to "${record.name}": ${outcome.reason}.`;
+        return `Ask ${sent.letter.id.slice(-8)} to "${record.name}": ${outcome.reason}.`;
       return `"${record.name}" replied:\n\n${outcome.body}`;
     } finally {
       // The ask tool call is still part of a running agent turn.
@@ -600,7 +570,7 @@ export class TalkCore {
     const sent = await this.sendLetter(target, "reply", body, ask.id);
     if (!sent.ok) return sent.error;
     await clearAsk(this.storage, self.addr, ask.id);
-    return `Replied to "${target.name}" (ask ${ask.id.slice(0, 8)}): ${sent.verdict}.`;
+    return `Replied to "${target.name}" (ask ${ask.id.slice(-8)}): ${sent.verdict}.`;
   }
 
   /** Build a minimal record from a letter's sender when the peer record is gone. */
@@ -644,8 +614,7 @@ export class TalkCore {
       if (now === prev) continue;
       this.watched.set(addr, now);
       const label = rec ? `"${rec.name}"` : shortAddr(addr);
-      const state =
-        now === "live" ? (rec?.status ?? "idle") : now === "stalled" ? "not responding" : "offline";
+      const state = now === "live" ? (rec?.status ?? "idle") : "offline";
       this.events.notify(`talk watch: ${label} is now ${state}.`);
     }
   }

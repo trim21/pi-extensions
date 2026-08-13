@@ -28,8 +28,7 @@ export class OutboundPolicy {
    * Gate one outbound letter. `unreadBacklog` is the target's current
    * unread count (report 0 when the target is idle — an idle agent has by
    * definition worked through what it was handed). `target` scopes the
-   * identical-body dedupe to a single peer (loop-breaking) so a broadcast
-   * of one body to N peers is not deduped after the first.
+   * identical-body dedupe to a single peer (loop-breaking).
    */
   check(body: string, unreadBacklog: number, target?: string): OutboundVerdict {
     if (body.length > MAX_BODY_CHARS) {
