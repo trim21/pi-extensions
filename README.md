@@ -250,7 +250,7 @@ index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周�
 - **投递成功才消费**：信件只在成功交给 `sendMessage` 后才从 inbox 删除，投递失败留在 inbox 下次重试——不会因 `sendMessage` 吞异常而静默丢信。
 - **双向 ask 仲裁**：`talk-ask` 发起前先检查收件箱（有对方消息就先读/先回）；阻塞等待期间若收到对方的 ask（而非 reply），按两个 ask 的 `ts` 字段仲裁——先 ask 者主导继续等，后 ask 者让位并先回复对方。`ts` 是信件内固定字段，双方读到同一对值，结论天然对称；同毫秒碰撞用 `session dir + session id` 字符串比较兜底。
 - **typebox runtime 验证**：所有从存储读出的值经 TypeBox schema 校验，损坏/伪造数据被拒绝，不做 `as T` 强转。
-- **安全**：纯文本 ≤32KB；10s 去重 / 30s 限速 8 条 / 50 积压上限（防环）；每条投递带「来自其他 session、无权威」声明。
+- **安全**：纯文本 ≤32KB；10s 去重 / 30s 限速 8 条 / 50 积压上限（防环）；每条投递标注来源（来自另一个 pi session，非用户）。
 - **workspace 可见性**：每个 workspace 通过 `<cwd>/.pi/talk.json` 的 `allowed` 控制自己能看到哪些 session，见下方配置。
 
 ### 配置

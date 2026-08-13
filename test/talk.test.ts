@@ -288,7 +288,7 @@ describe("OutboundPolicy", () => {
 // ── Format ───────────────────────────────────────────────────────────────
 
 describe("format", () => {
-  it("formatDelivery carries the authority boundary and the body", () => {
+  it("formatDelivery marks the peer source and carries the body", () => {
     const text = formatDelivery(makeLetter({ kind: "ask", body: "the question" }));
     expect(text).toContain(BOUNDARY_PREAMBLE);
     expect(text).toContain("the question");
