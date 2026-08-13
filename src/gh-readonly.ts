@@ -31,7 +31,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
@@ -603,12 +603,24 @@ export function cleanStepOutput(stepLog: string): string {
     .trim();
 }
 
+/**
+ * Strip terminal escape sequences and a leading UTF-8 BOM from a raw job log,
+ * keeping everything else — timestamps, `##[group]` markers, blank lines —
+ * intact. Used when writing a job's complete log to a file: complete, but
+ * readable without ANSI garbage.
+ */
+export function stripAnsi(text: string): string {
+  return text.replace(/^\uFEFF/, "").replaceAll(ANSI_RE, "");
+}
+
 export interface StepLogParams {
   runId: string;
   job?: string;
   step: string;
   offset?: number;
   limit?: number;
+  /** Return the complete, untruncated step output (ignores `offset`/`limit`). */
+  full?: boolean;
 }
 
 /**
@@ -623,7 +635,7 @@ export async function renderStepLog(
   fetchJobLog: (jobId: number) => Promise<string>,
   onUpdate?: (msg: CiLogsResult) => void,
 ): Promise<CiLogsResult> {
-  const { job, step, offset, limit } = params;
+  const { job, step, offset, limit, full } = params;
 
   if (!job) {
     return {
@@ -707,6 +719,26 @@ export async function renderStepLog(
 
   const clean = cleanStepOutput(stepLog);
 
+  // `full`: return the complete output, no truncation and no offset.
+  if (full) {
+    const fullLines = clean.split("\n").length;
+    return {
+      content: [{ type: "text", text: clean }],
+      details: {
+        summary: `Step ${stepNum} — ${targetJob.name} / ${found.name}: complete output (${fullLines} lines)`,
+        truncated: false,
+        full: true,
+        job: {
+          name: targetJob.name,
+          conclusion: targetJob.conclusion,
+          steps: stepsDetail(targetJob, new Set([stepNum])),
+        },
+        totalLines: fullLines,
+        shownLines: fullLines,
+      },
+    };
+  }
+
   // Apply offset on the cleaned text, then truncate.
   const totalLines = clean.split("\n").length;
   let logToShow = clean;
@@ -757,6 +789,8 @@ export interface JobLogsParams {
   job?: string;
   offset?: number;
   limit?: number;
+  /** Expand every step's complete output (default: only failed steps, truncated). */
+  full?: boolean;
 }
 
 export interface JobLogsStep {
@@ -781,7 +815,7 @@ export async function renderJobLogs(
   jobs: CiLogsJob[],
   fetchJobLog: (jobId: number) => Promise<string>,
 ): Promise<CiLogsResult> {
-  const { job, offset, limit } = params;
+  const { job, offset, limit, full } = params;
 
   if (!jobs || jobs.length === 0) {
     return {
@@ -814,7 +848,7 @@ export async function renderJobLogs(
     let rawLog: string | null = null;
 
     for (const s of j.steps) {
-      if (s.conclusion !== "failure") {
+      if (!full && s.conclusion !== "failure") {
         steps.push({ name: s.name });
         continue;
       }
@@ -828,6 +862,13 @@ export async function renderJobLogs(
         }
 
         const clean = cleanStepOutput(stepLog);
+
+        // `full`: every step carries its complete, untruncated output.
+        if (full) {
+          steps.push({ name: s.name, output: clean });
+          continue;
+        }
+
         const totalLines = clean.split("\n").length;
 
         // Apply offset on the cleaned text, then truncate.
@@ -856,7 +897,7 @@ export async function renderJobLogs(
 
   const totalJobs = output.length;
   const failedJobs = output.filter((j) => j.steps.some((s) => s.output !== undefined)).length;
-  const totalFailedSteps = output.reduce(
+  const expandedSteps = output.reduce(
     (acc, j) => acc + j.steps.filter((s) => s.output !== undefined).length,
     0,
   );
@@ -864,13 +905,152 @@ export async function renderJobLogs(
   return {
     content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
     details: {
-      summary: `${totalJobs} job${totalJobs > 1 ? "s" : ""}, ${failedJobs} failed, ${totalFailedSteps} failed step${totalFailedSteps > 1 ? "s" : ""}`,
+      summary: full
+        ? `${totalJobs} job${totalJobs > 1 ? "s" : ""}, ${expandedSteps} step output${expandedSteps === 1 ? "" : "s"} expanded (full, untruncated)`
+        : `${totalJobs} job${totalJobs > 1 ? "s" : ""}, ${failedJobs} failed, ${expandedSteps} failed step${expandedSteps > 1 ? "s" : ""}`,
       truncated: undefined,
+      ...(full && { full: true }),
       jobs: targetJobs.map((j) => ({
         name: j.name,
         conclusion: j.conclusion,
         steps: stepsDetail(j, undefined),
       })),
+    },
+  };
+}
+
+// ── writing complete logs to a file ─────────────────────────────────────────
+
+export interface WriteLogFileParams {
+  runId: string;
+  job?: string;
+  step?: string;
+  outputFile: string;
+}
+
+/**
+ * Write the complete log to a file and return metadata (path, line/byte
+ * counts) instead of the log content itself. With `step`: the step's cleaned
+ * output. Without `step`: the whole job's log, timestamps and `##[group]`
+ * markers kept but ANSI escapes stripped. `job` is required when the run has
+ * more than one job (a single-job run is used implicitly). Relative
+ * `outputFile` paths resolve against `cwd`.
+ */
+export async function writeLogFile(
+  params: WriteLogFileParams,
+  jobs: CiLogsJob[],
+  fetchJobLog: (jobId: number) => Promise<string>,
+  cwd: string | undefined,
+  input: unknown,
+): Promise<CiLogsResult> {
+  const { job, step, outputFile } = params;
+
+  const isNumeric = /^\d+$/.test(job ?? "");
+  const targetJobs = job ? jobs.filter((j) => (isNumeric ? String(j.id) : j.name) === job) : jobs;
+  if (targetJobs.length === 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Job "${job}" not found. Available: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
+        },
+      ],
+      details: { input },
+    };
+  }
+  if (targetJobs.length > 1) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Job "${job}" matches ${targetJobs.length} jobs. Specify a unique job name or id. Available: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
+        },
+      ],
+      details: { input },
+    };
+  }
+  const targetJob = targetJobs[0];
+
+  if (targetJob.status === "queued") {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Job "${targetJob.name}" is still queued — no logs available yet. Use \`watch-github-run\` to wait for it to start, then retry.`,
+        },
+      ],
+      details: { input },
+    };
+  }
+
+  const rawLog = await fetchJobLog(targetJob.id);
+
+  let content: string;
+  let what: string;
+  if (step !== undefined && step !== null) {
+    const found = targetJob.steps.find((s) => s.name.toLowerCase() === step.toLowerCase());
+    if (!found) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Step "${step}" not found. Available: ${targetJob.steps.map((s) => `${s.name} (${s.number})`).join(", ")}`,
+          },
+        ],
+        details: { input },
+      };
+    }
+    const stepLog = extractStepFromLog(rawLog, found.number, targetJob.steps);
+    if (stepLog === null) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Could not extract step ${found.number} from job "${targetJob.name}" logs. The log may be malformed or empty.`,
+          },
+        ],
+        details: { input },
+      };
+    }
+    content = cleanStepOutput(stepLog);
+    what = `step ${found.number} ("${found.name}") of job "${targetJob.name}"`;
+  } else {
+    content = stripAnsi(rawLog);
+    what = `job "${targetJob.name}" (id: ${targetJob.id})`;
+  }
+
+  const target = resolve(cwd ?? process.cwd(), outputFile);
+  await mkdir(dirname(target), { recursive: true });
+  await withFileMutationQueue(target, async () => {
+    await writeFile(target, content);
+  });
+
+  const lines = content.split("\n").length;
+  const bytes = Buffer.byteLength(content, "utf8");
+
+  return {
+    content: [
+      {
+        type: "text",
+        text:
+          `## CI log written to \`${target}\`\n\n` +
+          `- content: ${what}\n` +
+          `- ${lines} lines, ${bytes} bytes\n` +
+          `- run: ${params.runId}\n\n` +
+          `Read it with the \`read\` tool (use \`offset\`/\`limit\` for large files).`,
+      },
+    ],
+    details: {
+      outputFile: target,
+      lines,
+      bytes,
+      runId: params.runId,
+      job: {
+        name: targetJob.name,
+        id: targetJob.id,
+        conclusion: targetJob.conclusion,
+      },
+      input,
     },
   };
 }
@@ -1150,7 +1330,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     name: "read-github-ci-logs",
     label: "GitHub CI Logs",
     description:
-      "Get CI logs from a GitHub Actions workflow run. Without step: returns a JSON array of jobs [{name, steps:[{name, output?}]}] where every step is listed by name and failed steps carry their log as plain text in `output`. With step (requires job): returns that step's complete log as plain text. offset/limit control the size of every expanded output. Use run_id from list-github-workflow-runs. Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
+      "Get CI logs from a GitHub Actions workflow run. Without step: returns a JSON array of jobs [{name, steps:[{name, output?}]}] where every step is listed by name and failed steps carry their log as plain text in `output`. With step (requires job): returns that step's complete log as plain text. offset/limit control the size of every expanded output. Use run_id from list-github-workflow-runs. Note: queued jobs have no logs yet; use watch-github-run to wait for completion. Set full=true for complete untruncated outputs (every step when step is omitted; caution: very large outputs consume a lot of LLM context). Set output_file=/path to write the complete log to a file instead of returning it (requires job when the run has multiple jobs); the tool returns the file path to read.",
     promptSnippet: "Read GitHub CI logs",
     parameters: Type.Object({
       run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),
@@ -1178,9 +1358,21 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
           description: "Maximum number of lines per output text (default 500).",
         }),
       ),
+      full: Type.Optional(
+        Type.Boolean({
+          description:
+            "Return complete, untruncated output instead of the default 500-line/60KB cap. With `step`: that step's full output. Without `step`: every step's full output (not just failed ones). Ignored when `output_file` is set. Caution: very large outputs consume a lot of LLM context — prefer `output_file` for big logs.",
+        }),
+      ),
+      output_file: Type.Optional(
+        Type.String({
+          description:
+            "Write the complete log to this file instead of returning it (relative paths resolve against the working directory). With `step` (requires `job`): the step's cleaned output. Without `step`: requires `job` (or a run with a single job) and writes that job's full log — timestamps and group markers kept, ANSI escapes stripped. Returns the file path; read it with the `read` tool.",
+        }),
+      ),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
-      const { run_id, repo, job, step, offset, limit } = params;
+      const { run_id, repo, job, step, offset, limit, full, output_file } = params;
 
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
       const jobsOut = await ghExec(["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`], {
@@ -1193,6 +1385,17 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       const fetchJobLog = (jobId: number): Promise<string> =>
         getJobLog(String(run_id), jobId, effectiveRepo, signal, ctx.cwd, params);
 
+      // ── Write the complete log to a file ───────────────────────────────
+      if (output_file !== undefined && output_file !== null && output_file !== "") {
+        return writeLogFile(
+          { runId: String(run_id), job, step, outputFile: output_file },
+          jobs,
+          fetchJobLog,
+          ctx.cwd,
+          params,
+        );
+      }
+
       // ── Fetch a specific step's logs (requires `job`) ─────────────────
       if (step !== undefined && step !== null) {
         onUpdate?.({
@@ -1200,7 +1403,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
           details: {},
         });
         const stepResult = await renderStepLog(
-          { runId: String(run_id), job, step, offset, limit },
+          { runId: String(run_id), job, step, offset, limit, full },
           jobs,
           fetchJobLog,
           onUpdate,
@@ -1214,7 +1417,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         details: {},
       });
       const jobsResult = await renderJobLogs(
-        { runId: String(run_id), job, offset, limit },
+        { runId: String(run_id), job, offset, limit, full },
         jobs,
         fetchJobLog,
       );

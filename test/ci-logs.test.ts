@@ -13,7 +13,8 @@
  *
  * Run: npx vitest run test/ci-logs.test.ts
  */
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,6 +26,8 @@ import {
   extractStepFromLog,
   renderJobLogs,
   renderStepLog,
+  stripAnsi,
+  writeLogFile,
 } from "../src/gh-readonly.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -294,5 +297,189 @@ describe("composite action step extraction (winflexbison cibuildwheel)", () => {
     expect(log).not.toBeNull();
     expect(log).toContain("##[group]Run astral-sh/setup-uv@v9.0.0");
     expect(log).not.toContain("cibuildwheel");
+  });
+});
+
+describe("stripAnsi", () => {
+  it("removes the BOM and ANSI escapes but keeps timestamps and group markers", () => {
+    const raw = [
+      "\uFEFF2026-08-05T16:36:08.1842645Z ##[group]Run npx prettier --check ./",
+      "2026-08-05T16:36:08.1843040Z \u001B[36;1mnpx prettier --check ./\u001B[0m",
+      "2026-08-05T16:36:09.2942526Z Checking formatting...",
+    ].join("\n");
+
+    expect(stripAnsi(raw)).toBe(
+      [
+        "2026-08-05T16:36:08.1842645Z ##[group]Run npx prettier --check ./",
+        "2026-08-05T16:36:08.1843040Z npx prettier --check ./",
+        "2026-08-05T16:36:09.2942526Z Checking formatting...",
+      ].join("\n"),
+    );
+  });
+});
+
+describe("renderStepLog full", () => {
+  // 600 output lines — beyond the default 500-line cap, so the difference
+  // between `full` and the default truncation is observable.
+  const bigStepLog = [
+    "2026-08-05T16:36:08.1842645Z ##[group]Run npx prettier --check ./",
+    ...Array.from({ length: 600 }, (_, i) => `2026-08-05T16:36:08.1842645Z output line ${i}`),
+    "2026-08-05T16:36:08.1842645Z ##[endgroup]",
+  ].join("\n");
+  const fetchBig = () => Promise.resolve(bigStepLog);
+
+  it("full=true returns the complete output past the default cap", async () => {
+    const result = await renderStepLog(
+      { runId: "31026014828", job: "lint", step: "Run npx prettier --check ./", full: true },
+      jobs,
+      fetchBig,
+    );
+    const text = result.content[0].text;
+    expect(text.split("\n")).toHaveLength(600);
+    expect(text).toContain("output line 599");
+    expect(result.details).toMatchObject({
+      truncated: false,
+      full: true,
+      totalLines: 600,
+      shownLines: 600,
+    });
+  });
+
+  it("without full the same log is truncated to the default cap", async () => {
+    const result = await renderStepLog(
+      { runId: "31026014828", job: "lint", step: "Run npx prettier --check ./" },
+      jobs,
+      fetchBig,
+    );
+    const text = result.content[0].text;
+    expect(text.split("\n")).toHaveLength(500);
+    expect(result.details.truncated).toBe(true);
+    expect(text).not.toContain("output line 599");
+  });
+});
+
+describe("renderJobLogs full", () => {
+  it("full=true expands every step's output, including successful ones", async () => {
+    const result = await renderJobLogs(
+      { runId: "31026014828", job: "lint", full: true },
+      jobs,
+      fetchJobLog,
+    );
+    const parsed = JSON.parse(result.content[0].text) as {
+      name: string;
+      steps: { name: string; output?: string }[];
+    }[];
+    expect(parsed).toHaveLength(1);
+    const steps = new Map(parsed[0].steps.map((s) => [s.name, s]));
+
+    // successful steps carry output under full
+    expect(steps.get("Run pnpm install --frozen-lockfile")?.output).toBeDefined();
+    expect(steps.get("Run actions/checkout@v7")?.output).toBeDefined();
+    // skipped steps that never ran in the log have no group → no output
+    expect(steps.get("Run npx tsc --pretty")?.output).toBeUndefined();
+
+    expect(result.details.full).toBe(true);
+    expect(result.details.summary).toContain("full, untruncated");
+  });
+
+  it("without full, successful steps carry no output", async () => {
+    const result = await renderJobLogs({ runId: "31026014828", job: "lint" }, jobs, fetchJobLog);
+    const parsed = JSON.parse(result.content[0].text) as {
+      steps: { name: string; output?: string }[];
+    }[];
+    const steps = new Map(parsed[0].steps.map((s) => [s.name, s]));
+    expect(steps.get("Run pnpm install --frozen-lockfile")?.output).toBeUndefined();
+  });
+});
+
+function tempDir(): string {
+  return mkdtempSync(join(tmpdir(), "ci-logs-test-"));
+}
+
+describe("writeLogFile", () => {
+  it("writes a job's complete log (timestamps kept, ANSI stripped)", async () => {
+    const dir = tempDir();
+    try {
+      const outputFile = join(dir, "nested", "lint.log");
+      const result = await writeLogFile(
+        { runId: "31026014828", job: "lint", outputFile },
+        jobs,
+        fetchJobLog,
+        undefined,
+        {},
+      );
+      expect(result.details).toMatchObject({
+        lines: expect.any(Number),
+        bytes: expect.any(Number),
+      });
+
+      const written = readFileSync(join(dir, "nested", "lint.log"), "utf8");
+      expect(written).toContain("##[group]Run npx prettier --check ./");
+      expect(written).toContain("2026-08-05T16:36:");
+      expect(written).not.toContain("\u001B[");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a single step's cleaned output", async () => {
+    const dir = tempDir();
+    try {
+      const outputFile = join(dir, "step6.log");
+      const result = await writeLogFile(
+        {
+          runId: "31026014828",
+          job: "lint",
+          step: "Run npx prettier --check ./",
+          outputFile,
+        },
+        jobs,
+        fetchJobLog,
+        undefined,
+        {},
+      );
+      expect(result.details).toMatchObject({ lines: expect.any(Number) });
+
+      const written = readFileSync(join(dir, "step6.log"), "utf8");
+      expect(written).toContain("##[error]Process completed with exit code 1.");
+      expect(written).not.toContain("##[group]");
+      expect(written).not.toContain("2026-08-05T16:36:");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires a unique job when the run has several", async () => {
+    const result = await writeLogFile(
+      { runId: "31026014828", outputFile: join(tmpdir(), "x.log") },
+      jobs,
+      fetchJobLog,
+      undefined,
+      {},
+    );
+    expect(result.content[0].text).toContain("matches 3 jobs");
+  });
+
+  it("reports an unknown job", async () => {
+    const result = await writeLogFile(
+      { runId: "31026014828", job: "no-such-job", outputFile: join(tmpdir(), "x.log") },
+      jobs,
+      fetchJobLog,
+      undefined,
+      {},
+    );
+    expect(result.content[0].text).toContain('Job "no-such-job" not found');
+  });
+
+  it("reports a queued job", async () => {
+    const queuedJobs = [{ ...jobs[0], status: "queued" }];
+    const result = await writeLogFile(
+      { runId: "31026014828", job: "test", outputFile: join(tmpdir(), "x.log") },
+      queuedJobs,
+      fetchJobLog,
+      undefined,
+      {},
+    );
+    expect(result.content[0].text).toContain("still queued");
   });
 });
