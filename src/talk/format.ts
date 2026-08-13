@@ -31,27 +31,30 @@ export function formatDelivery(letter: Letter, now: number = Date.now()): string
   return `${BOUNDARY_PREAMBLE}\n\n${header}:\n\n${letter.body}\n\n${meta}${hint}`;
 }
 
-/** One peer session as the model sees it in a listing. `id` is the stable
- * pi session uuid; `name` is the display name when one was set. */
+/** One session as the model sees it in a listing. `id` is the stable pi
+ * session uuid; `name` is the display name when one was set; `self` marks
+ * the calling session itself. */
 export interface SessionListItem {
   status: string;
   work_dir: string;
   id: string;
   name?: string;
+  self?: boolean;
 }
 
-/** Machine-readable JSON listing of peer sessions (what the model sees). */
+/** Machine-readable JSON listing of sessions (what the model sees). */
 export function formatListing(
   records: SessionRecord[],
   selfAddr: string,
   presence: (r: SessionRecord) => Presence,
 ): string {
-  const others = records.filter((r) => r.addr !== selfAddr);
-  if (others.length === 0) return "[]";
-  const items: SessionListItem[] = others.map((r) => {
+  if (records.length === 0) return "[]";
+  const items: SessionListItem[] = records.map((r) => {
     const p = presence(r);
     const status = p === "live" ? r.status : p === "stalled" ? "not responding" : "offline";
-    return { status, work_dir: r.cwd, id: r.sessionId, name: r.name };
+    const item: SessionListItem = { status, work_dir: r.cwd, id: r.sessionId, name: r.name };
+    if (r.addr === selfAddr) item.self = true;
+    return item;
   });
   return JSON.stringify(items, null, 2);
 }

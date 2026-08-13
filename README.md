@@ -230,12 +230,12 @@ index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周�
 
 ### 工具（LLM 可见）
 
-| 工具                 | 作用                                                                                                                       |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `talk-list-sessions` | 列出其他 session，返回 JSON 数组（`status` / `work_dir` / `id` / `name`）；默认只列有心跳的，`includeOffline: true` 列全部 |
-| `talk-ask`           | 向某个 session 提问并阻塞等待回复（默认 30 分钟超时）                                                                      |
-| `talk-send`          | 发送纯文本消息（`to: "*"` 广播所有，`to: "cwd"` 广播同 cwd）                                                               |
-| `talk-reply`         | 回复一个 ask（`replyTo` 为 ask id，显式关联、不推断）                                                                      |
+| 工具                 | 作用                                                                                                                                    |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `talk-list-sessions` | 列出会话，返回 JSON 数组（`status` / `work_dir` / `id` / `name`，自己带 `self: true`）；默认只列有心跳的，`includeOffline: true` 列全部 |
+| `talk-ask`           | 向某个 session 提问并阻塞等待回复（默认 30 分钟超时）                                                                                   |
+| `talk-send`          | 发送纯文本消息（`to: "*"` 广播所有，`to: "cwd"` 广播同 cwd）                                                                            |
+| `talk-reply`         | 回复一个 ask（`replyTo` 为 ask id，显式关联、不推断）                                                                                   |
 
 对端消息自动投递（无需主动拉取）：投递方式由 `talk.deliver` 配置，`steer` 在模型工作过程中打断/唤醒，`queue` 排队到 session 下一轮自然 turn 时注入。
 

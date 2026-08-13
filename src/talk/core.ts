@@ -449,17 +449,18 @@ export class TalkCore {
   // ── Tool actions ───────────────────────────────────────────────────────
 
   /**
-   * JSON listing of visible peer sessions. Defaults to sessions whose
-   * heartbeat is fresh (within LIST_ACTIVE_MS); pass includeOffline to show
-   * every visible peer regardless of last contact.
+   * JSON listing of visible sessions, including self (marked `self: true`).
+   * Defaults to sessions whose heartbeat is fresh (within LIST_ACTIVE_MS);
+   * pass includeOffline to show every visible peer regardless of last contact.
    */
   async list(includeOffline = false): Promise<string> {
     const self = this.requireSelf();
     const now = this.now();
     const all = await listRecords(this.storage);
-    const records = all.filter(
-      (r) => this.isPeerVisible(r.cwd) && (includeOffline || now - r.lastSeenAt < LIST_ACTIVE_MS),
-    );
+    const records = all.filter((r) => {
+      if (r.addr === self.addr) return !this.dead;
+      return this.isPeerVisible(r.cwd) && (includeOffline || now - r.lastSeenAt < LIST_ACTIVE_MS);
+    });
     return formatListing(records, self.addr, (r) => presenceOf(r, now));
   }
 
@@ -468,12 +469,11 @@ export class TalkCore {
     const self = this.requireSelf();
     const now = this.now();
     const records = await listRecords(this.storage);
-    const filtered = records.filter(
-      (r) =>
-        r.cwd === cwd &&
-        this.isPeerVisible(r.cwd) &&
-        (includeOffline || now - r.lastSeenAt < LIST_ACTIVE_MS),
-    );
+    const filtered = records.filter((r) => {
+      if (r.cwd !== cwd) return false;
+      if (r.addr === self.addr) return !this.dead;
+      return this.isPeerVisible(r.cwd) && (includeOffline || now - r.lastSeenAt < LIST_ACTIVE_MS);
+    });
     return formatListing(filtered, self.addr, (r) => presenceOf(r, now));
   }
 

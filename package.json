@@ -67,6 +67,9 @@
       "src/opencode-todo.ts",
       "src/question.ts",
       "src/talk/index.ts"
+    ],
+    "skills": [
+      "src/talk/skills"
     ]
   },
   "lint-staged": {

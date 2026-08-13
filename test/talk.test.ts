@@ -305,8 +305,17 @@ describe("format", () => {
     ]);
   });
 
-  it("formatListing returns an empty array when no peers exist", () => {
-    expect(formatListing([makeSelf("aaaaaaaaaaaa")], "aaaaaaaaaaaa", () => "live")).toBe("[]");
+  it("formatListing marks the calling session with self: true", () => {
+    const listing = formatListing(
+      [makeSelf("aaaaaaaaaaaa"), makeSelf("bbbbbbbbbbbb")],
+      "aaaaaaaaaaaa",
+      () => "live",
+    );
+    const parsed = JSON.parse(listing) as { id: string; self?: boolean }[];
+    expect(parsed[0].id).toBe("session-aaaaaaaaaaaa");
+    expect(parsed[0].self).toBe(true);
+    expect(parsed[1].id).toBe("session-bbbbbbbbbbbb");
+    expect(parsed[1].self).toBeUndefined();
   });
 
   it("formatListing surfaces the waiting-talk-message status", () => {
@@ -446,15 +455,16 @@ describe("TalkCore", () => {
     expect(result).toContain("reply before asking");
   });
 
-  it("list hides peers outside the allowed workspaces", async () => {
+  it("list hides peers outside the allowed workspaces but keeps self", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb", { cwd: "/tmp/company1/repo" }));
     await writeRecord(storage, makeSelf("cccccccccccc", { cwd: "/tmp/company2/repo" }));
     core.setPeerVisibility(buildVisibilityFilter(["/tmp/company1"], "/base"));
-    const listing = JSON.parse(await core.list()) as { id: string }[];
-    expect(listing.map((s) => s.id)).toEqual(["session-bbbbbbbbbbbb"]);
+    const listing = JSON.parse(await core.list()) as { id: string; self?: boolean }[];
+    expect(listing.map((s) => s.id)).toEqual(["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb"]);
+    expect(listing.find((s) => s.self)?.id).toBe("session-aaaaaaaaaaaa");
   });
 
   it("list hides stale sessions unless includeOffline is set", async () => {
@@ -468,10 +478,11 @@ describe("TalkCore", () => {
     );
 
     const listing = JSON.parse(await core.list()) as { id: string }[];
-    expect(listing.map((s) => s.id)).toEqual(["session-bbbbbbbbbbbb"]);
+    expect(listing.map((s) => s.id)).toEqual(["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb"]);
 
     const all = JSON.parse(await core.list(true)) as { id: string }[];
     expect(all.map((s) => s.id).toSorted()).toEqual([
+      "session-aaaaaaaaaaaa",
       "session-bbbbbbbbbbbb",
       "session-cccccccccccc",
     ]);
@@ -508,10 +519,10 @@ describe("TalkCore", () => {
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb"));
     expect(await core.markDead("session-bbbbbbbbbbbb")).toContain("session bbbbbbbbbbbb");
     const listing = JSON.parse(await core.list()) as { id: string }[];
-    expect(listing).toEqual([]);
+    expect(listing.map((s) => s.id)).toEqual(["session-aaaaaaaaaaaa"]);
   });
 
-  it("markAllDead marks every visible peer", async () => {
+  it("markAllDead marks every visible peer but not self", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
@@ -519,7 +530,7 @@ describe("TalkCore", () => {
     await writeRecord(storage, makeSelf("cccccccccccc"));
     expect(await core.markAllDead()).toContain("2 session");
     const listing = JSON.parse(await core.list()) as { id: string }[];
-    expect(listing).toEqual([]);
+    expect(listing.map((s) => s.id)).toEqual(["session-aaaaaaaaaaaa"]);
   });
 
   it("sweep reaps a dead session with an empty mailbox immediately", async () => {

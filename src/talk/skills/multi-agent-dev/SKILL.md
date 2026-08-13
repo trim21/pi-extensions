@@ -15,10 +15,18 @@ The core rule: **a peer only knows what you tell it.** Messages must be self-con
 
 ### Discovery and addressing
 
-- `talk-list-sessions` returns visible sessions as JSON:
+- `talk-list-sessions` returns sessions as JSON — **your own session is included and marked `self: true`** (also where you learn your own id):
 
   ```json
-  [{ "status": "idle", "work_dir": "/path/to/cwd", "id": "0193a2f5-...", "name": "..." }]
+  [
+    {
+      "status": "idle",
+      "work_dir": "/path/to/cwd",
+      "id": "0193a2f5-...",
+      "name": "...",
+      "self": true
+    }
+  ]
   ```
 
 - Addressing is **by session id only**: `talk-send` / `talk-ask` take the full `id` (pi session uuid). Names, paths, and prefixes are not accepted.
