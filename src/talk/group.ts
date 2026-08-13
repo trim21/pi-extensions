@@ -1,14 +1,14 @@
 /**
- * Session groups for the talk mailbox: an explicit, uuid-addressed set of
- * sessions that see only each other. Core layer — depends only on
+ * Agent groups for the talk mailbox: an explicit, uuid-addressed set of
+ * agents that see only each other. Core layer — depends only on
  * TalkStorage, never on pi.
  *
  * Rules:
- * - A session belongs to at most one group (single-group invariant).
- * - Groups are public: any session can join any group by its uuid, and a
+ * - An agent belongs to at most one group (single-group invariant).
+ * - Groups are public: any agent can join any group by its uuid, and a
  *   member can leave freely. There is no owner.
- * - Visibility is fully group-driven: a grouped session sees only its
- *   co-members; a session in no group sees only itself.
+ * - Visibility is fully group-driven: a grouped agent sees only its
+ *   co-members; an agent in no group sees only itself.
  * - A group that empties is deleted; a one-member group is a normal state
  *   (a creator waiting for peers to join).
  */
@@ -22,7 +22,7 @@ import type { TalkStorage } from "./storage.js";
 
 export const GroupSchema = Type.Object({
   id: Type.String(),
-  /** pi session uuids of the members. */
+  /** pi agent uuids of the members. */
   members: Type.Array(Type.String()),
   createdAt: Type.Number(),
   updatedAt: Type.Number(),
@@ -79,16 +79,13 @@ export async function deleteGroup(storage: TalkStorage, id: string): Promise<boo
 }
 
 /**
- * The group a session currently belongs to. Under the single-group invariant
- * this is at most one; corrupted data that lists the session in several
+ * The group an agent currently belongs to. Under the single-group invariant
+ * this is at most one; corrupted data that lists the agent in several
  * groups resolves to the first match.
  */
-export async function groupForSession(
-  storage: TalkStorage,
-  sessionId: string,
-): Promise<Group | null> {
+export async function groupForAgent(storage: TalkStorage, agentId: string): Promise<Group | null> {
   for (const group of await listGroups(storage)) {
-    if (group.members.includes(sessionId)) return group;
+    if (group.members.includes(agentId)) return group;
   }
   return null;
 }

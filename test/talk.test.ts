@@ -13,7 +13,7 @@ import { peerAskedFirst, TalkCore } from "../src/talk/core.js";
 import { BOUNDARY_PREAMBLE, formatDelivery, formatListing } from "../src/talk/format.js";
 import {
   deleteGroup,
-  groupForSession,
+  groupForAgent,
   listGroups,
   readGroup,
   writeGroup,
@@ -35,11 +35,11 @@ import {
 } from "../src/talk/mailbox.js";
 import { BACKLOG_CAP, OutboundPolicy } from "../src/talk/policy.js";
 import {
+  type AgentRecord,
   deriveAddr,
   listRecords,
   presenceOf,
   readRecord,
-  type SessionRecord,
   sweep,
   writeRecord,
 } from "../src/talk/registry.js";
@@ -63,7 +63,7 @@ afterEach(() => {
 function makeLetter(overrides: Partial<Letter> = {}): Letter {
   return {
     id: newMessageId(),
-    from: { addr: "aaaaaaaaaaaa", name: "A", cwd: "/tmp/a", sessionId: "session-a" },
+    from: { addr: "aaaaaaaaaaaa", name: "A", cwd: "/tmp/a", agentId: "agent-a" },
     kind: "message",
     body: "hello",
     ts: Date.now(),
@@ -71,11 +71,11 @@ function makeLetter(overrides: Partial<Letter> = {}): Letter {
   };
 }
 
-function makeSelf(addr: string, overrides: Partial<SessionRecord> = {}): SessionRecord {
+function makeSelf(addr: string, overrides: Partial<AgentRecord> = {}): AgentRecord {
   return {
     addr,
-    sessionId: `session-${addr}`,
-    name: `session ${addr}`,
+    agentId: `agent-${addr}`,
+    name: `agent ${addr}`,
     cwd: `/tmp/${addr}`,
     pid: process.pid,
     startedAt: Date.now(),
@@ -144,19 +144,38 @@ describe("SqliteTalkStorage", () => {
 // ── Registry ─────────────────────────────────────────────────────────────
 
 describe("registry", () => {
-  it("derives a stable 12-hex address from cwd + sessionId", () => {
+  it("derives a stable 12-hex address from cwd + agentId", () => {
     const addr = deriveAddr("/tmp/x", "id");
     expect(addr).toMatch(/^[a-f0-9]{12}$/);
     expect(deriveAddr("/tmp/x", "id")).toBe(addr);
     expect(deriveAddr("/tmp/x", "id2")).not.toBe(addr);
   });
 
-  it("round-trips session records", async () => {
+  it("round-trips agent records", async () => {
     const { storage } = makeStorage();
     const self = makeSelf("aaaaaaaaaaaa");
     await writeRecord(storage, self);
     expect(await readRecord(storage, self.addr)).toEqual(self);
     expect(await readRecord(storage, "bbbbbbbbbbbb")).toBeNull();
+  });
+
+  it("readRecord migrates legacy records that stored the id as sessionId", async () => {
+    const { storage } = makeStorage();
+    // Pre-rename shape: `sessionId` instead of `agentId`.
+    const legacy = {
+      addr: "aaaaaaaaaaaa",
+      sessionId: "legacy-session-id",
+      name: "old agent",
+      cwd: "/tmp/legacy",
+      pid: 0,
+      startedAt: 1,
+      lastSeenAt: 1,
+      status: "idle",
+    };
+    await storage.writeJson("records", "aaaaaaaaaaaa.json", legacy);
+    const rec = await readRecord(storage, "aaaaaaaaaaaa");
+    expect(rec?.agentId).toBe("legacy-session-id");
+    expect(rec?.name).toBe("old agent");
   });
 
   it("presence reflects the offline flag and pid liveness", () => {
@@ -234,6 +253,22 @@ describe("mailbox", () => {
     // Write an invalid payload directly to the inbox namespace.
     await storage.writeJson("inbox/bbbbbbbbbbbb", "1-bad.json", { id: "no-body" });
     expect(await listInbox(storage, "bbbbbbbbbbbb")).toEqual([]);
+  });
+
+  it("listInbox migrates legacy letters whose sender id was sessionId", async () => {
+    const { storage } = makeStorage();
+    const legacy = {
+      id: newMessageId(),
+      from: { addr: "aaaaaaaaaaaa", name: "A", cwd: "/tmp/a", sessionId: "legacy-session" },
+      kind: "message" as const,
+      body: "hello from the past",
+      ts: Date.now(),
+    };
+    await storage.writeJson("inbox/bbbbbbbbbbbb", "1-legacy.json", legacy);
+    const inbox = await listInbox(storage, "bbbbbbbbbbbb");
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0].letter.from.agentId).toBe("legacy-session");
+    expect(inbox[0].letter.body).toBe("hello from the past");
   });
 
   it("tracks asks, lists pending, and resolves by ref", async () => {
@@ -323,21 +358,21 @@ describe("format", () => {
     expect(text).toContain("talk-reply");
   });
 
-  it("formatDelivery header carries the sender session id", () => {
+  it("formatDelivery header carries the sender agent id", () => {
     const text = formatDelivery(makeLetter());
-    expect(text).toContain('From pi session session-a (/tmp/a) — "A"');
+    expect(text).toContain('From pi agent agent-a (/tmp/a) — "A"');
   });
 
-  it("formatListing emits a JSON array with stable session ids", () => {
-    const records: SessionRecord[] = [
+  it("formatListing emits a JSON array with stable agent ids", () => {
+    const records: AgentRecord[] = [
       makeSelf("aaaaaaaaaaaa", {
-        sessionId: "0193a2f5-7c4b-8c1d-9e0f-abcdef123456",
+        agentId: "0193a2f5-7c4b-8c1d-9e0f-abcdef123456",
         name: "peer-a",
         cwd: "/tmp/proj-a",
         status: "working",
       }),
       makeSelf("bbbbbbbbbbbb", {
-        sessionId: "0193a2f6-1111-2222-3333-444444444444",
+        agentId: "0193a2f6-1111-2222-3333-444444444444",
         name: "peer-b",
         cwd: "/tmp/proj-b",
         status: "idle",
@@ -362,16 +397,16 @@ describe("format", () => {
     ]);
   });
 
-  it("formatListing marks the calling session with self: true", () => {
+  it("formatListing marks the calling agent with self: true", () => {
     const listing = formatListing(
       [makeSelf("aaaaaaaaaaaa"), makeSelf("bbbbbbbbbbbb")],
       "aaaaaaaaaaaa",
       () => "live",
     );
     const parsed = JSON.parse(listing) as { id: string; self?: boolean }[];
-    expect(parsed[0].id).toBe("session-aaaaaaaaaaaa");
+    expect(parsed[0].id).toBe("agent-aaaaaaaaaaaa");
     expect(parsed[0].self).toBe(true);
-    expect(parsed[1].id).toBe("session-bbbbbbbbbbbb");
+    expect(parsed[1].id).toBe("agent-bbbbbbbbbbbb");
     expect(parsed[1].self).toBeUndefined();
   });
 
@@ -385,8 +420,8 @@ describe("format", () => {
       {
         status: "waiting-talk-message",
         work_dir: "/tmp/aaaaaaaaaaaa",
-        id: "session-aaaaaaaaaaaa",
-        name: "session aaaaaaaaaaaa",
+        id: "agent-aaaaaaaaaaaa",
+        name: "agent aaaaaaaaaaaa",
       },
     ]);
   });
@@ -395,24 +430,24 @@ describe("format", () => {
 // ── Arbitration ──────────────────────────────────────────────────────────
 
 describe("peerAskedFirst", () => {
-  const peer = { ts: 100, cwd: "/x", sessionId: "a" };
-  const self = { ts: 200, cwd: "/y", sessionId: "b" };
+  const peer = { ts: 100, cwd: "/x", agentId: "a" };
+  const self = { ts: 200, cwd: "/y", agentId: "b" };
 
   it("earlier ts wins", () => {
     expect(peerAskedFirst(peer, self)).toBe(true);
     expect(peerAskedFirst(self, peer)).toBe(false);
   });
 
-  it("breaks a same-ts tie deterministically by cwd + sessionId", () => {
-    const left = { ts: 100, cwd: "/a", sessionId: "s" };
-    const right = { ts: 100, cwd: "/b", sessionId: "s" };
+  it("breaks a same-ts tie deterministically by cwd + agentId", () => {
+    const left = { ts: 100, cwd: "/a", agentId: "s" };
+    const right = { ts: 100, cwd: "/b", agentId: "s" };
     expect(peerAskedFirst(left, right)).toBe(true);
     expect(peerAskedFirst(right, left)).toBe(false);
   });
 
   it("never agrees in both directions", () => {
-    const a = { ts: 1, cwd: "/a", sessionId: "1" };
-    const b = { ts: 1, cwd: "/b", sessionId: "2" };
+    const a = { ts: 1, cwd: "/a", agentId: "1" };
+    const b = { ts: 1, cwd: "/b", agentId: "2" };
     expect(peerAskedFirst(a, b)).toBe(!peerAskedFirst(b, a));
   });
 });
@@ -438,15 +473,15 @@ describe("groups", () => {
     expect(await listGroups(storage)).toEqual([]);
   });
 
-  it("groupForSession finds the group containing the session", async () => {
+  it("groupForAgent finds the group containing the agent", async () => {
     const { storage } = makeStorage();
     await writeGroup(storage, { id: "g1", members: ["a", "b"], createdAt: 1, updatedAt: 1 });
     await writeGroup(storage, { id: "g2", members: ["c"], createdAt: 2, updatedAt: 2 });
-    const groupOfB = await groupForSession(storage, "b");
-    const groupOfC = await groupForSession(storage, "c");
+    const groupOfB = await groupForAgent(storage, "b");
+    const groupOfC = await groupForAgent(storage, "c");
     expect(groupOfB?.id).toBe("g1");
     expect(groupOfC?.id).toBe("g2");
-    expect(await groupForSession(storage, "nobody")).toBeNull();
+    expect(await groupForAgent(storage, "nobody")).toBeNull();
   });
 
   it("groupJoin without a name creates a fresh group with a uuid", async () => {
@@ -456,11 +491,11 @@ describe("groups", () => {
     const result = await core.groupJoin();
     const id = groupIdFrom(result);
     expect(result).toContain(`/talk-group-join ${id}`);
-    const myGroup = await groupForSession(storage, "session-aaaaaaaaaaaa");
+    const myGroup = await groupForAgent(storage, "agent-aaaaaaaaaaaa");
     expect(myGroup?.id).toBe(id);
   });
 
-  it("groupJoin with a custom name creates the group and a second session joins it", async () => {
+  it("groupJoin with a custom name creates the group and a second agent joins it", async () => {
     const { storage } = makeStorage();
     const coreA = makeCore(storage, []);
     const coreB = makeCore(storage, []);
@@ -469,7 +504,7 @@ describe("groups", () => {
     expect(await coreA.groupJoin("abc")).toContain("Created group abc");
     expect(await coreB.groupJoin("abc")).toContain("Joined group abc");
     const joined = await readGroup(storage, "abc");
-    expect(joined?.members).toEqual(["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb"]);
+    expect(joined?.members).toEqual(["agent-aaaaaaaaaaaa", "agent-bbbbbbbbbbbb"]);
   });
 
   it("groupJoin with a name like 'qwe--asd' works as a group name", async () => {
@@ -477,7 +512,7 @@ describe("groups", () => {
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
     expect(await core.groupJoin("qwe--asd")).toContain("Created group qwe--asd");
-    const myGroup = await groupForSession(storage, "session-aaaaaaaaaaaa");
+    const myGroup = await groupForAgent(storage, "agent-aaaaaaaaaaaa");
     expect(myGroup?.id).toBe("qwe--asd");
   });
 
@@ -498,6 +533,39 @@ describe("groups", () => {
     expect(await core.groupJoin("abc")).toContain("Already in group");
   });
 
+  it("groupJoin with a agent name sets the display name and lists it", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    const result = await core.groupJoin("abc", "frontend");
+    expect(result).toContain("Created group abc");
+    expect(result).toContain('visible as "frontend"');
+    const rec = await readRecord(storage, "aaaaaaaaaaaa");
+    expect(rec?.name).toBe("frontend");
+    const listing = JSON.parse(await core.list()) as { name?: string }[];
+    expect(listing[0].name).toBe("frontend");
+  });
+
+  it("groupJoin with a agent name renames an already-joined member", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    await core.groupJoin("abc");
+    expect(await core.groupJoin("abc", "backend")).toContain("Already in group");
+    const rec = await readRecord(storage, "aaaaaaaaaaaa");
+    expect(rec?.name).toBe("backend");
+  });
+
+  it("groupJoin without a agent name leaves the name untouched", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    await core.groupJoin("abc", "frontend");
+    await core.groupJoin("abc");
+    const rec = await readRecord(storage, "aaaaaaaaaaaa");
+    expect(rec?.name).toBe("frontend");
+  });
+
   it("groupJoinLast joins the most recently created group", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
@@ -505,18 +573,18 @@ describe("groups", () => {
     const now = Date.now();
     await writeGroup(storage, {
       id: "old",
-      members: ["session-bbbbbbbbbbbb"],
+      members: ["agent-bbbbbbbbbbbb"],
       createdAt: now - 2000,
       updatedAt: now - 2000,
     });
     await writeGroup(storage, {
       id: "new",
-      members: ["session-cccccccccccc"],
+      members: ["agent-cccccccccccc"],
       createdAt: now - 1000,
       updatedAt: now - 1000,
     });
     expect(await core.groupJoinLast()).toContain("Joined group new");
-    const myGroup = await groupForSession(storage, "session-aaaaaaaaaaaa");
+    const myGroup = await groupForAgent(storage, "agent-aaaaaaaaaaaa");
     expect(myGroup?.id).toBe("new");
     // already in the newest group → no-op
     expect(await core.groupJoinLast()).toContain("Already in group");
@@ -535,13 +603,13 @@ describe("groups", () => {
     await coreB.groupJoin(g1);
     const g2 = groupIdFrom(await coreB.groupJoin());
     expect(g2).not.toBe(g1);
-    const groupOfB = await groupForSession(storage, "session-bbbbbbbbbbbb");
-    const groupOfA = await groupForSession(storage, "session-aaaaaaaaaaaa");
+    const groupOfB = await groupForAgent(storage, "agent-bbbbbbbbbbbb");
+    const groupOfA = await groupForAgent(storage, "agent-aaaaaaaaaaaa");
     expect(groupOfB?.id).toBe(g2);
     // A stays in g1, now alone
     expect(groupOfA?.id).toBe(g1);
     const g1After = await readGroup(storage, g1);
-    expect(g1After?.members).toEqual(["session-aaaaaaaaaaaa"]);
+    expect(g1After?.members).toEqual(["agent-aaaaaaaaaaaa"]);
   });
 
   it("groupLeave removes the member and deletes an emptied group", async () => {
@@ -564,7 +632,7 @@ describe("groups", () => {
     await coreB.groupJoin(id);
     expect(await coreB.groupLeave()).toContain("1 member(s) remain");
     const gAfterLeave = await readGroup(storage, id);
-    expect(gAfterLeave?.members).toEqual(["session-aaaaaaaaaaaa"]);
+    expect(gAfterLeave?.members).toEqual(["agent-aaaaaaaaaaaa"]);
   });
 
   it("groupDelete removes a group by name; members become ungrouped", async () => {
@@ -577,8 +645,8 @@ describe("groups", () => {
     await coreB.groupJoin("abc");
     expect(await coreA.groupDelete("abc")).toContain("Deleted group abc (2 member(s))");
     expect(await readGroup(storage, "abc")).toBeNull();
-    expect(await groupForSession(storage, "session-aaaaaaaaaaaa")).toBeNull();
-    expect(await groupForSession(storage, "session-bbbbbbbbbbbb")).toBeNull();
+    expect(await groupForAgent(storage, "agent-aaaaaaaaaaaa")).toBeNull();
+    expect(await groupForAgent(storage, "agent-bbbbbbbbbbbb")).toBeNull();
     expect(await coreA.groupDelete("missing")).toContain("Unknown group");
     expect(await coreA.groupDelete("bad name")).toContain("Invalid group name");
   });
@@ -589,13 +657,13 @@ describe("groups", () => {
     await core.start(makeSelf("aaaaaaaaaaaa"));
     await writeGroup(storage, {
       id: "g1",
-      members: ["session-bbbbbbbbbbbb"],
+      members: ["agent-bbbbbbbbbbbb"],
       createdAt: 1,
       updatedAt: 1,
     });
     await writeGroup(storage, {
       id: "g2",
-      members: ["session-cccccccccccc"],
+      members: ["agent-cccccccccccc"],
       createdAt: 2,
       updatedAt: 2,
     });
@@ -612,13 +680,13 @@ describe("groups", () => {
     const now = Date.now();
     await writeGroup(storage, {
       id: "oldest",
-      members: ["session-bbbbbbbbbbbb"],
+      members: ["agent-bbbbbbbbbbbb"],
       createdAt: now - 2000,
       updatedAt: now - 2000,
     });
     await writeGroup(storage, {
       id: "middle",
-      members: ["session-cccccccccccc"],
+      members: ["agent-cccccccccccc"],
       createdAt: now - 1000,
       updatedAt: now - 1000,
     });
@@ -663,7 +731,7 @@ describe("TalkCore", () => {
     await coreB.start(makeSelf("bbbbbbbbbbbb"));
     await coreB.groupJoin(groupIdFrom(await coreA.groupJoin()));
 
-    const askPromise = coreA.ask("session-bbbbbbbbbbbb", "question?", 5000);
+    const askPromise = coreA.ask("agent-bbbbbbbbbbbb", "question?", 5000);
     // Wait until the ask letter lands in B's inbox, then let B process it.
     await vi.waitFor(async () => {
       expect(await listInbox(storage, "bbbbbbbbbbbb")).toHaveLength(1);
@@ -695,13 +763,13 @@ describe("TalkCore", () => {
       makeLetter({
         from: {
           addr: "bbbbbbbbbbbb",
-          name: "session bbbbbbbbbbbb",
+          name: "agent bbbbbbbbbbbb",
           cwd: "/tmp/bbbbbbbbbbbb",
-          sessionId: "session-bbbbbbbbbbbb",
+          agentId: "agent-bbbbbbbbbbbb",
         },
       }),
     );
-    const result = await coreA.ask("session-bbbbbbbbbbbb", "question?", 1000);
+    const result = await coreA.ask("agent-bbbbbbbbbbbb", "question?", 1000);
     expect(result).toContain("unread message(s)");
     expect(result).toContain("reply before asking");
   });
@@ -714,7 +782,7 @@ describe("TalkCore", () => {
     await writeRecord(storage, makeSelf("cccccccccccc", { cwd: "/tmp/company2/repo" }));
     const listing = JSON.parse(await core.list()) as { id: string; self?: boolean }[];
     expect(listing).toHaveLength(1);
-    expect(listing[0].id).toBe("session-aaaaaaaaaaaa");
+    expect(listing[0].id).toBe("agent-aaaaaaaaaaaa");
     expect(listing[0].self).toBe(true);
   });
 
@@ -724,7 +792,7 @@ describe("TalkCore", () => {
     await core.start(makeSelf("aaaaaaaaaaaa"));
     await writeGroup(storage, {
       id: "g1",
-      members: ["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb", "session-cccccccccccc"],
+      members: ["agent-aaaaaaaaaaaa", "agent-bbbbbbbbbbbb", "agent-cccccccccccc"],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
@@ -733,14 +801,14 @@ describe("TalkCore", () => {
 
     const listing = JSON.parse(await core.list()) as { id: string; status: string }[];
     expect(listing.map((s) => s.id).toSorted()).toEqual([
-      "session-aaaaaaaaaaaa",
-      "session-bbbbbbbbbbbb",
-      "session-cccccccccccc",
+      "agent-aaaaaaaaaaaa",
+      "agent-bbbbbbbbbbbb",
+      "agent-cccccccccccc",
     ]);
-    expect(listing.find((s) => s.id === "session-cccccccccccc")?.status).toBe("offline");
+    expect(listing.find((s) => s.id === "agent-cccccccccccc")?.status).toBe("offline");
   });
 
-  it("grouped sessions see only their co-members, ungrouped ones only themselves", async () => {
+  it("grouped agents see only their co-members, ungrouped ones only themselves", async () => {
     const { storage } = makeStorage();
     const coreA = makeCore(storage, []);
     const coreB = makeCore(storage, []);
@@ -751,39 +819,33 @@ describe("TalkCore", () => {
     await coreB.groupJoin(groupIdFrom(await coreA.groupJoin()));
 
     const listA = JSON.parse(await coreA.list()) as { id: string }[];
-    expect(listA.map((s) => s.id).toSorted()).toEqual([
-      "session-aaaaaaaaaaaa",
-      "session-bbbbbbbbbbbb",
-    ]);
+    expect(listA.map((s) => s.id).toSorted()).toEqual(["agent-aaaaaaaaaaaa", "agent-bbbbbbbbbbbb"]);
     const listB = JSON.parse(await coreB.list()) as { id: string }[];
-    expect(listB.map((s) => s.id).toSorted()).toEqual([
-      "session-aaaaaaaaaaaa",
-      "session-bbbbbbbbbbbb",
-    ]);
+    expect(listB.map((s) => s.id).toSorted()).toEqual(["agent-aaaaaaaaaaaa", "agent-bbbbbbbbbbbb"]);
     const listC = JSON.parse(await coreC.list()) as { id: string }[];
-    expect(listC.map((s) => s.id)).toEqual(["session-cccccccccccc"]);
+    expect(listC.map((s) => s.id)).toEqual(["agent-cccccccccccc"]);
   });
 
-  it("rejects asks to sessions outside the group even with the exact session id", async () => {
+  it("rejects asks to agents outside the group even with the exact agent id", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
     await writeGroup(storage, {
       id: "g1",
-      members: ["session-aaaaaaaaaaaa"],
+      members: ["agent-aaaaaaaaaaaa"],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb", { cwd: "/tmp/company2/repo" }));
-    const result = await core.ask("session-bbbbbbbbbbbb", "question?", 1000);
-    expect(result).toContain("Unknown session id");
+    const result = await core.ask("agent-bbbbbbbbbbbb", "question?", 1000);
+    expect(result).toContain("Unknown agent id");
   });
 
   it("markDead on self pins lastSeenAt to 0 even across later writes", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
-    expect(await core.markDead()).toContain("this session");
+    expect(await core.markDead()).toContain("this agent");
     core.setWorking(); // would normally refresh lastSeenAt
     await vi.waitFor(async () => {
       const rec = await readRecord(storage, "aaaaaaaaaaaa");
@@ -794,20 +856,20 @@ describe("TalkCore", () => {
     expect(listing).toEqual([]);
   });
 
-  it("markDead by session id marks the peer offline", async () => {
+  it("markDead by agent id marks the peer offline", async () => {
     const { storage } = makeStorage();
     const core = makeCore(storage, []);
     await core.start(makeSelf("aaaaaaaaaaaa"));
     await writeRecord(storage, makeSelf("bbbbbbbbbbbb"));
     await writeGroup(storage, {
       id: "g1",
-      members: ["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb"],
+      members: ["agent-aaaaaaaaaaaa", "agent-bbbbbbbbbbbb"],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
-    expect(await core.markDead("session-bbbbbbbbbbbb")).toContain("session bbbbbbbbbbbb");
+    expect(await core.markDead("agent-bbbbbbbbbbbb")).toContain("agent bbbbbbbbbbbb");
     const listing = JSON.parse(await core.list()) as { id: string; status: string }[];
-    const peer = listing.find((s) => s.id === "session-bbbbbbbbbbbb");
+    const peer = listing.find((s) => s.id === "agent-bbbbbbbbbbbb");
     expect(peer?.status).toBe("offline");
   });
 
@@ -819,21 +881,21 @@ describe("TalkCore", () => {
     await writeRecord(storage, makeSelf("cccccccccccc"));
     await writeGroup(storage, {
       id: "g1",
-      members: ["session-aaaaaaaaaaaa", "session-bbbbbbbbbbbb", "session-cccccccccccc"],
+      members: ["agent-aaaaaaaaaaaa", "agent-bbbbbbbbbbbb", "agent-cccccccccccc"],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
-    expect(await core.markAllDead()).toContain("2 session");
+    expect(await core.markAllDead()).toContain("2 agent");
     const listing = JSON.parse(await core.list()) as { id: string; status: string }[];
     const statuses = Object.fromEntries(listing.map((s) => [s.id, s.status]));
     expect(statuses).toEqual({
-      "session-aaaaaaaaaaaa": "idle",
-      "session-bbbbbbbbbbbb": "offline",
-      "session-cccccccccccc": "offline",
+      "agent-aaaaaaaaaaaa": "idle",
+      "agent-bbbbbbbbbbbb": "offline",
+      "agent-cccccccccccc": "offline",
     });
   });
 
-  it("sweep reaps a dead session with an empty mailbox immediately", async () => {
+  it("sweep reaps a dead agent with an empty mailbox immediately", async () => {
     const { storage } = makeStorage();
     const now = Date.now();
     await writeRecord(storage, makeSelf("aaaaaaaaaaaa", { pid: 0, lastSeenAt: 0 }));

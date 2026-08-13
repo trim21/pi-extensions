@@ -57,7 +57,7 @@ export class OutboundPolicy {
     if (this.sentAt.length >= RATE_LIMIT_MAX) {
       return {
         ok: false,
-        reason: `Rate limited: ${RATE_LIMIT_MAX} messages per ${RATE_LIMIT_WINDOW_MS / 1000}s per session.`,
+        reason: `Rate limited: ${RATE_LIMIT_MAX} messages per ${RATE_LIMIT_WINDOW_MS / 1000}s per agent.`,
       };
     }
     return { ok: true };

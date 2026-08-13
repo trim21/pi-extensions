@@ -1,12 +1,12 @@
 /**
- * Session registry for the talk mailbox: who is around, where, and whether
+ * Agent registry for the talk mailbox: who is around, where, and whether
  * they are reachable. Core layer — depends only on TalkStorage, never on pi.
  *
  * Design:
  * - An address belongs to a conversation, not a process: hash of cwd + pi
- *   session id, so a resumed session (`pi -c`) answers to the same address and
- *   two sessions on one directory never share an inbox.
- * - A record outlives the process that wrote it — that's what makes a session
+ *   agent id, so a resumed agent (`pi -c`) answers to the same address and
+ *   two agents on one directory never share an inbox.
+ * - A record outlives the process that wrote it — that's what makes an agent
  *   addressable while it's down (mail waits on disk).
  * - Presence is the offline flag plus the pid and its start time: a record
  *   whose process is alive (pid + matching start time, ruling out pid reuse)
@@ -26,7 +26,32 @@ import { Value } from "typebox/value";
 
 import type { TalkStorage } from "./storage.js";
 
-export const SessionRecordSchema = Type.Object({
+const STATUS_SCHEMA = Type.Union([
+  Type.Literal("idle"),
+  Type.Literal("working"),
+  Type.Literal("waiting-talk-message"),
+]);
+
+export const AgentRecordSchema = Type.Object({
+  addr: Type.String(),
+  agentId: Type.String(),
+  name: Type.String(),
+  cwd: Type.String(),
+  pid: Type.Number(),
+  pidStart: Type.Optional(Type.Number()),
+  startedAt: Type.Number(),
+  lastSeenAt: Type.Number(),
+  status: STATUS_SCHEMA,
+  offline: Type.Optional(Type.Boolean()),
+});
+export type AgentRecord = Static<typeof AgentRecordSchema>;
+
+/**
+ * Records written before the session→agent rename stored the pi session id
+ * as `sessionId`. TypeBox ignores extra properties, so this schema also
+ * matches current records; the read path checks the current schema first.
+ */
+const LegacyAgentRecordSchema = Type.Object({
   addr: Type.String(),
   sessionId: Type.String(),
   name: Type.String(),
@@ -35,14 +60,9 @@ export const SessionRecordSchema = Type.Object({
   pidStart: Type.Optional(Type.Number()),
   startedAt: Type.Number(),
   lastSeenAt: Type.Number(),
-  status: Type.Union([
-    Type.Literal("idle"),
-    Type.Literal("working"),
-    Type.Literal("waiting-talk-message"),
-  ]),
+  status: STATUS_SCHEMA,
   offline: Type.Optional(Type.Boolean()),
 });
-export type SessionRecord = Static<typeof SessionRecordSchema>;
 
 export type Presence = "live" | "offline";
 
@@ -53,8 +73,8 @@ export const SWEEP_MAIL_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
 const ADDRESS_PATTERN = /^[a-f0-9]{12}$/;
 
-export function deriveAddr(cwd: string, sessionId: string): string {
-  return createHash("sha256").update(`${cwd}${sessionId}`).digest("hex").slice(0, 12);
+export function deriveAddr(cwd: string, agentId: string): string {
+  return createHash("sha256").update(`${cwd}${agentId}`).digest("hex").slice(0, 12);
 }
 
 /** Validate a talk address before it becomes a storage key. */
@@ -81,23 +101,26 @@ function recordKey(addr: string): string {
   return `${addr}.json`;
 }
 
-// ── Session records ──────────────────────────────────────────────────────
+// ── Agent records ────────────────────────────────────────────────────────
 
-export async function writeRecord(storage: TalkStorage, record: SessionRecord): Promise<void> {
+export async function writeRecord(storage: TalkStorage, record: AgentRecord): Promise<void> {
   await storage.writeJson(RECORDS_NS, recordKey(record.addr), record);
 }
 
-export async function readRecord(
-  storage: TalkStorage,
-  addr: string,
-): Promise<SessionRecord | null> {
+export async function readRecord(storage: TalkStorage, addr: string): Promise<AgentRecord | null> {
   const raw = await storage.readJson(RECORDS_NS, recordKey(addr));
-  return Value.Check(SessionRecordSchema, raw) ? raw : null;
+  if (Value.Check(AgentRecordSchema, raw)) return raw;
+  // Migrate legacy records in place of the `sessionId` → `agentId` rename.
+  if (Value.Check(LegacyAgentRecordSchema, raw)) {
+    const { sessionId, ...rest } = raw as { sessionId: string } & Record<string, unknown>;
+    return { ...rest, agentId: sessionId } as AgentRecord;
+  }
+  return null;
 }
 
 /** Read-only listing, oldest first. Never mutates anything. */
-export async function listRecords(storage: TalkStorage): Promise<SessionRecord[]> {
-  const out: SessionRecord[] = [];
+export async function listRecords(storage: TalkStorage): Promise<AgentRecord[]> {
+  const out: AgentRecord[] = [];
   for (const key of await storage.listKeys(RECORDS_NS)) {
     const addr = key.slice(0, -".json".length);
     if (!ADDRESS_PATTERN.test(addr)) continue;
@@ -109,7 +132,7 @@ export async function listRecords(storage: TalkStorage): Promise<SessionRecord[]
 
 /**
  * Process start time (field 22 of /proc/<pid>/stat), used to rule out pid
- * reuse: pids wrap around, so an alive pid is only the same session when its
+ * reuse: pids wrap around, so an alive pid is only the same agent when its
  * start time matches the recorded one. Returns undefined on non-Linux or when
  * the stat file is unreadable.
  */
@@ -146,7 +169,7 @@ function pidAlive(pid: number, pidStart?: number): boolean {
   return start === undefined ? true : start === pidStart;
 }
 
-export function presenceOf(record: SessionRecord): Presence {
+export function presenceOf(record: AgentRecord): Presence {
   if (record.offline) return "offline";
   if (!pidAlive(record.pid, record.pidStart)) return "offline";
   return "live";
@@ -155,20 +178,20 @@ export function presenceOf(record: SessionRecord): Presence {
 // ── Sweep ────────────────────────────────────────────────────────────────
 
 /**
- * Reclaim dead sessions' data. Rules (mail outranks tidiness):
+ * Reclaim dead agents' data. Rules (mail outranks tidiness):
  * - a record whose process is still alive is never touched;
  * - a record whose last activity was less than SWEEP_OFFLINE_GRACE_MS ago is
  *   never touched — it may be merely down or suspended, and a resume will
  *   re-register it under the same id anyway;
  * - a mailbox holding undelivered mail is kept for SWEEP_MAIL_KEEP_MS;
  * - once the grace period has passed, an empty mailbox is discarded promptly
- *   regardless of whether pi could still resume the session (resume re-creates
+ *   regardless of whether pi could still resume the agent (resume re-creates
  *   the record; with no mail nothing is lost).
  */
 export async function sweep(storage: TalkStorage, now: number = Date.now()): Promise<void> {
   for (const record of await listRecords(storage)) {
     // Without a heartbeat, lastSeenAt only tracks the last event, so an idle
-    // live session would look long-quiet — never reap a live process.
+    // live agent would look long-quiet — never reap a live process.
     if (pidAlive(record.pid, record.pidStart)) continue;
     const quietFor = now - record.lastSeenAt;
     if (quietFor < SWEEP_OFFLINE_GRACE_MS) continue;

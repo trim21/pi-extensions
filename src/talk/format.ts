@@ -4,10 +4,9 @@
  */
 
 import type { Letter } from "./mailbox.js";
-import type { Presence, SessionRecord } from "./registry.js";
+import type { AgentRecord, Presence } from "./registry.js";
 
-export const BOUNDARY_PREAMBLE =
-  "This came from another pi session (a peer agent), not from the user.";
+export const BOUNDARY_PREAMBLE = "This came from another pi agent, not from the user.";
 
 export function shortAddr(addr: string): string {
   return addr.slice(0, 6);
@@ -21,20 +20,20 @@ export function age(ts: number, now: number = Date.now()): string {
   return `${Math.round(m / 60)}h ago`;
 }
 
-/** Delivery text injected into the receiving session's LLM context. */
+/** Delivery text injected into the receiving agent's LLM context. */
 export function formatDelivery(letter: Letter, now: number = Date.now()): string {
   const from = letter.from;
-  const header = `From pi session ${from.sessionId} (${from.cwd}) — "${from.name}"`;
+  const header = `From pi agent ${from.agentId} (${from.cwd}) — "${from.name}"`;
   const meta = `_id ${letter.id} · ${letter.kind} · sent ${age(letter.ts, now)}_`;
   const hint =
     letter.kind === "ask" ? `\n\nReply with the talk-reply tool, replyTo: "${letter.id}"` : "";
   return `${BOUNDARY_PREAMBLE}\n\n${header}:\n\n${letter.body}\n\n${meta}${hint}`;
 }
 
-/** One session as the model sees it in a listing. `id` is the stable pi
- * session uuid; `name` is the display name when one was set; `self` marks
- * the calling session itself. */
-export interface SessionListItem {
+/** One agent as the model sees it in a listing. `id` is the stable pi
+ * agent uuid; `name` is the display name when one was set; `self` marks
+ * the calling agent itself. */
+export interface AgentListItem {
   status: string;
   work_dir: string;
   id: string;
@@ -42,17 +41,17 @@ export interface SessionListItem {
   self?: boolean;
 }
 
-/** Machine-readable JSON listing of sessions (what the model sees). */
+/** Machine-readable JSON listing of agents (what the model sees). */
 export function formatListing(
-  records: SessionRecord[],
+  records: AgentRecord[],
   selfAddr: string,
-  presence: (r: SessionRecord) => Presence,
+  presence: (r: AgentRecord) => Presence,
 ): string {
   if (records.length === 0) return "[]";
-  const items: SessionListItem[] = records.map((r) => {
+  const items: AgentListItem[] = records.map((r) => {
     const p = presence(r);
     const status = p === "live" ? r.status : "offline";
-    const item: SessionListItem = { status, work_dir: r.cwd, id: r.sessionId, name: r.name };
+    const item: AgentListItem = { status, work_dir: r.cwd, id: r.agentId, name: r.name };
     if (r.addr === selfAddr) item.self = true;
     return item;
   });
@@ -60,5 +59,5 @@ export function formatListing(
 }
 
 export function refusalUnknown(to: string): string {
-  return `Unknown session id '${to}'. Get session ids with talk-list-sessions.`;
+  return `Unknown agent id '${to}'. Get agent ids with talk-list-agents.`;
 }

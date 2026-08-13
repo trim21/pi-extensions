@@ -18,11 +18,12 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
+import { parseArgs } from "../lib/cli-args.js";
 import { resolveHomePath } from "../lib/path.js";
 import { TalkCore } from "./core.js";
 import { formatDelivery } from "./format.js";
 import type { Letter } from "./mailbox.js";
-import { deriveAddr, type SessionRecord } from "./registry.js";
+import { type AgentRecord, deriveAddr } from "./registry.js";
 import { SqliteTalkStorage } from "./storage.js";
 
 const DELIVERY_TYPE = "talk:delivery";
@@ -108,14 +109,16 @@ export default function talk(pi: ExtensionAPI) {
   const dbPath = configured
     ? resolveHomePath(configured, getAgentDir())
     : path.join(getAgentDir(), "talk.db");
-  // "queue": deliver on the session's next natural turn without waking it;
-  // "steer": interrupt mid-run / wake an idle session immediately.
+  // "queue": deliver on the agent's next natural turn without waking it;
+  // "steer": interrupt mid-run / wake an idle agent immediately.
   const deliverMode: "steer" | "queue" = settings.deliver ?? "queue";
   const storage = new SqliteTalkStorage(dbPath);
 
-  let self: SessionRecord | undefined;
+  let self: AgentRecord | undefined;
+  /** Display name explicitly set via `--name`; kept across session_info_changed. */
+  let explicitName: string | undefined;
 
-  function deliverToSession(letter: Letter): boolean {
+  function deliverToAgent(letter: Letter): boolean {
     const details: DeliveryDetails = {
       id: letter.id,
       kind: letter.kind,
@@ -142,7 +145,7 @@ export default function talk(pi: ExtensionAPI) {
   const core = new TalkCore({
     storage,
     events: {
-      deliver: deliverToSession,
+      deliver: deliverToAgent,
       notify(content) {
         // Presence transitions are informational — queue for the next turn
         // rather than steering into a busy agent.
@@ -162,13 +165,13 @@ export default function talk(pi: ExtensionAPI) {
   // ── Lifecycle ──────────────────────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx: ExtensionContext) => {
-    const sessionId = ctx.sessionManager.getSessionId();
+    const agentId = ctx.sessionManager.getSessionId();
     const cwd = ctx.sessionManager.getCwd() ?? ctx.cwd;
     const now = Date.now();
     self = {
-      addr: deriveAddr(cwd, sessionId),
-      sessionId,
-      name: pi.getSessionName() ?? "Unnamed session",
+      addr: deriveAddr(cwd, agentId),
+      agentId,
+      name: pi.getSessionName() ?? "Unnamed agent",
       cwd,
       pid: process.pid,
       startedAt: now,
@@ -182,15 +185,17 @@ export default function talk(pi: ExtensionAPI) {
   pi.on("agent_end", () => core.setIdle());
   pi.on("agent_settled", () => core.setIdle());
   pi.on("before_agent_start", (event) => {
-    // One-line nudge: before coordinating with other pi sessions, read the
+    // One-line nudge: before coordinating with other pi agents, read the
     // shipped workflow skill. Skipped when the skill file is absent.
     if (!fs.existsSync(SKILL_PATH)) return;
     return {
-      systemPrompt: `${event.systemPrompt}\n\nBefore multi-session collaboration, read ${SKILL_PATH} to understand the talk workflow.`,
+      systemPrompt: `${event.systemPrompt}\n\nBefore multi-agent collaboration, read ${SKILL_PATH} to understand the talk workflow.`,
     };
   });
   pi.on("session_info_changed", () => {
-    if (self) core.setSessionName(pi.getSessionName() ?? self.name);
+    // A name set explicitly via `--name` wins over pi's session title;
+    // otherwise follow pi's session name.
+    if (self) core.setAgentName(explicitName ?? pi.getSessionName() ?? self.name);
   });
   pi.on("session_shutdown", () => {
     void core.stop();
@@ -199,12 +204,12 @@ export default function talk(pi: ExtensionAPI) {
   // ── Tools ──────────────────────────────────────────────────────────────
 
   pi.registerTool({
-    name: "talk-list-sessions",
-    label: "List Talk Sessions",
-    description: "List visible pi sessions (id, status, work_dir, name).",
-    promptSnippet: "List other pi sessions on this machine",
+    name: "talk-list-agents",
+    label: "List Talk Agents",
+    description: "List visible pi agents (id, status, work_dir, name).",
+    promptSnippet: "List other pi agents on this machine",
     parameters: Type.Object({
-      cwd: Type.Optional(Type.String({ description: "Only list sessions in this directory" })),
+      cwd: Type.Optional(Type.String({ description: "Only list agents in this directory" })),
     }),
     async execute(_toolCallId, params) {
       const initError = requireInit();
@@ -217,10 +222,10 @@ export default function talk(pi: ExtensionAPI) {
     name: "talk-ask",
     label: "Ask Talk",
     description:
-      "Ask another pi session a question and block until it replies (or times out). Before asking, it checks whether that session already sent you something; if so, you are told to read and reply first instead of asking.",
-    promptSnippet: "Ask another pi session a question and wait for the reply",
+      "Ask another pi agent a question and block until it replies (or times out). Before asking, it checks whether that agent already sent you something; if so, you are told to read and reply first instead of asking.",
+    promptSnippet: "Ask another pi agent a question and wait for the reply",
     parameters: Type.Object({
-      to: Type.String({ description: "Target session (name/address/@alias)" }),
+      to: Type.String({ description: "Target agent (name/address/@alias)" }),
       message: Type.String({ description: "The question" }),
       timeoutMs: Type.Optional(
         Type.Number({ description: `Wait cap in ms; default ${ASK_TIMEOUT_MS}` }),
@@ -244,10 +249,10 @@ export default function talk(pi: ExtensionAPI) {
     name: "talk-send",
     label: "Send Talk Message",
     description:
-      "Send a plain-text message to a single pi session. Plain text only, ≤32KB — send a summary and a path, never file contents.",
-    promptSnippet: "Send a message to another pi session",
+      "Send a plain-text message to a single pi agent. Plain text only, ≤32KB — send a summary and a path, never file contents.",
+    promptSnippet: "Send a message to another pi agent",
     parameters: Type.Object({
-      to: Type.String({ description: "Target session id (from talk-list-sessions)" }),
+      to: Type.String({ description: "Target agent id (from talk-list-agents)" }),
       message: Type.String({ description: "Message body" }),
     }),
     async execute(_toolCallId, params) {
@@ -277,7 +282,7 @@ export default function talk(pi: ExtensionAPI) {
   // ── /talk commands ────────────────────────────────────────────────────
 
   pi.registerCommand("talk", {
-    description: "List registered pi sessions",
+    description: "List registered pi agents",
     async handler() {
       const text = requireInit() ?? (await core.list());
       pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
@@ -286,7 +291,7 @@ export default function talk(pi: ExtensionAPI) {
 
   pi.registerCommand("talk-dead", {
     description:
-      "Mark a talk session as dead (shown offline, swept soon): no arg = this session, <sessionId> = that session, --all = every other visible session",
+      "Mark a talk agent as dead (shown offline, swept soon): no arg = this agent, <agentId> = that agent, --all = every other visible agent",
     async handler(args) {
       const initError = requireInit();
       const trimmed = args.trim();
@@ -303,17 +308,21 @@ export default function talk(pi: ExtensionAPI) {
 
   pi.registerCommand("talk-group-join", {
     description:
-      "Join or create a private session group (members see only each other; a session in no group sees only itself). No arg = new group with a generated uuid; <name> = join that group, or create it when it does not exist",
+      "Join or create a private agent group (members see only each other; an agent in no group sees only itself). No arg = new group with a generated uuid; <name> = join that group, or create it when it does not exist; --name <alias> additionally sets this agent's display name (e.g. --name frontend)",
     async handler(args) {
       const initError = requireInit();
-      const token = args.trim();
-      const text = initError ?? (await core.groupJoin(token || undefined));
+      const parsed = parseArgs(args);
+      const groupName = parsed.positionals[0];
+      const flag = parsed.flags.name;
+      const agentName = typeof flag === "string" && flag.trim() !== "" ? flag.trim() : undefined;
+      if (agentName !== undefined) explicitName = agentName;
+      const text = initError ?? (await core.groupJoin(groupName || undefined, agentName));
       pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
     },
   });
 
   pi.registerCommand("talk-group-join-last", {
-    description: "Join the most recently created session group (no-op when already in it).",
+    description: "Join the most recently created agent group (no-op when already in it).",
     async handler() {
       const initError = requireInit();
       const text = initError ?? (await core.groupJoinLast());
@@ -322,7 +331,7 @@ export default function talk(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("talk-group-leave", {
-    description: "Leave the current session group (an emptied group is deleted).",
+    description: "Leave the current agent group (an emptied group is deleted).",
     async handler() {
       const initError = requireInit();
       const text = initError ?? (await core.groupLeave());
@@ -331,7 +340,7 @@ export default function talk(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("talk-group-list", {
-    description: "List all session groups and their members, newest first.",
+    description: "List all agent groups and their members, newest first.",
     async handler() {
       const initError = requireInit();
       const text = initError ?? (await core.groupList());
@@ -341,7 +350,7 @@ export default function talk(pi: ExtensionAPI) {
 
   pi.registerCommand("talk-group-del", {
     description:
-      "Delete a session group by name; its members become ungrouped (see only themselves).",
+      "Delete an agent group by name; its members become ungrouped (see only themselves).",
     async handler(args) {
       const initError = requireInit();
       const name = args.trim();
@@ -352,7 +361,7 @@ export default function talk(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("talk-group-clear", {
-    description: "Delete every session group; all sessions become ungrouped.",
+    description: "Delete every agent group; all agents become ungrouped.",
     async handler() {
       const initError = requireInit();
       const text = initError ?? (await core.groupClear());

@@ -45,7 +45,7 @@ export interface TalkStorage {
  * SQLite backend (Node's built-in `node:sqlite`, no npm dependency).
  *
  * A single database file holds everything; WAL mode plus a busy timeout lets
- * multiple pi sessions read and write it concurrently. SQL parameter binding
+ * multiple pi agents read and write it concurrently. SQL parameter binding
  * removes the need for path/symlink hardening entirely.
  *
  * The backend is synchronous; each method wraps its result in a resolved

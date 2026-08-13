@@ -6,7 +6,7 @@
  * - A reader never sees half a letter: writes are atomic (single SQL upsert).
  * - Consumption is decoupled from delivery: `listInbox` only reads; the
  *   caller removes a letter with `removeLetter` AFTER it has been handed to
- *   the session. A letter that could not be delivered stays in the inbox and
+ *   the agent. A letter that could not be delivered stays in the inbox and
  *   is retried on the next poll.
  * - Every value read from storage is validated with a TypeBox schema.
  * - Every deposit and delivery appends one append-only audit line. The log
@@ -27,7 +27,7 @@ export const LetterSchema = Type.Object({
     addr: Type.String(),
     name: Type.String(),
     cwd: Type.String(),
-    sessionId: Type.String(),
+    agentId: Type.String(),
   }),
   kind: Type.Union([
     Type.Literal("message"),
@@ -41,6 +41,25 @@ export const LetterSchema = Type.Object({
 });
 export type Letter = Static<typeof LetterSchema>;
 export type LetterKind = Letter["kind"];
+
+/**
+ * Migrate letters written before the session→agent rename, which carried the
+ * sender's pi session id as `from.sessionId`. Current letters pass through
+ * unchanged; anything else returns null.
+ */
+export function normalizeLetter(value: unknown): Letter | null {
+  if (Value.Check(LetterSchema, value)) return value;
+  const record = value as { from?: unknown } | null;
+  const from = record?.from;
+  if (typeof from !== "object" || from === null) return null;
+  const fromRecord = from as Record<string, unknown>;
+  if (typeof fromRecord.sessionId !== "string") return null;
+  const migrated = {
+    ...(value as object),
+    from: { ...fromRecord, agentId: fromRecord.sessionId },
+  };
+  return Value.Check(LetterSchema, migrated) ? migrated : null;
+}
 
 export const OutAskSchema = Type.Object({
   askId: Type.String(),
@@ -133,7 +152,8 @@ export async function listInbox(storage: TalkStorage, addr: string): Promise<Inb
   const out: InboxItem[] = [];
   for (const fileName of await storage.listKeys(inboxNs(addr))) {
     const raw = await storage.readJson(inboxNs(addr), fileName);
-    if (isValidLetter(raw)) out.push({ fileName, letter: raw });
+    const letter = normalizeLetter(raw);
+    if (letter && isValidLetter(letter)) out.push({ fileName, letter });
     // corrupt letters are skipped; the caller may remove them separately
   }
   return out; // keys are already sorted by listKeys
@@ -161,7 +181,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * Consumption receipt: after depositing to a LIVE target, wait briefly for
  * the exact letter to vanish from the target's inbox. Under the
  * deliver-then-remove semantics, disappearance means the receiver actually
- * handed the letter to its session, not merely drained it.
+ * handed the letter to its agent, not merely drained it.
  */
 export async function awaitReceipt(
   storage: TalkStorage,
@@ -218,7 +238,7 @@ export async function readIncomingAsk(
   askId: string,
 ): Promise<Letter | null> {
   const raw = await storage.readJson(asksNs(addr), askKey(askId));
-  return Value.Check(LetterSchema, raw) ? raw : null;
+  return normalizeLetter(raw);
 }
 
 export async function readOutgoingAsk(
@@ -242,7 +262,8 @@ export async function pendingAsks(storage: TalkStorage, addr: string): Promise<L
   for (const key of await storage.listKeys(asksNs(addr))) {
     if (key.startsWith("out-")) continue;
     const raw = await storage.readJson(asksNs(addr), key);
-    if (Value.Check(LetterSchema, raw)) out.push(raw);
+    const letter = normalizeLetter(raw);
+    if (letter) out.push(letter);
   }
   return out;
 }
