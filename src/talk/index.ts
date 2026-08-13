@@ -80,32 +80,6 @@ interface DeliveryDetails {
   replyTo?: string;
 }
 
-// ── Resumability (for sweep) ─────────────────────────────────────────────
-// pi session files live at <agentDir>/sessions/<cwd-slug>/<ts>_<sessionId>.jsonl.
-// Collected once per sweep; a session whose file exists can be resumed and
-// must keep its mailbox address.
-
-function collectResumableSessionIds(): Set<string> {
-  const ids = new Set<string>();
-  let dirs: string[];
-  try {
-    dirs = fs.readdirSync(path.join(getAgentDir(), "sessions"));
-  } catch {
-    return ids;
-  }
-  for (const dir of dirs) {
-    try {
-      for (const file of fs.readdirSync(path.join(getAgentDir(), "sessions", dir))) {
-        const match = /_([0-9a-f-]{36})\.jsonl$/.exec(file);
-        if (match) ids.add(match[1]);
-      }
-    } catch {
-      // skip unreadable dir
-    }
-  }
-  return ids;
-}
-
 /**
  * Read the default sqlite path and delivery mode from global settings.json:
  * `{ "talk": { "db_path": "...", "deliver": "steer" | "queue" } }`.
@@ -192,7 +166,6 @@ export default function talk(pi: ExtensionAPI) {
         );
       },
     },
-    collectResumableSessionIds,
   });
 
   function requireInit(): string | undefined {
@@ -236,15 +209,23 @@ export default function talk(pi: ExtensionAPI) {
     name: "talk-list-sessions",
     label: "List Talk Sessions",
     description:
-      "List other pi sessions on this machine with their presence (idle/working/not responding/offline), address, and working directory.",
+      "List other pi sessions with a recent heartbeat (id, status, work_dir, name). Pass includeOffline to also list stale sessions.",
     promptSnippet: "List other pi sessions on this machine",
     parameters: Type.Object({
       cwd: Type.Optional(Type.String({ description: "Only list sessions in this directory" })),
+      includeOffline: Type.Optional(
+        Type.Boolean({ description: "Include sessions without a recent heartbeat" }),
+      ),
     }),
     async execute(_toolCallId, params) {
       const initError = requireInit();
       if (initError) return toolResult(initError);
-      return toolResult(params.cwd ? await core.listCwd(params.cwd) : await core.list());
+      const includeOffline = params.includeOffline === true;
+      return toolResult(
+        params.cwd
+          ? await core.listCwd(params.cwd, includeOffline)
+          : await core.list(includeOffline),
+      );
     },
   });
 

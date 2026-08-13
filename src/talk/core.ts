@@ -35,6 +35,7 @@ import {
 } from "./mailbox.js";
 import { inboundAccepts, OutboundPolicy } from "./policy.js";
 import {
+  LIST_ACTIVE_MS,
   listRecords,
   type Presence,
   presenceOf,
@@ -60,8 +61,6 @@ export interface TalkCoreEvents {
 export interface TalkCoreOptions {
   storage: TalkStorage;
   events: TalkCoreEvents;
-  /** Adapter-provided: which session ids pi can still resume (for sweep). */
-  collectResumableSessionIds?: () => Set<string>;
   now?: () => number;
 }
 
@@ -71,6 +70,7 @@ const WATCH_POLL_MS = 5000;
 const DELIVERY_BACKOFF_MS = 5000;
 const INITIAL_DRAIN_DELAY_MS = 1200;
 const WAIT_POLL_MS = 500;
+const SWEEP_INTERVAL_MS = 30 * 60 * 1000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -118,7 +118,6 @@ export function peerAskedFirst(
 export class TalkCore {
   private readonly storage: TalkStorage;
   private readonly events: TalkCoreEvents;
-  private readonly collectResumableSessionIds?: () => Set<string>;
   private readonly now: () => number;
 
   private self: SessionRecord | undefined;
@@ -133,12 +132,12 @@ export class TalkCore {
   private inboxPoll: ReturnType<typeof setInterval> | undefined;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private watchPoller: ReturnType<typeof setInterval> | undefined;
+  private sweeper: ReturnType<typeof setInterval> | undefined;
   private lastDeliveryFailureAt = 0;
 
   constructor(options: TalkCoreOptions) {
     this.storage = options.storage;
     this.events = options.events;
-    this.collectResumableSessionIds = options.collectResumableSessionIds;
     this.now = options.now ?? Date.now;
   }
 
@@ -164,11 +163,7 @@ export class TalkCore {
     this.self = self;
     await writeRecord(this.storage, self);
     try {
-      const collectResumable = this.collectResumableSessionIds;
-      const sessionExists = collectResumable
-        ? (id: string) => collectResumable().has(id)
-        : undefined;
-      await sweep(this.storage, this.now(), sessionExists);
+      await sweep(this.storage, this.now());
     } catch {
       // sweep failure never breaks the session
     }
@@ -177,6 +172,11 @@ export class TalkCore {
       void this.writeSelf({});
     }, HEARTBEAT_MS);
     this.heartbeat.unref();
+    // Reclaim dead records periodically, not just at startup.
+    this.sweeper = setInterval(() => {
+      void sweep(this.storage, this.now());
+    }, SWEEP_INTERVAL_MS);
+    this.sweeper.unref();
     // Drain mail queued while offline — deferred: delivering during
     // session_start races the session's own first turn.
     const initial = setTimeout(() => {
@@ -189,6 +189,7 @@ export class TalkCore {
     if (this.heartbeat) clearInterval(this.heartbeat);
     if (this.watchPoller) clearInterval(this.watchPoller);
     if (this.inboxPoll) clearInterval(this.inboxPoll);
+    if (this.sweeper) clearInterval(this.sweeper);
     if (this.self) {
       try {
         await this.writeSelf({ status: "idle", offline: true });
@@ -479,20 +480,33 @@ export class TalkCore {
     }
   }
 
-  /** JSON listing of visible peer sessions: status, work_dir, id, name per session. */
-  async list(): Promise<string> {
+  /**
+   * JSON listing of visible peer sessions. Defaults to sessions whose
+   * heartbeat is fresh (within LIST_ACTIVE_MS); pass includeOffline to show
+   * every visible peer regardless of last contact.
+   */
+  async list(includeOffline = false): Promise<string> {
     const self = this.requireSelf();
+    const now = this.now();
     const all = await listRecords(this.storage);
-    const records = all.filter((r) => this.isPeerVisible(r.cwd));
-    return formatListing(records, self.addr, (r) => presenceOf(r));
+    const records = all.filter(
+      (r) => this.isPeerVisible(r.cwd) && (includeOffline || now - r.lastSeenAt < LIST_ACTIVE_MS),
+    );
+    return formatListing(records, self.addr, (r) => presenceOf(r, now));
   }
 
   /** Same as list(), filtered to one working directory. */
-  async listCwd(cwd: string): Promise<string> {
+  async listCwd(cwd: string, includeOffline = false): Promise<string> {
     const self = this.requireSelf();
+    const now = this.now();
     const records = await listRecords(this.storage);
-    const filtered = records.filter((r) => r.cwd === cwd && this.isPeerVisible(r.cwd));
-    return formatListing(filtered, self.addr, (r) => presenceOf(r));
+    const filtered = records.filter(
+      (r) =>
+        r.cwd === cwd &&
+        this.isPeerVisible(r.cwd) &&
+        (includeOffline || now - r.lastSeenAt < LIST_ACTIVE_MS),
+    );
+    return formatListing(filtered, self.addr, (r) => presenceOf(r, now));
   }
 
   async send(to: string, body: string): Promise<string> {

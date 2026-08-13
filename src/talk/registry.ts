@@ -38,6 +38,10 @@ export type SessionRecord = Static<typeof SessionRecordSchema>;
 export type Presence = "live" | "stalled" | "offline";
 
 export const HEARTBEAT_STALE_MS = 45_000;
+/** A session is shown in the default listing while its heartbeat is this fresh. */
+export const LIST_ACTIVE_MS = 15 * 60 * 1000;
+/** Sweep leaves a record alone until its heartbeat has been quiet this long. */
+export const SWEEP_OFFLINE_GRACE_MS = 24 * 60 * 60 * 1000;
 /** A mailbox holding undelivered mail is kept this long after last contact. */
 export const SWEEP_MAIL_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -118,29 +122,21 @@ export function presenceOf(record: SessionRecord, now: number = Date.now()): Pre
 
 /**
  * Reclaim dead sessions' data. Rules (mail outranks tidiness):
- * - a running session is never touched;
+ * - a record whose heartbeat went quiet less than SWEEP_OFFLINE_GRACE_MS ago
+ *   is never touched — it may be merely down or suspended, and a resume will
+ *   re-register it under the same id anyway;
  * - a mailbox holding undelivered mail is kept for SWEEP_MAIL_KEEP_MS;
- * - an offline but resumable session keeps its record (its address — new
- *   mail must remain deliverable while it's down);
- * - only an empty mailbox of a session that can no longer be resumed is
- *   discarded promptly.
- *
- * `sessionExists(sessionId)` reports whether pi can still resume the session
- * (its session file is present). When omitted, every offline session is
- * treated as resumable (the conservative choice).
+ * - once the grace period has passed, an empty mailbox is discarded promptly
+ *   regardless of whether pi could still resume the session (resume re-creates
+ *   the record; with no mail nothing is lost).
  */
-export async function sweep(
-  storage: TalkStorage,
-  now: number = Date.now(),
-  sessionExists?: (sessionId: string) => boolean,
-): Promise<void> {
+export async function sweep(storage: TalkStorage, now: number = Date.now()): Promise<void> {
   for (const record of await listRecords(storage)) {
-    if (presenceOf(record, now) !== "offline") continue;
+    const quietFor = now - record.lastSeenAt;
+    if (quietFor < SWEEP_OFFLINE_GRACE_MS) continue;
     const hasMail =
       (await storage.hasKeys(inboxNs(record.addr))) || (await storage.hasKeys(asksNs(record.addr)));
-    const expired = now - record.lastSeenAt >= SWEEP_MAIL_KEEP_MS;
-    if (hasMail && !expired) continue;
-    if (!expired && (sessionExists?.(record.sessionId) ?? true)) continue;
+    if (hasMail && quietFor < SWEEP_MAIL_KEEP_MS) continue;
     await storage.removeNamespace(inboxNs(record.addr));
     await storage.removeNamespace(asksNs(record.addr));
     await storage.removeKey(RECORDS_NS, recordKey(record.addr));

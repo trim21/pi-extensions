@@ -133,27 +133,28 @@ describe("registry", () => {
     expect(presenceOf({ ...base, lastSeenAt: Date.now() - 60_000 })).toBe("stalled");
   });
 
-  it("sweep reaps only dead, empty, unresumable sessions", async () => {
+  it("sweep keeps recent records and mail, reaps long-quiet empty ones", async () => {
     const { storage } = makeStorage();
     const now = Date.now();
-    const live = makeSelf("aaaaaaaaaaaa", { pid: process.pid, lastSeenAt: now });
-    const deadWithMail = makeSelf("bbbbbbbbbbbb", { pid: 0, lastSeenAt: now - 1000 });
-    const deadResumable = makeSelf("cccccccccccc", { pid: 0, lastSeenAt: now - 1000 });
-    const deadUnresumable = makeSelf("dddddddddddd", { pid: 0, lastSeenAt: now - 1000 });
-    await writeRecord(storage, live);
-    await writeRecord(storage, deadWithMail);
-    await writeRecord(storage, deadResumable);
-    await writeRecord(storage, deadUnresumable);
-    await deposit(storage, deadWithMail.addr, makeLetter());
+    const recent = makeSelf("aaaaaaaaaaaa", { lastSeenAt: now - 1000 }); // heartbeat 1s ago
+    const quietEmpty = makeSelf("bbbbbbbbbbbb", { lastSeenAt: now - 25 * 3600 * 1000 });
+    const quietWithMail = makeSelf("cccccccccccc", { lastSeenAt: now - 25 * 3600 * 1000 });
+    const ancient = makeSelf("dddddddddddd", { lastSeenAt: now - 31 * 24 * 3600 * 1000 });
+    await writeRecord(storage, recent);
+    await writeRecord(storage, quietEmpty);
+    await writeRecord(storage, quietWithMail);
+    await writeRecord(storage, ancient);
+    await deposit(storage, quietWithMail.addr, makeLetter());
+    await deposit(storage, ancient.addr, makeLetter());
 
-    await sweep(storage, now, (id) => id === "session-cccccccccccc");
+    await sweep(storage, now);
 
     const records = await listRecords(storage);
     const addrs = records.map((r) => r.addr);
-    expect(addrs).toContain("aaaaaaaaaaaa"); // live
-    expect(addrs).toContain("bbbbbbbbbbbb"); // has undelivered mail
-    expect(addrs).toContain("cccccccccccc"); // resumable
-    expect(addrs).not.toContain("dddddddddddd"); // dead + empty + unresumable
+    expect(addrs).toContain("aaaaaaaaaaaa"); // heartbeat still fresh → untouched
+    expect(addrs).not.toContain("bbbbbbbbbbbb"); // quiet > 24h + empty → reaped
+    expect(addrs).toContain("cccccccccccc"); // quiet but has undelivered mail → kept
+    expect(addrs).not.toContain("dddddddddddd"); // mail older than 30 days → reaped
   });
 });
 
@@ -433,6 +434,26 @@ describe("TalkCore", () => {
     core.setPeerVisibility(buildVisibilityFilter(["/tmp/company1"], "/base"));
     const listing = JSON.parse(await core.list()) as { id: string }[];
     expect(listing.map((s) => s.id)).toEqual(["session-bbbbbbbbbbbb"]);
+  });
+
+  it("list hides stale sessions unless includeOffline is set", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    await writeRecord(storage, makeSelf("bbbbbbbbbbbb", { lastSeenAt: Date.now() }));
+    await writeRecord(
+      storage,
+      makeSelf("cccccccccccc", { lastSeenAt: Date.now() - 60 * 60 * 1000 }),
+    );
+
+    const listing = JSON.parse(await core.list()) as { id: string }[];
+    expect(listing.map((s) => s.id)).toEqual(["session-bbbbbbbbbbbb"]);
+
+    const all = JSON.parse(await core.list(true)) as { id: string }[];
+    expect(all.map((s) => s.id).toSorted()).toEqual([
+      "session-bbbbbbbbbbbb",
+      "session-cccccccccccc",
+    ]);
   });
 
   it("rejects asks to invisible sessions even with the exact session id", async () => {

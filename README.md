@@ -230,13 +230,13 @@ index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周�
 
 ### 工具（LLM 可见）
 
-| 工具                 | 作用                                                                      |
-| -------------------- | ------------------------------------------------------------------------- |
-| `talk-list-sessions` | 列出其他 session，返回 JSON 数组（`status` / `work_dir` / `id` / `name`） |
-| `talk-ask`           | 向某个 session 提问并阻塞等待回复（默认 30 分钟超时）                     |
-| `talk-wait`          | 阻塞等待新消息到达                                                        |
-| `talk-send`          | 发送纯文本消息（`to: "*"` 广播所有，`to: "cwd"` 广播同 cwd）              |
-| `talk-reply`         | 回复一个 ask（`replyTo` 为 ask id，显式关联、不推断）                     |
+| 工具                 | 作用                                                                                                                       |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `talk-list-sessions` | 列出其他 session，返回 JSON 数组（`status` / `work_dir` / `id` / `name`）；默认只列有心跳的，`includeOffline: true` 列全部 |
+| `talk-ask`           | 向某个 session 提问并阻塞等待回复（默认 30 分钟超时）                                                                      |
+| `talk-wait`          | 阻塞等待新消息到达                                                                                                         |
+| `talk-send`          | 发送纯文本消息（`to: "*"` 广播所有，`to: "cwd"` 广播同 cwd）                                                               |
+| `talk-reply`         | 回复一个 ask（`replyTo` 为 ask id，显式关联、不推断）                                                                      |
 
 对端消息自动投递（无需主动拉取）：投递方式由 `talk.deliver` 配置，`steer` 在模型工作过程中打断/唤醒，`queue` 排队到 session 下一轮自然 turn 时注入。
 
@@ -244,6 +244,8 @@ index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周�
 
 ### 关键设计
 
+- **心跳即活跃**：每个 session 每 15s 写一次 `lastSeenAt`；`talk-list-sessions` 默认只显示最近 15 分钟内有心跳的 session，已结束/挂起的 session 自动从默认列表消失（`includeOffline: true` 可见全部）。`status` 用 45s 心跳阈值区分 live / not responding / offline。
+- **定期清理**：心跳停止超过 24h 且无未投递 mail 的记录会被定期 sweep（30 分钟一次）回收；有 mail 的保留 30 天。resume 后 session 会自动重新注册，无 mail 即无损失。
 - **投递成功才消费**：信件只在成功交给 `sendMessage` 后才从 inbox 删除，投递失败留在 inbox 下次重试——不会因 `sendMessage` 吞异常而静默丢信。
 - **双向 ask 仲裁**：`talk-ask` 发起前先检查收件箱（有对方消息就先读/先回）；阻塞等待期间若收到对方的 ask（而非 reply），按两个 ask 的 `ts` 字段仲裁——先 ask 者主导继续等，后 ask 者让位并先回复对方。`ts` 是信件内固定字段，双方读到同一对值，结论天然对称；同毫秒碰撞用 `session dir + session id` 字符串比较兜底。
 - **typebox runtime 验证**：所有从存储读出的值经 TypeBox schema 校验，损坏/伪造数据被拒绝，不做 `as T` 强转。
