@@ -303,6 +303,22 @@ describe("format", () => {
   it("formatListing returns an empty array when no peers exist", () => {
     expect(formatListing([makeSelf("aaaaaaaaaaaa")], "aaaaaaaaaaaa", () => "live")).toBe("[]");
   });
+
+  it("formatListing surfaces the waiting-talk-message status", () => {
+    const listing = formatListing(
+      [makeSelf("aaaaaaaaaaaa", { status: "waiting-talk-message" })],
+      "bbbbbbbbbbbb",
+      () => "live",
+    );
+    expect(JSON.parse(listing)).toEqual([
+      {
+        status: "waiting-talk-message",
+        work_dir: "/tmp/aaaaaaaaaaaa",
+        id: "session-aaaaaaaaaaaa",
+        name: "session aaaaaaaaaaaa",
+      },
+    ]);
+  });
 });
 
 // ── Arbitration ──────────────────────────────────────────────────────────
@@ -508,5 +524,21 @@ describe("TalkCore", () => {
     await sweep(storage, now);
     const records = await listRecords(storage);
     expect(records.map((r) => r.addr)).not.toContain("aaaaaaaaaaaa");
+  });
+
+  it("wait reports status waiting-talk-message while blocked, then restores working", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    const pending = core.wait(300);
+    await vi.waitFor(async () => {
+      const rec = await readRecord(storage, "aaaaaaaaaaaa");
+      expect(rec?.status).toBe("waiting-talk-message");
+    });
+    await pending;
+    await vi.waitFor(async () => {
+      const rec = await readRecord(storage, "aaaaaaaaaaaa");
+      expect(rec?.status).toBe("working");
+    });
   });
 });

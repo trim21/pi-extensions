@@ -205,6 +205,11 @@ export class TalkCore {
     void this.writeSelf({ status: "working" });
   }
 
+  /** Blocked on talk-wait / talk-ask — visible as "waiting-talk-message". */
+  setWaiting(): void {
+    void this.writeSelf({ status: "waiting-talk-message" });
+  }
+
   setIdle(): void {
     void this.writeSelf({ status: "idle" });
   }
@@ -473,13 +478,19 @@ export class TalkCore {
   async wait(timeoutMs: number, signal?: AbortSignal): Promise<string> {
     const self = this.requireSelf();
     const deadline = this.now() + timeoutMs;
-    for (;;) {
-      const inbox = await listInbox(this.storage, self.addr);
-      const fresh = await this.consumeFresh(inbox);
-      if (fresh.length > 0) return fresh.map((l) => formatDelivery(l)).join("\n\n");
-      if (signal?.aborted) return "aborted";
-      if (this.now() >= deadline) return `No message within ${Math.round(timeoutMs / 1000)}s.`;
-      await sleep(WAIT_POLL_MS);
+    this.setWaiting();
+    try {
+      for (;;) {
+        const inbox = await listInbox(this.storage, self.addr);
+        const fresh = await this.consumeFresh(inbox);
+        if (fresh.length > 0) return fresh.map((l) => formatDelivery(l)).join("\n\n");
+        if (signal?.aborted) return "aborted";
+        if (this.now() >= deadline) return `No message within ${Math.round(timeoutMs / 1000)}s.`;
+        await sleep(WAIT_POLL_MS);
+      }
+    } finally {
+      // The tool call is still part of a running agent turn.
+      this.setWorking();
     }
   }
 
@@ -608,11 +619,17 @@ export class TalkCore {
       body,
       ts: sent.letter.ts,
     });
-    const outcome = await this.waitForReply(sent.letter.id, Math.max(1000, timeoutMs), signal);
-    await clearAsk(this.storage, self.addr, sent.letter.id);
-    if (!outcome.replied)
-      return `Ask ${sent.letter.id.slice(0, 8)} to "${record.name}": ${outcome.reason}.`;
-    return `"${record.name}" replied:\n\n${outcome.body}`;
+    this.setWaiting();
+    try {
+      const outcome = await this.waitForReply(sent.letter.id, Math.max(1000, timeoutMs), signal);
+      await clearAsk(this.storage, self.addr, sent.letter.id);
+      if (!outcome.replied)
+        return `Ask ${sent.letter.id.slice(0, 8)} to "${record.name}": ${outcome.reason}.`;
+      return `"${record.name}" replied:\n\n${outcome.body}`;
+    } finally {
+      // The ask tool call is still part of a running agent turn.
+      this.setWorking();
+    }
   }
 
   async reply(replyTo: string, body: string): Promise<string> {

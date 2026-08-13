@@ -30,7 +30,11 @@ export const SessionRecordSchema = Type.Object({
   pid: Type.Number(),
   startedAt: Type.Number(),
   lastSeenAt: Type.Number(),
-  status: Type.Union([Type.Literal("idle"), Type.Literal("working")]),
+  status: Type.Union([
+    Type.Literal("idle"),
+    Type.Literal("working"),
+    Type.Literal("waiting-talk-message"),
+  ]),
   offline: Type.Optional(Type.Boolean()),
 });
 export type SessionRecord = Static<typeof SessionRecordSchema>;
