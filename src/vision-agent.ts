@@ -189,7 +189,7 @@ export function buildPendantMarkdown(params: {
     "### 识别结果",
     "",
     body || params.description,
-    footer ? `\n---\n${footer}` : "",
+    footer ? `\n- -\n${footer}` : "",
   ]
     .join("\n")
     .trim();

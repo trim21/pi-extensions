@@ -18,7 +18,7 @@ export function registerShellTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "Bash",
     promptSnippet: "execute command",
-    promptGuidelines: [`--\n${BASH_PROMPT}`],
+    promptGuidelines: [`- -\n${BASH_PROMPT}`],
     label: "Bash",
     description: [
       "Executes a given bash command synchronously and returns its output.",

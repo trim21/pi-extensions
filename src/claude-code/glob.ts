@@ -53,7 +53,7 @@ export function registerGlobTool(pi: ExtensionAPI): void {
       "Returns matching file paths sorted by modification time.",
     ].join("\n"),
     promptSnippet: "Find files by name patterns",
-    promptGuidelines: [`--\n${GLOB_PROMPT}`],
+    promptGuidelines: [`- -\n${GLOB_PROMPT}`],
     parameters: Type.Object(
       {
         pattern: Type.String({ description: "The glob pattern to match files against" }),

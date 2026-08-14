@@ -173,7 +173,7 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       "This tool reads files, not directories.",
     ].join("\n"),
     promptSnippet: "Read files from the local filesystem with line numbers",
-    promptGuidelines: [`--\n${READ_PROMPT}`],
+    promptGuidelines: [`- -\n${READ_PROMPT}`],
     parameters: Type.Object(
       {
         file_path: Type.String({ description: "The absolute path to the file to read" }),
@@ -243,7 +243,7 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       "This tool does not use regular expressions or fuzzy matching.",
     ].join("\n"),
     promptSnippet: "Make exact string replacements in files",
-    promptGuidelines: [`--\n${EDIT_PROMPT}`],
+    promptGuidelines: [`- -\n${EDIT_PROMPT}`],
     parameters: Type.Object(
       {
         file_path: Type.String({ description: "The absolute path to the file to modify" }),
@@ -302,7 +302,7 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       "If the file exists, you must use Read first. Prefer Edit for partial changes.",
     ].join("\n"),
     promptSnippet: "Create or overwrite files",
-    promptGuidelines: [`--\n${WRITE_PROMPT}`],
+    promptGuidelines: [`- -\n${WRITE_PROMPT}`],
     parameters: Type.Object(
       {
         file_path: Type.String({

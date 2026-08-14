@@ -183,7 +183,7 @@ export function registerSessionTools(pi: ExtensionAPI): void {
       'If you recommend an option, put it first and append "(Recommended)" to its label.',
     ].join("\n"),
     promptSnippet: "Ask the user questions during execution",
-    promptGuidelines: [`--\n${ASK_PROMPT}`],
+    promptGuidelines: [`- -\n${ASK_PROMPT}`],
     parameters: Type.Object(
       {
         questions: Type.Array(questionSchema, {
