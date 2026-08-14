@@ -30,13 +30,12 @@ import {
   type AgentSessionEvent,
   type ExtensionAPI,
   type ExtensionUIContext,
-  getMarkdownTheme,
   type RpcExtensionUIRequest,
   type RpcExtensionUIResponse,
   truncateTail,
+  truncateToVisualLines,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { type AgentConfig, discoverAgents, formatAgentList } from "./spawn-agent-agents.js";
@@ -624,9 +623,14 @@ export default function spawnAgent(pi: ExtensionAPI) {
 
     renderCall(args, theme) {
       const preview = args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task;
-      let text = theme.fg("toolTitle", theme.bold("spawn_agent ")) + theme.fg("accent", args.agent);
-      text += `\n  ${theme.fg("dim", preview)}`;
-      return new Text(text, 0, 0);
+      const line =
+        theme.fg("toolTitle", theme.bold("spawn_agent ")) + theme.fg("accent", args.agent);
+      const detail = `  ${theme.fg("dim", preview)}`;
+      return {
+        render: (width: number) =>
+          truncateToVisualLines(`${line}\n${detail}`, 2, width).visualLines,
+        invalidate: (): void => undefined,
+      };
     },
 
     renderResult(result, { expanded }, theme) {
@@ -639,40 +643,29 @@ export default function spawnAgent(pi: ExtensionAPI) {
       const finalOutput = getFinalOutput(details.messages);
       const usageStr = formatUsageStats(details.usage, details.model);
 
-      if (expanded) {
-        const container = new Container();
-        const header = `${icon} ${theme.fg("toolTitle", theme.bold(details.agent))}${
-          details.stopReason ? ` ${theme.fg("error", `[${details.stopReason}]`)}` : ""
-        }`;
-        container.addChild(new Text(header, 0, 0));
-        if (isError && details.errorMessage) {
-          container.addChild(new Text(theme.fg("error", `Error: ${details.errorMessage}`), 0, 0));
-        }
-        container.addChild(new Spacer(1));
-        container.addChild(new Text(theme.fg("muted", "─── Task ───"), 0, 0));
-        container.addChild(new Text(theme.fg("dim", details.task), 0, 0));
-        if (finalOutput) {
-          container.addChild(new Spacer(1));
-          container.addChild(new Text(theme.fg("muted", "─── Output ───"), 0, 0));
-          container.addChild(new Markdown(finalOutput.trim(), 0, 0, getMarkdownTheme()));
-        }
-        if (usageStr) {
-          container.addChild(new Spacer(1));
-          container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
-        }
-        return container;
-      }
-
-      let text = `${icon} ${theme.fg("toolTitle", theme.bold(details.agent))}`;
+      const lines: string[] = [];
+      let header = `${icon} ${theme.fg("toolTitle", theme.bold(details.agent))}`;
+      if (details.stopReason) header += ` ${theme.fg("error", `[${details.stopReason}]`)}`;
+      lines.push(header);
       if (isError && details.errorMessage) {
-        text += `\n${theme.fg("error", `Error: ${details.errorMessage}`)}`;
-      } else if (finalOutput) {
-        text += `\n${theme.fg("toolOutput", finalOutput.split("\n").slice(0, 5).join("\n"))}`;
-      } else {
-        text += `\n${theme.fg("muted", "(no output)")}`;
+        lines.push(theme.fg("error", `Error: ${details.errorMessage}`));
       }
-      if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
-      return new Text(text, 0, 0);
+      if (expanded) {
+        lines.push("", theme.fg("muted", "─── Task ───"), theme.fg("dim", details.task));
+        if (finalOutput) {
+          lines.push("", theme.fg("muted", "─── Output ───"), finalOutput.trim());
+        }
+      } else if (finalOutput) {
+        lines.push(theme.fg("toolOutput", finalOutput.split("\n").slice(0, 5).join("\n")));
+      } else {
+        lines.push(theme.fg("muted", "(no output)"));
+      }
+      if (usageStr) lines.push(theme.fg("dim", usageStr));
+      return {
+        render: (width: number) =>
+          truncateToVisualLines(lines.join("\n"), Infinity, width).visualLines,
+        invalidate: (): void => undefined,
+      };
     },
   });
 }

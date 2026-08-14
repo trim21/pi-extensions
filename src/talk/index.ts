@@ -14,8 +14,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { Box, Text } from "@earendil-works/pi-tui";
+import { getAgentDir, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
 import { type TObject, Type } from "typebox";
 
 import { type CommandResult, type CommandSpec, parseCommand } from "../lib/cli.js";
@@ -453,8 +452,14 @@ export default function talk(pi: ExtensionAPI) {
     if (d.kind === "ask") {
       out.push(theme.fg("dim", `└─ reply via talk-reply, replyTo: "${idTail}"`));
     }
-    const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
-    box.addChild(new Text(out.join("\n"), 0, 0));
-    return box;
+    // plain 组件：不引入 pi-tui，直接输出带背景色的文本行
+    const text = out.join("\n");
+    return {
+      render: (width: number) =>
+        truncateToVisualLines(text, Infinity, width, 1).visualLines.map((line) =>
+          theme.bg("customMessageBg", line),
+        ),
+      invalidate: (): void => undefined,
+    };
   });
 }

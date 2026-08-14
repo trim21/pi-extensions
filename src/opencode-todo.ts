@@ -23,8 +23,7 @@
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import { type ExtensionAPI, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Markdown } from "@earendil-works/pi-tui";
+import { type ExtensionAPI, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -183,12 +182,12 @@ export default function todowrite(pi: ExtensionAPI) {
     },
 
     renderResult(result) {
-      // 用 buildTodoMarkdown 生成任务列表 markdown，经 TUI Markdown 组件渲染。
-      // 折叠时只显示前几项，展开时显示完整列表（与 widget 的 pendant.expanded 语义一致）。
-      const todos = result.details.todos;
-      const display = todos.slice(0, 8);
-      const markdown = buildTodoMarkdown(display);
-      return new Markdown(markdown, 0, 0, getMarkdownTheme());
+      // 用 buildTodoMarkdown 生成任务列表 markdown 原文显示（plain，不渲染富文本）
+      const markdown = buildTodoMarkdown(result.details.todos);
+      return {
+        render: (width: number) => truncateToVisualLines(markdown, Infinity, width).visualLines,
+        invalidate: (): void => undefined,
+      };
     },
   });
 }
