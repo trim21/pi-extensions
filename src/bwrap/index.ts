@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { Value } from "typebox/value";
 
 import { bwrapRuntime } from "./runtime.js";
 
@@ -40,7 +39,6 @@ export default function bwrapExtension(pi: ExtensionAPI): void {
       localBash.description +
       "\n\nSet request_full_access to true to request unsandboxed execution.",
     parameters: sandboxedBashSchema,
-    prepareArguments: (args) => Value.Parse(sandboxedBashSchema, args),
     executionMode: localBash.executionMode,
     execute(id, params, signal, onUpdate, ctx) {
       return bwrapRuntime.execute({

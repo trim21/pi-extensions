@@ -1,3 +1,6 @@
+import { stat } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -6,36 +9,26 @@ import { bwrapRuntime } from "../bwrap/runtime.js";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 
-interface MarkerResult {
-  text: string;
-  cwd: string | undefined;
-}
-
-function stripCwdMarker(text: string, marker: string): MarkerResult {
-  const match = new RegExp(String.raw`${marker}([^\n]+)${marker}`).exec(text);
-  if (!match) return { text, cwd: undefined };
-  return { text: text.replace(match[0], "").trimEnd(), cwd: match[1] };
-}
-
-function wrapCommand(command: string, marker: string): string {
-  return [
-    command,
-    "__pi_cc_status=$?",
-    "wait",
-    String.raw`printf '\n${marker}%s${marker}\n' "$PWD"`,
-    "exit $__pi_cc_status",
-  ].join("\n");
+async function resolveWorkdir(workdir: string, cwd: string): Promise<string> {
+  const target = isAbsolute(workdir) ? workdir : resolve(cwd, workdir);
+  let info;
+  try {
+    info = await stat(target);
+  } catch {
+    throw new Error(`Working directory does not exist: ${target}`);
+  }
+  if (!info.isDirectory()) {
+    throw new Error(`Working directory is not a directory: ${target}`);
+  }
+  return target;
 }
 
 export function registerShellTools(pi: ExtensionAPI): void {
-  let persistentCwd: string | undefined;
-
   pi.registerTool({
     name: "Bash",
     label: "Bash",
     description: [
       "Executes a given bash command synchronously and returns its output.",
-      "The working directory persists between commands, but shell state does not.",
       "timeout is in milliseconds, defaults to 120000, and may not exceed 600000.",
       "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
     ].join("\n"),
@@ -47,6 +40,12 @@ export function registerShellTools(pi: ExtensionAPI): void {
         ),
         description: Type.Optional(
           Type.String({ description: "Clear, concise description of the command" }),
+        ),
+        workdir: Type.Optional(
+          Type.String({
+            description:
+              "Working directory to execute the command in. Defaults to the current directory; relative paths resolve from there.",
+          }),
         ),
         dangerouslyDisableSandbox: Type.Optional(
           Type.Boolean({
@@ -63,43 +62,27 @@ export function registerShellTools(pi: ExtensionAPI): void {
         throw new Error(`timeout must be between 1 and ${MAX_TIMEOUT_MS} milliseconds`);
       }
 
-      const marker = `__PI_CC_CWD_${id.replaceAll("-", "_")}_${Date.now()}__`;
+      const cwd = params.workdir ? await resolveWorkdir(params.workdir, ctx.cwd) : ctx.cwd;
+
       try {
-        const result = await bwrapRuntime.execute({
-          ctx: { ...ctx, cwd: persistentCwd ?? ctx.cwd },
+        return await bwrapRuntime.execute({
+          ctx: { ...ctx, cwd },
           toolCallId: id,
-          command: wrapCommand(params.command, marker),
+          command: params.command,
           timeout: timeout / 1000,
           requestFullAccess: params.dangerouslyDisableSandbox,
           requestFullAccessReason: params.description,
           signal,
-          onUpdate: onUpdate
-            ? (update) => {
-                const content = update.content.map((item) => {
-                  if (item.type !== "text") return item;
-                  return { ...item, text: stripCwdMarker(item.text, marker).text };
-                });
-                onUpdate({ ...update, content });
-              }
-            : undefined,
+          onUpdate,
         });
-        const content = result.content.map((item) => {
-          if (item.type !== "text") return item;
-          const cleaned = stripCwdMarker(item.text, marker);
-          if (cleaned.cwd) persistentCwd = cleaned.cwd;
-          return { ...item, text: cleaned.text || "(no output)" };
-        });
-        return { ...result, content };
       } catch (error) {
         if (!(error instanceof Error)) throw error;
-        const cleaned = stripCwdMarker(error.message, marker);
-        if (cleaned.cwd) persistentCwd = cleaned.cwd;
-        const timeoutMatch = /Command timed out after [\d.]+ seconds/.exec(cleaned.text);
+        const timeoutMatch = /Command timed out after [\d.]+ seconds/.exec(error.message);
         const message = timeoutMatch
-          ? cleaned.text.slice(0, timeoutMatch.index) +
+          ? error.message.slice(0, timeoutMatch.index) +
             `Command timed out after ${timeout} milliseconds` +
-            cleaned.text.slice(timeoutMatch.index + timeoutMatch[0].length)
-          : cleaned.text;
+            error.message.slice(timeoutMatch.index + timeoutMatch[0].length)
+          : error.message;
         throw new Error(message, { cause: error });
       }
     },

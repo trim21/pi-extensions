@@ -103,6 +103,7 @@ describe("Claude Code tool registration", () => {
       "command",
       "timeout",
       "description",
+      "workdir",
       "dangerouslyDisableSandbox",
     ]);
     expect(tools.has("TaskOutput")).toBe(false);
@@ -237,15 +238,25 @@ describe("Bash", () => {
     expect(result.content[0].text).toBe("done");
   });
 
-  it("persists the working directory between commands", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "cc-bash-cwd-"));
+  it("runs commands in the given workdir", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-bash-workdir-"));
     const nested = join(directory, "nested");
     await import("node:fs/promises").then(({ mkdir }) => mkdir(nested));
     const tools = loadTools();
     const ctx = context(directory);
-    await call(tools.get("Bash")!, { command: `cd ${JSON.stringify(nested)}` }, ctx);
-    const result = await call(tools.get("Bash")!, { command: "pwd" }, ctx);
+    const result = await call(tools.get("Bash")!, { command: "pwd", workdir: nested }, ctx);
     expect(result.content[0].text).toBe(nested);
+  });
+
+  it("rejects a missing workdir", async () => {
+    const tools = loadTools();
+    await expect(
+      call(
+        tools.get("Bash")!,
+        { command: "pwd", workdir: join(tmpdir(), "cc-bash-missing-workdir") },
+        context(process.cwd()),
+      ),
+    ).rejects.toThrow(/Working directory does not exist/);
   });
 
   it("waits for shell jobs started with ampersand", async () => {
