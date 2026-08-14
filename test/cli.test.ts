@@ -164,4 +164,97 @@ describe("parseCommand", () => {
     if (r.kind !== "error") return;
     expect(r.text).toContain("Missing required option '--out'");
   });
+
+  it("sets a bare long boolean flag to true", () => {
+    const r = parseCommand(spec, "--all");
+    expect(r.kind).toBe("ok");
+    if (r.kind !== "ok") return;
+    expect(r.flags.all).toBe(true);
+  });
+
+  it("treats a lone dash as a positional", () => {
+    const r = parseCommand(spec, "-");
+    expect(r.kind).toBe("ok");
+    if (r.kind !== "ok") return;
+    expect(r.args).toEqual(["-"]);
+  });
+
+  it("reports a missing value for a short flag", () => {
+    const r = parseCommand(spec, "-n");
+    expect(r.kind).toBe("error");
+    if (r.kind !== "error") return;
+    expect(r.text).toContain("Option '-n' requires a value");
+  });
+
+  it("turns a tokenizer failure into an error result", () => {
+    const r = parseCommand(spec, `--name "unterminated`);
+    expect(r.kind).toBe("error");
+    if (r.kind !== "error") return;
+    expect(r.text).toContain("unterminated quote");
+  });
+
+  it("throws on an unsupported flag schema kind", () => {
+    const bad = { name: "x", usage: "", flags: Type.Object({ list: Type.Array(Type.String()) }) };
+    expect(() => parseCommand(bad, "")).toThrow(TypeError);
+  });
+
+  it("throws on duplicate short aliases", () => {
+    const dup = {
+      name: "x",
+      usage: "",
+      flags: Type.Object({ a: Type.Optional(Type.Boolean()), b: Type.Optional(Type.Boolean()) }),
+      flagMeta: { a: { short: "x" }, b: { short: "x" } },
+    };
+    expect(() => parseCommand(dup, "")).toThrow(/Duplicate short option '-x'/);
+  });
+
+  it("reports values that fail the typebox check", () => {
+    // A mixed union (string literal + boolean) has no string enum validation,
+    // so an invalid value is caught by the typebox pipeline instead.
+    const mixed = {
+      name: "x",
+      usage: "",
+      flags: Type.Object({ u: Type.Optional(Type.Union([Type.Literal("a"), Type.Boolean()])) }),
+    };
+    const r = parseCommand(mixed, "--u z");
+    expect(r.kind).toBe("error");
+    if (r.kind !== "error") return;
+    expect(r.text).toContain("Invalid arguments");
+  });
+
+  it("falls back to a generic error when the value pipeline throws", () => {
+    const badDefault = {
+      name: "x",
+      usage: "",
+      flags: Type.Object({
+        v: Type.String({
+          default: () => {
+            throw new Error("boom");
+          },
+        }),
+      }),
+    };
+    const r = parseCommand(badDefault, "");
+    expect(r).toEqual({ kind: "error", text: "Invalid arguments\nTry '/x --help' for usage." });
+  });
+
+  it("lets --help win over a missing value using the short -h form", () => {
+    const r = parseCommand(spec, "--name -h");
+    expect(r.kind).toBe("help");
+  });
+
+  it("renders help without a description or examples section when absent", () => {
+    const bare = { name: "x", usage: "[args]", flags: Type.Object({}) };
+    const r = parseCommand(bare, "-h");
+    expect(r.kind).toBe("help");
+    if (r.kind !== "help") return;
+    expect(r.text).toContain("Usage: /x [args]");
+    expect(r.text).not.toContain("Examples:");
+    expect(r.text).toContain("-h, --help");
+  });
+
+  it("throws for a flag schema without a typebox kind", () => {
+    const raw = { name: "x", usage: "", flags: Type.Object({ v: { type: "string" } } as never) };
+    expect(() => parseCommand(raw, "")).toThrow(/Unsupported flag type for 'v'/);
+  });
 });

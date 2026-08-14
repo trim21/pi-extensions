@@ -22,7 +22,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { resolveHomePath } from "./lib/path.js";
-import { normalizeForEdit, replace } from "./opencode-edit-engine.js";
+import { normalizeForEdit, replace } from "./opencode/edit-engine.js";
 
 const WRITE_TOOLS = new Set(["write", "edit"]);
 const ALWAYS_ALLOW = ["/tmp"];

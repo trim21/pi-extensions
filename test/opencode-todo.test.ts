@@ -15,7 +15,7 @@ import todowrite, {
   serializeTodos,
   type TodoInfo,
   TOOL_NAME,
-} from "../src/opencode-todo.js";
+} from "../src/opencode/todo.js";
 
 interface MockCtx {
   ui: { setWidget: (key: string, lines: string[] | undefined) => void };

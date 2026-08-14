@@ -28,6 +28,10 @@ describe("shlexSplit", () => {
   it("rejects an unterminated quote", () => {
     expect(() => shlexSplit(`--name "oops`)).toThrow(SyntaxError);
   });
+
+  it("drops a trailing backslash at the end of input", () => {
+    expect(shlexSplit("abc\\")).toEqual(["abc"]);
+  });
 });
 
 describe("parseArgs", () => {

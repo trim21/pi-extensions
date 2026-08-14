@@ -28,7 +28,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { stripBom } from "./opencode-edit-engine.js";
+import { stripBom } from "./edit-engine.js";
 
 /**
  * opencode: desiredBom = source.bom || next.bom —— 优先保留原文件 BOM，

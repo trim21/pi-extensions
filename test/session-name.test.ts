@@ -83,16 +83,12 @@ describe("loadSessionNameConfig", () => {
     }
   });
 
-  it("tolerates jsonc comments and trailing commas", () => {
+  it("returns undefined for malformed JSON", () => {
     const dir = mkdtempSync(join(tmpdir(), "session-name-test-"));
     try {
       const path = join(dir, "settings.json");
-      writeFileSync(path, '{\n  // 注释\n  "sessionName": { "model": "m" },\n}', "utf8");
-      expect(loadSessionNameConfig(path)).toEqual({
-        provider: undefined,
-        model: "m",
-        maxLength: undefined,
-      });
+      writeFileSync(path, '{ "sessionName": { "model": "m", }', "utf8");
+      expect(loadSessionNameConfig(path)).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

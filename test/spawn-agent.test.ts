@@ -141,27 +141,27 @@ describe("buildSubagentArgs", () => {
 
   it("loads opencode-read for the default read-only toolset", () => {
     const exts = loadedExtensions(buildSubagentArgs(baseAgent, "task", undefined));
-    expect(exts.some((p) => p.endsWith("opencode-read.ts"))).toBe(true);
-    expect(exts.some((p) => p.endsWith("opencode-edit.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode-write.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(true);
+    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(false);
   });
 
   it("loads opencode overrides for each declared tool (read/edit/write)", () => {
     const exts = loadedExtensions(
       buildSubagentArgs({ ...baseAgent, tools: ["read", "edit", "write"] }, "task", undefined),
     );
-    expect(exts.some((p) => p.endsWith("opencode-read.ts"))).toBe(true);
-    expect(exts.some((p) => p.endsWith("opencode-edit.ts"))).toBe(true);
-    expect(exts.some((p) => p.endsWith("opencode-write.ts"))).toBe(true);
+    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(true);
+    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(true);
+    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(true);
   });
 
   it("does not load opencode overrides for tools the agent did not declare", () => {
     const exts = loadedExtensions(
       buildSubagentArgs({ ...baseAgent, tools: ["bash"] }, "task", undefined),
     );
-    expect(exts.some((p) => p.endsWith("opencode-read.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode-edit.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode-write.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(false);
   });
 
   it("uses the agent's declared toolset and model when present", () => {

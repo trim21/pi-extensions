@@ -173,6 +173,37 @@ describe("execute", () => {
     expect(input).toHaveBeenCalledWith("Pick: Which one?", "Type your answer…");
   });
 
+  it("treats blank free-text input as an unanswered question", async () => {
+    const { tool } = loadTool();
+    const select = vi.fn(async () => CUSTOM_LABEL);
+    const input = vi.fn(async () => " ".repeat(3));
+    const result = await tool.execute(
+      "id",
+      { questions: [q({})] },
+      undefined,
+      undefined,
+      ctxWith({ select, input }),
+    );
+    expect(result.details.answers).toEqual([[]]);
+    expect(result.content[0].text).toContain("Unanswered");
+  });
+
+  it("uses the question text as the dialog title when header is empty", async () => {
+    const { tool } = loadTool();
+    const select = vi.fn(async (title: string) => {
+      expect(title).toBe("Which one?");
+      return "A";
+    });
+    const result = await tool.execute(
+      "id",
+      { questions: [q({ header: "" })] },
+      undefined,
+      undefined,
+      ctxWith({ select }),
+    );
+    expect(result.details.answers).toEqual([["A"]]);
+  });
+
   it("treats a skipped question as Unanswered and continues", async () => {
     const { tool } = loadTool();
     const select = vi.fn(async () => SKIP);
@@ -218,6 +249,27 @@ describe("execute", () => {
       ["B", "C", DONE_LABEL],
       ["B", DONE_LABEL],
     ]);
+  });
+
+  it("ignores a multi-select choice that is no longer in the remaining set", async () => {
+    const { tool } = loadTool();
+    const multi = q({
+      multiple: true,
+      options: [{ label: "A", description: "a" }],
+    });
+    let calls = 0;
+    const select = vi.fn(async () => {
+      calls++;
+      return calls === 1 ? "stale" : DONE_LABEL;
+    });
+    const result = await tool.execute(
+      "id",
+      { questions: [multi] },
+      undefined,
+      undefined,
+      ctxWith({ select }),
+    );
+    expect(result.details.answers).toEqual([[]]);
   });
 
   it("throws when no interactive UI is available", async () => {

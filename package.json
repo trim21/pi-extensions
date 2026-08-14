@@ -22,6 +22,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "prepare": "husky"
   },
   "peerDependencies": {
@@ -35,6 +36,7 @@
     "@earendil-works/pi-coding-agent": "^0.84.1",
     "@eslint/js": "10.0.1",
     "@types/node": "^24.13.3",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-erasable-syntax-only": "0.4.2",
@@ -56,13 +58,10 @@
       "src/session-name.ts",
       "src/bwrap/index.ts",
       "src/workspace-guard.ts",
-      "src/opencode-edit.ts",
-      "src/opencode-read.ts",
-      "src/opencode-write.ts",
+      "src/opencode/index.ts",
       "src/bash-default-timeout.ts",
       "src/gh-readonly.ts",
       "src/spawn-agent.ts",
-      "src/opencode-todo.ts",
       "src/question.ts",
       "src/talk/index.ts"
     ],

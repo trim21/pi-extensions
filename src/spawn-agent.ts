@@ -62,9 +62,9 @@ const UNCONDITIONAL_EXTENSIONS = ["workspace-guard.ts", "bwrap/index.ts"] as con
  * subagent uses the enhanced implementation instead of the built-in one.
  */
 const TOOL_EXTENSION_OVERRIDES: Record<string, string> = {
-  read: "opencode-read.ts",
-  edit: "opencode-edit.ts",
-  write: "opencode-write.ts",
+  read: "opencode/read.ts",
+  edit: "opencode/edit.ts",
+  write: "opencode/write.ts",
 };
 
 // ── schema ───────────────────────────────────────────────────────────────────

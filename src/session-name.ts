@@ -33,8 +33,6 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { jsoncToJson } from "./lib/jsonc.js";
-
 // ── constants ────────────────────────────────────────────────────────────────
 
 /** ~/.pi/agent/settings.json：sessionName 配置所在文件 */
@@ -98,8 +96,7 @@ export interface UserMessageLike {
 /**
  * 读取 ~/.pi/agent/settings.json 的 sessionName 配置。
  * provider 缺省时回退到 defaultProvider；文件缺失 / JSON 损坏 / 无 sessionName
- * 时返回 undefined。支持 jsonc（注释/尾逗号），与 pi 文档的 settings.json
- * 示例一致。
+ * 时返回 undefined。
  */
 export function loadSessionNameConfig(settingsPath = SETTINGS_PATH): SessionNameConfig | undefined {
   let raw: string;
@@ -109,7 +106,7 @@ export function loadSessionNameConfig(settingsPath = SETTINGS_PATH): SessionName
     return undefined;
   }
   try {
-    const parsed: unknown = JSON.parse(jsoncToJson(raw));
+    const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
     const settings = parsed as Record<string, unknown>;
     const sn = settings.sessionName;

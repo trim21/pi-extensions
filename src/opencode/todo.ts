@@ -26,7 +26,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { type ToolPendant } from "./lib/pendant.js";
+import { type ToolPendant } from "../lib/pendant.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
 

@@ -10,7 +10,7 @@
  * Known gaps (intentionally not implemented): LSP diagnostics in the result,
  * formatter run.
  *
- * The matching engine (replacers + replace()) lives in opencode-edit-engine.ts
+ * The matching engine (replacers + replace()) lives in opencode/edit-engine.ts
  * and is also used by workspace-guard for the diff preview.
  *
  * Usage:
@@ -35,7 +35,7 @@ import {
   replace,
   restoreLineEndings,
   stripBom,
-} from "./opencode-edit-engine.js";
+} from "./edit-engine.js";
 
 // ── schema ────────────────────────────────────────────────────────────────────
 

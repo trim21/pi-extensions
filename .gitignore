@@ -1,2 +1,4 @@
 node_modules/
 .pixi/
+coverage/
+coverage/

@@ -1,0 +1,315 @@
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { describe, expect, it, vi } from "vitest";
+
+import { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
+import claudeCodeTools from "../src/claude-code/index.js";
+import { buildGrepArguments, pageGrepOutput } from "../src/claude-code/search.js";
+
+interface RegisteredTool {
+  name: string;
+  description: string;
+  parameters: {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+  execute: (...args: any[]) => Promise<any>;
+}
+
+function loadTools(): Map<string, RegisteredTool> {
+  const tools = new Map<string, RegisteredTool>();
+  claudeCodeTools({
+    registerTool(tool: RegisteredTool) {
+      tools.set(tool.name, tool);
+    },
+    on: vi.fn(),
+    exec: vi.fn(),
+  } as never);
+  return tools;
+}
+
+function context(cwd: string, overrides: Record<string, unknown> = {}) {
+  return {
+    cwd,
+    hasUI: true,
+    ui: {
+      setWidget: vi.fn(),
+      select: vi.fn(),
+      input: vi.fn(),
+    },
+    ...overrides,
+  };
+}
+
+async function call(
+  tool: RegisteredTool,
+  params: Record<string, unknown>,
+  ctx: ReturnType<typeof context>,
+  signal?: AbortSignal,
+) {
+  return tool.execute("call-id", params, signal, undefined, ctx);
+}
+
+describe("Claude Code tool registration", () => {
+  it("registers the supported synchronous tool set", () => {
+    expect([...loadTools().keys()]).toEqual([
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Bash",
+      "TodoWrite",
+      "AskUserQuestion",
+    ]);
+  });
+
+  it("uses Claude Code snake_case schemas", () => {
+    const tools = loadTools();
+    expect(Object.keys(tools.get("Read")!.parameters.properties!)).toEqual([
+      "file_path",
+      "offset",
+      "limit",
+      "pages",
+    ]);
+    expect(tools.get("Read")!.parameters.required).toEqual(["file_path"]);
+    expect(Object.keys(tools.get("Edit")!.parameters.properties!)).toEqual([
+      "file_path",
+      "old_string",
+      "new_string",
+      "replace_all",
+    ]);
+    expect(tools.get("Edit")!.parameters.required).toEqual([
+      "file_path",
+      "old_string",
+      "new_string",
+    ]);
+  });
+
+  it("does not expose background Bash parameters or task tools", () => {
+    const tools = loadTools();
+    expect(Object.keys(tools.get("Bash")!.parameters.properties!)).toEqual([
+      "command",
+      "timeout",
+      "description",
+    ]);
+    expect(tools.has("TaskOutput")).toBe(false);
+    expect(tools.has("TaskStop")).toBe(false);
+  });
+});
+
+describe("Read, Edit, and Write", () => {
+  it("formats Read output with cat-n style line numbers and a partial notice", () => {
+    expect(formatReadOutput("one\ntwo\nthree\n", 2, 1)).toEqual({
+      text: "     2\ttwo\n\n<system-reminder>PARTIAL view: showing lines 2-2 of 3. Use offset and limit to read more.</system-reminder>",
+      complete: false,
+      totalLines: 3,
+    });
+  });
+
+  it("performs only exact replacements and enforces uniqueness", () => {
+    expect(exactReplace("a b a", "b", "B")).toBe("a B a");
+    expect(() => exactReplace("a b a", "a", "A")).toThrow(/2 matches/);
+    expect(exactReplace("a b a", "a", "A", true)).toBe("A b A");
+    expect(() => exactReplace("hello", " hello", "x")).toThrow(/not found/);
+  });
+
+  it("requires a complete Read before Edit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-files-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "hello world\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+
+    await expect(
+      call(
+        tools.get("Edit")!,
+        { file_path: filePath, old_string: "world", new_string: "there" },
+        ctx,
+      ),
+    ).rejects.toThrow(/not been read/);
+
+    await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    await call(
+      tools.get("Edit")!,
+      { file_path: filePath, old_string: "world", new_string: "there" },
+      ctx,
+    );
+    expect(await readFile(filePath, "utf8")).toBe("hello there\n");
+  });
+
+  it("allows Edit after a partial Read while still checking the file fingerprint", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-partial-"));
+    const filePath = join(directory, "large.txt");
+    await writeFile(filePath, "one\ntwo\nthree\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+    await call(tools.get("Read")!, { file_path: filePath, offset: 2, limit: 1 }, ctx);
+    await call(
+      tools.get("Edit")!,
+      { file_path: filePath, old_string: "three", new_string: "THREE" },
+      ctx,
+    );
+    expect(await readFile(filePath, "utf8")).toBe("one\ntwo\nTHREE\n");
+  });
+
+  it("requires a new Read after an external file change", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-stale-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "first\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+    await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    await writeFile(filePath, "externally changed and longer\n", "utf8");
+
+    await expect(
+      call(tools.get("Write")!, { file_path: filePath, content: "overwrite\n" }, ctx),
+    ).rejects.toThrow(/modified since read/);
+  });
+
+  it("allows Write to create a new file without a prior Read", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-write-"));
+    const filePath = join(directory, "nested", "new.txt");
+    const tools = loadTools();
+    await call(tools.get("Write")!, { file_path: filePath, content: "new\n" }, context(directory));
+    expect(await readFile(filePath, "utf8")).toBe("new\n");
+  });
+});
+
+describe("Glob and Grep", () => {
+  it("builds ripgrep arguments for Claude Code output modes", () => {
+    expect(
+      buildGrepArguments(
+        {
+          pattern: "hello",
+          output_mode: "content",
+          glob: "*.ts",
+          "-i": true,
+          context: 2,
+          multiline: true,
+        },
+        "/repo",
+      ),
+    ).toEqual([
+      "--color=never",
+      "--no-heading",
+      "--with-filename",
+      "--line-number",
+      "--context",
+      "2",
+      "--ignore-case",
+      "--glob",
+      "*.ts",
+      "--multiline",
+      "--multiline-dotall",
+      "--",
+      "hello",
+      "/repo",
+    ]);
+  });
+
+  it("paginates Grep output and reports an out-of-range offset", () => {
+    expect(pageGrepOutput("a\nb\nc\n", 1, 1)).toBe("b");
+    expect(pageGrepOutput("a\nb\n", 3, 1)).toBe("No entries at this offset");
+  });
+});
+
+describe("Bash", () => {
+  it("waits for command completion and returns output", async () => {
+    const tools = loadTools();
+    const result = await call(
+      tools.get("Bash")!,
+      { command: "printf done", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toBe("done");
+  });
+
+  it("persists the working directory between commands", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-bash-cwd-"));
+    const nested = join(directory, "nested");
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(nested));
+    const tools = loadTools();
+    const ctx = context(directory);
+    await call(tools.get("Bash")!, { command: `cd ${JSON.stringify(nested)}` }, ctx);
+    const result = await call(tools.get("Bash")!, { command: "pwd" }, ctx);
+    expect(result.content[0].text).toBe(nested);
+  });
+
+  it("waits for shell jobs started with ampersand", async () => {
+    const tools = loadTools();
+    const startedAt = Date.now();
+    const result = await call(
+      tools.get("Bash")!,
+      { command: "sleep 0.05 & printf started", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toBe("started");
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(40);
+  });
+
+  it("uses millisecond timeouts", async () => {
+    const tools = loadTools();
+    await expect(
+      call(tools.get("Bash")!, { command: "sleep 1", timeout: 20 }, context(process.cwd())),
+    ).rejects.toThrow(/20 milliseconds/);
+  });
+
+  it("force-stops commands that ignore SIGTERM", async () => {
+    const tools = loadTools();
+    await expect(
+      call(
+        tools.get("Bash")!,
+        { command: "trap '' TERM; while :; do sleep 1; done", timeout: 20 },
+        context(process.cwd()),
+      ),
+    ).rejects.toThrow(/20 milliseconds/);
+  });
+});
+
+describe("TodoWrite and AskUserQuestion", () => {
+  it("uses activeForm for the in-progress widget row", async () => {
+    const tools = loadTools();
+    const ctx = context(process.cwd());
+    await call(
+      tools.get("TodoWrite")!,
+      {
+        todos: [
+          { content: "Run tests", status: "in_progress", activeForm: "Running tests" },
+          { content: "Build", status: "pending", activeForm: "Building" },
+        ],
+      },
+      ctx,
+    );
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith("claude-code-todos", [
+      "- [>] Running tests",
+      "- [ ] Build",
+    ]);
+  });
+
+  it("asks a single-choice question and returns the answer", async () => {
+    const tools = loadTools();
+    const ctx = context(process.cwd());
+    ctx.ui.select.mockResolvedValue("Postgres");
+    const result = await call(
+      tools.get("AskUserQuestion")!,
+      {
+        questions: [
+          {
+            question: "Which database?",
+            header: "Database",
+            options: [
+              { label: "Postgres", description: "Relational" },
+              { label: "SQLite", description: "Embedded" },
+            ],
+            multiSelect: false,
+          },
+        ],
+      },
+      ctx,
+    );
+    expect(result.content[0].text).toContain('"Which database?"="Postgres"');
+  });
+});
