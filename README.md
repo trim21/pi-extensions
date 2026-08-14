@@ -1,4 +1,4 @@
-# pi-extensions
+# Some of my personal pi extensions
 
 [pi](https://github.com/earendil-works/pi-mono) coding-agent 自定义扩展集合。
 
