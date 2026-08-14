@@ -7,7 +7,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { resolveBwrap, resolveEscalation, resolveHeadlessBwrap } from "../src/bwrap/index.js";
+import { resolveBwrap, resolveHeadlessBwrap } from "../src/bwrap/core.ts";
+import { resolveEscalation } from "../src/bwrap/runtime.ts";
 
 describe("resolveBwrap", () => {
   it("resolves allow-net with sandbox on and network on", () => {
