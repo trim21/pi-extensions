@@ -28,6 +28,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { guardWriteAccess } from "../lib/write-guard.js";
 import { stripBom } from "./edit-engine.js";
 
 /**
@@ -69,6 +70,11 @@ export default function opencodeWrite(pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const { filePath: rawPath, content } = params;
       const absolutePath = resolvePath(ctx.cwd, rawPath);
+      await guardWriteAccess(ctx, {
+        toolName: "write",
+        absolutePath,
+        change: { oldText: "", newText: content },
+      });
       const dir = dirname(absolutePath);
 
       const throwIfAborted = () => {

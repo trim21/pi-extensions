@@ -127,14 +127,13 @@ describe("buildSubagentArgs", () => {
     expect(args).not.toContain("Task: find the config");
   });
 
-  it("always loads the protection extensions (write guard + bwrap)", () => {
+  it("always loads the bwrap sandbox extension", () => {
     for (const agent of [
       baseAgent,
       { ...baseAgent, tools: ["bash", "edit"] },
       { ...baseAgent, tools: ["write"] },
     ]) {
       const exts = loadedExtensions(buildSubagentArgs(agent, "task", undefined));
-      expect(exts.some((p) => p.endsWith("workspace-guard.ts"))).toBe(true);
       expect(exts.some((p) => p.endsWith("bwrap/index.ts"))).toBe(true);
     }
   });

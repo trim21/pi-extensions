@@ -50,11 +50,11 @@ const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
 const MAX_PROGRESS_LINES = 5;
 
 /**
- * Extensions loaded unconditionally into every subagent: the workspace write
- * guard and the bwrap sandbox. Both are protection layers and must not depend
- * on the agent's declared toolset.
+ * Extensions loaded unconditionally into every subagent: the bwrap sandbox is a
+ * protection layer and must not depend on the agent's declared toolset.
+ * (Workspace write protection is embedded in the opencode write/edit tools.)
  */
-const UNCONDITIONAL_EXTENSIONS = ["workspace-guard.ts", "bwrap/index.ts"] as const;
+const UNCONDITIONAL_EXTENSIONS = ["bwrap/index.ts"] as const;
 
 /**
  * Tool → extension override map: when a subagent's frontmatter enables a

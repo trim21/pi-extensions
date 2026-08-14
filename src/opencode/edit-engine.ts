@@ -7,8 +7,8 @@
  * and wrapped in a pi extension so the behaviour is identical to opencode.
  *
  * Shared by:
- *   - opencode-edit.ts  — the edit tool implementation
- *   - workspace-guard.ts — the diff preview shown in the approval dialog
+ *   - opencode-edit.ts — the edit tool implementation
+ *   - lib/write-guard.ts — the diff preview shown in the approval dialog
  */
 
 // ── BOM & line ending helpers ─────────────────────────────────────────────────

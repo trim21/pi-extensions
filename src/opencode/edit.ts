@@ -11,7 +11,7 @@
  * formatter run.
  *
  * The matching engine (replacers + replace()) lives in opencode/edit-engine.ts
- * and is also used by workspace-guard for the diff preview.
+ * and is also used by lib/write-guard for the diff preview.
  *
  * Usage:
  *   pi -e ./opencode-edit.ts
@@ -29,6 +29,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { guardWriteAccess } from "../lib/write-guard.js";
 import {
   detectLineEnding,
   normalizeToLF,
@@ -78,6 +79,12 @@ export default function opencodeEdit(pi: ExtensionAPI) {
       const replaceAll = params.replaceAll ?? false;
 
       const absolutePath = isAbsolute(filePath) ? filePath : resolve(ctx.cwd, filePath);
+
+      await guardWriteAccess(ctx, {
+        toolName: "edit",
+        absolutePath,
+        change: { oldText: oldString, newText: newString, replaceAll },
+      });
 
       const throwIfAborted = (): void => {
         if (signal?.aborted) throw new Error("Operation aborted");

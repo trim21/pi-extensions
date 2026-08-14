@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { guardWriteAccess } from "../lib/write-guard.js";
 import {
   type ClaudeCodeState,
   type FileSnapshot,
@@ -241,9 +242,18 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       },
       { additionalProperties: false },
     ),
-    async execute(_id, params, signal) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       throwIfAborted(signal);
       const filePath = requireAbsolutePath(params.file_path);
+      await guardWriteAccess(ctx, {
+        toolName: "Edit",
+        absolutePath: filePath,
+        change: {
+          oldText: params.old_string,
+          newText: params.new_string,
+          replaceAll: params.replace_all,
+        },
+      });
       return withFileMutationQueue(filePath, async () => {
         await requireCurrentRead(state, filePath);
         await access(filePath, constants.R_OK | constants.W_OK);
@@ -287,9 +297,14 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       },
       { additionalProperties: false },
     ),
-    async execute(_id, params, signal) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       throwIfAborted(signal);
       const filePath = requireAbsolutePath(params.file_path);
+      await guardWriteAccess(ctx, {
+        toolName: "Write",
+        absolutePath: filePath,
+        change: { oldText: "", newText: params.content },
+      });
       return withFileMutationQueue(filePath, async () => {
         let original: string | undefined;
         try {

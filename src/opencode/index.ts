@@ -3,7 +3,7 @@
  *
  * 聚合 read / edit / write / todo / question / bash 六个工具，一次加载全部注册；
  * 各工具的公开 API（匹配引擎、纯函数等）也从这里重新导出，方便
- * 测试与其他模块（如 workspace-guard）引用。
+ * 测试与其他模块（如 lib/write-guard）引用。
  *
  * Usage:
  *   pi -e ./opencode/index.ts

@@ -58,7 +58,6 @@
       "src/claude-code/index.ts",
       "src/vision-agent.ts",
       "src/session-name.ts",
-      "src/workspace-guard.ts",
       "src/gh-readonly.ts",
       "src/spawn-agent.ts",
       "src/talk/index.ts"

@@ -6,17 +6,17 @@
 
 ## 扩展概览
 
-| 扩展                                          | 描述                                                   |
-| --------------------------------------------- | ------------------------------------------------------ |
-| [bwrap](#bwrap)                               | 基于 bubblewrap 的 OS 级沙箱，提供文件系统和网络隔离   |
-| [workspace-guard](#workspace-guard)           | 限制文件写入在 workspace 内，外部写入需用户审批        |
-| [opencode-edit](#opencode-edit)               | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎 |
-| [bash-default-timeout](#bash-default-timeout) | 为 bash 工具设置默认超时（180 秒）                     |
-| [vision-agent](#vision-agent)                 | 视觉代理：主模型不支持视觉时，spawn 子 agent 识别图片  |
-| [session-name](#session-name)                 | 首个 user prompt 自动生成会话名，模型命名 + 启发式兜底 |
-| [todowrite](#todowrite)                       | opencode 风格的任务列表工具，完整列表替换语义          |
-| [question](#question)                         | opencode 风格的提问工具，阻塞式询问用户选择            |
-| [talk](#talk)                                 | session 间消息传递，SQLite 邮箱 + 双向 ask 时间戳仲裁  |
+| 扩展                                          | 描述                                                    |
+| --------------------------------------------- | ------------------------------------------------------- |
+| [bwrap](#bwrap)                               | 基于 bubblewrap 的 OS 级沙箱，提供文件系统和网络隔离    |
+| [写保护（内置）](#写保护内置)                 | 写工具内置：限制文件写入在 workspace 内，外部写入需审批 |
+| [opencode-edit](#opencode-edit)               | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎  |
+| [bash-default-timeout](#bash-default-timeout) | 为 bash 工具设置默认超时（180 秒）                      |
+| [vision-agent](#vision-agent)                 | 视觉代理：主模型不支持视觉时，spawn 子 agent 识别图片   |
+| [session-name](#session-name)                 | 首个 user prompt 自动生成会话名，模型命名 + 启发式兜底  |
+| [todowrite](#todowrite)                       | opencode 风格的任务列表工具，完整列表替换语义           |
+| [question](#question)                         | opencode 风格的提问工具，阻塞式询问用户选择             |
+| [talk](#talk)                                 | session 间消息传递，SQLite 邮箱 + 双向 ask 时间戳仲裁   |
 
 ---
 
@@ -86,25 +86,20 @@ pi -e ./src/bwrap/index.ts
 
 ---
 
-## workspace-guard
+## 写保护（内置）
 
-阻止 `write` 和 `edit` 工具写入 workspace 外部的路径。读取工具（`read`、`ls`、`find`、`grep`）不受限制。
+写保护直接内置在各写工具（opencode 风格 `write`/`edit`、Claude Code 风格 `Write`/`Edit`）内部，通过 `src/lib/write-guard.ts` 的 `guardWriteAccess` 实现。读取工具（`read`、`ls`、`find`、`grep`）不受限制。
 
 - workspace 内或 `/tmp` 下的路径自动放行
-- 外部路径需通过确认对话框由用户审批,对话框内以 ```diff 代码块展示将要发生的变更预览(与 opencode-edit 共享匹配引擎,能定位时显示带行号的真实 patch,否则退化为参数 diff)
-- 无需配置
-
-### 使用
-
-```bash
-pi -e ./src/workspace-guard.ts
-```
+- 外部路径需通过确认对话框由用户审批，对话框内以 ```diff 代码块展示将要发生的变更预览（与 opencode-edit 共享匹配引擎，能定位时显示带行号的真实 patch，否则退化为参数 diff）
+- headless（无 UI）会话直接拒绝外部写入
+- 无需配置，随各写工具自动生效
 
 ---
 
 ## opencode-edit
 
-替换内置 `edit` 工具，使用 [opencode](https://github.com/anomalyco/opencode) 的 schema 和模糊匹配引擎。核心 replacer 和 `replace()` 函数直接复制自 opencode，行为与原版完全一致。匹配引擎位于 `src/opencode-edit-engine.ts`，与 workspace-guard 的审批弹窗 diff 预览共享。
+替换内置 `edit` 工具，使用 [opencode](https://github.com/anomalyco/opencode) 的 schema 和模糊匹配引擎。核心 replacer 和 `replace()` 函数直接复制自 opencode，行为与原版完全一致。匹配引擎位于 `src/opencode/edit-engine.ts`，与写保护审批弹窗（`src/lib/write-guard.ts`）的 diff 预览共享。
 
 支持的匹配策略：
 
@@ -363,7 +358,6 @@ pi -e ./src/talk/index.ts
 
 ```bash
 pi -e ./src/bwrap/index.ts
-pi -e ./src/workspace-guard.ts
 ```
 
 ---
