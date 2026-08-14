@@ -26,6 +26,8 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { type ToolPendant } from "./lib/pendant.js";
+
 // ── constants ────────────────────────────────────────────────────────────────
 
 export const TOOL_NAME = "todowrite";
@@ -82,7 +84,7 @@ export interface TodoInfo {
 
 export interface TodoDetails {
   todos: TodoInfo[];
-  pendant: { markdown: string; expanded: boolean };
+  pendant?: ToolPendant;
 }
 
 // ── schema（与 opencode 的 Parameters 一致）──────────────────────────────────

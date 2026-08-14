@@ -34,6 +34,8 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { type ToolPendant } from "./lib/pendant.js";
+
 // ── constants ────────────────────────────────────────────────────────────────
 
 export const TOOL_NAME = "describe_image";
@@ -444,7 +446,7 @@ export default function visionAgent(pi: ExtensionAPI) {
             pendant: {
               markdown,
               expanded: true,
-            },
+            } satisfies ToolPendant,
           },
         };
       } catch (error) {
@@ -464,7 +466,7 @@ export default function visionAgent(pi: ExtensionAPI) {
             pendant: {
               markdown: `## 图片识别失败\n\n${message}`,
               expanded: true,
-            },
+            } satisfies ToolPendant,
           },
         };
       }

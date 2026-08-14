@@ -4,7 +4,6 @@ import eslintConfigPrettier from "eslint-config-prettier";
 import erasableSyntaxOnly from "eslint-plugin-erasable-syntax-only";
 import pluginPromise from "eslint-plugin-promise";
 import simpleImportSort from "eslint-plugin-simple-import-sort";
-import eslintPluginTsDoc from "eslint-plugin-tsdoc";
 import eslintPluginUnicorn from "eslint-plugin-unicorn";
 import unusedImports from "eslint-plugin-unused-imports";
 import tsEslint from "typescript-eslint";
@@ -56,7 +55,6 @@ export default defineConfig(
   eslintPluginUnicorn.configs.recommended,
   {
     plugins: {
-      tsdoc: eslintPluginTsDoc,
       "simple-import-sort": simpleImportSort,
       "unused-imports": unusedImports,
     },
@@ -67,7 +65,6 @@ export default defineConfig(
       "unicorn/import-style": "off",
       "unused-imports/no-unused-imports": "error",
       curly: ["error"],
-      "tsdoc/syntax": "error",
       "no-new-object": "error",
       "no-console": "error",
       "no-new-wrappers": "error",
