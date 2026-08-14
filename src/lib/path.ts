@@ -2,6 +2,7 @@
  * Shared path helpers used by multiple extensions.
  */
 
+import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -25,4 +26,23 @@ export function expandHome(p: string): string {
 export function resolveHomePath(p: string, baseDir: string): string {
   const expanded = expandHome(p);
   return isAbsolute(expanded) ? resolve(expanded) : resolve(baseDir, expanded);
+}
+
+/**
+ * Resolve a command `workdir` argument: absolute paths are used as-is, relative
+ * paths resolve against `baseDir`. Throws if the target does not exist or is
+ * not a directory.
+ */
+export async function resolveWorkdir(workdir: string, baseDir: string): Promise<string> {
+  const target = isAbsolute(workdir) ? workdir : resolve(baseDir, workdir);
+  let info;
+  try {
+    info = await stat(target);
+  } catch {
+    throw new Error(`Working directory does not exist: ${target}`);
+  }
+  if (!info.isDirectory()) {
+    throw new Error(`Working directory is not a directory: ${target}`);
+  }
+  return target;
 }

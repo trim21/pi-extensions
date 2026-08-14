@@ -7,29 +7,27 @@ import { resolveWorkdir } from "../lib/path.js";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 
-export function registerShellTools(pi: ExtensionAPI): void {
+export default function opencodeBash(pi: ExtensionAPI): void {
   pi.registerTool({
-    name: "Bash",
-    label: "Bash",
+    name: "bash",
+    label: "bash",
     description: [
       "Executes a given bash command synchronously and returns its output.",
+      "The default working directory is the current directory; use workdir to run elsewhere.",
       "timeout is in milliseconds, defaults to 120000, and may not exceed 600000.",
       "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
     ].join("\n"),
     parameters: Type.Object(
       {
         command: Type.String({ description: "The command to execute" }),
-        timeout: Type.Optional(
-          Type.Number({ description: "Optional timeout in milliseconds (max 600000)" }),
-        ),
-        description: Type.Optional(
-          Type.String({ description: "Clear, concise description of the command" }),
-        ),
         workdir: Type.Optional(
           Type.String({
             description:
               "Working directory to execute the command in. Defaults to the current directory; relative paths resolve from there.",
           }),
+        ),
+        timeout: Type.Optional(
+          Type.Number({ description: "Optional timeout in milliseconds (max 600000)" }),
         ),
         dangerouslyDisableSandbox: Type.Optional(
           Type.Boolean({
@@ -55,7 +53,6 @@ export function registerShellTools(pi: ExtensionAPI): void {
           command: params.command,
           timeout: timeout / 1000,
           requestFullAccess: params.dangerouslyDisableSandbox,
-          requestFullAccessReason: params.description,
           signal,
           onUpdate,
         });

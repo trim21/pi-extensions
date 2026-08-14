@@ -1,6 +1,6 @@
 /**
  * Tests for the bash-default-timeout extension:
- * - sets a 180s timeout on bash tool calls that do not declare one
+ * - sets a 180s (180000ms) timeout on bash tool calls that do not declare one
  * - leaves existing timeouts and non-bash calls untouched
  */
 import { describe, expect, it } from "vitest";
@@ -28,14 +28,14 @@ describe("bash-default-timeout", () => {
     const handler = loadHandler();
     const event: ToolCallLike = { toolName: "bash", input: {} };
     handler(event);
-    expect(event.input.timeout).toBe(180);
+    expect(event.input.timeout).toBe(180_000);
   });
 
   it("leaves an existing timeout untouched", () => {
     const handler = loadHandler();
-    const event: ToolCallLike = { toolName: "bash", input: { timeout: 60 } };
+    const event: ToolCallLike = { toolName: "bash", input: { timeout: 60_000 } };
     handler(event);
-    expect(event.input.timeout).toBe(60);
+    expect(event.input.timeout).toBe(60_000);
   });
 
   it("ignores non-bash tool calls", () => {

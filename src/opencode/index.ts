@@ -1,7 +1,7 @@
 /**
  * opencode —— 统一注册 opencode 风格工具扩展。
  *
- * 聚合 read / edit / write / todo / question 五个工具，一次加载全部注册；
+ * 聚合 read / edit / write / todo / question / bash 六个工具，一次加载全部注册；
  * 各工具的公开 API（匹配引擎、纯函数等）也从这里重新导出，方便
  * 测试与其他模块（如 workspace-guard）引用。
  *
@@ -14,12 +14,14 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import opencodeBash from "./bash.js";
 import opencodeEdit from "./edit.js";
 import opencodeQuestion from "./question.js";
 import opencodeRead from "./read.js";
 import opencodeTodo from "./todo.js";
 import opencodeWrite from "./write.js";
 
+export { default as opencodeBash } from "./bash.js";
 export { default as opencodeEdit } from "./edit.js";
 export {
   detectLineEnding,
@@ -40,4 +42,5 @@ export default function opencode(pi: ExtensionAPI) {
   opencodeWrite(pi);
   opencodeTodo(pi);
   opencodeQuestion(pi);
+  opencodeBash(pi);
 }

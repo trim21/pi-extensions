@@ -38,7 +38,7 @@
 
 ### 提权机制
 
-bash 工具注册了 `request_full_access` 和 `request_full_access_reason` 参数。模型需要全权限时须说明原因（如需要网络、写入 workspace 外部路径）。
+bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `dangerouslyDisableSandbox` 参数。模型需要全权限时置为 true 并说明原因（如需要网络、写入 workspace 外部路径）。
 
 建议模型不确定时先尝试沙箱模式，若因沙箱限制失败，再以完整权限重试。
 
