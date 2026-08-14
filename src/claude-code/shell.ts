@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -7,10 +10,14 @@ import { resolveWorkdir } from "../lib/path.js";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 
+/** Bash tool guidance, kept in markdown so it reads like documentation. */
+const BASH_PROMPT = readFileSync(fileURLToPath(new URL("bash.md", import.meta.url)), "utf8").trim();
+
 export function registerShellTools(pi: ExtensionAPI): void {
   bwrapRuntime.setup(pi);
   pi.registerTool({
     name: "Bash",
+    promptGuidelines: [BASH_PROMPT],
     label: "Bash",
     description: [
       "Executes a given bash command synchronously and returns its output.",

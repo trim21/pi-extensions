@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, readFileSync } from "node:fs";
 import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, extname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -23,6 +24,14 @@ import {
 
 const DEFAULT_READ_LINES = 2000;
 const SAMPLE_BYTES = 4096;
+
+/** Tool guidance, kept in markdown so it reads like documentation. */
+const READ_PROMPT = readFileSync(fileURLToPath(new URL("read.md", import.meta.url)), "utf8").trim();
+const EDIT_PROMPT = readFileSync(fileURLToPath(new URL("edit.md", import.meta.url)), "utf8").trim();
+const WRITE_PROMPT = readFileSync(
+  fileURLToPath(new URL("write.md", import.meta.url)),
+  "utf8",
+).trim();
 const IMAGE_MIMES = new Map<string, string>([
   [".gif", "image/gif"],
   [".jpeg", "image/jpeg"],
@@ -163,6 +172,8 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       "Results use cat -n style line numbers starting at 1. Images are returned visually.",
       "This tool reads files, not directories.",
     ].join("\n"),
+    promptSnippet: "Read files from the local filesystem with line numbers",
+    promptGuidelines: [READ_PROMPT],
     parameters: Type.Object(
       {
         file_path: Type.String({ description: "The absolute path to the file to read" }),
@@ -231,6 +242,8 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       "old_string must match exactly and must be unique unless replace_all is true.",
       "This tool does not use regular expressions or fuzzy matching.",
     ].join("\n"),
+    promptSnippet: "Make exact string replacements in files",
+    promptGuidelines: [EDIT_PROMPT],
     parameters: Type.Object(
       {
         file_path: Type.String({ description: "The absolute path to the file to modify" }),
@@ -288,6 +301,8 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       "This tool overwrites an existing file with the full content provided.",
       "If the file exists, you must use Read first. Prefer Edit for partial changes.",
     ].join("\n"),
+    promptSnippet: "Create or overwrite files",
+    promptGuidelines: [WRITE_PROMPT],
     parameters: Type.Object(
       {
         file_path: Type.String({

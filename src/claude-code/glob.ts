@@ -5,8 +5,10 @@
  * independently (declare `Glob` in the frontmatter to get only this tool).
  */
 
+import { readFileSync } from "node:fs";
 import { glob as fsGlob, stat } from "node:fs/promises";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -14,6 +16,9 @@ import { Type } from "typebox";
 import { searchRoot, throwIfAborted } from "./common.js";
 
 const GLOB_RESULT_LIMIT = 100;
+
+/** Tool guidance, kept in markdown so it reads like documentation. */
+const GLOB_PROMPT = readFileSync(fileURLToPath(new URL("glob.md", import.meta.url)), "utf8").trim();
 
 export async function globFiles(
   pattern: string,
@@ -47,6 +52,8 @@ export function registerGlobTool(pi: ExtensionAPI): void {
       'Supports glob patterns such as "**/*.js" and "src/**/*.ts".',
       "Returns matching file paths sorted by modification time.",
     ].join("\n"),
+    promptSnippet: "Find files by name patterns",
+    promptGuidelines: [GLOB_PROMPT],
     parameters: Type.Object(
       {
         pattern: Type.String({ description: "The glob pattern to match files against" }),

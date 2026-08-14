@@ -116,6 +116,7 @@ export function registerSessionTools(pi: ExtensionAPI): void {
       "Keep exactly one task in_progress while work remains and mark tasks completed immediately after finishing them.",
       "Each task needs an imperative content form and a present-continuous activeForm.",
     ].join("\n"),
+    promptSnippet: "Plan and track work with a task list",
     parameters: todoSchema,
     execute(_id, params, _signal, _onUpdate, ctx) {
       const todos = params.todos.map((todo) => ({
@@ -174,6 +175,12 @@ export function registerSessionTools(pi: ExtensionAPI): void {
       "Use multiSelect for questions where multiple choices may apply.",
       'If you recommend an option, put it first and append "(Recommended)" to its label.',
     ].join("\n"),
+    promptSnippet: "Ask the user questions during execution",
+    promptGuidelines: [
+      "Use AskUserQuestion when you need to gather preferences, clarify requirements, or choose an implementation direction.",
+      "Users can always provide their own answer through the automatically supplied Other option.",
+      'If you recommend an option, put it first and append "(Recommended)" to its label.',
+    ],
     parameters: Type.Object(
       {
         questions: Type.Array(questionSchema, {

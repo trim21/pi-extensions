@@ -9,7 +9,9 @@
  * lines capped at 500 columns, and an implicit head_limit of 250 entries.
  */
 
+import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -20,6 +22,9 @@ import { searchRoot, throwIfAborted } from "./common.js";
 const GREP_OUTPUT_MODES = ["content", "files_with_matches", "count"] as const;
 
 type GrepOutputMode = (typeof GREP_OUTPUT_MODES)[number];
+
+/** Tool guidance, kept in markdown so it reads like documentation. */
+const GREP_PROMPT = readFileSync(fileURLToPath(new URL("grep.md", import.meta.url)), "utf8").trim();
 
 /** Version control directories excluded from searches (noise in results). */
 const VCS_DIRECTORIES_TO_EXCLUDE = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"] as const;
@@ -145,6 +150,8 @@ export function registerGrepTool(pi: ExtensionAPI): void {
       "Supports regular expressions, file globs, file types, multiline matching, context lines, and paginated output.",
       'output_mode defaults to "files_with_matches"; use "content" for matching lines or "count" for match counts.',
     ].join("\n"),
+    promptSnippet: "Search file contents with regular expressions",
+    promptGuidelines: [GREP_PROMPT],
     parameters: Type.Object(
       {
         pattern: Type.String({ description: "The regular expression pattern to search for" }),
