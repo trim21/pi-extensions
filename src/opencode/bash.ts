@@ -18,6 +18,7 @@ export default function opencodeBash(pi: ExtensionAPI): void {
       "timeout is in milliseconds, defaults to 120000, and may not exceed 600000.",
       "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
     ].join("\n"),
+    promptSnippet: "execute command",
     parameters: Type.Object(
       {
         command: Type.String({ description: "The command to execute" }),
