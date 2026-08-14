@@ -62,7 +62,6 @@
       "src/bash-default-timeout.ts",
       "src/gh-readonly.ts",
       "src/spawn-agent.ts",
-      "src/question.ts",
       "src/talk/index.ts"
     ],
     "skills": [

@@ -14,7 +14,7 @@ import question, {
   normalizeQuestions,
   type Question,
   TOOL_NAME,
-} from "../src/question.js";
+} from "../src/opencode/question.js";
 
 interface Tool {
   name: string;
