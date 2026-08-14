@@ -1,16 +1,17 @@
 /**
  * Tests for the vision-agent extension:
- * - loadVisionConfig / resolveProviderConfig: config resolution
+ * - loadVisionConfig: config resolution
  * - resolveImagePaths: path list normalization
- * - callVision: OpenAI-compatible API calls with base64 data URLs
+ * - callVision: model-registry based vision calls with base64 image content
  * - tool visibility sync on model_select
- * - execute: end-to-end via mocked fetch
+ * - execute: end-to-end via mocked registry
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
+import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import {
   buildPendantMarkdown,
@@ -18,10 +19,8 @@ import {
   callVision,
   isMultimodal,
   loadVisionConfig,
-  normalizeBaseUrl,
-  resolveApiKey,
+  type ModelRegistryLike,
   resolveImagePaths,
-  resolveProviderConfig,
   TOOL_NAME,
   VISION_SYSTEM_PROMPT,
   VisionAbortError,
@@ -40,15 +39,6 @@ function writePng(dir: string, name: string): string {
   return path;
 }
 
-function okResponse(body: unknown): Response {
-  return {
-    ok: true,
-    status: 200,
-    text: async () => "",
-    json: async () => body,
-  } as Response;
-}
-
 function withTempFile(content: unknown, fn: (path: string) => void, name = "settings.json") {
   const dir = mkdtempSync(join(tmpdir(), "vision-agent-test-"));
   try {
@@ -60,7 +50,7 @@ function withTempFile(content: unknown, fn: (path: string) => void, name = "sett
   }
 }
 
-/** 把 settings.json / models.json 写进临时 home，并加载扩展模块 */
+/** 把 settings.json 写进临时 home，并加载扩展模块 */
 async function loadVisionAgentWithHome(files: Record<string, string>) {
   vi.resetModules();
   const tempHome = mkdtempSync(join(tmpdir(), "vision-home-"));
@@ -75,6 +65,33 @@ async function loadVisionAgentWithHome(files: Record<string, string>) {
   });
   const { default: visionAgent } = await import("../src/vision-agent.js");
   return { visionAgent, tempHome };
+}
+
+/** 构造一个最小 Model mock（只带 callVision 用到的字段） */
+function modelMock(id = "mimo", maxTokens = 4096): Model<Api> {
+  return { id, maxTokens } as Model<Api>;
+}
+
+/** 构造 complete 返回指定文本的 registry mock */
+function registryMock(
+  text = "ok",
+  usage?: { totalTokens: number },
+): ModelRegistryLike & { complete: Mock } {
+  return {
+    find: (): Model<Api> | undefined => undefined,
+    complete: vi.fn(
+      async () =>
+        ({
+          content: [{ type: "text", text }],
+          usage: usage ?? { totalTokens: 42 },
+        }) as unknown as AssistantMessage,
+    ),
+  };
+}
+
+/** execute 测试的 ctx 里注入 registry mock */
+function visionCtx(registry: unknown) {
+  return { cwd: "/cwd", hasUI: false, modelRegistry: registry };
 }
 
 describe("loadVisionConfig", () => {
@@ -112,73 +129,6 @@ describe("loadVisionConfig", () => {
     withTempFile({ visionConfig: { provider: "  ", model: "" } }, (path) => {
       expect(loadVisionConfig(path)).toEqual({ provider: undefined, model: undefined });
     });
-  });
-});
-
-describe("resolveProviderConfig", () => {
-  const models = {
-    providers: {
-      axonhub: {
-        baseUrl: "http://192.168.2.18:8090/v1",
-        apiKey: "k",
-        models: [{ id: "mimo-v2.5", maxTokens: 8192 }],
-      },
-    },
-  };
-
-  it("parses baseUrl, apiKey and the model's maxTokens", () => {
-    withTempFile(models, (path) => {
-      expect(resolveProviderConfig("axonhub", "mimo-v2.5", path)).toEqual({
-        baseUrl: "http://192.168.2.18:8090/v1",
-        apiKey: "k",
-        maxTokens: 8192,
-      });
-    });
-  });
-
-  it("omits maxTokens when the model is not in the catalog", () => {
-    withTempFile(models, (path) => {
-      expect(resolveProviderConfig("axonhub", "other-model", path)).toEqual({
-        baseUrl: "http://192.168.2.18:8090/v1",
-        apiKey: "k",
-        maxTokens: undefined,
-      });
-    });
-  });
-
-  it("returns undefined for unknown providers, missing files and corrupt JSON", () => {
-    withTempFile(models, (path) => {
-      expect(resolveProviderConfig("nope", "m", path)).toBeUndefined();
-    });
-    expect(resolveProviderConfig("axonhub", "m", "/nonexistent/models.json")).toBeUndefined();
-    const dir = mkdtempSync(join(tmpdir(), "vision-agent-test-"));
-    try {
-      const path = join(dir, "models.json");
-      writeFileSync(path, "{ broken", "utf8");
-      expect(resolveProviderConfig("axonhub", "m", path)).toBeUndefined();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("resolveApiKey", () => {
-  it("resolves $ENV references and passes through plain keys", () => {
-    process.env.VISION_TEST_KEY = "secret";
-    expect(resolveApiKey("$VISION_TEST_KEY")).toBe("secret");
-    expect(resolveApiKey("sk-plain")).toBe("sk-plain");
-    expect(resolveApiKey(undefined)).toBeUndefined();
-    delete process.env.VISION_TEST_KEY;
-  });
-});
-
-describe("normalizeBaseUrl", () => {
-  it("appends /chat/completions when missing", () => {
-    expect(normalizeBaseUrl("http://local/v1")).toBe("http://local/v1/chat/completions");
-    expect(normalizeBaseUrl("http://local/v1/chat/completions")).toBe(
-      "http://local/v1/chat/completions",
-    );
-    expect(normalizeBaseUrl("http://local/v1/")).toBe("http://local/v1/chat/completions");
   });
 });
 
@@ -262,46 +212,34 @@ describe("buildPendantMarkdown", () => {
 });
 
 describe("callVision", () => {
-  it("sends the image file as a base64 data URL and returns the description", async () => {
+  it("sends the image as base64 content and returns the description", async () => {
     const dir = mkdtempSync(join(tmpdir(), "vision-agent-img-"));
     try {
       const imgPath = writePng(dir, "cat.png");
-      const fetchMock = vi.fn(async () =>
-        okResponse({
-          choices: [{ message: { content: "这是一只猫" } }],
-          usage: { total_tokens: 123 },
-        }),
-      );
-      vi.stubGlobal("fetch", fetchMock);
+      const registry = registryMock("这是一只猫", { totalTokens: 123 });
 
-      const text = await callVision(
-        { baseUrl: "http://local/v1", apiKey: "k", model: "mimo" },
-        [imgPath],
-        buildPrompt(),
-      );
+      const text = await callVision(registry, modelMock("mimo"), [imgPath], buildPrompt());
       expect(text).toContain("这是一只猫");
       expect(text).toContain("mimo");
       expect(text).toContain("cat.png");
+      expect(text).toContain("tokens: 123");
 
-      const [url, init] = fetchMock.mock.calls[0] as unknown as [
-        string,
-        { headers: Record<string, string>; body: string },
+      const [, context, options] = registry.complete.mock.calls[0] as unknown as [
+        Model<Api>,
+        Context,
+        { maxTokens: number; signal: AbortSignal },
       ];
-      expect(url).toBe("http://local/v1/chat/completions");
-      expect(init.headers.Authorization).toBe("Bearer k");
-      const body = JSON.parse(init.body) as {
-        model: string;
-        max_tokens: number;
-        messages: [
-          { role: string; content: string },
-          { role: string; content: { type: string; image_url: { url: string } }[] },
-        ];
-      };
-      expect(body.model).toBe("mimo");
-      expect(body.max_tokens).toBe(4096);
-      expect(body.messages[0].role).toBe("system");
-      expect(body.messages[0].content).toContain("图像识别助手");
-      expect(body.messages[1].content[0].image_url.url).toMatch(/^data:image\/png;base64,/);
+      expect(context.systemPrompt).toContain("图像识别助手");
+      expect(options.maxTokens).toBe(4096);
+      expect(options.signal).toBeInstanceOf(AbortSignal);
+      const userContent = context.messages[0].content as {
+        type: string;
+        mimeType?: string;
+        data?: string;
+      }[];
+      expect(userContent[0]).toMatchObject({ type: "image", mimeType: "image/png" });
+      expect(userContent[0].data).toMatch(/^iVBOR/); // PNG base64 头
+      expect(userContent[1]).toMatchObject({ type: "text" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -312,47 +250,45 @@ describe("callVision", () => {
     try {
       const img1 = writePng(dir, "a.png");
       const img2 = writePng(dir, "b.png");
-      const fetchMock = vi.fn(async () =>
-        okResponse({ choices: [{ message: { content: "图1 是猫，图2 是狗" } }] }),
-      );
-      vi.stubGlobal("fetch", fetchMock);
+      const registry = registryMock("图1 是猫，图2 是狗");
 
       const text = await callVision(
-        { baseUrl: "http://x/v1", model: "m" },
+        registry,
+        modelMock("m"),
         [img1, img2],
         buildPrompt(undefined, 2),
       );
       expect(text).toContain("图1 是猫，图2 是狗");
       expect(text).toContain("a.png, b.png");
 
-      const [, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
-      const body = JSON.parse(init.body) as {
-        messages: [
-          { role: string },
-          { content: { type: string; image_url?: { url: string }; text?: string }[] },
-        ];
-      };
-      const userContent = body.messages[1].content;
+      const [, context] = registry.complete.mock.calls[0] as unknown as [Model<Api>, Context];
+      const userContent = context.messages[0].content as {
+        type: string;
+        mimeType?: string;
+        text?: string;
+      }[];
       expect(userContent).toHaveLength(3); // 两张图片 + 文本
-      expect(userContent[0].image_url?.url).toMatch(/^data:image\/png;base64,/);
-      expect(userContent[1].image_url?.url).toMatch(/^data:image\/png;base64,/);
-      expect(userContent[2].text).toContain("共 2 张图片");
+      expect(userContent[0]).toMatchObject({ type: "image", mimeType: "image/png" });
+      expect(userContent[1]).toMatchObject({ type: "image", mimeType: "image/png" });
+      expect(userContent[2]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("共 2 张图片"),
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("uses the model's maxTokens from the catalog when available", async () => {
+  it("uses the model's maxTokens when available", async () => {
     const dir = mkdtempSync(join(tmpdir(), "vision-agent-img-"));
     try {
       const imgPath = writePng(dir, "pic.png");
-      const fetchMock = vi.fn(async () =>
-        okResponse({ choices: [{ message: { content: "ok" } }] }),
-      );
-      vi.stubGlobal("fetch", fetchMock);
-      await callVision({ baseUrl: "http://x/v1", model: "m", maxTokens: 8192 }, [imgPath], "p");
-      const [, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
-      expect(JSON.parse(init.body).max_tokens).toBe(8192);
+      const registry = registryMock("ok");
+      await callVision(registry, modelMock("m", 8192), [imgPath], "p");
+      const options = (
+        registry.complete.mock.calls[0] as unknown as [Model<Api>, Context, { maxTokens: number }]
+      )[2];
+      expect(options.maxTokens).toBe(8192);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -363,27 +299,24 @@ describe("callVision", () => {
     try {
       const badPath = join(dir, "notes.txt");
       writeFileSync(badPath, "not an image");
-      await expect(
-        callVision({ baseUrl: "http://x/v1", model: "m" }, [badPath], "p"),
-      ).rejects.toThrow(/不支持的文件格式/);
+      await expect(callVision(registryMock(), modelMock(), [badPath], "p")).rejects.toThrow(
+        /不支持的文件格式/,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("reports non-OK API responses", async () => {
+  it("propagates registry errors", async () => {
     const dir = mkdtempSync(join(tmpdir(), "vision-agent-img-"));
     try {
       const imgPath = writePng(dir, "pic.png");
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          async () => ({ ok: false, status: 401, text: async () => "unauthorized" }) as Response,
-        ),
-      );
-      await expect(
-        callVision({ baseUrl: "http://x/v1", model: "m" }, [imgPath], "p"),
-      ).rejects.toThrow(/401/);
+      const registry = {
+        complete: vi.fn(async () => {
+          throw new Error("boom");
+        }),
+      } as never;
+      await expect(callVision(registry, modelMock(), [imgPath], "p")).rejects.toThrow(/boom/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -393,15 +326,14 @@ describe("callVision", () => {
     const dir = mkdtempSync(join(tmpdir(), "vision-agent-img-"));
     try {
       const imgPath = writePng(dir, "pic.png");
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => {
+      const registry = {
+        complete: vi.fn(async () => {
           throw new DOMException("aborted", "AbortError");
         }),
+      } as never;
+      await expect(callVision(registry, modelMock(), [imgPath], "p")).rejects.toBeInstanceOf(
+        VisionAbortError,
       );
-      await expect(
-        callVision({ baseUrl: "http://x/v1", model: "m" }, [imgPath], "p"),
-      ).rejects.toBeInstanceOf(VisionAbortError);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -412,9 +344,6 @@ describe("tool registration", () => {
   const CONFIGURED = {
     "settings.json": JSON.stringify({
       visionConfig: { provider: "axonhub", model: "mimo-v2.5" },
-    }),
-    "models.json": JSON.stringify({
-      providers: { axonhub: { baseUrl: "http://local/v1", apiKey: "k", models: [] } },
     }),
   };
 
@@ -457,10 +386,9 @@ describe("tool registration", () => {
     }
   });
 
-  it("skips registration when the provider is missing from models.json", async () => {
+  it("registers even when the provider is missing from models.json (resolved at execute time)", async () => {
     const { visionAgent, tempHome } = await loadVisionAgentWithHome({
       "settings.json": JSON.stringify({ visionConfig: { provider: "nope", model: "m" } }),
-      "models.json": JSON.stringify({ providers: {} }),
     });
     try {
       let tool: { name: string } | undefined;
@@ -471,7 +399,7 @@ describe("tool registration", () => {
         on: () => false,
       } as never);
 
-      expect(tool).toBeUndefined();
+      expect(tool?.name).toBe(TOOL_NAME);
     } finally {
       vi.resetModules();
       rmSync(tempHome, { recursive: true, force: true });
@@ -532,22 +460,18 @@ describe("execute", () => {
   }
 
   it("describes an image via the configured vision model", async () => {
-    const fetchMock = vi.fn(async () =>
-      okResponse({
-        choices: [{ message: { content: "图中有一只猫" } }],
-        usage: { total_tokens: 10 },
-      }),
+    const complete = vi.fn(
+      async () =>
+        ({
+          content: [{ type: "text", text: "图中有一只猫" }],
+          usage: { totalTokens: 10 },
+        }) as unknown as AssistantMessage,
     );
-    vi.stubGlobal("fetch", fetchMock);
+    const registry = { find: () => modelMock("mimo-v2.5"), complete };
     const { tool, tempHome } = await loadToolWithHome({
       "settings.json": JSON.stringify({
         defaultProvider: "axonhub",
         visionConfig: { provider: "axonhub", model: "mimo-v2.5" },
-      }),
-      "models.json": JSON.stringify({
-        providers: {
-          axonhub: { baseUrl: "http://local/v1", apiKey: "k", models: [{ id: "mimo-v2.5" }] },
-        },
       }),
     });
     const imgDir = mkdtempSync(join(tmpdir(), "vision-agent-img-"));
@@ -559,7 +483,7 @@ describe("execute", () => {
         { path: imgPath, prompt: "图中有什么动物？" },
         undefined,
         onUpdate,
-        { cwd: "/cwd", hasUI: false },
+        visionCtx(registry),
       );
       expect(result.isError).toBeFalsy();
       expect(result.content[0].text).toContain("图中有一只猫");
@@ -582,17 +506,13 @@ describe("execute", () => {
       expect(pendant?.markdown).toContain("图中有什么动物？");
       expect(pendant?.markdown).toContain("图中有一只猫");
 
-      // 请求体：system 携带默认提示词，user 携带自定义 prompt
-      const [, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
-      const body = JSON.parse(init.body) as {
-        messages: [
-          { role: string; content: string },
-          { role: string; content: { text: string }[] },
-        ];
-      };
-      expect(body.messages[0].role).toBe("system");
-      expect(body.messages[0].content).toContain(VISION_SYSTEM_PROMPT);
-      expect(body.messages[1].content[1].text).toBe("图中有什么动物？");
+      // SDK 调用：system 携带默认提示词，user 携带图片 + 自定义 prompt
+      expect(complete).toHaveBeenCalledTimes(1);
+      const [, context] = complete.mock.calls[0] as unknown as [Model<Api>, Context];
+      expect(context.systemPrompt).toContain(VISION_SYSTEM_PROMPT);
+      const userContent = context.messages[0].content as { type: string; text?: string }[];
+      expect(userContent.at(-1)?.type).toBe("text");
+      expect(userContent.at(-1)?.text).toBe("图中有什么动物？");
     } finally {
       rmSync(imgDir, { recursive: true, force: true });
       rmSync(tempHome, { recursive: true, force: true });
@@ -600,16 +520,17 @@ describe("execute", () => {
   });
 
   it("describes multiple images passed as a paths array", async () => {
-    const fetchMock = vi.fn(async () =>
-      okResponse({ choices: [{ message: { content: "图1 是猫，图2 是狗" } }] }),
+    const complete = vi.fn(
+      async () =>
+        ({
+          content: [{ type: "text", text: "图1 是猫，图2 是狗" }],
+          usage: { totalTokens: 42 },
+        }) as unknown as AssistantMessage,
     );
-    vi.stubGlobal("fetch", fetchMock);
+    const registry = { find: () => modelMock("mimo-v2.5"), complete };
     const { tool, tempHome } = await loadToolWithHome({
       "settings.json": JSON.stringify({
         visionConfig: { provider: "axonhub", model: "mimo-v2.5" },
-      }),
-      "models.json": JSON.stringify({
-        providers: { axonhub: { baseUrl: "http://local/v1", apiKey: "k", models: [] } },
       }),
     });
     const imgDir = mkdtempSync(join(tmpdir(), "vision-agent-img-"));
@@ -622,20 +543,20 @@ describe("execute", () => {
         { path: [img1, img2], prompt: "每张图各有什么动物？" },
         undefined,
         undefined,
-        { cwd: "/cwd", hasUI: false },
+        visionCtx(registry),
       );
       expect(result.isError).toBeFalsy();
       expect(result.content[0].text).toContain("图1 是猫，图2 是狗");
 
-      const [, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
-      const body = JSON.parse(init.body) as {
-        messages: [{ role: string }, { content: { image_url?: { url: string }; text?: string }[] }];
-      };
-      const userContent = body.messages[1].content;
+      const [, context] = complete.mock.calls[0] as unknown as [Model<Api>, Context];
+      const userContent = context.messages[0].content as { type: string; text?: string }[];
       expect(userContent).toHaveLength(3);
-      expect(userContent[0].image_url?.url).toMatch(/^data:image\/png;base64,/);
-      expect(userContent[1].image_url?.url).toMatch(/^data:image\/png;base64,/);
-      expect(userContent[2].text).toContain("共 2 张图片");
+      expect(userContent[0]).toMatchObject({ type: "image" });
+      expect(userContent[1]).toMatchObject({ type: "image" });
+      expect(userContent[2]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("共 2 张图片"),
+      });
       expect(userContent[2].text).toContain("每张图各有什么动物？");
     } finally {
       rmSync(imgDir, { recursive: true, force: true });
@@ -643,22 +564,44 @@ describe("execute", () => {
     }
   });
 
+  it("returns an error when the configured model is not in the registry", async () => {
+    const registry = { find: (): Model<Api> | undefined => undefined, complete: vi.fn() };
+    const { tool, tempHome } = await loadToolWithHome({
+      "settings.json": JSON.stringify({
+        visionConfig: { provider: "nope", model: "missing-model" },
+      }),
+    });
+    const imgDir = mkdtempSync(join(tmpdir(), "vision-agent-img-"));
+    try {
+      const imgPath = writePng(imgDir, "cat.png");
+      const result = await tool.execute(
+        "id",
+        { path: imgPath },
+        undefined,
+        undefined,
+        visionCtx(registry),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("找不到视觉模型");
+      expect(registry.complete).not.toHaveBeenCalled();
+    } finally {
+      rmSync(imgDir, { recursive: true, force: true });
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
   it("fails fast when path is missing", async () => {
+    const registry = { find: () => modelMock(), complete: vi.fn() };
     const { tool, tempHome } = await loadToolWithHome({
       "settings.json": JSON.stringify({
         visionConfig: { provider: "axonhub", model: "mimo-v2.5" },
       }),
-      "models.json": JSON.stringify({
-        providers: { axonhub: { baseUrl: "http://local/v1", apiKey: "k", models: [] } },
-      }),
     });
     try {
-      const result = await tool.execute("id", {}, undefined, undefined, {
-        cwd: "/cwd",
-        hasUI: false,
-      });
+      const result = await tool.execute("id", {}, undefined, undefined, visionCtx(registry));
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("path");
+      expect(registry.complete).not.toHaveBeenCalled();
     } finally {
       rmSync(tempHome, { recursive: true, force: true });
     }

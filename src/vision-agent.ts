@@ -2,14 +2,14 @@
  * vision-agent —— 视觉代理扩展
  *
  * 让非多模态主模型（如 DeepSeek）通过 describe_image 工具完成图片识别：
- * 图片文件直接以 base64 data URL 放进 OpenAI 兼容 /chat/completions 请求，
- * 由视觉模型（models.json 中的多模态 provider）完成识别 —— 不经过任何
- * read 工具或中间 agent，识别过程对主模型完全透明。支持一次传入多张图片
- * （path 数组），请求体里同时携带全部 image_url，由模型按顺序逐张描述。
+ * 图片文件直接以 base64 交给 pi 的 AI SDK（ctx.modelRegistry.complete），
+ * 由视觉模型完成识别 —— 不经过任何 read 工具或中间 agent，识别过程对主
+ * 模型完全透明。支持一次传入多张图片（path 数组），user 消息里同时携带
+ * 全部图片，由模型按顺序逐张描述。
  *
  * 配置不单独维护：视觉模型来自 ~/.pi/agent/settings.json 的 `visionConfig`
- * （\{ provider, model \}，provider 缺省时回退到 defaultProvider），
- * provider 的 baseUrl / apiKey 从 ~/.pi/agent/models.json 解析，认证、代理、
+ * （\{ provider, model \}，provider 缺省时回退到 defaultProvider），provider
+ * 的 baseUrl / apiKey 由 pi 的模型注册表解析（models.json），认证、代理、
  * 网络全部复用 pi 自身配置。
  *
  * 使用前提：本扩展与 pi-vlm-proxy 都注册同名 describe_image 工具，
@@ -21,6 +21,16 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
 
+import {
+  type Api,
+  type ApiStreamOptions,
+  type AssistantMessage,
+  contentText,
+  type Context,
+  type ImageContent,
+  type Model,
+  type TextContent,
+} from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -29,9 +39,7 @@ import { Type } from "typebox";
 export const TOOL_NAME = "describe_image";
 /** ~/.pi/agent/settings.json：visionConfig（provider + model）所在文件 */
 export const SETTINGS_PATH = join(homedir(), ".pi", "agent", "settings.json");
-/** ~/.pi/agent/models.json：pi 自定义 provider（baseUrl/apiKey）所在文件 */
-export const MODELS_PATH = join(homedir(), ".pi", "agent", "models.json");
-/** 单张图片体积上限：base64 后约 1.34 倍，再整体塞进 JSON body，需要留出内存余量 */
+/** 单张图片体积上限：base64 后约 1.34 倍，再整体塞进请求 body，需要留出内存余量 */
 export const MAX_IMAGE_BYTES = 100 * 1024 * 1024;
 /** 单次视觉请求的默认超时。ctx.signal 在 agent 空闲时为 undefined，不能只依赖它 */
 export const REQUEST_TIMEOUT_MS = 300_000;
@@ -73,18 +81,17 @@ export interface VisionConfigSettings {
   model?: string;
 }
 
-export interface ResolvedProvider {
-  baseUrl: string;
-  apiKey?: string;
-  /** 从模型元数据里解析的输出上限 */
-  maxTokens?: number;
-}
-
-/** OpenAI 兼容响应里我们用到的字段（其余忽略） */
-interface ChatCompletionResponse {
-  choices?: { message?: unknown }[];
-  usage?: { total_tokens?: unknown };
-  error?: { message?: unknown };
+/**
+ * 视觉识别所需的模型注册表操作：扩展传 ctx.modelRegistry，测试传 mock。
+ * 结构化类型（duck typing），只声明用到的两个方法。
+ */
+export interface ModelRegistryLike {
+  find(provider: string, modelId: string): Model<Api> | undefined;
+  complete(
+    model: Model<Api>,
+    context: Context,
+    options?: ApiStreamOptions<Api> & { signal?: AbortSignal },
+  ): Promise<AssistantMessage>;
 }
 
 // ── 纯函数（可测试）──────────────────────────────────────────────────────────
@@ -132,76 +139,6 @@ export function loadVisionConfig(settingsPath = SETTINGS_PATH): VisionConfigSett
   } catch {
     return undefined;
   }
-}
-
-/**
- * 从 ~/.pi/agent/models.json 解析 provider 的 baseUrl / apiKey，
- * 并从模型元数据里找该模型的 maxTokens。provider 不存在或缺少 baseUrl
- * 时返回 undefined。
- */
-export function resolveProviderConfig(
-  providerName: string,
-  model: string,
-  modelsPath = MODELS_PATH,
-): ResolvedProvider | undefined {
-  let raw: string;
-  try {
-    raw = readFileSync(modelsPath, "utf8");
-  } catch {
-    return undefined;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-  const providers = (parsed as Record<string, unknown>).providers;
-  const entry =
-    providers && typeof providers === "object" && !Array.isArray(providers)
-      ? (providers as Record<string, unknown>)[providerName]
-      : undefined;
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
-  const provider = entry as Record<string, unknown>;
-  const baseUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : "";
-  if (!baseUrl) return undefined;
-  return {
-    baseUrl,
-    apiKey:
-      typeof provider.apiKey === "string" && provider.apiKey.trim()
-        ? provider.apiKey.trim()
-        : undefined,
-    maxTokens: findModelMaxTokens(provider.models, model),
-  };
-}
-
-function findModelMaxTokens(models: unknown, modelId: string): number | undefined {
-  if (!Array.isArray(models)) return undefined;
-  for (const entry of models) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const m = entry as Record<string, unknown>;
-    if (m.id !== modelId) continue;
-    return typeof m.maxTokens === "number" && m.maxTokens > 0 ? m.maxTokens : undefined;
-  }
-  return undefined;
-}
-
-/** 解析 apiKey，支持 $ENV_NAME 引用环境变量（与 pi 配置语法一致） */
-export function resolveApiKey(apiKey: string | undefined): string | undefined {
-  if (!apiKey) return undefined;
-  const m = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(apiKey.trim());
-  if (m) return process.env[m[1]] || undefined;
-  return apiKey;
-}
-
-/** 规范化 baseUrl：自动补 /chat/completions */
-export function normalizeBaseUrl(baseUrl: string): string {
-  let url = baseUrl.trim().replace(/\/+$/, "");
-  if (!url.endsWith("/chat/completions")) {
-    url += "/chat/completions";
-  }
-  return url;
 }
 
 /**
@@ -300,14 +237,6 @@ function loadImageBytes(path: string): { base64: string; mimeType: string; label
   return { base64: buffer.toString("base64"), mimeType, label: basename(path) };
 }
 
-function buildHeaders(apiKey: string | undefined): Record<string, string> {
-  const resolved = resolveApiKey(apiKey);
-  return {
-    "Content-Type": "application/json",
-    ...(resolved && { Authorization: `Bearer ${resolved}` }),
-  };
-}
-
 /** 合并调用方 signal 与本地超时；调用方未传时仍然有超时兜底 */
 function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
   const timeout = AbortSignal.timeout(ms);
@@ -315,104 +244,53 @@ function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
 }
 
 /**
- * 从 OpenAI 兼容响应里取正文。
- * content 可能是字符串，也可能是分片数组（部分网关/国内端点如此），
- * 少数推理模型只填 reasoning_content。
- */
-function extractText(message: unknown): string {
-  if (!message || typeof message !== "object") return "";
-  const msg = message as Record<string, unknown>;
-  const content = msg.content;
-  if (typeof content === "string" && content.trim()) return content;
-  if (Array.isArray(content)) {
-    const joined = content
-      .map((part: unknown) => {
-        if (typeof part === "string") return part;
-        if (
-          part &&
-          typeof part === "object" &&
-          typeof (part as Record<string, unknown>).text === "string"
-        ) {
-          return (part as Record<string, unknown>).text as string;
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("");
-    if (joined.trim()) return joined;
-  }
-  if (typeof msg.reasoning_content === "string" && msg.reasoning_content.trim()) {
-    return msg.reasoning_content;
-  }
-  return "";
-}
-
-/**
- * 调用 OpenAI 兼容的多模态端点识别图片。所有图片文件直接以 base64 data URL
- * 放进同一个 user 消息 —— 不需要模型或 agent 先读取图片文件。
- * @returns 视觉模型返回的文字描述
+ * 通过模型注册表调用视觉模型识别图片。所有图片文件直接以 base64 放进
+ * 同一个 user 消息 —— 不需要模型或 agent 先读取图片文件。走 pi 的 AI SDK
+ * （modelRegistry.complete），复用 provider 解析与 thinking/重试/usage 等
+ * 基础设施，不手写 HTTP 请求。
+ *
+ * @returns 视觉模型返回的文字描述（含图片标签与 token 元信息）
  */
 export async function callVision(
-  provider: ResolvedProvider & { model: string },
+  registry: ModelRegistryLike,
+  model: Model<Api>,
   paths: string[],
   prompt: string,
   signal?: AbortSignal,
 ): Promise<string> {
   const loaded = paths.map((p) => loadImageBytes(p));
-  const url = normalizeBaseUrl(provider.baseUrl);
-
-  let response: Response;
+  const content: (ImageContent | TextContent)[] = [
+    ...loaded.map(
+      ({ base64, mimeType }) => ({ type: "image", data: base64, mimeType }) satisfies ImageContent,
+    ),
+    { type: "text", text: prompt } satisfies TextContent,
+  ];
+  let result: AssistantMessage;
   try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: buildHeaders(provider.apiKey),
-      body: JSON.stringify({
-        model: provider.model,
-        max_tokens: provider.maxTokens ?? DEFAULT_MAX_TOKENS,
-        messages: [
-          { role: "system", content: VISION_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: [
-              ...loaded.map(({ base64, mimeType }) => ({
-                type: "image_url",
-                image_url: { url: `data:${mimeType};base64,${base64}` },
-              })),
-              { type: "text", text: prompt },
-            ],
-          },
-        ],
-      }),
-      signal: withTimeout(signal, REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    if (error instanceof Error && error.name === "TimeoutError") {
-      throw new Error(`请求超时（${REQUEST_TIMEOUT_MS / 1000}s）: ${url}`, { cause: error });
-    }
-    if (error instanceof Error && error.name === "AbortError") throw new VisionAbortError();
-    throw new Error(
-      `请求失败 (${url}): ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
+    result = await registry.complete(
+      model,
+      {
+        systemPrompt: VISION_SYSTEM_PROMPT,
+        messages: [{ role: "user", content, timestamp: Date.now() }],
+      },
+      {
+        maxTokens: model.maxTokens ?? DEFAULT_MAX_TOKENS,
+        signal: withTimeout(signal, REQUEST_TIMEOUT_MS),
+      },
     );
+  } catch (error) {
+    // 用户主动取消（signal abort）不是失败，转成 VisionAbortError 由调用方处理
+    if (error instanceof Error && error.name === "AbortError") throw new VisionAbortError();
+    throw error;
   }
-
-  if (!response.ok) {
-    const errText = await response.text().catch(() => "");
-    throw new Error(`API ${response.status}: ${errText.slice(0, 300)}`);
-  }
-
-  const data = (await response.json().catch(() => null)) as ChatCompletionResponse | null;
-  const text = extractText(data?.choices?.[0]?.message);
+  const text = contentText(result.content).trim();
   if (!text) {
-    const apiError = data?.error?.message;
-    const hint = typeof apiError === "string" && apiError ? `: ${apiError.slice(0, 200)}` : "";
-    throw new Error(`API 未返回内容${hint}`);
+    throw new Error("API 未返回内容");
   }
-
-  const totalTokens = data?.usage?.total_tokens;
-  const tokenStr = typeof totalTokens === "number" ? String(totalTokens) : "?";
+  const tokenStr =
+    typeof result.usage?.totalTokens === "number" ? String(result.usage.totalTokens) : "?";
   const labels = loaded.map((l) => l.label).join(", ");
-  return `[${labels}]\n${text}\n[模型: ${provider.model}, tokens: ${tokenStr}]`;
+  return `[${labels}]\n${text}\n[模型: ${model.id}, tokens: ${tokenStr}]`;
 }
 
 // ── extension ────────────────────────────────────────────────────────────────
@@ -452,13 +330,11 @@ export default function visionAgent(pi: ExtensionAPI) {
     syncVisionMode(ctx.model);
   });
 
-  // 未配置视觉模型（或 provider 缺失）就不注册工具：agent 看不到也调不到，
-  // 避免留下一个必然失败的僵尸工具。配置好 settings.json / models.json 后
-  // 重新加载（/reload）即可生效。
+  // 未配置视觉模型就不注册工具：agent 看不到也调不到。provider 的
+  // baseUrl/apiKey 由 pi 的模型注册表在调用时解析（execute 里 find），
+  // 配置好 settings.json / models.json 后重新加载（/reload）即可生效。
   const visionConfig = loadVisionConfig();
   if (!visionConfig?.model) return;
-  const providerName = visionConfig.provider ?? "default";
-  if (!resolveProviderConfig(providerName, visionConfig.model)) return;
 
   pi.registerTool({
     name: TOOL_NAME,
@@ -521,17 +397,17 @@ export default function visionAgent(pi: ExtensionAPI) {
         }
 
         const providerName = visionConfig.provider ?? "default";
-        const provider = resolveProviderConfig(providerName, visionConfig.model);
-        if (!provider) {
+        const model = ctx.modelRegistry.find(providerName, visionConfig.model);
+        if (!model) {
           return {
             isError: true,
             content: [
               {
                 type: "text",
-                text: `在 ${MODELS_PATH} 中找不到 provider「${providerName}」。请检查 models.json 是否包含该 provider 的 baseUrl 配置。`,
+                text: `在模型注册表中找不到视觉模型「${providerName}/${visionConfig.model}」。请检查 models.json 是否配置了该 provider 与该模型。`,
               },
             ],
-            details: { error: `provider not found: ${providerName}` },
+            details: { error: `model not found: ${providerName}/${visionConfig.model}` },
           };
         }
 
@@ -543,7 +419,8 @@ export default function visionAgent(pi: ExtensionAPI) {
         });
 
         const description = await callVision(
-          { ...provider, model: visionConfig.model },
+          ctx.modelRegistry,
+          model,
           paths,
           prompt,
           signal ?? ctx.signal,
