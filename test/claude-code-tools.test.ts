@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { bwrapRuntime } from "../src/bwrap/runtime.js";
 import { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
+import { sortFilesByMtime, summarizeCountOutput } from "../src/claude-code/grep.js";
 import claudeCodeTools from "../src/claude-code/index.js";
 import { buildGrepArguments, pageGrepOutput } from "../src/claude-code/search.js";
 
@@ -207,6 +208,21 @@ describe("Glob and Grep", () => {
       ),
     ).toEqual([
       "--color=never",
+      "--hidden",
+      "--max-columns",
+      "500",
+      "--glob",
+      "!.git",
+      "--glob",
+      "!.svn",
+      "--glob",
+      "!.hg",
+      "--glob",
+      "!.bzr",
+      "--glob",
+      "!.jj",
+      "--glob",
+      "!.sl",
       "--no-heading",
       "--with-filename",
       "--line-number",
@@ -226,6 +242,54 @@ describe("Glob and Grep", () => {
   it("paginates Grep output and reports an out-of-range offset", () => {
     expect(pageGrepOutput("a\nb\nc\n", 1, 1)).toBe("b");
     expect(pageGrepOutput("a\nb\n", 3, 1)).toBe("No entries at this offset");
+  });
+
+  it("summarizes count-mode output with an occurrence/file total", () => {
+    expect(summarizeCountOutput("/a.ts:3\n/b.ts:2\n")).toBe(
+      "/a.ts:3\n/b.ts:2\n\nFound 5 total occurrences across 2 files.",
+    );
+    expect(summarizeCountOutput("/a.ts:1\n")).toBe(
+      "/a.ts:1\n\nFound 1 total occurrence across 1 file.",
+    );
+  });
+
+  it("sorts files_with_matches output by modification time", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-grep-sort-"));
+    const older = join(directory, "older.txt");
+    const newer = join(directory, "newer.txt");
+    await writeFile(older, "x");
+    await writeFile(newer, "x");
+    await utimes(older, new Date(2020, 0, 1), new Date(2020, 0, 1));
+    await expect(sortFilesByMtime(`${newer}\n${older}`)).resolves.toBe(`${newer}\n${older}`);
+    await expect(sortFilesByMtime(`${older}\n${newer}`)).resolves.toBe(`${newer}\n${older}`);
+  });
+
+  it("sorts and paginates Grep file matches with the default head limit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-grep-exec-"));
+    const a = join(directory, "a.txt");
+    const b = join(directory, "b.txt");
+    await writeFile(a, "needle\n");
+    await writeFile(b, "needle\n");
+    await utimes(b, new Date(2020, 0, 1), new Date(2020, 0, 1)); // b is older than a
+    let tool: RegisteredTool | undefined;
+    const exec = vi.fn(async () => ({ code: 0, stdout: `${b}\n${a}`, stderr: "" }));
+    claudeCodeTools({
+      registerTool: (registered: RegisteredTool) => {
+        if (registered.name === "Grep") tool = registered;
+      },
+      registerFlag: vi.fn(),
+      registerCommand: vi.fn(),
+      on: vi.fn(),
+      exec,
+    } as never);
+    const result = await call(
+      tool!,
+      { pattern: "needle", output_mode: "files_with_matches" },
+      context(directory),
+    );
+    // Most recently modified file first, then the older one.
+    expect(result.content[0].text).toBe(`${a}\n${b}`);
+    expect(exec).toHaveBeenCalledWith("rg", expect.any(Array), expect.any(Object));
   });
 });
 

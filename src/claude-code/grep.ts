@@ -3,7 +3,13 @@
  *
  * Split out of the former search.ts so spawn-agent subagents can load it
  * independently (declare `Grep` in the frontmatter to get only this tool).
+ *
+ * Parameter semantics and default behavior are aligned with Claude Code's
+ * GrepTool (ripgrep-based): hidden files searched, VCS directories excluded,
+ * lines capped at 500 columns, and an implicit head_limit of 250 entries.
  */
+
+import { stat } from "node:fs/promises";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -14,6 +20,16 @@ import { searchRoot, throwIfAborted } from "./common.js";
 const GREP_OUTPUT_MODES = ["content", "files_with_matches", "count"] as const;
 
 type GrepOutputMode = (typeof GREP_OUTPUT_MODES)[number];
+
+/** Version control directories excluded from searches (noise in results). */
+const VCS_DIRECTORIES_TO_EXCLUDE = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"] as const;
+
+/**
+ * Default cap on results when head_limit is unspecified. Prevents broad
+ * patterns from flooding the context; pass head_limit=0 explicitly for
+ * unlimited results. Mirrors Claude Code's default of 250.
+ */
+const DEFAULT_HEAD_LIMIT = 250;
 
 function truncateOutput(output: string, maxCharacters = 30_000): string {
   if (output.length <= maxCharacters) return output;
@@ -39,7 +55,10 @@ interface GrepParameters {
 
 export function buildGrepArguments(params: GrepParameters, cwd: string): string[] {
   const mode = params.output_mode ?? "files_with_matches";
-  const args = ["--color=never"];
+  const args = ["--color=never", "--hidden", "--max-columns", "500"];
+  for (const dir of VCS_DIRECTORIES_TO_EXCLUDE) {
+    args.push("--glob", `!${dir}`);
+  }
   switch (mode) {
     case "files_with_matches": {
       args.push("--files-with-matches");
@@ -51,7 +70,8 @@ export function buildGrepArguments(params: GrepParameters, cwd: string): string[
     }
     case "content": {
       args.push("--no-heading", "--with-filename");
-      if (params["-n"] !== false) args.push("--line-number");
+      const showLineNumbers = params["-n"] === true || params["-n"] === undefined;
+      if (showLineNumbers) args.push("--line-number");
       const before = params["-B"];
       const after = params["-A"];
       const around = params.context ?? params["-C"];
@@ -70,6 +90,43 @@ export function buildGrepArguments(params: GrepParameters, cwd: string): string[
   if (params.multiline === true) args.push("--multiline", "--multiline-dotall");
   args.push("--", params.pattern, searchRoot(params.path, cwd));
   return args;
+}
+
+/**
+ * Sort a newline-separated list of file paths by modification time, most
+ * recent first, with file name as a tiebreaker. Files that can no longer be
+ * stat-ed sort last (mtime 0). Used for files_with_matches output, matching
+ * Claude Code's behaviour.
+ */
+export async function sortFilesByMtime(output: string): Promise<string> {
+  const paths = output.replace(/\n$/, "").split("\n").filter(Boolean);
+  if (paths.length <= 1) return output;
+  const stats = await Promise.allSettled(paths.map((path) => stat(path)));
+  const sorted = paths
+    .map((path, index) => ({
+      path,
+      mtimeMs: stats[index]?.status === "fulfilled" ? stats[index].value.mtimeMs : 0,
+    }))
+    .toSorted((left, right) => right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path))
+    .map((entry) => entry.path);
+  return sorted.join("\n");
+}
+
+/**
+ * Append an occurrence/file summary to `filename:count` output (count mode),
+ * mirroring Claude Code's "Found N occurrences across M files" result.
+ */
+export function summarizeCountOutput(output: string): string {
+  const lines = output.split("\n").filter((line) => line.includes(":"));
+  let occurrences = 0;
+  for (const line of lines) {
+    const colon = line.lastIndexOf(":");
+    occurrences += Number(line.slice(colon + 1)) || 0;
+  }
+  const files = lines.length;
+  const occurrenceLabel = occurrences === 1 ? "occurrence" : "occurrences";
+  const fileLabel = files === 1 ? "file" : "files";
+  return `${output.trimEnd()}\n\nFound ${occurrences} total ${occurrenceLabel} across ${files} ${fileLabel}.`;
 }
 
 export function pageGrepOutput(output: string, offset = 0, headLimit = 0): string {
@@ -154,7 +211,21 @@ export function registerGrepTool(pi: ExtensionAPI): void {
       if (result.code === 1 || result.stdout === "") {
         return { content: [{ type: "text", text: "No files found" }], details: { matches: 0 } };
       }
-      const text = pageGrepOutput(result.stdout, params.offset ?? 0, params.head_limit ?? 0);
+      const mode = params.output_mode ?? "files_with_matches";
+      // head_limit defaults to DEFAULT_HEAD_LIMIT; an explicit 0 means unlimited.
+      const stdout =
+        mode === "files_with_matches" ? await sortFilesByMtime(result.stdout) : result.stdout;
+      const text = pageGrepOutput(
+        stdout,
+        params.offset ?? 0,
+        params.head_limit ?? DEFAULT_HEAD_LIMIT,
+      );
+      if (mode === "count") {
+        return {
+          content: [{ type: "text", text: summarizeCountOutput(text) }],
+          details: undefined,
+        };
+      }
       return { content: [{ type: "text", text }], details: undefined };
     },
   });
