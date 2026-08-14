@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createBashTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+
+import { bwrapRuntime } from "../bwrap/runtime.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
@@ -47,6 +48,12 @@ export function registerShellTools(pi: ExtensionAPI): void {
         description: Type.Optional(
           Type.String({ description: "Clear, concise description of the command" }),
         ),
+        dangerouslyDisableSandbox: Type.Optional(
+          Type.Boolean({
+            description:
+              "Request one-time unsandboxed execution. The user must approve this request.",
+          }),
+        ),
       },
       { additionalProperties: false },
     ),
@@ -57,13 +64,16 @@ export function registerShellTools(pi: ExtensionAPI): void {
       }
 
       const marker = `__PI_CC_CWD_${id.replaceAll("-", "_")}_${Date.now()}__`;
-      const bash = createBashTool(persistentCwd ?? ctx.cwd);
       try {
-        const result = await bash.execute(
-          id,
-          { command: wrapCommand(params.command, marker), timeout: timeout / 1000 },
+        const result = await bwrapRuntime.execute({
+          ctx: { ...ctx, cwd: persistentCwd ?? ctx.cwd },
+          toolCallId: id,
+          command: wrapCommand(params.command, marker),
+          timeout: timeout / 1000,
+          requestFullAccess: params.dangerouslyDisableSandbox,
+          requestFullAccessReason: params.description,
           signal,
-          onUpdate
+          onUpdate: onUpdate
             ? (update) => {
                 const content = update.content.map((item) => {
                   if (item.type !== "text") return item;
@@ -72,7 +82,7 @@ export function registerShellTools(pi: ExtensionAPI): void {
                 onUpdate({ ...update, content });
               }
             : undefined,
-        );
+        });
         const content = result.content.map((item) => {
           if (item.type !== "text") return item;
           const cleaned = stripCwdMarker(item.text, marker);

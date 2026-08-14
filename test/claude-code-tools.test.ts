@@ -2,11 +2,20 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { bwrapRuntime } from "../src/bwrap/runtime.js";
 import { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
 import claudeCodeTools from "../src/claude-code/index.js";
 import { buildGrepArguments, pageGrepOutput } from "../src/claude-code/search.js";
+
+beforeEach(() => {
+  bwrapRuntime.setMode(process.cwd(), "allow-all");
+});
+
+afterEach(() => {
+  bwrapRuntime.reset();
+});
 
 interface RegisteredTool {
   name: string;
@@ -94,6 +103,7 @@ describe("Claude Code tool registration", () => {
       "command",
       "timeout",
       "description",
+      "dangerouslyDisableSandbox",
     ]);
     expect(tools.has("TaskOutput")).toBe(false);
     expect(tools.has("TaskStop")).toBe(false);

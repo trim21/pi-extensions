@@ -1,5 +1,7 @@
 # Some of my personal pi extensions
 
+你可以参考本仓库的实现，但不要直接使用：这是我个人自用的扩展集，我会随意做 breaking change，不承诺向后兼容。
+
 [pi](https://github.com/earendil-works/pi-mono) coding-agent 自定义扩展集合。
 
 ## 扩展概览
