@@ -62,11 +62,12 @@ import { access as fsAccess } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type BashOperations, createBashTool, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { type TObject, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { type CommandSpec, parseCommand } from "../lib/cli.js";
 import { expandHome } from "../lib/path.js";
 
 const SANDBOX_PROMPT = `
@@ -711,25 +712,80 @@ export default function bwrapExtension(pi: ExtensionAPI) {
     };
   });
 
-  pi.registerCommand("bwrap", {
+  const BWRAP_SPEC = {
+    name: "bwrap",
+    usage: "",
     description: "Show bwrap sandbox configuration",
-    handler: (_args, ctx) => {
-      const r = getResolved(ctx.hasUI);
-      if (!r.bwrapEnabled) {
-        ctx.ui.notify(`bwrap disabled (mode: ${r.mode})`, "info");
-        return Promise.resolve();
-      }
+    flags: Type.Object({}),
+    arity: { max: 0 },
+  };
 
-      const net = r.network ? "net" : "no-net";
-      const w = r.writablePaths.map((p) => resolvePath(p, localCwd));
-      const t = r.tmpfsPaths.map((p) => resolvePath(p, localCwd));
+  const BWRAP_ALLOW_ALL_SPEC = {
+    name: "bwrap-allow-all",
+    usage: "",
+    description: "Disable bwrap sandbox, full access",
+    flags: Type.Object({}),
+    arity: { max: 0 },
+  };
 
-      ctx.ui.notify(
-        `bwrap ${r.mode} ${net} write:[${w.join(", ")}] tmpfs:[${t.join(", ") || "-"}]`,
-        "info",
-      );
+  const BWRAP_WORKSPACE_WRITE_SPEC = {
+    name: "bwrap-workspace-write",
+    usage: "",
+    description: "Sandbox on, network off, workspace writable",
+    flags: Type.Object({}),
+    arity: { max: 0 },
+  };
+
+  const BWRAP_ALLOW_NET_SPEC = {
+    name: "bwrap-allow-net",
+    usage: "",
+    description: "Sandbox on, network on, workspace writable",
+    flags: Type.Object({}),
+    arity: { max: 0 },
+  };
+
+  const BWRAP_READONLY_SPEC = {
+    name: "bwrap-readonly",
+    usage: "",
+    description: "Sandbox on, network off, no writes",
+    flags: Type.Object({}),
+    arity: { max: 0 },
+  };
+
+  /** Parse a /bwrap command; on help/error the text is sent to the session, otherwise run() executes. */
+  function runBwrapCommand(
+    spec: CommandSpec<TObject>,
+    args: string,
+    ctx: ExtensionCommandContext,
+    run: (ctx: ExtensionCommandContext) => void | Promise<void>,
+  ): Promise<void> {
+    const parsed = parseCommand(spec, args);
+    if (parsed.kind !== "ok") {
+      pi.sendMessage({ customType: "info", content: parsed.text, display: true });
       return Promise.resolve();
-    },
+    }
+    return Promise.resolve(run(ctx));
+  }
+
+  pi.registerCommand("bwrap", {
+    description: BWRAP_SPEC.description,
+    handler: (args, ctx) =>
+      runBwrapCommand(BWRAP_SPEC, args, ctx, (c) => {
+        const r = getResolved(c.hasUI);
+        if (!r.bwrapEnabled) {
+          c.ui.notify(`bwrap disabled (mode: ${r.mode})`, "info");
+          return;
+        }
+
+        const net = r.network ? "net" : "no-net";
+        const w = r.writablePaths.map((p) => resolvePath(p, localCwd));
+        const t = r.tmpfsPaths.map((p) => resolvePath(p, localCwd));
+
+        c.ui.notify(
+          `bwrap ${r.mode} ${net} write:[${w.join(", ")}] tmpfs:[${t.join(", ") || "-"}]`,
+          "info",
+        );
+      }),
   });
 
   function switchMode(
@@ -760,22 +816,28 @@ export default function bwrapExtension(pi: ExtensionAPI) {
   }
 
   pi.registerCommand("bwrap-allow-all", {
-    description: "Disable bwrap sandbox, full access",
-    handler: (_args, ctx) => Promise.resolve(switchMode("allow-all", ctx)),
+    description: BWRAP_ALLOW_ALL_SPEC.description,
+    handler: (args, ctx) =>
+      runBwrapCommand(BWRAP_ALLOW_ALL_SPEC, args, ctx, (c) => switchMode("allow-all", c)),
   });
 
   pi.registerCommand("bwrap-workspace-write", {
-    description: "Sandbox on, network off, workspace writable",
-    handler: (_args, ctx) => Promise.resolve(switchMode("workspace-write", ctx)),
+    description: BWRAP_WORKSPACE_WRITE_SPEC.description,
+    handler: (args, ctx) =>
+      runBwrapCommand(BWRAP_WORKSPACE_WRITE_SPEC, args, ctx, (c) =>
+        switchMode("workspace-write", c),
+      ),
   });
 
   pi.registerCommand("bwrap-allow-net", {
-    description: "Sandbox on, network on, workspace writable",
-    handler: (_args, ctx) => Promise.resolve(switchMode("allow-net", ctx)),
+    description: BWRAP_ALLOW_NET_SPEC.description,
+    handler: (args, ctx) =>
+      runBwrapCommand(BWRAP_ALLOW_NET_SPEC, args, ctx, (c) => switchMode("allow-net", c)),
   });
 
   pi.registerCommand("bwrap-readonly", {
-    description: "Sandbox on, network off, no writes",
-    handler: (_args, ctx) => Promise.resolve(switchMode("readonly", ctx)),
+    description: BWRAP_READONLY_SPEC.description,
+    handler: (args, ctx) =>
+      runBwrapCommand(BWRAP_READONLY_SPEC, args, ctx, (c) => switchMode("readonly", c)),
   });
 }

@@ -16,9 +16,9 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { type TObject, Type } from "typebox";
 
-import { parseArgs } from "../lib/cli-args.js";
+import { type CommandResult, type CommandSpec, parseCommand } from "../lib/cli.js";
 import { resolveHomePath } from "../lib/path.js";
 import { TalkCore } from "./core.js";
 import { formatDelivery } from "./format.js";
@@ -281,92 +281,155 @@ export default function talk(pi: ExtensionAPI) {
 
   // ── /talk commands ────────────────────────────────────────────────────
 
-  pi.registerCommand("talk", {
-    description: "List registered pi agents",
-    async handler() {
-      const text = requireInit() ?? (await core.list());
+  type OkResult<TFlags extends TObject> = Extract<CommandResult<TFlags>, { kind: "ok" }>;
+
+  /** Parse a /talk command; on help/error or init failure the text is sent, otherwise run() produces the listing text. */
+  function handleCommand<TFlags extends TObject>(
+    spec: CommandSpec<TFlags>,
+    args: string,
+    run: (parsed: OkResult<TFlags>) => Promise<string> | string,
+  ): Promise<void> {
+    const parsed = parseCommand(spec, args);
+    if (parsed.kind !== "ok") {
+      pi.sendMessage({ customType: LIST_TYPE, content: parsed.text, display: true });
+      return Promise.resolve();
+    }
+    return (async () => {
+      const initError = requireInit();
+      const text = initError ?? (await run(parsed));
       pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
-    },
+    })();
+  }
+
+  const TALK_SPEC = {
+    name: "talk",
+    usage: "",
+    description: "List registered pi agents",
+    flags: Type.Object({}),
+    arity: { max: 0 },
+  };
+
+  const TALK_DEAD_SPEC = {
+    name: "talk-dead",
+    usage: "[agentId] [options]",
+    description:
+      "Mark a talk agent as dead (shown offline, swept soon): no arg = this agent, <agentId> = that agent, --all = every other visible agent",
+    flags: Type.Object({
+      all: Type.Optional(Type.Boolean({ description: "Mark every other visible agent dead" })),
+    }),
+    flagMeta: { all: { short: "a" } },
+    arity: { max: 1 },
+  };
+
+  const TALK_GROUP_JOIN_SPEC = {
+    name: "talk-group-join",
+    usage: "[group name] [options]",
+    description:
+      "Join or create a private agent group (members see only each other; an agent in no group sees only itself). No arg = new group with a generated uuid; <name> = join that group, or create it when it does not exist; --name <alias> additionally sets this agent's display name",
+    flags: Type.Object({
+      name: Type.Optional(Type.String({ description: "Set this agent's display name" })),
+    }),
+    flagMeta: { name: { short: "n", valuePlaceholder: "<alias>" } },
+    arity: { max: 1 },
+    examples: ["/talk-group-join frontend", "/talk-group-join --name frontend"],
+  };
+
+  const TALK_GROUP_JOIN_LAST_SPEC = {
+    name: "talk-group-join-last",
+    usage: "",
+    description: "Join the most recently created agent group (no-op when already in it).",
+    flags: Type.Object({}),
+    arity: { max: 0 },
+  };
+
+  const TALK_GROUP_LEAVE_SPEC = {
+    name: "talk-group-leave",
+    usage: "",
+    description: "Leave the current agent group (an emptied group is deleted).",
+    flags: Type.Object({}),
+    arity: { max: 0 },
+  };
+
+  const TALK_GROUP_LIST_SPEC = {
+    name: "talk-group-list",
+    usage: "",
+    description: "List all agent groups and their members, newest first.",
+    flags: Type.Object({}),
+    arity: { max: 0 },
+  };
+
+  const TALK_GROUP_DEL_SPEC = {
+    name: "talk-group-del",
+    usage: "<group name>",
+    description:
+      "Delete an agent group by name; its members become ungrouped (see only themselves).",
+    flags: Type.Object({}),
+    arity: { min: 1, max: 1 },
+  };
+
+  const TALK_GROUP_CLEAR_SPEC = {
+    name: "talk-group-clear",
+    usage: "",
+    description: "Delete every agent group; all agents become ungrouped.",
+    flags: Type.Object({}),
+    arity: { max: 0 },
+  };
+
+  pi.registerCommand("talk", {
+    description: TALK_SPEC.description,
+    handler: (args) => handleCommand(TALK_SPEC, args, async () => core.list()),
   });
 
   pi.registerCommand("talk-dead", {
-    description:
-      "Mark a talk agent as dead (shown offline, swept soon): no arg = this agent, <agentId> = that agent, --all = every other visible agent",
-    async handler(args) {
-      const initError = requireInit();
-      const trimmed = args.trim();
-      const text =
-        initError ??
-        (trimmed === "--all"
+    description: TALK_DEAD_SPEC.description,
+    handler: (args) =>
+      handleCommand(TALK_DEAD_SPEC, args, async (parsed) => {
+        if (parsed.flags.all && parsed.args.length > 0) {
+          return "--all cannot be combined with an agent id.\nTry '/talk-dead --help' for usage.";
+        }
+        return parsed.flags.all
           ? await core.markAllDead()
-          : trimmed
-            ? await core.markDead(trimmed)
-            : await core.markDead());
-      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
-    },
+          : parsed.args[0]
+            ? await core.markDead(parsed.args[0])
+            : await core.markDead();
+      }),
   });
 
   pi.registerCommand("talk-group-join", {
-    description:
-      "Join or create a private agent group (members see only each other; an agent in no group sees only itself). No arg = new group with a generated uuid; <name> = join that group, or create it when it does not exist; --name <alias> additionally sets this agent's display name (e.g. --name frontend)",
-    async handler(args) {
-      const initError = requireInit();
-      const parsed = parseArgs(args);
-      const groupName = parsed.positionals[0];
-      const flag = parsed.flags.name;
-      const agentName = typeof flag === "string" && flag.trim() !== "" ? flag.trim() : undefined;
-      if (agentName !== undefined) explicitName = agentName;
-      const text = initError ?? (await core.groupJoin(groupName || undefined, agentName));
-      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
-    },
+    description: TALK_GROUP_JOIN_SPEC.description,
+    handler: (args) =>
+      handleCommand(TALK_GROUP_JOIN_SPEC, args, async (parsed) => {
+        const agentName = parsed.flags.name?.trim() || undefined;
+        if (agentName !== undefined) explicitName = agentName;
+        return core.groupJoin(parsed.args[0], agentName);
+      }),
   });
 
   pi.registerCommand("talk-group-join-last", {
-    description: "Join the most recently created agent group (no-op when already in it).",
-    async handler() {
-      const initError = requireInit();
-      const text = initError ?? (await core.groupJoinLast());
-      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
-    },
+    description: TALK_GROUP_JOIN_LAST_SPEC.description,
+    handler: (args) =>
+      handleCommand(TALK_GROUP_JOIN_LAST_SPEC, args, async () => core.groupJoinLast()),
   });
 
   pi.registerCommand("talk-group-leave", {
-    description: "Leave the current agent group (an emptied group is deleted).",
-    async handler() {
-      const initError = requireInit();
-      const text = initError ?? (await core.groupLeave());
-      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
-    },
+    description: TALK_GROUP_LEAVE_SPEC.description,
+    handler: (args) => handleCommand(TALK_GROUP_LEAVE_SPEC, args, async () => core.groupLeave()),
   });
 
   pi.registerCommand("talk-group-list", {
-    description: "List all agent groups and their members, newest first.",
-    async handler() {
-      const initError = requireInit();
-      const text = initError ?? (await core.groupList());
-      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
-    },
+    description: TALK_GROUP_LIST_SPEC.description,
+    handler: (args) => handleCommand(TALK_GROUP_LIST_SPEC, args, async () => core.groupList()),
   });
 
   pi.registerCommand("talk-group-del", {
-    description:
-      "Delete an agent group by name; its members become ungrouped (see only themselves).",
-    async handler(args) {
-      const initError = requireInit();
-      const name = args.trim();
-      const text =
-        initError ?? (name ? await core.groupDelete(name) : "Usage: /talk-group-del <group name>");
-      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
-    },
+    description: TALK_GROUP_DEL_SPEC.description,
+    handler: (args) =>
+      handleCommand(TALK_GROUP_DEL_SPEC, args, async (parsed) => core.groupDelete(parsed.args[0])),
   });
 
   pi.registerCommand("talk-group-clear", {
-    description: "Delete every agent group; all agents become ungrouped.",
-    async handler() {
-      const initError = requireInit();
-      const text = initError ?? (await core.groupClear());
-      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
-    },
+    description: TALK_GROUP_CLEAR_SPEC.description,
+    handler: (args) => handleCommand(TALK_GROUP_CLEAR_SPEC, args, async () => core.groupClear()),
   });
 
   // ── Delivery card ──────────────────────────────────────────────────────
