@@ -8,6 +8,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 
 export default function opencodeBash(pi: ExtensionAPI): void {
+  bwrapRuntime.setup(pi);
   pi.registerTool({
     name: "bash",
     label: "bash",
@@ -27,7 +28,10 @@ export default function opencodeBash(pi: ExtensionAPI): void {
           }),
         ),
         timeout: Type.Optional(
-          Type.Number({ description: "Optional timeout in milliseconds (max 600000)" }),
+          Type.Number({
+            description: "Optional timeout in milliseconds (max 600000)",
+            default: 600,
+          }),
         ),
         dangerouslyDisableSandbox: Type.Optional(
           Type.Boolean({

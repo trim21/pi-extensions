@@ -8,6 +8,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 
 export function registerShellTools(pi: ExtensionAPI): void {
+  bwrapRuntime.setup(pi);
   pi.registerTool({
     name: "Bash",
     label: "Bash",
