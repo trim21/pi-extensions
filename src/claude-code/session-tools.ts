@@ -2,6 +2,8 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { selectWithOptionalInput } from "../lib/ui.js";
+
 const TODO_STATUSES = ["pending", "in_progress", "completed"] as const;
 const OTHER_OPTION = "Other";
 const DONE_OPTION = "Done";
@@ -45,15 +47,17 @@ async function askSingle(
   signal: AbortSignal | undefined,
 ): Promise<string> {
   const title = `${question.header}: ${question.question}`;
-  const selected = await ctx.ui.select(
+  const result = await selectWithOptionalInput(
     title,
-    [...question.options.map((option) => option.label), OTHER_OPTION],
+    [
+      ...question.options.map((option) => ({ label: option.label })),
+      { label: OTHER_OPTION, inputPrompt: "Type your answer" },
+    ],
+    ctx.ui,
     { signal },
   );
-  if (selected === undefined) return "Unanswered";
-  if (selected !== OTHER_OPTION) return selected;
-  const answer = await ctx.ui.input(title, "Type your answer", { signal });
-  return answer?.trim() || "Unanswered";
+  if (result === undefined) return "Unanswered";
+  return result.prompted ? result.input || "Unanswered" : result.label;
 }
 
 async function askMultiple(
@@ -65,16 +69,22 @@ async function askMultiple(
   const remaining = new Set(question.options.map((option) => option.label));
   const selected: string[] = [];
   while (remaining.size > 0) {
-    const choice = await ctx.ui.select(title, [...remaining, OTHER_OPTION, DONE_OPTION], {
-      signal,
-    });
-    if (choice === undefined || choice === DONE_OPTION) break;
-    if (choice === OTHER_OPTION) {
-      const answer = await ctx.ui.input(title, "Type your answer", { signal });
-      if (answer?.trim()) selected.push(answer.trim());
+    const result = await selectWithOptionalInput(
+      title,
+      [
+        ...[...remaining].map((label) => ({ label })),
+        { label: OTHER_OPTION, inputPrompt: "Type your answer" },
+        { label: DONE_OPTION },
+      ],
+      ctx.ui,
+      { signal },
+    );
+    if (result === undefined || result.label === DONE_OPTION) break;
+    if (result.prompted) {
+      if (result.input) selected.push(result.input);
       break;
     }
-    if (remaining.delete(choice)) selected.push(choice);
+    if (remaining.delete(result.label)) selected.push(result.label);
   }
   return selected.length > 0 ? selected.join(", ") : "Unanswered";
 }

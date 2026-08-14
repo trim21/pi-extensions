@@ -47,18 +47,18 @@ function loadTool(): Tool {
 
 let dir: string;
 let target: string;
+let ctx: { cwd: string };
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "opencode-edit-test-"));
   target = join(dir, "sub", "file.txt");
   await mkdir(join(dir, "sub"));
+  ctx = { cwd: dir };
 });
 
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
-
-const ctx = { cwd: dir! };
 
 describe("opencode edit execute", () => {
   it("creates a new file when oldString is empty and the file does not exist", async () => {

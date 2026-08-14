@@ -33,6 +33,8 @@ function loadTools(): Map<string, RegisteredTool> {
     registerTool(tool: RegisteredTool) {
       tools.set(tool.name, tool);
     },
+    registerFlag: vi.fn(),
+    registerCommand: vi.fn(),
     on: vi.fn(),
     exec: vi.fn(),
   } as never);
@@ -245,7 +247,7 @@ describe("Bash", () => {
     const tools = loadTools();
     const ctx = context(directory);
     const result = await call(tools.get("Bash")!, { command: "pwd", workdir: nested }, ctx);
-    expect(result.content[0].text).toBe(nested);
+    expect(result.content[0].text).toBe(`${nested}\n`);
   });
 
   it("rejects a missing workdir", async () => {
@@ -332,5 +334,83 @@ describe("TodoWrite and AskUserQuestion", () => {
       ctx,
     );
     expect(result.content[0].text).toContain('"Which database?"="Postgres"');
+  });
+
+  it("falls back to free text when the Other option is chosen", async () => {
+    const tools = loadTools();
+    const ctx = context(process.cwd());
+    ctx.ui.select.mockResolvedValue("Other");
+    ctx.ui.input.mockResolvedValue("  TiDB  ");
+    const result = await call(
+      tools.get("AskUserQuestion")!,
+      {
+        questions: [
+          {
+            question: "Which database?",
+            header: "Database",
+            options: [
+              { label: "Postgres", description: "Relational" },
+              { label: "SQLite", description: "Embedded" },
+            ],
+            multiSelect: false,
+          },
+        ],
+      },
+      ctx,
+    );
+    expect(result.content[0].text).toContain('"Which database?"="TiDB"');
+    expect(ctx.ui.input).toHaveBeenCalledWith("Database: Which database?", "Type your answer", {
+      signal: undefined,
+    });
+  });
+
+  it("records Unanswered when Other input is blank or cancelled", async () => {
+    const tools = loadTools();
+    const ctx = context(process.cwd());
+    ctx.ui.select.mockResolvedValue("Other");
+    ctx.ui.input.mockResolvedValue(undefined);
+    const result = await call(
+      tools.get("AskUserQuestion")!,
+      {
+        questions: [
+          {
+            question: "Which database?",
+            header: "Database",
+            options: [
+              { label: "Postgres", description: "Relational" },
+              { label: "SQLite", description: "Embedded" },
+            ],
+            multiSelect: false,
+          },
+        ],
+      },
+      ctx,
+    );
+    expect(result.content[0].text).toContain('"Which database?"="Unanswered"');
+  });
+
+  it("supports free text in multi-select via Other", async () => {
+    const tools = loadTools();
+    const ctx = context(process.cwd());
+    ctx.ui.select.mockResolvedValueOnce("Postgres").mockResolvedValueOnce("Other");
+    ctx.ui.input.mockResolvedValue("  CockroachDB  ");
+    const result = await call(
+      tools.get("AskUserQuestion")!,
+      {
+        questions: [
+          {
+            question: "Which databases?",
+            header: "Databases",
+            options: [
+              { label: "Postgres", description: "Relational" },
+              { label: "SQLite", description: "Embedded" },
+            ],
+            multiSelect: true,
+          },
+        ],
+      },
+      ctx,
+    );
+    expect(result.content[0].text).toContain('"Which databases?"="Postgres, CockroachDB"');
   });
 });

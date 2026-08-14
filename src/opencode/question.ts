@@ -23,6 +23,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { selectWithOptionalInput } from "../lib/ui.js";
+
 // ── constants ────────────────────────────────────────────────────────────────
 
 export const TOOL_NAME = "question";
@@ -117,14 +119,16 @@ function dialogTitle(q: Question): string {
 
 async function askSingle(q: Question, ctx: ExtensionContext): Promise<Answer> {
   const title = dialogTitle(q);
-  const options = [...q.options.map((o) => o.label), CUSTOM_LABEL];
-  const choice = await ctx.ui.select(title, options);
-  if (choice === undefined) return [];
-  if (choice === CUSTOM_LABEL) {
-    const typed = await ctx.ui.input(title, "Type your answer…");
-    return typed?.trim() ? [typed.trim()] : [];
-  }
-  return [choice];
+  const result = await selectWithOptionalInput(
+    title,
+    [
+      ...q.options.map((o) => ({ label: o.label })),
+      { label: CUSTOM_LABEL, inputPrompt: "Type your answer…" },
+    ],
+    ctx.ui,
+  );
+  if (result === undefined) return [];
+  return result.prompted ? (result.input ? [result.input] : []) : [result.label];
 }
 
 async function askMultiple(q: Question, ctx: ExtensionContext): Promise<Answer> {

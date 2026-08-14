@@ -170,7 +170,9 @@ describe("execute", () => {
       ctxWith({ select, input }),
     );
     expect(result.details.answers).toEqual([["my own answer"]]);
-    expect(input).toHaveBeenCalledWith("Pick: Which one?", "Type your answer…");
+    expect(input).toHaveBeenCalledWith("Pick: Which one?", "Type your answer…", {
+      signal: undefined,
+    });
   });
 
   it("treats blank free-text input as an unanswered question", async () => {

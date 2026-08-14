@@ -78,18 +78,18 @@ function loadTool(): Tool {
 
 let dir: string;
 let target: string;
+let ctx: { cwd: string };
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "opencode-write-test-"));
   target = join(dir, "nested", "file.txt");
   await mkdir(join(dir, "nested"));
+  ctx = { cwd: dir };
 });
 
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
-
-const ctx = { cwd: dir! };
 
 describe("opencode write execute", () => {
   it("writes a new file and creates parent directories automatically", async () => {

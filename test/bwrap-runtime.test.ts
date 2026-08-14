@@ -14,6 +14,10 @@ function setupRuntime() {
   return { runtime, pi };
 }
 
+function fullAccessContext(ui: unknown, abort: () => void = vi.fn()) {
+  return { cwd: process.cwd(), hasUI: true, signal: undefined, abort, ui } as never;
+}
+
 describe("BwrapRuntime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -48,5 +52,102 @@ describe("BwrapRuntime", () => {
         ctx: { cwd: process.cwd(), hasUI: false } as never,
       }),
     ).rejects.toThrow(/no UI is available/);
+  });
+
+  describe("full-access approval dialog", () => {
+    it("runs the command when the user approves once", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async () => "Approve once");
+      const abort = vi.fn();
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf approved",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }, abort),
+      });
+      expect(result.content[0]).toMatchObject({ type: "text", text: "approved" });
+      expect(abort).not.toHaveBeenCalled();
+    });
+
+    it("aborts and denies when the selection is dismissed", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn().mockResolvedValue(undefined);
+      const abort = vi.fn();
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "printf should-not-run",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input: vi.fn() }, abort),
+        }),
+      ).rejects.toThrow(/User denied the command execution/);
+      expect(abort).toHaveBeenCalled();
+    });
+
+    it("denies without feedback when the user blocks", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async () => "Block");
+      const abort = vi.fn();
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "printf should-not-run",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input: vi.fn() }, abort),
+        }),
+      ).rejects.toThrow(/User denied unsandboxed execution/);
+      expect(abort).not.toHaveBeenCalled();
+    });
+
+    it("includes the typed reason when the user blocks with reason", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async () => "Block with reason");
+      const input = vi.fn(async () => "too risky");
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "printf should-not-run",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input }),
+        }),
+      ).rejects.toThrow(/User denied unsandboxed execution: too risky/);
+    });
+
+    it("re-asks when the reason input is cancelled", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce("Block with reason")
+        .mockResolvedValueOnce("Approve once");
+      const input = vi.fn().mockResolvedValue(undefined);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf approved",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input }),
+      });
+      expect(select).toHaveBeenCalledTimes(2);
+      expect(result.content[0]).toMatchObject({ type: "text", text: "approved" });
+    });
+
+    it("denies without reason text when the reason input is blank", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async () => "Block with reason");
+      const input = vi.fn(async () => " ".repeat(3));
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "printf should-not-run",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input }),
+        }),
+      ).rejects.toThrow(/User denied unsandboxed execution\.$/);
+    });
   });
 });

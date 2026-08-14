@@ -50,21 +50,27 @@ const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
 const MAX_PROGRESS_LINES = 5;
 
 /**
- * Extensions loaded unconditionally into every subagent: the bwrap sandbox is a
- * protection layer and must not depend on the agent's declared toolset.
- * (Workspace write protection is embedded in the opencode write/edit tools.)
- */
-const UNCONDITIONAL_EXTENSIONS = ["bwrap/index.ts"] as const;
-
-/**
  * Tool → extension override map: when a subagent's frontmatter enables a
  * built-in tool, the matching opencode extension is loaded via `-e` so the
  * subagent uses the enhanced implementation instead of the built-in one.
+ *
+ * The bash override also carries the bwrap sandbox: opencode/bash.ts calls
+ * bwrapRuntime.setup() and runs commands through bwrapRuntime.execute(), so
+ * agents that declare the bash tool get sandboxing automatically. Agents
+ * without bash need no bwrap setup (there are no commands to sandbox).
+ * (Workspace write protection is embedded in the opencode write/edit tools.)
+ *
+ * Claude Code style tools (capitalized names, e.g. `Grep`/`Glob`) map to
+ * their split claude-code files, so a subagent can enable exactly the search
+ * tools it declares — e.g. `Grep` without `Glob`.
  */
 const TOOL_EXTENSION_OVERRIDES: Record<string, string> = {
   read: "opencode/read.ts",
   edit: "opencode/edit.ts",
   write: "opencode/write.ts",
+  bash: "opencode/bash.ts",
+  Grep: "claude-code/grep.ts",
+  Glob: "claude-code/glob.ts",
 };
 
 // ── schema ───────────────────────────────────────────────────────────────────
@@ -185,14 +191,8 @@ export function buildSubagentArgs(
   // dialog responses over stdin. --no-session keeps the child ephemeral.
   // --no-extensions disables
   // extension discovery; only the extensions explicitly loaded below (the
-  // unconditional guards plus per-tool overrides) run inside the subagent.
+  // per-tool overrides) run inside the subagent.
   const args: string[] = ["--mode", "rpc", "--no-session", "--no-extensions"];
-
-  // Protection layers that must be present in every subagent regardless of
-  // its declared toolset: the workspace write guard and the bwrap sandbox.
-  for (const ext of UNCONDITIONAL_EXTENSIONS) {
-    args.push("-e", extensionPath(ext));
-  }
 
   // Thinking level rides on the model shorthand ("model:level"); it cannot be
   // set without a model, so a level without a model is ignored.

@@ -71,7 +71,7 @@ describe("buildDiffPreview", () => {
       "\`\`\`diff
       --- target.txt
       +++ target.txt
-      @@ -1 +1 @@
+      @@ -1,1 +1,1 @@
       -old
       +new
 

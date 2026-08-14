@@ -7,6 +7,7 @@ import { createBashTool } from "@earendil-works/pi-coding-agent";
 import { type TObject, Type } from "typebox";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
+import { selectWithOptionalInput } from "../lib/ui.js";
 import {
   type BwrapMode,
   createBwrapBashOperations,
@@ -163,26 +164,27 @@ export class BwrapRuntime {
     if (policy.kind === "deny") throw new Error(policy.reason);
     const description = `Allow this command to run without sandbox?\n---\n\nReason: ${escapeHtml(reason ?? "(No reason provided by model)")}\n---\n${fenceCodeBlock(command)}`;
     while (true) {
-      const choice = await ctx.ui.select(
+      const result = await selectWithOptionalInput(
         description,
-        ["Approve once", "Block", "Block with reason"],
-        {
-          signal: ctx.signal,
-        },
+        [
+          { label: "Approve once" },
+          { label: "Block" },
+          { label: "Block with reason", inputPrompt: "Why was this denied?" },
+        ],
+        ctx.ui,
+        { signal: ctx.signal },
       );
-      if (choice === undefined) {
+      if (result === undefined) {
         ctx.abort();
         throw new Error("User denied the command execution.");
       }
-      if (choice === "Approve once") return;
-      if (choice === "Block") throw new Error("User denied unsandboxed execution.");
-      const feedback = await ctx.ui.input("Why was this denied?", undefined, {
-        signal: ctx.signal,
-      });
-      if (feedback === undefined) continue;
+      if (result.label === "Approve once") return;
+      if (result.label === "Block") throw new Error("User denied unsandboxed execution.");
+      // "Block with reason"：取消输入则重新询问；空输入同样拒绝（不带反馈文本）
+      if (result.input === undefined) continue;
       throw new Error(
-        feedback
-          ? `User denied unsandboxed execution: ${feedback}`
+        result.input
+          ? `User denied unsandboxed execution: ${result.input}`
           : "User denied unsandboxed execution.",
       );
     }

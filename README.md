@@ -6,17 +6,16 @@
 
 ## 扩展概览
 
-| 扩展                                          | 描述                                                    |
-| --------------------------------------------- | ------------------------------------------------------- |
-| [bwrap](#bwrap)                               | 基于 bubblewrap 的 OS 级沙箱，提供文件系统和网络隔离    |
-| [写保护（内置）](#写保护内置)                 | 写工具内置：限制文件写入在 workspace 内，外部写入需审批 |
-| [opencode-edit](#opencode-edit)               | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎  |
-| [bash-default-timeout](#bash-default-timeout) | 为 bash 工具设置默认超时（180 秒）                      |
-| [vision-agent](#vision-agent)                 | 视觉代理：主模型不支持视觉时，spawn 子 agent 识别图片   |
-| [session-name](#session-name)                 | 首个 user prompt 自动生成会话名，模型命名 + 启发式兜底  |
-| [todowrite](#todowrite)                       | opencode 风格的任务列表工具，完整列表替换语义           |
-| [question](#question)                         | opencode 风格的提问工具，阻塞式询问用户选择             |
-| [talk](#talk)                                 | session 间消息传递，SQLite 邮箱 + 双向 ask 时间戳仲裁   |
+| 扩展                            | 描述                                                    |
+| ------------------------------- | ------------------------------------------------------- |
+| [bwrap](#bwrap)                 | 基于 bubblewrap 的 OS 级沙箱，提供文件系统和网络隔离    |
+| [写保护（内置）](#写保护内置)   | 写工具内置：限制文件写入在 workspace 内，外部写入需审批 |
+| [opencode-edit](#opencode-edit) | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎  |
+| [vision-agent](#vision-agent)   | 视觉代理：主模型不支持视觉时，spawn 子 agent 识别图片   |
+| [session-name](#session-name)   | 首个 user prompt 自动生成会话名，模型命名 + 启发式兜底  |
+| [todowrite](#todowrite)         | opencode 风格的任务列表工具，完整列表替换语义           |
+| [question](#question)           | opencode 风格的提问工具，阻塞式询问用户选择             |
+| [talk](#talk)                   | session 间消息传递，SQLite 邮箱 + 双向 ask 时间戳仲裁   |
 
 ---
 
@@ -79,10 +78,7 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
 
 ### 使用
 
-```bash
-pi -e ./src/bwrap/index.ts
-# 或通过配置文件注册后自动加载
-```
+bwrap 已集成进 bash 工具实现（opencode 风格 `bash` 位于 `src/opencode/bash.ts`，Claude Code 风格 `Bash` 位于 `src/claude-code/shell.ts`），随对应扩展一起加载，无需单独安装。bash 工具内置默认超时 120 秒。
 
 ---
 
@@ -119,18 +115,6 @@ pi -e ./src/bwrap/index.ts
 
 ```bash
 pi -e ./src/opencode-edit.ts
-```
-
----
-
-## bash-default-timeout
-
-为所有 bash 工具调用设置 180 秒默认超时。仅在模型未显式指定 `timeout` 时生效，避免长时间运行的命令无限挂起。
-
-### 使用
-
-```bash
-pi -e ./src/bash-default-timeout.ts
 ```
 
 ---
@@ -357,7 +341,7 @@ pi -e ./src/talk/index.ts
 ### 命令行加载单个扩展
 
 ```bash
-pi -e ./src/bwrap/index.ts
+pi -e ./src/opencode/index.ts
 ```
 
 ---

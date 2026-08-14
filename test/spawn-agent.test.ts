@@ -127,15 +127,17 @@ describe("buildSubagentArgs", () => {
     expect(args).not.toContain("Task: find the config");
   });
 
-  it("always loads the bwrap sandbox extension", () => {
+  it("loads the bwrap-backed opencode bash for agents that declare the bash tool", () => {
     for (const agent of [
-      baseAgent,
+      { ...baseAgent, tools: ["bash"] },
       { ...baseAgent, tools: ["bash", "edit"] },
-      { ...baseAgent, tools: ["write"] },
     ]) {
       const exts = loadedExtensions(buildSubagentArgs(agent, "task", undefined));
-      expect(exts.some((p) => p.endsWith("bwrap/index.ts"))).toBe(true);
+      expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
     }
+    // Agents without bash need no bwrap sandbox: there are no commands to run.
+    const exts = loadedExtensions(buildSubagentArgs(baseAgent, "task", undefined));
+    expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(false);
   });
 
   it("loads opencode-read for the default read-only toolset", () => {
@@ -145,13 +147,18 @@ describe("buildSubagentArgs", () => {
     expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(false);
   });
 
-  it("loads opencode overrides for each declared tool (read/edit/write)", () => {
+  it("loads opencode overrides for each declared tool (read/edit/write/bash)", () => {
     const exts = loadedExtensions(
-      buildSubagentArgs({ ...baseAgent, tools: ["read", "edit", "write"] }, "task", undefined),
+      buildSubagentArgs(
+        { ...baseAgent, tools: ["read", "edit", "write", "bash"] },
+        "task",
+        undefined,
+      ),
     );
     expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(true);
     expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(true);
     expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(true);
+    expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
   });
 
   it("does not load opencode overrides for tools the agent did not declare", () => {
@@ -161,6 +168,27 @@ describe("buildSubagentArgs", () => {
     expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(false);
     expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(false);
     expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
+  });
+
+  it("loads claude-code search tools individually (Grep without Glob)", () => {
+    const grepExts = loadedExtensions(
+      buildSubagentArgs({ ...baseAgent, tools: ["Grep"] }, "task", undefined),
+    );
+    expect(grepExts.some((p) => p.endsWith("claude-code/grep.ts"))).toBe(true);
+    expect(grepExts.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(false);
+
+    const globExts = loadedExtensions(
+      buildSubagentArgs({ ...baseAgent, tools: ["Glob"] }, "task", undefined),
+    );
+    expect(globExts.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(true);
+    expect(globExts.some((p) => p.endsWith("claude-code/grep.ts"))).toBe(false);
+
+    const both = loadedExtensions(
+      buildSubagentArgs({ ...baseAgent, tools: ["Grep", "Glob"] }, "task", undefined),
+    );
+    expect(both.some((p) => p.endsWith("claude-code/grep.ts"))).toBe(true);
+    expect(both.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(true);
   });
 
   it("uses the agent's declared toolset and model when present", () => {
