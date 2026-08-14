@@ -17,7 +17,8 @@ export function registerShellTools(pi: ExtensionAPI): void {
   bwrapRuntime.setup(pi);
   pi.registerTool({
     name: "Bash",
-    promptGuidelines: [BASH_PROMPT],
+    promptSnippet: "execute command",
+    promptGuidelines: [`--\n${BASH_PROMPT}`],
     label: "Bash",
     description: [
       "Executes a given bash command synchronously and returns its output.",

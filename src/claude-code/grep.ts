@@ -151,7 +151,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
       'output_mode defaults to "files_with_matches"; use "content" for matching lines or "count" for match counts.',
     ].join("\n"),
     promptSnippet: "Search file contents with regular expressions",
-    promptGuidelines: [GREP_PROMPT],
+    promptGuidelines: [`--\n${GREP_PROMPT}`],
     parameters: Type.Object(
       {
         pattern: Type.String({ description: "The regular expression pattern to search for" }),

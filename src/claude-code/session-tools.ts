@@ -8,6 +8,13 @@ const TODO_STATUSES = ["pending", "in_progress", "completed"] as const;
 const OTHER_OPTION = "Other";
 const DONE_OPTION = "Done";
 
+/** AskUserQuestion guidance, kept as plain text like the tool .md files. */
+const ASK_PROMPT = [
+  "Use AskUserQuestion when you need to gather preferences, clarify requirements, or choose an implementation direction.",
+  "Users can always provide their own answer through the automatically supplied Other option.",
+  'If you recommend an option, put it first and append "(Recommended)" to its label.',
+].join("\n");
+
 type TodoStatus = (typeof TODO_STATUSES)[number];
 
 export interface ClaudeCodeTodo {
@@ -176,11 +183,7 @@ export function registerSessionTools(pi: ExtensionAPI): void {
       'If you recommend an option, put it first and append "(Recommended)" to its label.',
     ].join("\n"),
     promptSnippet: "Ask the user questions during execution",
-    promptGuidelines: [
-      "Use AskUserQuestion when you need to gather preferences, clarify requirements, or choose an implementation direction.",
-      "Users can always provide their own answer through the automatically supplied Other option.",
-      'If you recommend an option, put it first and append "(Recommended)" to its label.',
-    ],
+    promptGuidelines: [`--\n${ASK_PROMPT}`],
     parameters: Type.Object(
       {
         questions: Type.Array(questionSchema, {
