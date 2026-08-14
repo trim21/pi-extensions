@@ -11,6 +11,7 @@
 | [opencode-edit](#opencode-edit)               | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎 |
 | [bash-default-timeout](#bash-default-timeout) | 为 bash 工具设置默认超时（180 秒）                     |
 | [vision-agent](#vision-agent)                 | 视觉代理：主模型不支持视觉时，spawn 子 agent 识别图片  |
+| [session-name](#session-name)                 | 首个 user prompt 自动生成会话名，模型命名 + 启发式兜底 |
 | [todowrite](#todowrite)                       | opencode 风格的任务列表工具，完整列表替换语义          |
 | [question](#question)                         | opencode 风格的提问工具，阻塞式询问用户选择            |
 | [talk](#talk)                                 | session 间消息传递，SQLite 邮箱 + 双向 ask 时间戳仲裁  |
@@ -169,6 +170,37 @@ pi -e ./src/vision-agent.ts
 ```
 
 **注意：** 本扩展与 pi-vlm-proxy 都注册同名 `describe_image` 工具，启用前请先从 `~/.pi/agent/settings.json` 的 `packages` 中移除 `pi-vlm-proxy`，避免工具注册冲突。
+
+---
+
+## session-name
+
+根据会话的第一个 user prompt 自动生成显示名，在 `/resume` 和 `pi -r` 里更易区分会话。
+
+- **双模式命名**：配置了 `sessionName.model` 时调用命名模型（OpenAI 兼容 API，复用 `~/.pi/agent/models.json` 的 provider 配置）把 prompt 概括成短名；未配置模型、provider 不可解析或模型调用失败时退化为启发式（取首行、去 markdown 装饰、截断到 `maxLength`）。
+- **不覆盖已有名字**：`--name`、`/name` 设置过名字的会话不会被改；恢复的已命名会话同样跳过。
+- **恢复无名会话**：resume/fork 恢复且无名字的会话，从历史第一条 user 消息生成名字。
+- **非阻塞**：命名在后台进行，不拖慢首轮回复；中途切换会话也不会把名字写到错误的 session。
+- **无需配置开箱即用**：缺省按启发式命名。
+
+### 配置
+
+```jsonc
+// ~/.pi/agent/settings.json
+{
+  "sessionName": {
+    "provider": "axonhub", // 可选，缺省回退 defaultProvider
+    "model": "deepseek-v4-flash", // 命名模型；不配置则用启发式
+    "maxLength": 30, // 可选，名字最大长度，默认 30
+  },
+}
+```
+
+### 使用
+
+```bash
+pi -e ./src/session-name.ts
+```
 
 ---
 

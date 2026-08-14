@@ -25,15 +25,15 @@
     "prepare": "husky"
   },
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+    "@earendil-works/pi-agent-core": ">=0.84.1",
+    "@earendil-works/pi-ai": ">=0.84.1",
+    "@earendil-works/pi-coding-agent": ">=0.84.1",
+    "@earendil-works/pi-tui": ">=0.84.1",
+    "typebox": ">=1.3.1"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.80.10",
-    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@earendil-works/pi-ai": "^0.84.1",
+    "@earendil-works/pi-coding-agent": "^0.84.1",
     "@eslint/js": "10.0.1",
     "@types/node": "^24.13.3",
     "@typescript-eslint/utils": "8.67.0",
@@ -56,6 +56,7 @@
   "pi": {
     "extensions": [
       "src/vision-agent.ts",
+      "src/session-name.ts",
       "src/bwrap/index.ts",
       "src/workspace-guard.ts",
       "src/opencode-edit.ts",
