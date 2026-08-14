@@ -243,7 +243,7 @@ opencode 风格的提问工具，参数与语义和 opencode 的 [`question`](ht
 ### 使用
 
 ```bash
-pi -e ./src/question.ts
+pi -e ./src/opencode/question.ts
 ```
 
 ---
