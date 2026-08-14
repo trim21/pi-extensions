@@ -191,6 +191,24 @@ describe("buildSubagentArgs", () => {
     expect(both.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(true);
   });
 
+  it("loads the shared cc files implementation once for Read/Edit/Write", () => {
+    // All three stateful cc tools live in claude-code/files.ts (shared
+    // read-snapshot state); the `--tools` allowlist exposes only the subset
+    // the agent declared, so the extension file must be loaded exactly once.
+    const exts = loadedExtensions(
+      buildSubagentArgs({ ...baseAgent, tools: ["Read", "Edit", "Write"] }, "task", undefined),
+    );
+    expect(exts.filter((p) => p.endsWith("claude-code/files.ts"))).toHaveLength(1);
+    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(false);
+
+    const single = loadedExtensions(
+      buildSubagentArgs({ ...baseAgent, tools: ["Edit"] }, "task", undefined),
+    );
+    expect(single.filter((p) => p.endsWith("claude-code/files.ts"))).toHaveLength(1);
+  });
+
   it("uses the agent's declared toolset and model when present", () => {
     const args = buildSubagentArgs(
       { ...baseAgent, tools: ["bash", "edit"], model: "claude-sonnet-4" },

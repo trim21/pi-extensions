@@ -60,9 +60,11 @@ const MAX_PROGRESS_LINES = 5;
  * without bash need no bwrap setup (there are no commands to sandbox).
  * (Workspace write protection is embedded in the opencode write/edit tools.)
  *
- * Claude Code style tools (capitalized names, e.g. `Grep`/`Glob`) map to
- * their split claude-code files, so a subagent can enable exactly the search
- * tools it declares — e.g. `Grep` without `Glob`.
+ * Claude Code style tools (capitalized names) map to their claude-code
+ * files, so a subagent can enable exactly the tools it declares — e.g. `Grep`
+ * without `Glob`. The stateful file tools (`Read`/`Edit`/`Write`) share one
+ * implementation file (they share a read-snapshot state); the `--tools`
+ * allowlist still exposes only the declared subset.
  */
 const TOOL_EXTENSION_OVERRIDES: Record<string, string> = {
   read: "opencode/read.ts",
@@ -71,6 +73,9 @@ const TOOL_EXTENSION_OVERRIDES: Record<string, string> = {
   bash: "opencode/bash.ts",
   Grep: "claude-code/grep.ts",
   Glob: "claude-code/glob.ts",
+  Read: "claude-code/files.ts",
+  Edit: "claude-code/files.ts",
+  Write: "claude-code/files.ts",
 };
 
 // ── schema ───────────────────────────────────────────────────────────────────
@@ -205,10 +210,17 @@ export function buildSubagentArgs(
   const tools = agent.tools ?? DEFAULT_TOOLS;
   // Load the opencode override for each built-in tool the agent declares
   // (read/edit/write), so the subagent uses the enhanced implementation
-  // instead of the built-in one.
+  // instead of the built-in one. Several tool names can map to the same
+  // implementation file (e.g. cc Read/Edit/Write → claude-code/files.ts);
+  // loading a file twice would run its extension factory twice and create
+  // separate closure states, so each file is loaded at most once.
+  const loadedOverrideFiles = new Set<string>();
   for (const tool of tools) {
     const ext = TOOL_EXTENSION_OVERRIDES[tool];
-    if (ext) args.push("-e", extensionPath(ext));
+    if (ext && !loadedOverrideFiles.has(ext)) {
+      loadedOverrideFiles.add(ext);
+      args.push("-e", extensionPath(ext));
+    }
   }
   args.push("--tools", tools.join(","));
   if (systemPromptPath) args.push("--append-system-prompt", systemPromptPath);
