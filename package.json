@@ -58,6 +58,7 @@
       "src/session-name.ts",
       "src/bwrap/index.ts",
       "src/workspace-guard.ts",
+      "src/claude-code/index.ts",
       "src/opencode/index.ts",
       "src/bash-default-timeout.ts",
       "src/gh-readonly.ts",
