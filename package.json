@@ -23,9 +23,7 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "prepack": "pnpm run copy",
-    "copy": "cp node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-bash.wasm src/bwrap/tree-sitter-bash.wasm",
-    "prepare": "husky && pnpm run copy"
+    "prepare": "husky"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.84.1",
@@ -40,7 +38,6 @@
     "@types/node": "^24.13.3",
     "@typescript/native": "npm:typescript@^7.0.2",
     "@vitest/coverage-v8": "^4.1.10",
-    "@vscode/tree-sitter-wasm": "^0.3.1",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-erasable-syntax-only": "0.4.2",
@@ -86,6 +83,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "@vscode/tree-sitter-wasm": "^0.3.1",
     "web-tree-sitter": "^0.26.12"
   }
 }

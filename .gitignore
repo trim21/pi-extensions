@@ -2,4 +2,3 @@ node_modules/
 .pixi/
 coverage/
 coverage/
-src/bwrap/tree-sitter-bash.wasm
