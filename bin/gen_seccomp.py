@@ -14,6 +14,7 @@ sockets (sendto/sendmsg/sendmmsg).
 reaching host AF_UNIX sockets (/var/run/docker.sock, etc.).
 """
 
+import errno
 import sys
 from pathlib import Path
 
@@ -66,7 +67,7 @@ def build_filter() -> bytes:
 
     for name in BLOCKED_SYSCALLS:
         try:
-            f.add_rule(seccomp.ERRNO(1), name)
+            f.add_rule(seccomp.ERRNO(errno.EACCES), name)
         except RuntimeError as e:
             print(
                 f"warning: syscall '{name}' not available, skipping: {e}",
