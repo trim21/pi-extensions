@@ -5,9 +5,9 @@ Reads a file from the local filesystem. You can access any file directly by usin
 Usage:
 
 - The file_path parameter must be an absolute path, not a relative path
-- By default, it reads up to 2000 lines starting from the beginning of the file
+- By default, it reads the entire file; files over 256 KB or 25K tokens require offset and limit to read specific portions
 - When you already know which part of the file you need, only read that part. This can be important for larger files.
-- Results are returned using cat -n format, with line numbers starting at 1
+- Results are returned as `<lineNumber>\t<content>` lines, 1-indexed (Claude Code Read format)
 - This tool allows you to read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually.
 - This tool can only read files, not directories. To read a directory, use an ls command via the Bash tool.
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.

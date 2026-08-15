@@ -64,7 +64,8 @@
       "src/talk/index.ts"
     ],
     "skills": [
-      "src/talk/skills"
+      "src/talk/skills",
+      "src/claude-code/skills"
     ]
   },
   "lint-staged": {

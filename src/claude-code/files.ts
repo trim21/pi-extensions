@@ -16,14 +16,30 @@ import { Type } from "typebox";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import {
   type ClaudeCodeState,
+  didYouMean,
   type FileSnapshot,
   requireAbsolutePath,
   snapshotsEqual,
   throwIfAborted,
 } from "./common.js";
+import { findActualString, preserveQuoteStyle } from "./edit-utils.js";
 
-const DEFAULT_READ_LINES = 2000;
 const SAMPLE_BYTES = 4096;
+
+/** Read 全读时的文件大小上限（对齐 Claude Code 的 256KB）。 */
+const MAX_READ_SIZE_BYTES = 0.25 * 1024 * 1024;
+/** Read 输出 token 粗估上限（对齐 Claude Code 的 25K tokens；无 tokenizer，按 4 字符/token 估算）。 */
+const MAX_READ_TOKENS = 25_000;
+
+/** Edit 最大文件大小（stat 字节数），防止大文件 OOM（对齐 Claude Code）。 */
+const MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024; // 1 GiB
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
 
 /** Tool guidance, kept in markdown so it reads like documentation. */
 const READ_PROMPT = readFileSync(fileURLToPath(new URL("read.md", import.meta.url)), "utf8").trim();
@@ -71,54 +87,49 @@ function isBinary(sample: Uint8Array): boolean {
   return sample.length > 0 && suspicious / sample.length > 0.3;
 }
 
+/**
+ * 对齐 Claude Code 的 readFileInRange + addLineNumbers：
+ * - 剥离 UTF-8 BOM；
+ * - 非空文件按「每行 + 一个尾随空行」切分（真实 CC 的尾部 fragment 无条件
+ *   加入，等价于补一个 \n 再 split），所以 totalLines 总比编辑器显示行数多 1；
+ * - 每行去掉尾随 \r（CRLF → LF）。
+ */
 function splitFileLines(content: string): string[] {
-  if (content === "") return [];
-  const lines = content.split("\n");
-  if (content.endsWith("\n")) lines.pop();
-  return lines;
+  const text = content.replace(/^\uFEFF/, "");
+  if (text === "") return [];
+  return (text.endsWith("\n") ? text : `${text}\n`)
+    .split("\n")
+    .map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
 }
 
+/**
+ * 格式化读取输出（对齐 Claude Code 的 addLineNumbers）：行号无 padding，
+ * limit 未指定时读取全部。无 PARTIAL 提示、无单行截断（由 execute 层的
+ * 字节/token 上限兜底）。
+ */
 export function formatReadOutput(
   content: string,
   offset = 1,
-  limit = DEFAULT_READ_LINES,
-): { text: string; complete: boolean; totalLines: number } {
+  limit?: number,
+): { text: string; totalLines: number } {
   const lines = splitFileLines(content);
   const totalLines = lines.length;
   if (totalLines === 0) {
-    if (offset > 1)
-      return {
-        text: `<system-reminder>Warning: the file exists but has fewer lines than the provided offset (${offset}). The file has 0 lines.</system-reminder>`,
-        complete: false,
-        totalLines,
-      };
     return {
-      text: "<system-reminder>Warning: the file exists but has empty contents.</system-reminder>",
-      complete: true,
+      text: "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>",
       totalLines,
     };
   }
   if (offset > totalLines) {
     return {
-      text: `<system-reminder>Warning: the file exists but has fewer lines than the provided offset (${offset}). The file has ${totalLines} lines.</system-reminder>`,
-      complete: false,
+      text: `<system-reminder>Warning: the file exists but is shorter than the provided offset (${offset}). The file has ${totalLines} lines.</system-reminder>`,
       totalLines,
     };
   }
-
-  const selected = lines.slice(offset - 1, offset - 1 + limit);
-  const numbered = selected
-    .map(
-      (line, index) =>
-        `${String(offset + index).padStart(6)}\t${line.length > 2000 ? line.slice(0, 2000) : line}`,
-    )
-    .join("\n");
-  const complete = offset === 1 && selected.length === totalLines;
-  const hasMore = offset - 1 + selected.length < totalLines;
-  const notice = hasMore
-    ? `\n\n<system-reminder>PARTIAL view: showing lines ${offset}-${offset + selected.length - 1} of ${totalLines}. Use offset and limit to read more.</system-reminder>`
-    : "";
-  return { text: numbered + notice, complete, totalLines };
+  const selected =
+    limit === undefined ? lines.slice(offset - 1) : lines.slice(offset - 1, offset - 1 + limit);
+  const text = selected.map((line, index) => `${offset + index}\t${line}`).join("\n");
+  return { text, totalLines };
 }
 
 function countMatches(content: string, needle: string): number {
@@ -155,15 +166,18 @@ export function exactReplace(
 
 async function requireCurrentRead(state: ClaudeCodeState, filePath: string): Promise<void> {
   const readSnapshot = state.reads.get(filePath);
-  if (!readSnapshot)
-    throw new Error(`File has not been read yet. Read it first before writing to it: ${filePath}`);
+  if (!readSnapshot) {
+    throw new Error("File has not been read yet. Read it first before writing to it.");
+  }
   if (!readSnapshot.textEditable) {
     throw new Error(`Cannot edit or overwrite a binary file with a text tool: ${filePath}`);
   }
   const currentContent = await readFile(filePath);
   const current = snapshotOf(currentContent);
   if (!snapshotsEqual(readSnapshot, current)) {
-    throw new Error(`File has been modified since read. Read it again before writing: ${filePath}`);
+    throw new Error(
+      "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.",
+    );
   }
 }
 
@@ -173,7 +187,7 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
     label: "Read",
     description: [
       "Reads a file from the local filesystem. You can access any file directly using this tool.",
-      "The file_path parameter must be an absolute path. By default, it reads up to 2000 lines from the beginning.",
+      "The file_path parameter must be an absolute path. By default, it reads the entire file; files over 256 KB or 25K tokens require offset and limit.",
       "Results use cat -n style line numbers starting at 1. Images are returned visually.",
       "This tool reads files, not directories.",
     ].join("\n"),
@@ -192,7 +206,7 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       },
       { additionalProperties: false },
     ),
-    async execute(_id, params, signal) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       throwIfAborted(signal);
       const filePath = requireAbsolutePath(params.file_path);
       if (
@@ -204,7 +218,19 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       if (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit < 1)) {
         throw new Error("limit must be a positive integer");
       }
-      await assertReadableFile(filePath);
+      // 文件不存在 → 友好错误 + Did you mean（对齐 Claude Code）
+      try {
+        await assertReadableFile(filePath);
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+          const suggestion = await didYouMean(filePath, ctx.cwd);
+          throw new Error(
+            `File does not exist. Note: your current working directory is ${ctx.cwd}.${suggestion ? ` Did you mean ${suggestion}?` : ""}`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
       throwIfAborted(signal);
 
       const extension = extname(filePath).toLowerCase();
@@ -229,11 +255,21 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       const buffer = await readFile(filePath);
       if (isBinary(buffer.subarray(0, SAMPLE_BYTES)))
         throw new Error(`Cannot read binary file: ${filePath}`);
-      const formatted = formatReadOutput(
-        buffer.toString("utf8"),
-        params.offset ?? 1,
-        params.limit ?? DEFAULT_READ_LINES,
-      );
+      // 全读（limit 未传）时受字节上限约束（对齐 Claude Code）
+      if (params.limit === undefined && buffer.length > MAX_READ_SIZE_BYTES) {
+        throw new Error(
+          `File content (${formatFileSize(buffer.length)}) exceeds maximum allowed size (${formatFileSize(MAX_READ_SIZE_BYTES)}). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file.`,
+        );
+      }
+      const text = buffer.toString("utf8");
+      const formatted = formatReadOutput(text, params.offset ?? 1, params.limit);
+      // 输出 token 粗估上限（无 tokenizer，4 字符/token），对读取范围生效
+      const estimatedTokens = Math.ceil(formatted.text.length / 4);
+      if (estimatedTokens > MAX_READ_TOKENS) {
+        throw new Error(
+          `File content (${estimatedTokens} tokens) exceeds maximum allowed tokens (${MAX_READ_TOKENS}). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file.`,
+        );
+      }
       const snapshot = snapshotOf(buffer);
       state.reads.set(filePath, snapshot);
       return {
@@ -278,25 +314,109 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
         },
       });
       return withFileMutationQueue(filePath, async () => {
+        const oldString = params.old_string;
+        const newString = params.new_string;
+        if (oldString === newString) {
+          throw new Error("No changes to make: old_string and new_string are exactly the same.");
+        }
+        // 空 old_string：创建新文件或填充空文件（不需要先 Read，对齐 Claude Code）
+        if (oldString === "") {
+          let exists = true;
+          try {
+            const value = await stat(filePath);
+            if (value.isFile()) {
+              const content = await readFile(filePath, "utf8");
+              if (content.trim() !== "") {
+                throw new Error("Cannot create new file - file already exists.");
+              }
+            }
+          } catch (error) {
+            if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+              exists = false;
+            } else {
+              throw error;
+            }
+          }
+          if (!exists) await mkdir(dirname(filePath), { recursive: true });
+          await writeFile(filePath, newString, "utf8");
+          const snapshot = snapshotOf(newString);
+          state.reads.set(filePath, snapshot);
+          return {
+            content: [
+              { type: "text", text: `The file ${filePath} has been updated successfully.` },
+            ],
+            details: { reads: { [filePath]: snapshot } } satisfies FileToolDetails,
+          };
+        }
+        const replaceAll = params.replace_all ?? false;
+        // 防止 OOM 的大文件检查（对齐 Claude Code）
+        try {
+          const { size } = await stat(filePath);
+          if (size > MAX_EDIT_FILE_SIZE) {
+            throw new Error(
+              `File is too large to edit (${formatFileSize(size)}). Maximum editable file size is ${formatFileSize(MAX_EDIT_FILE_SIZE)}.`,
+            );
+          }
+        } catch (error) {
+          if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
+            throw error;
+          }
+        }
+        let original: string;
+        try {
+          original = await readFile(filePath, "utf8");
+        } catch (error) {
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+            const suggestion = await didYouMean(filePath, ctx.cwd);
+            throw new Error(
+              `File does not exist. Note: your current working directory is ${ctx.cwd}.${suggestion ? ` Did you mean ${suggestion}?` : ""}`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+        if (extname(filePath).toLowerCase() === ".ipynb") {
+          throw new Error(
+            "File is a Jupyter Notebook. Use the NotebookEditTool to edit this file.",
+          );
+        }
         await requireCurrentRead(state, filePath);
         await access(filePath, constants.R_OK | constants.W_OK);
-        const original = await readFile(filePath, "utf8");
         throwIfAborted(signal);
-        const updated = exactReplace(
-          original,
-          params.old_string,
-          params.new_string,
-          params.replace_all ?? false,
-        );
-        await writeFile(filePath, updated, "utf8");
-        const snapshot = snapshotOf(updated);
+
+        // CRLF 规范化后匹配（old_string 不需要带 \r），写回时恢复原行尾
+        const crlfCount = (original.match(/\r\n/g) ?? []).length;
+        const lfCount = (original.match(/(?<!\r)\n/g) ?? []).length;
+        const lineEnding = crlfCount > lfCount ? "\r\n" : "\n";
+        const normalized = original.replaceAll("\r\n", "\n");
+        const actualOldString = findActualString(normalized, oldString) ?? oldString;
+        const matches = normalized.split(actualOldString).length - 1;
+        if (matches === 0) {
+          throw new Error(`String to replace not found in file.\nString: ${oldString}`);
+        }
+        if (!replaceAll && matches > 1) {
+          throw new Error(
+            `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${oldString}`,
+          );
+        }
+        const actualNewString = preserveQuoteStyle(oldString, actualOldString, newString);
+        // split/join 与函数替换：replacement 含 $ 时不会触发 $& 等特殊语义
+        const updated = replaceAll
+          ? normalized.split(actualOldString).join(actualNewString)
+          : normalized.replace(actualOldString, () => actualNewString);
+        const restored = lineEnding === "\r\n" ? updated.replaceAll("\n", "\r\n") : updated;
+        await writeFile(filePath, restored, "utf8");
+        const snapshot = snapshotOf(restored);
         state.reads.set(filePath, snapshot);
-        const diff = generateDiffString(original, updated);
+        const diff = generateDiffString(original, restored);
+        const text = replaceAll
+          ? `The file ${filePath} has been updated. All occurrences were successfully replaced.`
+          : `The file ${filePath} has been updated successfully.`;
         return {
-          content: [{ type: "text", text: `The file ${filePath} has been updated successfully.` }],
+          content: [{ type: "text", text }],
           details: {
             diff: diff.diff,
-            patch: generateUnifiedPatch(filePath, original, updated),
+            patch: generateUnifiedPatch(filePath, original, restored),
             firstChangedLine: diff.firstChangedLine,
             reads: { [filePath]: snapshot },
           } satisfies FileToolDetails,
@@ -341,7 +461,9 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
             original = await readFile(filePath, "utf8");
           }
         } catch (error) {
-          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+          if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
+            throw error;
+          }
         }
         throwIfAborted(signal);
         await mkdir(dirname(filePath), { recursive: true });
@@ -349,8 +471,12 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
         const snapshot = snapshotOf(params.content);
         state.reads.set(filePath, snapshot);
         const diff = generateDiffString(original ?? "", params.content);
+        const text =
+          original === undefined
+            ? `File created successfully at: ${filePath}`
+            : `The file ${filePath} has been updated successfully.`;
         return {
-          content: [{ type: "text", text: `File created successfully at: ${filePath}` }],
+          content: [{ type: "text", text }],
           details: {
             diff: diff.diff,
             patch: generateUnifiedPatch(filePath, original ?? "", params.content),

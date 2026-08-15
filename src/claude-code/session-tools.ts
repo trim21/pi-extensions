@@ -158,7 +158,8 @@ export function registerSessionTools(pi: ExtensionAPI): void {
         content: [
           {
             type: "text" as const,
-            text: "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable.",
+            // 与 Claude Code 的 TodoWrite 逐字一致（无结尾句号）
+            text: "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable",
           },
         ],
         details: { todos },

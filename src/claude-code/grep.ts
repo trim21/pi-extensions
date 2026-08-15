@@ -17,7 +17,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { searchRoot, throwIfAborted } from "./common.js";
+import { searchRoot, suggestPathUnderCwd, throwIfAborted, toRelativePath } from "./common.js";
 
 const GREP_OUTPUT_MODES = ["content", "files_with_matches", "count"] as const;
 
@@ -70,7 +70,8 @@ export function buildGrepArguments(params: GrepParameters, cwd: string): string[
       break;
     }
     case "count": {
-      args.push("--count-matches");
+      // -c 统计匹配行数（对齐 Claude Code；--count-matches 是匹配次数）
+      args.push("-c");
       break;
     }
     case "content": {
@@ -90,10 +91,26 @@ export function buildGrepArguments(params: GrepParameters, cwd: string): string[
     // No default
   }
   if (params["-i"] === true) args.push("--ignore-case");
-  if (params.glob) args.push("--glob", params.glob);
   if (params.type) args.push("--type", params.type);
   if (params.multiline === true) args.push("--multiline", "--multiline-dotall");
-  args.push("--", params.pattern, searchRoot(params.path, cwd));
+  // glob 按逗号/空格拆分（花括号模式不拆），对齐 Claude Code
+  if (params.glob) {
+    const globPatterns: string[] = [];
+    for (const rawPattern of params.glob.split(/\s+/)) {
+      if (rawPattern.includes("{") && rawPattern.includes("}")) {
+        globPatterns.push(rawPattern);
+      } else {
+        globPatterns.push(...rawPattern.split(",").filter(Boolean));
+      }
+    }
+    for (const globPattern of globPatterns) {
+      if (globPattern) args.push("--glob", globPattern);
+    }
+  }
+  // 以 - 开头的 pattern 用 -e 显式声明，防止被 rg 当作选项
+  if (params.pattern.startsWith("-")) args.push("-e", params.pattern);
+  else args.push(params.pattern);
+  args.push(searchRoot(params.path, cwd));
   return args;
 }
 
@@ -120,8 +137,9 @@ export async function sortFilesByMtime(output: string): Promise<string> {
 /**
  * Append an occurrence/file summary to `filename:count` output (count mode),
  * mirroring Claude Code's "Found N occurrences across M files" result.
+ * `limitInfo`（如 "limit: 250, offset: 5"）非空时追加 pagination 说明。
  */
-export function summarizeCountOutput(output: string): string {
+export function summarizeCountOutput(output: string, limitInfo?: string): string {
   const lines = output.split("\n").filter((line) => line.includes(":"));
   let occurrences = 0;
   for (const line of lines) {
@@ -131,14 +149,61 @@ export function summarizeCountOutput(output: string): string {
   const files = lines.length;
   const occurrenceLabel = occurrences === 1 ? "occurrence" : "occurrences";
   const fileLabel = files === 1 ? "file" : "files";
-  return `${output.trimEnd()}\n\nFound ${occurrences} total ${occurrenceLabel} across ${files} ${fileLabel}.`;
+  return `${output.trimEnd()}\n\nFound ${occurrences} total ${occurrenceLabel} across ${files} ${fileLabel}.${limitInfo ? ` with pagination = ${limitInfo}` : ""}`;
 }
 
-export function pageGrepOutput(output: string, offset = 0, headLimit = 0): string {
+/**
+ * 对齐 Claude Code 的 applyHeadLimit：offset 跳过前 N 条；head_limit=0 表示
+ * 无限；appliedLimit 仅在真正截断时返回（模型据此知道可以继续分页）。
+ */
+export function pageGrepOutput(
+  output: string,
+  offset = 0,
+  headLimit = 0,
+): { lines: string[]; appliedLimit: number | undefined; appliedOffset: number | undefined } {
   const lines = output ? output.replace(/\n$/, "").split("\n") : [];
-  if (offset >= lines.length && lines.length > 0) return "No entries at this offset";
-  const selected = headLimit > 0 ? lines.slice(offset, offset + headLimit) : lines.slice(offset);
-  return truncateOutput(selected.join("\n"));
+  if (headLimit === 0) {
+    return {
+      lines: lines.slice(offset),
+      appliedLimit: undefined,
+      appliedOffset: offset > 0 ? offset : undefined,
+    };
+  }
+  const sliced = lines.slice(offset, offset + headLimit);
+  return {
+    lines: sliced,
+    appliedLimit: lines.length - offset > headLimit ? headLimit : undefined,
+    appliedOffset: offset > 0 ? offset : undefined,
+  };
+}
+
+/** 分页信息文本，仅包含实际发生/提供的部分（对齐 Claude Code）。 */
+function formatLimitInfo(
+  appliedLimit: number | undefined,
+  appliedOffset: number | undefined,
+): string {
+  const parts: string[] = [];
+  if (appliedLimit !== undefined) parts.push(`limit: ${appliedLimit}`);
+  if (appliedOffset) parts.push(`offset: ${appliedOffset}`);
+  return parts.join(", ");
+}
+
+/** content 模式行：路径前缀相对化（`/abs/path:line:content` 取第一个冒号）。 */
+function relativizeContentLine(line: string, cwd: string): string {
+  const colonIndex = line.indexOf(":");
+  if (colonIndex > 0) {
+    return toRelativePath(line.slice(0, colonIndex), cwd) + line.slice(colonIndex);
+  }
+  return line;
+}
+
+/** count 模式行：路径前缀相对化（`/abs/path:count` 取最后一个冒号）。 */
+function relativizeCountLine(line: string, cwd: string): string {
+  const colonIndex = line.lastIndexOf(":");
+  if (colonIndex > 0) {
+    return toRelativePath(line.slice(0, colonIndex), cwd) + line.slice(colonIndex);
+  }
+  return line;
 }
 
 export function registerGrepTool(pi: ExtensionAPI): void {
@@ -210,29 +275,88 @@ export function registerGrepTool(pi: ExtensionAPI): void {
       ) {
         throw new Error("head_limit must be a non-negative integer");
       }
+      if (params.path) {
+        const absolutePath = searchRoot(params.path, ctx.cwd);
+        try {
+          await stat(absolutePath);
+        } catch (error) {
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+            const suggestion = await suggestPathUnderCwd(absolutePath, ctx.cwd);
+            throw new Error(
+              `Path does not exist: ${params.path}. Note: your current working directory is ${ctx.cwd}.${suggestion ? ` Did you mean ${suggestion}?` : ""}`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+      }
       const result = await pi.exec("rg", buildGrepArguments(params, ctx.cwd), { signal });
       throwIfAborted(signal);
       if (result.code !== 0 && result.code !== 1) {
         throw new Error(result.stderr.trim() || `ripgrep exited with code ${result.code}`);
       }
-      if (result.code === 1 || result.stdout === "") {
-        return { content: [{ type: "text", text: "No files found" }], details: { matches: 0 } };
-      }
       const mode = params.output_mode ?? "files_with_matches";
-      // head_limit defaults to DEFAULT_HEAD_LIMIT; an explicit 0 means unlimited.
-      const stdout =
-        mode === "files_with_matches" ? await sortFilesByMtime(result.stdout) : result.stdout;
-      const text = pageGrepOutput(
-        stdout,
-        params.offset ?? 0,
-        params.head_limit ?? DEFAULT_HEAD_LIMIT,
-      );
+      const offset = params.offset ?? 0;
+      const headLimit = params.head_limit ?? DEFAULT_HEAD_LIMIT;
+      // rg 退出码 1 = 无匹配，stdout 为空
+      const stdout = result.code === 1 ? "" : result.stdout;
+
+      if (mode === "files_with_matches") {
+        if (stdout === "") {
+          return { content: [{ type: "text", text: "No files found" }], details: { matches: 0 } };
+        }
+        const sorted = await sortFilesByMtime(stdout);
+        const { lines, appliedLimit, appliedOffset } = pageGrepOutput(sorted, offset, headLimit);
+        const filenames = lines.map((filePath) => toRelativePath(filePath, ctx.cwd));
+        const limitInfo = formatLimitInfo(appliedLimit, appliedOffset);
+        const text = truncateOutput(
+          `Found ${filenames.length} ${filenames.length === 1 ? "file" : "files"}${limitInfo ? ` ${limitInfo}` : ""}\n${filenames.join("\n")}`,
+        );
+        return { content: [{ type: "text", text }], details: { matches: filenames.length } };
+      }
+
       if (mode === "count") {
+        if (stdout === "") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No matches found\n\nFound 0 total occurrences across 0 files.",
+              },
+            ],
+            details: undefined,
+          };
+        }
+        const { lines, appliedLimit, appliedOffset } = pageGrepOutput(stdout, offset, headLimit);
+        const relativized = lines.map((line) => relativizeCountLine(line, ctx.cwd));
         return {
-          content: [{ type: "text", text: summarizeCountOutput(text) }],
+          content: [
+            {
+              type: "text",
+              text: truncateOutput(
+                summarizeCountOutput(
+                  relativized.join("\n"),
+                  formatLimitInfo(appliedLimit, appliedOffset),
+                ),
+              ),
+            },
+          ],
           details: undefined,
         };
       }
+
+      // content mode
+      if (stdout === "") {
+        return { content: [{ type: "text", text: "No matches found" }], details: undefined };
+      }
+      const { lines, appliedLimit, appliedOffset } = pageGrepOutput(stdout, offset, headLimit);
+      const relativized = lines.map((line) => relativizeContentLine(line, ctx.cwd)).join("\n");
+      const limitInfo = formatLimitInfo(appliedLimit, appliedOffset);
+      const text = truncateOutput(
+        limitInfo
+          ? `${relativized}\n\n[Showing results with pagination = ${limitInfo}]`
+          : relativized,
+      );
       return { content: [{ type: "text", text }], details: undefined };
     },
   });
