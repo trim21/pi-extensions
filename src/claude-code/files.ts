@@ -44,6 +44,11 @@ export interface FileToolDetails {
   diff?: string;
   patch?: string;
   firstChangedLine?: number;
+  /**
+   * 本轮受影响文件的已读快照（path → snapshot）。随工具结果持久化到
+   * session 文件，resume 后由 session_start 重建 reads state。
+   */
+  reads?: Record<string, FileSnapshot>;
 }
 
 function snapshotOf(content: Uint8Array | string, textEditable = true): FileSnapshot {
@@ -216,8 +221,9 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
           { type: "text", text: `Read image file [${imageMime}]` },
           { type: "image", data, mimeType: imageMime },
         ];
-        state.reads.set(filePath, snapshotOf(image, false));
-        return { content, details: undefined };
+        const snapshot = snapshotOf(image, false);
+        state.reads.set(filePath, snapshot);
+        return { content, details: { reads: { [filePath]: snapshot } } };
       }
 
       const buffer = await readFile(filePath);
@@ -228,8 +234,12 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
         params.offset ?? 1,
         params.limit ?? DEFAULT_READ_LINES,
       );
-      state.reads.set(filePath, snapshotOf(buffer));
-      return { content: [{ type: "text", text: formatted.text }], details: undefined };
+      const snapshot = snapshotOf(buffer);
+      state.reads.set(filePath, snapshot);
+      return {
+        content: [{ type: "text", text: formatted.text }],
+        details: { reads: { [filePath]: snapshot } },
+      };
     },
   });
 
@@ -279,7 +289,8 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
           params.replace_all ?? false,
         );
         await writeFile(filePath, updated, "utf8");
-        state.reads.set(filePath, snapshotOf(updated));
+        const snapshot = snapshotOf(updated);
+        state.reads.set(filePath, snapshot);
         const diff = generateDiffString(original, updated);
         return {
           content: [{ type: "text", text: `The file ${filePath} has been updated successfully.` }],
@@ -287,6 +298,7 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
             diff: diff.diff,
             patch: generateUnifiedPatch(filePath, original, updated),
             firstChangedLine: diff.firstChangedLine,
+            reads: { [filePath]: snapshot },
           } satisfies FileToolDetails,
         };
       });
@@ -334,7 +346,8 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
         throwIfAborted(signal);
         await mkdir(dirname(filePath), { recursive: true });
         await writeFile(filePath, params.content, "utf8");
-        state.reads.set(filePath, snapshotOf(params.content));
+        const snapshot = snapshotOf(params.content);
+        state.reads.set(filePath, snapshot);
         const diff = generateDiffString(original ?? "", params.content);
         return {
           content: [{ type: "text", text: `File created successfully at: ${filePath}` }],
@@ -342,6 +355,7 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
             diff: diff.diff,
             patch: generateUnifiedPatch(filePath, original ?? "", params.content),
             firstChangedLine: diff.firstChangedLine,
+            reads: { [filePath]: snapshot },
           } satisfies FileToolDetails,
         };
       });

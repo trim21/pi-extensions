@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { bwrapRuntime } from "../src/bwrap/runtime.js";
+import { deserializeReads } from "../src/claude-code/common.js";
 import { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
 import { sortFilesByMtime, summarizeCountOutput } from "../src/claude-code/grep.js";
 import claudeCodeTools from "../src/claude-code/index.js";
@@ -40,6 +41,25 @@ function loadTools(): Map<string, RegisteredTool> {
     exec: vi.fn(),
   } as never);
   return tools;
+}
+
+/** 同 loadTools，额外捕获事件 handler（如 session_start）供测试触发。 */
+function loadToolsWithHandlers(): {
+  tools: Map<string, RegisteredTool>;
+  handlers: Map<string, (...args: any[]) => unknown>;
+} {
+  const tools = new Map<string, RegisteredTool>();
+  const handlers = new Map<string, (...args: any[]) => unknown>();
+  claudeCodeTools({
+    registerTool(tool: RegisteredTool) {
+      tools.set(tool.name, tool);
+    },
+    registerFlag: vi.fn(),
+    registerCommand: vi.fn(),
+    on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+    exec: vi.fn(),
+  } as never);
+  return { tools, handlers };
 }
 
 function context(cwd: string, overrides: Record<string, unknown> = {}) {
@@ -189,6 +209,78 @@ describe("Read, Edit, and Write", () => {
     const tools = loadTools();
     await call(tools.get("Write")!, { file_path: filePath, content: "new\n" }, context(directory));
     expect(await readFile(filePath, "utf8")).toBe("new\n");
+  });
+});
+
+describe("reads state restore on session_start", () => {
+  it("deserializes reads snapshots and rejects malformed entries", () => {
+    expect(
+      deserializeReads({
+        "/a.txt": { digest: "abc", textEditable: true },
+        "/bad.txt": { digest: "x" },
+        "/arr.txt": [{ digest: "y", textEditable: true }],
+      }),
+    ).toEqual(new Map([["/a.txt", { digest: "abc", textEditable: true }]]));
+    expect(deserializeReads(null)).toEqual(new Map());
+    expect(deserializeReads([{ digest: "x", textEditable: true }])).toEqual(new Map());
+    expect(deserializeReads(undefined)).toEqual(new Map());
+  });
+
+  it("lets Edit proceed after restoring a prior Read from session history", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-restore-ok-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "hello world\n", "utf8");
+    const { tools, handlers } = loadToolsWithHandlers();
+    const ctx = context(directory);
+
+    // 模拟历史会话：之前 Read 过，快照保存在 toolResult details 里
+    const readResult = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    const branch = [
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "Read",
+          details: { reads: readResult.details.reads },
+        },
+      },
+    ];
+    await handlers.get("session_start")!({}, { sessionManager: { getBranch: () => branch } });
+
+    // 新进程没有重新 Read，直接 Edit 应成功
+    await call(
+      tools.get("Edit")!,
+      { file_path: filePath, old_string: "world", new_string: "there" },
+      ctx,
+    );
+    expect(await readFile(filePath, "utf8")).toBe("hello there\n");
+  });
+
+  it("still requires a fresh Read when the file changed while the process was gone", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-restore-stale-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "first\n", "utf8");
+    const { tools, handlers } = loadToolsWithHandlers();
+    const ctx = context(directory);
+
+    const readResult = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    const branch = [
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "Read",
+          details: { reads: readResult.details.reads },
+        },
+      },
+    ];
+    await handlers.get("session_start")!({}, { sessionManager: { getBranch: () => branch } });
+
+    // 进程退出期间文件被外部修改
+    await writeFile(filePath, "externally changed and longer\n", "utf8");
+    await expect(
+      call(tools.get("Write")!, { file_path: filePath, content: "overwrite\n" }, ctx),
+    ).rejects.toThrow(/modified since read/);
   });
 });
 
@@ -371,9 +463,63 @@ describe("TodoWrite and AskUserQuestion", () => {
       ctx,
     );
     expect(ctx.ui.setWidget).toHaveBeenCalledWith("claude-code-todos", [
+      "Progress: 0/2 (0%)",
       "- [>] Running tests",
       "- [ ] Build",
     ]);
+  });
+
+  it("re-renders the widget from the last TodoWrite on session_start", async () => {
+    const { handlers } = loadToolsWithHandlers();
+    const setWidget = vi.fn();
+    const branch = [
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "TodoWrite",
+          details: {
+            todos: [
+              { content: "Run tests", status: "in_progress", activeForm: "Running tests" },
+              { content: "Build", status: "pending", activeForm: "Building" },
+            ],
+          },
+        },
+      },
+    ];
+    await handlers.get("session_start")!(
+      {},
+      { sessionManager: { getBranch: () => branch }, ui: { setWidget } },
+    );
+
+    expect(setWidget).toHaveBeenCalledWith("claude-code-todos", [
+      "Progress: 0/2 (0%)",
+      "- [>] Running tests",
+      "- [ ] Build",
+    ]);
+  });
+
+  it("skips a corrupt todo payload when restoring the widget", async () => {
+    const { handlers } = loadToolsWithHandlers();
+    const setWidget = vi.fn();
+    const branch = [
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "TodoWrite",
+          details: {
+            todos: [{ content: "Run tests", status: "bogus", activeForm: "Running tests" }],
+          },
+        },
+      },
+    ];
+    await handlers.get("session_start")!(
+      {},
+      { sessionManager: { getBranch: () => branch }, ui: { setWidget } },
+    );
+
+    expect(setWidget).not.toHaveBeenCalled();
   });
 
   it("asks a single-choice question and returns the answer", async () => {

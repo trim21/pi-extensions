@@ -1,6 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 
 import { selectWithOptionalInput } from "../lib/ui.js";
 
@@ -102,22 +103,33 @@ async function askMultiple(
 }
 
 export function registerSessionTools(pi: ExtensionAPI): void {
-  const todoSchema = Type.Object(
+  const todoItemSchema = Type.Object(
     {
-      todos: Type.Array(
-        Type.Object(
-          {
-            content: Type.String({ minLength: 1 }),
-            status: StringEnum(TODO_STATUSES),
-            activeForm: Type.String({ minLength: 1 }),
-          },
-          { additionalProperties: false },
-        ),
-        { description: "The updated todo list" },
-      ),
+      content: Type.String({ minLength: 1 }),
+      status: StringEnum(TODO_STATUSES),
+      activeForm: Type.String({ minLength: 1 }),
     },
     { additionalProperties: false },
   );
+  const todoSchema = Type.Object(
+    {
+      todos: Type.Array(todoItemSchema, { description: "The updated todo list" }),
+    },
+    { additionalProperties: false },
+  );
+
+  // TodoWrite 的列表随工具结果 details 持久化（跟随会话分支），但 widget 是
+  // 纯 TUI 状态，进程重启后丢失。session 恢复时从当前分支取最后一个 TodoWrite
+  // 的列表重新渲染（完整列表替换语义，后出现的覆盖前面的）。
+  pi.on("session_start", (_event, ctx) => {
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
+      if (entry.message.toolName !== "TodoWrite") continue;
+      if (Value.Check(todoSchema, entry.message.details)) {
+        ctx.ui.setWidget("claude-code-todos", formatTodos(entry.message.details.todos));
+      }
+    }
+  });
 
   pi.registerTool({
     name: "TodoWrite",
