@@ -30,10 +30,10 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: "lts/*"
           cache: pnpm
 
-      # npm >= 11 is required for OIDC trusted publishing (node 22 ships npm 10)
+      # npm >= 11 is required for OIDC trusted publishing
       - run: npm install -g npm@latest
 
       - run: pnpm install --frozen-lockfile

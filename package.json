@@ -79,6 +79,9 @@
     ]
   },
   "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=24"
+  },
   "dependencies": {
     "web-tree-sitter": "^0.26.12"
   }
