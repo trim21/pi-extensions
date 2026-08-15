@@ -27,9 +27,11 @@ jobs:
 
       # bwrap.test.ts imports src/bwrap which resolves the bwrap binary at
       # module load time; bubblewrap is not preinstalled on ubuntu-latest.
-      # Cache the apt package to avoid re-downloading on every run.
+      # The claude-code Glob tool and its tests spawn `rg` directly, which is
+      # also not preinstalled on ubuntu-latest.
+      # Cache the apt packages to avoid re-downloading on every run.
       - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
-          packages: bubblewrap
+          packages: bubblewrap ripgrep
 
       - run: pnpm test
