@@ -1,9 +1,10 @@
 import type {
+  AgentToolUpdateCallback,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { createBashTool } from "@earendil-works/pi-coding-agent";
+import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 import { type TObject, Type } from "typebox";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
@@ -39,8 +40,17 @@ export interface BwrapExecutionRequest {
   requestFullAccess?: boolean;
   requestFullAccessReason?: string;
   signal?: AbortSignal;
-  onUpdate?: Parameters<ReturnType<typeof createBashTool>["execute"]>[3];
+  onUpdate?: AgentToolUpdateCallback;
   ctx: ExtensionContext;
+}
+
+/**
+ * 底层执行结果：完整退出码 + 完整输出（stdout/stderr 合并，未截断）。
+ * 退出码语义（grep exit 1 等）由上层 Bash 工具解释，这里不做成败判定。
+ */
+export interface BwrapExecutionResult {
+  exitCode: number | null;
+  output: string;
 }
 
 function escapeHtml(text: string): string {
@@ -55,6 +65,46 @@ function fenceCodeBlock(code: string): string {
   const longestRun = Math.max(...(code.match(/`+/g)?.map((match) => match.length) ?? [0]));
   const fence = "`".repeat(Math.max(3, longestRun + 1));
   return `${fence}\n${code}\n${fence}`;
+}
+
+/** 进度推送的节流间隔（对齐 pi 内置 bash 工具的 100ms）。 */
+const BASH_UPDATE_THROTTLE_MS = 100;
+/** 进度快照只保留尾部内容，避免大输出每 100ms 全量推给 TUI。 */
+const BASH_UPDATE_TAIL_BYTES = 64 * 1024;
+
+/**
+ * 合并 stdout/stderr 的流式输出累积器。
+ * 内存中保留全部输出供最终结果使用；进度快照只取尾部。
+ */
+class BashOutput {
+  private chunks: Buffer[] = [];
+  private totalBytes = 0;
+
+  append(data: Buffer): void {
+    this.chunks.push(data);
+    this.totalBytes += data.length;
+  }
+
+  toString(): string {
+    return Buffer.concat(this.chunks, this.totalBytes).toString("utf8");
+  }
+
+  /** 尾部快照（用于流式进度显示）。 */
+  tailSnapshot(): string {
+    let remaining = BASH_UPDATE_TAIL_BYTES;
+    const tail: Buffer[] = [];
+    for (let i = this.chunks.length - 1; i >= 0 && remaining > 0; i--) {
+      const chunk = this.chunks[i];
+      if (chunk.length <= remaining) {
+        tail.unshift(chunk);
+        remaining -= chunk.length;
+      } else {
+        tail.unshift(chunk.subarray(chunk.length - remaining));
+        remaining = 0;
+      }
+    }
+    return Buffer.concat(tail).toString("utf8");
+  }
 }
 
 function notifyMode(
@@ -143,7 +193,7 @@ export class BwrapRuntime {
     this.bwrapUnavailable = false;
   }
 
-  async execute(request: BwrapExecutionRequest) {
+  async execute(request: BwrapExecutionRequest): Promise<BwrapExecutionResult> {
     const runtime = this.resolve(request.ctx);
     if (this.bwrapUnavailable && runtime.bwrapEnabled && request.requestFullAccess !== true) {
       throw new Error(
@@ -154,16 +204,70 @@ export class BwrapRuntime {
     if (request.requestFullAccess === true && runtime.bwrapEnabled) {
       await this.approveFullAccess(request.ctx, request.command, request.requestFullAccessReason);
     }
-    const bash =
+    const operations =
       runtime.bwrapEnabled && request.requestFullAccess !== true
-        ? createBashTool(request.ctx.cwd, { operations: createBwrapBashOperations(runtime) })
-        : createBashTool(request.ctx.cwd);
-    return bash.execute(
-      request.toolCallId,
-      { command: request.command, timeout: request.timeout },
-      request.signal,
-      request.onUpdate,
-    );
+        ? createBwrapBashOperations(runtime)
+        : createLocalBashOperations();
+    const output = new BashOutput();
+    const { onUpdate } = request;
+
+    // 流式进度：节流推送尾部快照（对齐 pi 内置 bash 的实时输出体验）
+    let updateTimer: ReturnType<typeof setTimeout> | undefined;
+    let dirty = false;
+    let lastUpdateAt = 0;
+    const emitUpdate = () => {
+      if (!onUpdate || !dirty) return;
+      dirty = false;
+      lastUpdateAt = Date.now();
+      onUpdate({
+        content: [{ type: "text", text: output.tailSnapshot() }],
+        details: undefined,
+      });
+    };
+    const scheduleUpdate = () => {
+      if (!onUpdate) return;
+      dirty = true;
+      const delay = BASH_UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
+      if (delay <= 0) {
+        if (updateTimer) clearTimeout(updateTimer);
+        updateTimer = undefined;
+        emitUpdate();
+        return;
+      }
+      if (updateTimer) return;
+      updateTimer = setTimeout(() => {
+        updateTimer = undefined;
+        emitUpdate();
+      }, delay);
+    };
+
+    try {
+      if (onUpdate) onUpdate({ content: [], details: undefined });
+      const { exitCode } = await operations.exec(request.command, request.ctx.cwd, {
+        onData: (data) => {
+          output.append(data);
+          scheduleUpdate();
+        },
+        signal: request.signal,
+        timeout: request.timeout,
+      });
+      return { exitCode, output: output.toString() };
+    } catch (error) {
+      // 底层统一把超时/中断转成可读文案（对齐 pi 内置 bash 工具）
+      if (error instanceof Error && error.message.startsWith("timeout:")) {
+        throw new Error(
+          `Command timed out after ${error.message.slice("timeout:".length)} seconds`,
+          { cause: error },
+        );
+      }
+      if (error instanceof Error && error.message === "aborted") {
+        throw new Error("Command aborted", { cause: error });
+      }
+      throw error;
+    } finally {
+      if (updateTimer) clearTimeout(updateTimer);
+      if (onUpdate && dirty) emitUpdate();
+    }
   }
 
   private resolve(ctx: Pick<ExtensionContext, "cwd" | "hasUI">): ResolvedBwrap {

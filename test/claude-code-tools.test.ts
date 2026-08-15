@@ -844,6 +844,37 @@ describe("Bash", () => {
       ),
     ).rejects.toThrow(/20 milliseconds/);
   });
+
+  it("fails any non-zero exit with Exit code N, without command semantics", async () => {
+    // grep 无匹配（exit 1）在 CC 里是"正常"，但我们不做语义化特判，一律报错
+    await expect(
+      call(
+        bashTool,
+        { command: "grep definitely-not-present /dev/null", timeout: 5_000 },
+        context(process.cwd()),
+      ),
+    ).rejects.toThrow(/^Exit code 1$/);
+  });
+
+  it("includes the full output for failed commands", async () => {
+    await expect(
+      call(
+        bashTool,
+        { command: "sh -c 'echo boom; exit 4'", timeout: 5_000 },
+        context(process.cwd()),
+      ),
+    ).rejects.toThrow(/^Exit code 4\nboom\n$/);
+  });
+
+  it("reports the exit code of the last command in a pipeline", async () => {
+    await expect(
+      call(
+        bashTool,
+        { command: "printf x | rg definitely-not-present", timeout: 5_000 },
+        context(process.cwd()),
+      ),
+    ).rejects.toThrow(/^Exit code 1$/);
+  });
 });
 
 describe("TodoWrite and AskUserQuestion", () => {

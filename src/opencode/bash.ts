@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { createBwrapRuntime } from "../bwrap/runtime.js";
+import { type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
+import { formatBashSuccess } from "../claude-code/shell.js";
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -54,8 +55,9 @@ export default function opencodeBash(pi: ExtensionAPI): void {
 
       const cwd = params.workdir ? await resolveWorkdir(params.workdir, ctx.cwd) : ctx.cwd;
 
+      let result: Awaited<ReturnType<BwrapRuntime["execute"]>>;
       try {
-        return await runtime.execute({
+        result = await runtime.execute({
           ctx: { ...ctx, cwd },
           toolCallId: id,
           command: params.command,
@@ -74,6 +76,15 @@ export default function opencodeBash(pi: ExtensionAPI): void {
           : error.message;
         throw new Error(message, { cause: error });
       }
+
+      // 任何非 0 退出码都视为失败（不做命令语义化特判）
+      if (result.exitCode !== 0 && result.exitCode !== null) {
+        const status = `Command exited with code ${result.exitCode}`;
+        throw new Error(result.output ? `${result.output}\n\n${status}` : status, {
+          cause: result,
+        });
+      }
+      return formatBashSuccess(result.output);
     },
   });
 }

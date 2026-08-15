@@ -73,7 +73,7 @@ describe("BwrapRuntime", () => {
         command: "printf runtime",
         ctx: { cwd: process.cwd(), hasUI: true } as never,
       });
-      expect(result.content[0]).toMatchObject({ type: "text", text: "runtime" });
+      expect(result).toEqual({ exitCode: 0, output: "runtime" });
     });
   });
 
@@ -85,7 +85,18 @@ describe("BwrapRuntime", () => {
       command: "printf runtime",
       ctx: { cwd: process.cwd(), hasUI: true } as never,
     });
-    expect(result.content[0]).toMatchObject({ type: "text", text: "runtime" });
+    expect(result).toEqual({ exitCode: 0, output: "runtime" });
+  });
+
+  it("returns the full result for non-zero exit codes instead of throwing", async () => {
+    const { runtime } = setupRuntime();
+    runtime.setMode(process.cwd(), "allow-all");
+    const result = await runtime.execute({
+      toolCallId: "test",
+      command: "sh -c 'printf oops; exit 3'",
+      ctx: { cwd: process.cwd(), hasUI: true } as never,
+    });
+    expect(result).toEqual({ exitCode: 3, output: "oops" });
   });
 
   it("rejects full-access requests before execution without a UI", async () => {
@@ -112,7 +123,7 @@ describe("BwrapRuntime", () => {
         requestFullAccess: true,
         ctx: fullAccessContext({ select, input: vi.fn() }, abort),
       });
-      expect(result.content[0]).toMatchObject({ type: "text", text: "approved" });
+      expect(result).toEqual({ exitCode: 0, output: "approved" });
       expect(abort).not.toHaveBeenCalled();
     });
 
