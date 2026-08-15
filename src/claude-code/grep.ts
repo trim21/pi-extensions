@@ -15,13 +15,11 @@ import { fileURLToPath } from "node:url";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 
 import { searchRoot, suggestPathUnderCwd, throwIfAborted, toRelativePath } from "./common.js";
 
 const GREP_OUTPUT_MODES = ["content", "files_with_matches", "count"] as const;
-
-type GrepOutputMode = (typeof GREP_OUTPUT_MODES)[number];
 
 /** Tool guidance, kept in markdown so it reads like documentation. */
 const GREP_PROMPT = readFileSync(fileURLToPath(new URL("grep.md", import.meta.url)), "utf8").trim();
@@ -41,22 +39,49 @@ function truncateOutput(output: string, maxCharacters = 30_000): string {
   return `${output.slice(0, maxCharacters)}\n\n[Output truncated at ${maxCharacters} characters]`;
 }
 
-interface GrepParameters {
-  pattern: string;
-  path?: string;
-  glob?: string;
-  output_mode?: GrepOutputMode;
-  "-B"?: number;
-  "-A"?: number;
-  "-C"?: number;
-  context?: number;
-  "-n"?: boolean;
-  "-i"?: boolean;
-  type?: string;
-  head_limit?: number;
-  offset?: number;
-  multiline?: boolean;
-}
+const grepParametersSchema = Type.Object(
+  {
+    pattern: Type.String({ description: "The regular expression pattern to search for" }),
+    path: Type.Optional(
+      Type.String({
+        description: "File or directory to search. Defaults to the current directory.",
+      }),
+    ),
+    glob: Type.Optional(Type.String({ description: 'Glob filter such as "*.js" or "*.{ts,tsx}"' })),
+    output_mode: Type.Optional(
+      StringEnum(GREP_OUTPUT_MODES, {
+        description: "Output mode. Defaults to files_with_matches.",
+      }),
+    ),
+    "-B": Type.Optional(
+      Type.Number({ description: "Lines to show before each match in content mode" }),
+    ),
+    "-A": Type.Optional(
+      Type.Number({ description: "Lines to show after each match in content mode" }),
+    ),
+    "-C": Type.Optional(Type.Number({ description: "Lines to show before and after each match" })),
+    context: Type.Optional(
+      Type.Number({ description: "Lines to show before and after each match" }),
+    ),
+    "-n": Type.Optional(
+      Type.Boolean({ description: "Show line numbers in content mode; defaults true" }),
+    ),
+    "-i": Type.Optional(Type.Boolean({ description: "Case-insensitive search" })),
+    type: Type.Optional(
+      Type.String({ description: "ripgrep file type such as js, py, rust, or go" }),
+    ),
+    head_limit: Type.Optional(
+      Type.Number({ description: "Limit output to the first N entries after offset" }),
+    ),
+    offset: Type.Optional(Type.Number({ description: "Skip the first N output entries" })),
+    multiline: Type.Optional(
+      Type.Boolean({ description: "Allow patterns to span multiple lines" }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+type GrepParameters = Static<typeof grepParametersSchema>;
 
 export function buildGrepArguments(params: GrepParameters, cwd: string): string[] {
   const mode = params.output_mode ?? "files_with_matches";
@@ -217,51 +242,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
     ].join("\n"),
     promptSnippet: "Search file contents with regular expressions",
     promptGuidelines: [`- -\n${GREP_PROMPT}`],
-    parameters: Type.Object(
-      {
-        pattern: Type.String({ description: "The regular expression pattern to search for" }),
-        path: Type.Optional(
-          Type.String({
-            description: "File or directory to search. Defaults to the current directory.",
-          }),
-        ),
-        glob: Type.Optional(
-          Type.String({ description: 'Glob filter such as "*.js" or "*.{ts,tsx}"' }),
-        ),
-        output_mode: Type.Optional(
-          StringEnum(GREP_OUTPUT_MODES, {
-            description: "Output mode. Defaults to files_with_matches.",
-          }),
-        ),
-        "-B": Type.Optional(
-          Type.Number({ description: "Lines to show before each match in content mode" }),
-        ),
-        "-A": Type.Optional(
-          Type.Number({ description: "Lines to show after each match in content mode" }),
-        ),
-        "-C": Type.Optional(
-          Type.Number({ description: "Lines to show before and after each match" }),
-        ),
-        context: Type.Optional(
-          Type.Number({ description: "Lines to show before and after each match" }),
-        ),
-        "-n": Type.Optional(
-          Type.Boolean({ description: "Show line numbers in content mode; defaults true" }),
-        ),
-        "-i": Type.Optional(Type.Boolean({ description: "Case-insensitive search" })),
-        type: Type.Optional(
-          Type.String({ description: "ripgrep file type such as js, py, rust, or go" }),
-        ),
-        head_limit: Type.Optional(
-          Type.Number({ description: "Limit output to the first N entries after offset" }),
-        ),
-        offset: Type.Optional(Type.Number({ description: "Skip the first N output entries" })),
-        multiline: Type.Optional(
-          Type.Boolean({ description: "Allow patterns to span multiple lines" }),
-        ),
-      },
-      { additionalProperties: false },
-    ),
+    parameters: grepParametersSchema,
     async execute(_id, params, signal, _onUpdate, ctx) {
       if (
         params.offset !== undefined &&

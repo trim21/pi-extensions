@@ -12,18 +12,15 @@ import {
   sep,
 } from "node:path";
 
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
-
-export interface FileSnapshot {
-  digest: string;
-  textEditable: boolean;
-}
 
 const fileSnapshotSchema = Type.Object({
   digest: Type.String(),
   textEditable: Type.Boolean(),
 });
+
+export type FileSnapshot = Static<typeof fileSnapshotSchema>;
 
 export interface ClaudeCodeState {
   readonly reads: Map<string, FileSnapshot>;

@@ -24,7 +24,7 @@
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 
 import { type ToolPendant } from "../lib/pendant.js";
 
@@ -74,19 +74,6 @@ export const TODOWRITE_DESCRIPTION = [
   "- Items should be specific and actionable; break large work into smaller steps",
 ].join("\n");
 
-// ── types ────────────────────────────────────────────────────────────────────
-
-export interface TodoInfo {
-  content: string;
-  status: TodoStatus;
-  priority: TodoPriority;
-}
-
-export interface TodoDetails {
-  todos: TodoInfo[];
-  pendant?: ToolPendant;
-}
-
 // ── schema（与 opencode 的 Parameters 一致）──────────────────────────────────
 
 const todoInfoSchema = Type.Object({
@@ -102,6 +89,15 @@ const todoInfoSchema = Type.Object({
 export const todowriteSchema = Type.Object({
   todos: Type.Array(todoInfoSchema, { description: "The updated todo list" }),
 });
+
+// ── types ────────────────────────────────────────────────────────────────────
+
+export type TodoInfo = Static<typeof todoInfoSchema>;
+
+export interface TodoDetails {
+  todos: TodoInfo[];
+  pendant?: ToolPendant;
+}
 
 // ── 纯函数（可测试）──────────────────────────────────────────────────────────
 

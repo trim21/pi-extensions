@@ -21,7 +21,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 
 import { selectWithOptionalInput } from "../lib/ui.js";
 
@@ -47,34 +47,6 @@ export const QUESTION_DESCRIPTION = [
   '- If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label',
 ].join("\n");
 
-// ── types ────────────────────────────────────────────────────────────────────
-
-export interface QuestionOption {
-  label: string;
-  description: string;
-}
-
-/** 与 schema 对齐的输入形状（multiple 可选） */
-export interface QuestionInput {
-  question: string;
-  header: string;
-  options: QuestionOption[];
-  multiple?: boolean;
-}
-
-/** 规整后的问题（multiple 已默认化为 boolean） */
-export interface Question extends Omit<QuestionInput, "multiple"> {
-  multiple: boolean;
-}
-
-/** 每个问题的答案：选中的 label 数组（自定义输入就是单元素的 [text]） */
-export type Answer = string[];
-
-export interface QuestionDetails {
-  questions: Question[];
-  answers: Answer[];
-}
-
 // ── schema（与 opencode 的 Question.Prompt 一致）──────────────────────────────
 
 const optionSchema = Type.Object({
@@ -92,6 +64,26 @@ const questionSchema = Type.Object({
 export const questionParamsSchema = Type.Object({
   questions: Type.Array(questionSchema, { description: "Questions to ask" }),
 });
+
+// ── types ────────────────────────────────────────────────────────────────────
+
+export type QuestionOption = Static<typeof optionSchema>;
+
+/** 与 schema 对齐的输入形状（multiple 可选） */
+export type QuestionInput = Static<typeof questionSchema>;
+
+/** 规整后的问题（multiple 已默认化为 boolean） */
+export interface Question extends Omit<QuestionInput, "multiple"> {
+  multiple: boolean;
+}
+
+/** 每个问题的答案：选中的 label 数组（自定义输入就是单元素的 [text]） */
+export type Answer = string[];
+
+export interface QuestionDetails {
+  questions: Question[];
+  answers: Answer[];
+}
 
 // ── 纯函数（可测试）──────────────────────────────────────────────────────────
 

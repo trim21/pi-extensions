@@ -1,6 +1,6 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { selectWithOptionalInput } from "../lib/ui.js";
@@ -18,23 +18,48 @@ const ASK_PROMPT = [
 
 type TodoStatus = (typeof TODO_STATUSES)[number];
 
-export interface ClaudeCodeTodo {
-  content: string;
-  status: TodoStatus;
-  activeForm: string;
-}
+const todoItemSchema = Type.Object(
+  {
+    content: Type.String({ minLength: 1 }),
+    status: StringEnum(TODO_STATUSES),
+    activeForm: Type.String({ minLength: 1 }),
+  },
+  { additionalProperties: false },
+);
+const todoSchema = Type.Object(
+  {
+    todos: Type.Array(todoItemSchema, { description: "The updated todo list" }),
+  },
+  { additionalProperties: false },
+);
 
-interface QuestionOption {
-  label: string;
-  description: string;
-}
+export type ClaudeCodeTodo = Static<typeof todoItemSchema>;
 
-interface QuestionInput {
-  question: string;
-  header: string;
-  options: QuestionOption[];
-  multiSelect: boolean;
-}
+const optionSchema = Type.Object(
+  {
+    label: Type.String({ description: "Concise display text for the option" }),
+    description: Type.String({ description: "Explanation of the option" }),
+  },
+  { additionalProperties: false },
+);
+const questionSchema = Type.Object(
+  {
+    question: Type.String({ description: "The complete question to ask" }),
+    header: Type.String({ description: "Very short label displayed with the question" }),
+    options: Type.Array(optionSchema, {
+      minItems: 2,
+      maxItems: 4,
+      description: "The available choices; do not include an Other option",
+    }),
+    multiSelect: Type.Boolean({
+      default: false,
+      description: "Allow the user to select multiple options",
+    }),
+  },
+  { additionalProperties: false },
+);
+
+type QuestionInput = Static<typeof questionSchema>;
 
 function formatTodos(todos: readonly ClaudeCodeTodo[]): string[] | undefined {
   if (todos.length === 0) return undefined;
@@ -103,21 +128,6 @@ async function askMultiple(
 }
 
 export function registerSessionTools(pi: ExtensionAPI): void {
-  const todoItemSchema = Type.Object(
-    {
-      content: Type.String({ minLength: 1 }),
-      status: StringEnum(TODO_STATUSES),
-      activeForm: Type.String({ minLength: 1 }),
-    },
-    { additionalProperties: false },
-  );
-  const todoSchema = Type.Object(
-    {
-      todos: Type.Array(todoItemSchema, { description: "The updated todo list" }),
-    },
-    { additionalProperties: false },
-  );
-
   // TodoWrite 的列表随工具结果 details 持久化（跟随会话分支），但 widget 是
   // 纯 TUI 状态，进程重启后丢失。session 恢复时从当前分支取最后一个 TodoWrite
   // 的列表重新渲染（完整列表替换语义，后出现的覆盖前面的）。
@@ -166,30 +176,6 @@ export function registerSessionTools(pi: ExtensionAPI): void {
       });
     },
   });
-
-  const optionSchema = Type.Object(
-    {
-      label: Type.String({ description: "Concise display text for the option" }),
-      description: Type.String({ description: "Explanation of the option" }),
-    },
-    { additionalProperties: false },
-  );
-  const questionSchema = Type.Object(
-    {
-      question: Type.String({ description: "The complete question to ask" }),
-      header: Type.String({ description: "Very short label displayed with the question" }),
-      options: Type.Array(optionSchema, {
-        minItems: 2,
-        maxItems: 4,
-        description: "The available choices; do not include an Other option",
-      }),
-      multiSelect: Type.Boolean({
-        default: false,
-        description: "Allow the user to select multiple options",
-      }),
-    },
-    { additionalProperties: false },
-  );
 
   pi.registerTool({
     name: "AskUserQuestion",
