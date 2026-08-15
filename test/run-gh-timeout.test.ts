@@ -104,3 +104,35 @@ describe("ghExec timeout", () => {
     expect((err as GhError).code).toBe(-1);
   });
 });
+
+describe("runGh spawn failure", () => {
+  it("captures the underlying spawn error (e.g. gh not found)", async () => {
+    const err = new Error("spawn gh ENOENT");
+    const promise = runGh(["issue", "view", "1057"], {});
+    fakeProc.emit("error", err);
+    const result = await promise;
+    expect(result.spawnError).toBe("spawn gh ENOENT");
+    expect(result.code).toBe(1);
+    expect(result.combined).toBe("");
+  });
+
+  it("surfaces the spawn error in GhError instead of a bare exit code", async () => {
+    const err = new Error("spawn gh ENOENT");
+    const promise = ghExec(["issue", "view", "1057"], {
+      input: { number: 1057, repo: "bangumi/frontend" },
+    });
+    fakeProc.emit("error", err);
+    const ghErr = await promise.catch((error: unknown) => error);
+    expect(ghErr).toBeInstanceOf(GhError);
+    expect((ghErr as GhError).message).toContain("spawn failed: spawn gh ENOENT");
+    expect((ghErr as GhError).message).not.toContain("exit code 1");
+  });
+
+  it("marks a non-zero exit with no output as (no output)", async () => {
+    const promise = ghExec(["issue", "view", "1057"], {});
+    fakeProc.exit(1);
+    const ghErr = await promise.catch((error: unknown) => error);
+    expect(ghErr).toBeInstanceOf(GhError);
+    expect((ghErr as GhError).message).toContain("exit code 1 (no output)");
+  });
+});

@@ -46,6 +46,8 @@ interface GhResult {
   combined: string;
   /** Why the process was killed, when `killed` is true. */
   reason?: "timeout" | "abort";
+  /** When the process could not be started at all (e.g. `gh` not found in PATH). */
+  spawnError?: string;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -131,12 +133,22 @@ export function runGh(
       });
     });
 
-    proc.on("error", () => {
+    proc.on("error", (err: Error) => {
       if (timeoutId) clearTimeout(timeoutId);
       if (onAbort && ctx.signal) {
         ctx.signal.removeEventListener("abort", onAbort);
       }
-      resolve({ stdout, stderr, code: 1, killed, combined: combined.join(""), reason: killReason });
+      // spawn 失败（如 gh 不在 PATH → ENOENT、cwd 不存在）时进程从未启动，
+      // 没有任何 stdout/stderr；把底层错误带上，否则会退化成无信息的 "exit code 1"。
+      resolve({
+        stdout,
+        stderr,
+        code: 1,
+        killed,
+        combined: combined.join(""),
+        reason: killReason,
+        spawnError: err.message,
+      });
     });
   });
 }
@@ -162,9 +174,21 @@ export class GhError extends Error {
           ? " (command aborted)"
           : ""
       : "";
-    super(
-      `${inputText}<output>${result.combined.trim() || `exit code ${result.code}`}${killedText}<output>`,
-    );
+
+    // The process never started (e.g. `gh` not found): surface the spawn error.
+    // Otherwise show the command's own output; an empty output with a non-zero
+    // exit is explicitly marked, so a bare "exit code 1" can't be mistaken for
+    // a specific failure.
+    let outputText: string;
+    if (result.spawnError) {
+      outputText = `spawn failed: ${result.spawnError}`;
+    } else if (result.combined.trim()) {
+      outputText = result.combined.trim();
+    } else {
+      outputText = `exit code ${result.code} (no output)`;
+    }
+
+    super(`${inputText}<output>${outputText}${killedText}<output>`);
     this.name = "GhError";
     this.args = args;
     this.code = result.code;
