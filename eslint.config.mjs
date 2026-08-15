@@ -2,7 +2,7 @@ import eslint from "@eslint/js";
 import { defineConfig } from "eslint/config";
 import eslintConfigPrettier from "eslint-config-prettier";
 import erasableSyntaxOnly from "eslint-plugin-erasable-syntax-only";
-import { importX } from 'eslint-plugin-import-x'
+import { importX } from "eslint-plugin-import-x";
 import pluginPromise from "eslint-plugin-promise";
 import simpleImportSort from "eslint-plugin-simple-import-sort";
 import eslintPluginUnicorn from "eslint-plugin-unicorn";
@@ -58,12 +58,12 @@ export default defineConfig(
     plugins: {
       "simple-import-sort": simpleImportSort,
       "unused-imports": unusedImports,
-      'import-x': importX,
+      "import-x": importX,
     },
   },
   {
     rules: {
-      'import-x/no-duplicates': ['error', { "prefer-inline": true }],
+      "import-x/no-duplicates": ["error", { "prefer-inline": true }],
       "@typescript-eslint/restrict-template-expressions": "off",
       "unicorn/import-style": "off",
       "unused-imports/no-unused-imports": "error",
