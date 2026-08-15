@@ -5,6 +5,7 @@ on:
     branches: [master]
     paths:
       - "**/*.ts"
+      - "**/*.bpf"
       - .github/workflows/release.yaml
       - package.json
 
