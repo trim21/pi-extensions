@@ -45,12 +45,11 @@ interface BashParser {
 /**
  * 延迟初始化 tree-sitter bash parser（wasm 加载开销大，只做一次）。
  * Node 环境：主 wasm 由 web-tree-sitter 按自身路径自动加载，
- * bash grammar 的 wasm 从仓库内 vendor 的文件读入。
+ * bash grammar 的 wasm 从同目录文件读入。
  *
- * 本文件（tree-sitter-bash.wasm）来自 @vscode/tree-sitter-wasm
- * （devDependency，MIT）：用 `pnpm up @vscode/tree-sitter-wasm` 升级后，
- * 将 node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-bash.wasm
- * 覆盖回本文件即可。
+ * tree-sitter-bash.wasm 不提交进 git：`pnpm install` 后的 prepare
+ * 和发布前的 prepack 都会执行 `pnpm run copy`，从 devDependency
+ * @vscode/tree-sitter-wasm（MIT）复制到本目录。
  */
 function createParserLoader(): () => Promise<BashParser> {
   let parserPromise: Promise<BashParser> | undefined;

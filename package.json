@@ -23,7 +23,9 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "prepare": "husky"
+    "prepack": "pnpm run copy",
+    "copy": "cp node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-bash.wasm src/bwrap/tree-sitter-bash.wasm",
+    "prepare": "husky && pnpm run copy"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.84.1",
