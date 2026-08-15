@@ -29,9 +29,10 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
@@ -51,6 +52,22 @@ interface GhResult {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Check whether the `gh` CLI is on the system, scanning PATH like
+ * `findDefaultBwrap`. The extension registers no tools when `gh` is missing, so
+ * the model never sees GitHub tools that would fail on every call.
+ */
+export function isGhAvailable(): boolean {
+  const pathEnv = process.env.PATH ?? "";
+  for (const directory of pathEnv.split(delimiter)) {
+    if (existsSync(join(directory, "gh"))) return true;
+  }
+  for (const candidate of ["/usr/bin/gh", "/usr/local/bin/gh", "/run/current-system/sw/bin/gh"]) {
+    if (existsSync(candidate)) return true;
+  }
+  return false;
+}
 
 export function runGh(
   args: string[],
@@ -1082,6 +1099,19 @@ export async function writeLogFile(
 // ── tools ────────────────────────────────────────────────────────────────────
 
 export default function ghReadonlyTools(pi: ExtensionAPI) {
+  // Fail fast: the `gh` CLI is the only backend for these tools. Without it the
+  // extension registers nothing and reports the problem at session start, so
+  // the user gets one clear error instead of a dozen failing tool calls.
+  if (!isGhAvailable()) {
+    pi.on("session_start", (_event, ctx) => {
+      ctx.ui.notify(
+        "gh CLI not found in PATH: GitHub read-only tools are disabled. Install GitHub CLI (https://cli.github.com/) and reload the session.",
+        "error",
+      );
+    });
+    return;
+  }
+
   // ── read-github-issue ──────────────────────────────────────────────────────
   pi.registerTool({
     name: "read-github-issue",

@@ -7,8 +7,18 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { resolveBwrap, resolveHeadlessBwrap } from "../src/bwrap/core.ts";
+import { findBwrap, resolveBwrap, resolveHeadlessBwrap } from "../src/bwrap/core.ts";
 import { resolveEscalation } from "../src/bwrap/runtime.ts";
+
+describe("findBwrap", () => {
+  it("throws when the configured bwrapPath does not exist", () => {
+    expect(() => findBwrap("/nonexistent/bwrap")).toThrow(/not found at configured path/);
+  });
+
+  it("returns an existing configured path", () => {
+    expect(findBwrap(process.execPath)).toBe(process.execPath);
+  });
+});
 
 describe("resolveBwrap", () => {
   it("resolves allow-net with sandbox on and network on", () => {

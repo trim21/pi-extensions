@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createBwrapRuntime } from "../src/bwrap/runtime.js";
+vi.mock("../src/bwrap/core.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/bwrap/core.js")>();
+  return {
+    ...actual,
+    findBwrap: () => {
+      throw new Error("bwrap (bubblewrap) not found in PATH");
+    },
+  };
+});
+
+import { type BwrapRuntime, createBwrapRuntime } from "../src/bwrap/runtime.js";
 
 function setupRuntime() {
   const runtime = createBwrapRuntime();
@@ -18,6 +28,16 @@ function fullAccessContext(ui: unknown, abort: () => void = vi.fn()) {
   return { cwd: process.cwd(), hasUI: true, signal: undefined, abort, ui } as never;
 }
 
+function startSession(runtime: BwrapRuntime, pi: { on: ReturnType<typeof vi.fn> }) {
+  const call = pi.on.mock.calls.find((c) => c[0] === "session_start");
+  const handler = call?.[1] as (
+    event: unknown,
+    ctx: { cwd: string; hasUI: boolean; ui: unknown },
+  ) => void;
+  const ui = { notify: vi.fn(), setStatus: vi.fn(), theme: { fg: (_c: string, t: string) => t } };
+  handler({}, { cwd: process.cwd(), hasUI: true, ui });
+}
+
 describe("BwrapRuntime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -29,6 +49,32 @@ describe("BwrapRuntime", () => {
     expect(pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
     expect(pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
     expect(pi.registerCommand).toHaveBeenCalledWith("bwrap-readonly", expect.any(Object));
+  });
+
+  describe("bwrap binary unavailable", () => {
+    it("refuses all commands instead of degrading to allow-all", async () => {
+      const { runtime, pi } = setupRuntime();
+      startSession(runtime, pi);
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "echo should-not-run",
+          ctx: { cwd: process.cwd(), hasUI: true } as never,
+        }),
+      ).rejects.toThrow(/refusing to execute commands without sandboxing/);
+    });
+
+    it("still runs commands after the user explicitly switches to allow-all", async () => {
+      const { runtime, pi } = setupRuntime();
+      startSession(runtime, pi);
+      runtime.setMode(process.cwd(), "allow-all");
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf runtime",
+        ctx: { cwd: process.cwd(), hasUI: true } as never,
+      });
+      expect(result.content[0]).toMatchObject({ type: "text", text: "runtime" });
+    });
   });
 
   it("executes through its selected allow-all policy", async () => {

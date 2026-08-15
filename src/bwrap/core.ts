@@ -167,7 +167,13 @@ function findDefaultBwrap(): string {
 }
 
 export function findBwrap(override?: string): string {
-  return override ?? findDefaultBwrap();
+  if (override) {
+    if (!existsSync(override)) {
+      throw new Error(`bwrap not found at configured path: ${override}`);
+    }
+    return override;
+  }
+  return findDefaultBwrap();
 }
 
 export function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): string[] {

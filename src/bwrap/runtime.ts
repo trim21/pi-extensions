@@ -73,6 +73,7 @@ function notifyMode(
 export class BwrapRuntime {
   private resolved: ResolvedBwrap | undefined;
   private sandboxDisabled = false;
+  private bwrapUnavailable = false;
 
   setup(pi: ExtensionAPI): void {
     pi.registerFlag("no-bwrap", {
@@ -84,13 +85,18 @@ export class BwrapRuntime {
     pi.on("session_start", (_event, ctx) => {
       this.sandboxDisabled = pi.getFlag("no-bwrap") === true && ctx.hasUI;
       this.resolved = undefined;
+      this.bwrapUnavailable = false;
       const runtime = this.resolve(ctx);
       if (runtime.bwrapEnabled) {
         try {
           findBwrap(runtime.bwrapPath);
         } catch (error) {
-          this.sandboxDisabled = true;
+          // Fail closed: a missing bwrap binary must not silently degrade to an
+          // unsandboxed allow-all session. Commands are refused until the user
+          // explicitly opts out via --no-bwrap or the bwrap-allow-all command.
+          this.bwrapUnavailable = true;
           this.resolved = undefined;
+          ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("error", "bwrap: unavailable"));
           ctx.ui.notify(error instanceof Error ? error.message : "bwrap not found", "error");
           return;
         }
@@ -110,10 +116,16 @@ export class BwrapRuntime {
 
     pi.on("before_agent_start", (event, ctx) => {
       const runtime = this.resolve(ctx);
-      const prompt = ctx.hasUI
-        ? `\n\n## Command Execution\nCurrent bwrap mode: **${runtime.mode}**. The bwrap runtime selects sandboxing and, when requested, user approval for unsandboxed execution.\n`
-        : "\n\n## Command Execution\nThis headless session is forced into bwrap readonly mode. Unsandboxed execution cannot be approved.\n";
-      return { systemPrompt: event.systemPrompt + prompt };
+      const modeText = ctx.hasUI
+        ? `Current bwrap mode: **${runtime.mode}**. The bwrap runtime selects sandboxing and, when requested, user approval for unsandboxed execution.`
+        : "This headless session is forced into bwrap readonly mode. Unsandboxed execution cannot be approved.";
+      const unavailableText = this.bwrapUnavailable
+        ? " bwrap is unavailable (binary not found): bash commands are refused unless the user explicitly approves unsandboxed execution."
+        : "";
+      return {
+        systemPrompt:
+          event.systemPrompt + `\n\n## Command Execution\n${modeText}${unavailableText}\n`,
+      };
     });
 
     this.registerCommands(pi);
@@ -128,10 +140,17 @@ export class BwrapRuntime {
   reset(): void {
     this.resolved = undefined;
     this.sandboxDisabled = false;
+    this.bwrapUnavailable = false;
   }
 
   async execute(request: BwrapExecutionRequest) {
     const runtime = this.resolve(request.ctx);
+    if (this.bwrapUnavailable && runtime.bwrapEnabled && request.requestFullAccess !== true) {
+      throw new Error(
+        "bwrap (bubblewrap) not found; refusing to execute commands without sandboxing. " +
+          "Install bubblewrap and restart the session, or pass --no-bwrap to disable the sandbox explicitly.",
+      );
+    }
     if (request.requestFullAccess === true && runtime.bwrapEnabled) {
       await this.approveFullAccess(request.ctx, request.command, request.requestFullAccessReason);
     }
@@ -229,6 +248,13 @@ export class BwrapRuntime {
       handler: (args, ctx) =>
         this.runCommand(pi, specs.bwrap, args, ctx, (commandCtx) => {
           const runtime = this.resolve(commandCtx);
+          if (this.bwrapUnavailable) {
+            commandCtx.ui.notify(
+              "bwrap is unavailable: binary not found. Commands are refused unless sandboxing is explicitly disabled.",
+              "error",
+            );
+            return;
+          }
           if (!runtime.bwrapEnabled) {
             commandCtx.ui.notify(`bwrap disabled (mode: ${runtime.mode})`, "info");
             return;
