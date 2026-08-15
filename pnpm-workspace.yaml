@@ -2,6 +2,5 @@ allowBuilds:
   "@google/genai": false
   esbuild: true
   protobufjs: false
-  tree-sitter-bash: true
 
 minimumReleaseAge: 0

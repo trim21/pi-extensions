@@ -11,11 +11,8 @@
  * - opencode packages/opencode/src/tool/shell.ts（tree-sitter 命令提取）
  */
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 import type { Node } from "web-tree-sitter";
-
-import { resolvePackageWasm } from "../lib/wasm.js";
 
 /** 解析后的单个命令：命令名 + 参数 + 原文 + 嵌套命令（命令替换里的）。 */
 export interface BashCommand {
@@ -48,7 +45,12 @@ interface BashParser {
 /**
  * 延迟初始化 tree-sitter bash parser（wasm 加载开销大，只做一次）。
  * Node 环境：主 wasm 由 web-tree-sitter 按自身路径自动加载，
- * bash grammar 的 wasm 显式读文件传入。
+ * bash grammar 的 wasm 从仓库内 vendor 的文件读入。
+ *
+ * 本文件（tree-sitter-bash.wasm）来自 @vscode/tree-sitter-wasm
+ * （devDependency，MIT）：用 `pnpm up @vscode/tree-sitter-wasm` 升级后，
+ * 将 node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-bash.wasm
+ * 覆盖回本文件即可。
  */
 function createParserLoader(): () => Promise<BashParser> {
   let parserPromise: Promise<BashParser> | undefined;
@@ -56,9 +58,7 @@ function createParserLoader(): () => Promise<BashParser> {
     parserPromise ??= (async () => {
       const { Language, Parser } = await import("web-tree-sitter");
       await Parser.init();
-      const bashWasm = readFileSync(
-        fileURLToPath(resolvePackageWasm("tree-sitter-bash", "tree-sitter-bash.wasm")),
-      );
+      const bashWasm = readFileSync(new URL("tree-sitter-bash.wasm", import.meta.url));
       const language = await Language.load(bashWasm);
       const parser = new Parser();
       parser.setLanguage(language);

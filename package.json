@@ -38,6 +38,7 @@
     "@types/node": "^24.13.3",
     "@typescript/native": "npm:typescript@^7.0.2",
     "@vitest/coverage-v8": "^4.1.10",
+    "@vscode/tree-sitter-wasm": "^0.3.1",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-erasable-syntax-only": "0.4.2",
@@ -79,7 +80,6 @@
   },
   "packageManager": "pnpm@11.22.0",
   "dependencies": {
-    "tree-sitter-bash": "^0.25.1",
     "web-tree-sitter": "^0.26.12"
   }
 }
