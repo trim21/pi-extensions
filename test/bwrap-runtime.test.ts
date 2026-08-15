@@ -14,6 +14,12 @@ vi.mock("../src/bwrap/core.js", async (importOriginal) => {
   };
 });
 
+const { dcgSuggestionMock } = vi.hoisted(() => ({ dcgSuggestionMock: vi.fn() }));
+
+vi.mock("../src/bwrap/dcg-scan.js", () => ({
+  dcgSuggestion: (...args: unknown[]) => dcgSuggestionMock(...args),
+}));
+
 import {
   ALLOW_FOREVER,
   ALLOW_ONCE,
@@ -57,6 +63,7 @@ function startSession(runtime: BwrapRuntime, pi: { on: ReturnType<typeof vi.fn> 
 describe("BwrapRuntime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    dcgSuggestionMock.mockReset();
   });
 
   it("registers flags, lifecycle handlers, and bwrap commands in setup", () => {
@@ -201,6 +208,43 @@ describe("BwrapRuntime", () => {
       });
       expect(result).toMatchObject({ exitCode: 0, output: "approved" });
       expect(abort).not.toHaveBeenCalled();
+    });
+
+    it("shows the dcg suggestion inside the approval dialog when available", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      dcgSuggestionMock.mockResolvedValue({ kind: "danger", text: "⚡ dcg 建议拦截: test" });
+      const select = vi.fn(async () => ALLOW_ONCE);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "rm -rf /tmp/x",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }),
+      });
+      expect(select).toHaveBeenCalledWith(
+        expect.stringContaining("⚡ dcg 建议拦截: test"),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(result).toMatchObject({ exitCode: 0 });
+    });
+
+    it("renders the dialog without a dcg block when no suggestion is available", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      // dcgSuggestionMock 默认返回 undefined（未安装/扫描失败）
+      const select = vi.fn(async () => ALLOW_ONCE);
+      await runtime.execute({
+        toolCallId: "test",
+        command: "printf ok",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }),
+      });
+      expect(select).toHaveBeenCalledWith(
+        expect.not.stringContaining("dcg"),
+        expect.anything(),
+        expect.anything(),
+      );
     });
 
     it("aborts and denies when the selection is dismissed", async () => {

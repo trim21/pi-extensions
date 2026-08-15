@@ -29,6 +29,7 @@ import {
   type ResolvedBwrap,
   resolveHeadlessBwrap,
 } from "./core.js";
+import { dcgSuggestion } from "./dcg-scan.js";
 
 export type EscalationDecision = { kind: "dialog" } | { kind: "deny"; reason: string };
 
@@ -388,7 +389,10 @@ export class BwrapRuntime {
   ): Promise<void> {
     const policy = resolveEscalation({ hasUI: ctx.hasUI });
     if (policy.kind === "deny") throw new Error(policy.reason);
-    const description = `Allow this command to run without sandbox?\n---\n\nReason: ${escapeHtml(reason ?? "(No reason provided by model)")}\n---\n${fenceCodeBlock(command)}`;
+    // dcg 扫描建议是可选的参考文本：未安装/失败时为 undefined，弹窗与无 dcg 时一致
+    const suggestion = await dcgSuggestion(command);
+    const suggestionBlock = suggestion ? `\n${suggestion.text}\n---\n` : "";
+    const description = `Allow this command to run without sandbox?\n---\n\nReason: ${escapeHtml(reason ?? "(No reason provided by model)")}\n---\n${suggestionBlock}${fenceCodeBlock(command)}`;
 
     // 单选：允许一次 / 永久允许（写入规则）/ 拒绝 / 拒绝并附理由（弹输入框）
     const verdict = await selectWithOptionalInput(description, FULL_ACCESS_CHOICES, ctx.ui, {
