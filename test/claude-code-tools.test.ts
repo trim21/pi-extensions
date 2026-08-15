@@ -10,6 +10,8 @@ beforeAll(() => {
   process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "cc-tools-agent-dir-"));
 });
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 import { type BwrapRuntime, createBwrapRuntime } from "../src/bwrap/runtime.js";
 import {
   deserializeReads,
@@ -740,12 +742,16 @@ describe("Glob and Grep", () => {
   it("globs via ripgrep: oldest first, hidden files included, absolute patterns", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-glob-rg-"));
     const older = join(directory, "older.txt");
-    const newer = join(directory, "newer.txt");
     const dot = join(directory, ".hidden.txt");
+    const newer = join(directory, "newer.txt");
     await writeFile(older, "x");
-    await writeFile(newer, "x");
-    await writeFile(dot, "x");
     await utimes(older, new Date(2020, 0, 1), new Date(2020, 0, 1));
+    // 连续 writeFile 的 mtime 可能落在同一时间片，rg 对并列 mtime 的排序不稳定；
+    // 创建时错开时间，保证 mtime 严格递增：older < dot < newer
+    await sleep(50);
+    await writeFile(dot, "x");
+    await sleep(50);
+    await writeFile(newer, "x");
 
     // 最旧在前（rg --sort=modified 升序）
     const { files, truncated } = await globFiles("*.txt", directory);
