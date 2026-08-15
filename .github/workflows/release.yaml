@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
     paths:
+      - "**/*.wasm"
       - "**/*.ts"
       - "**/*.bpf"
       - .github/workflows/release.yaml
