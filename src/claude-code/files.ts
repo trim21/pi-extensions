@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants, readFileSync } from "node:fs";
-import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -164,17 +164,44 @@ export function exactReplace(
   return content.slice(0, index) + newString + content.slice(index + oldString.length);
 }
 
-async function requireCurrentRead(state: ClaudeCodeState, filePath: string): Promise<void> {
-  const readSnapshot = state.reads.get(filePath);
+/**
+ * reads 记账 key：解析 symlink 后的真实路径，与 withFileMutationQueue 的队列
+ * key 对齐。文件尚不存在（Write 新建 / Edit 空 old_string 创建）时 realpath
+ * 抛 ENOENT，回退到已规范化路径。
+ */
+async function readStateKey(filePath: string): Promise<string> {
+  try {
+    return await realpath(filePath);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+    ) {
+      return filePath;
+    }
+    throw error;
+  }
+}
+
+/**
+ * 校验「已读且未变」。key 与 currentContent 由调用方提供：调用方每次工具调用
+ * 只 realpath / readFile 一次，避免重复 IO。
+ */
+function requireCurrentRead(
+  state: ClaudeCodeState,
+  key: string,
+  filePath: string,
+  currentContent: Uint8Array,
+): void {
+  const readSnapshot = state.reads.get(key);
   if (!readSnapshot) {
     throw new Error("File has not been read yet. Read it first before writing to it.");
   }
   if (!readSnapshot.textEditable) {
     throw new Error(`Cannot edit or overwrite a binary file with a text tool: ${filePath}`);
   }
-  const currentContent = await readFile(filePath);
-  const current = snapshotOf(currentContent);
-  if (!snapshotsEqual(readSnapshot, current)) {
+  if (!snapshotsEqual(readSnapshot, snapshotOf(currentContent))) {
     throw new Error(
       "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.",
     );
@@ -249,8 +276,9 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
           { type: "image", data, mimeType: imageMime },
         ];
         const snapshot = snapshotOf(image, false);
-        state.reads.set(filePath, snapshot);
-        return { content, details: { reads: { [filePath]: snapshot } } };
+        const key = await readStateKey(filePath);
+        state.reads.set(key, snapshot);
+        return { content, details: { reads: { [key]: snapshot } } };
       }
 
       const buffer = await readFile(filePath);
@@ -272,10 +300,11 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
         );
       }
       const snapshot = snapshotOf(buffer);
-      state.reads.set(filePath, snapshot);
+      const key = await readStateKey(filePath);
+      state.reads.set(key, snapshot);
       return {
         content: [{ type: "text", text: formatted.text }],
-        details: { reads: { [filePath]: snapshot } },
+        details: { reads: { [key]: snapshot } },
       };
     },
   });
@@ -343,12 +372,13 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
           if (!exists) await mkdir(dirname(filePath), { recursive: true });
           await writeFile(filePath, newString, "utf8");
           const snapshot = snapshotOf(newString);
-          state.reads.set(filePath, snapshot);
+          const key = await readStateKey(filePath);
+          state.reads.set(key, snapshot);
           return {
             content: [
               { type: "text", text: `The file ${filePath} has been updated successfully.` },
             ],
-            details: { reads: { [filePath]: snapshot } } satisfies FileToolDetails,
+            details: { reads: { [key]: snapshot } } satisfies FileToolDetails,
           };
         }
         const replaceAll = params.replace_all ?? false;
@@ -365,9 +395,9 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
             throw error;
           }
         }
-        let original: string;
+        let content: Buffer;
         try {
-          original = await readFile(filePath, "utf8");
+          content = await readFile(filePath);
         } catch (error) {
           if (error instanceof Error && "code" in error && error.code === "ENOENT") {
             const suggestion = await didYouMean(filePath, ctx.cwd);
@@ -383,9 +413,11 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
             "File is a Jupyter Notebook. Use the NotebookEditTool to edit this file.",
           );
         }
-        await requireCurrentRead(state, filePath);
+        const key = await readStateKey(filePath);
+        requireCurrentRead(state, key, filePath, content);
         await access(filePath, constants.R_OK | constants.W_OK);
         throwIfAborted(signal);
+        const original = content.toString("utf8");
 
         // CRLF 规范化后匹配（old_string 不需要带 \r），写回时恢复原行尾
         const crlfCount = (original.match(/\r\n/g) ?? []).length;
@@ -410,7 +442,7 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
         const restored = lineEnding === "\r\n" ? updated.replaceAll("\n", "\r\n") : updated;
         await writeFile(filePath, restored, "utf8");
         const snapshot = snapshotOf(restored);
-        state.reads.set(filePath, snapshot);
+        state.reads.set(key, snapshot);
         const diff = generateDiffString(original, restored);
         const text = replaceAll
           ? `The file ${filePath} has been updated. All occurrences were successfully replaced.`
@@ -421,7 +453,7 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
             diff: diff.diff,
             patch: generateUnifiedPatch(filePath, original, restored),
             firstChangedLine: diff.firstChangedLine,
-            reads: { [filePath]: snapshot },
+            reads: { [key]: snapshot },
           } satisfies FileToolDetails,
         };
       });
@@ -457,11 +489,14 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       });
       return withFileMutationQueue(filePath, async () => {
         let original: string | undefined;
+        let key: string | undefined;
         try {
           const value = await stat(filePath);
           if (value.isFile()) {
-            await requireCurrentRead(state, filePath);
-            original = await readFile(filePath, "utf8");
+            const content = await readFile(filePath);
+            key = await readStateKey(filePath);
+            requireCurrentRead(state, key, filePath, content);
+            original = content.toString("utf8");
           }
         } catch (error) {
           if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
@@ -472,7 +507,9 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
         await mkdir(dirname(filePath), { recursive: true });
         await writeFile(filePath, params.content, "utf8");
         const snapshot = snapshotOf(params.content);
-        state.reads.set(filePath, snapshot);
+        // 新建文件：writeFile 之后 realpath 才能解析；覆盖写则复用上面的 key
+        const resolvedKey = key ?? (await readStateKey(filePath));
+        state.reads.set(resolvedKey, snapshot);
         const diff = generateDiffString(original ?? "", params.content);
         const text =
           original === undefined
@@ -484,7 +521,7 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
             diff: diff.diff,
             patch: generateUnifiedPatch(filePath, original ?? "", params.content),
             firstChangedLine: diff.firstChangedLine,
-            reads: { [filePath]: snapshot },
+            reads: { [resolvedKey]: snapshot },
           } satisfies FileToolDetails,
         };
       });

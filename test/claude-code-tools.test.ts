@@ -1,5 +1,5 @@
 import { mkdtempSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -264,6 +264,28 @@ describe("Read, Edit, and Write", () => {
     await expect(
       call(tools.get("Write")!, { file_path: filePath, content: "overwrite\n" }, ctx),
     ).rejects.toThrow(/modified since read/);
+  });
+
+  it("treats a symlinked path and its real path as the same file for read state", async () => {
+    const base = await mkdtemp(join(tmpdir(), "cc-symlink-"));
+    const realDir = join(base, "real");
+    await mkdir(realDir);
+    const realFile = join(realDir, "note.txt");
+    await writeFile(realFile, "hello world\n", "utf8");
+    const linkDir = join(base, "link");
+    await symlink(realDir, linkDir, "dir");
+    const linkFile = join(linkDir, "note.txt");
+    const tools = loadTools();
+    const ctx = context(base);
+
+    // 经 symlink 路径 Read，经真实路径 Edit 应视为同一文件（不报 not read yet）
+    await call(tools.get("Read")!, { file_path: linkFile }, ctx);
+    await call(
+      tools.get("Edit")!,
+      { file_path: realFile, old_string: "world", new_string: "there" },
+      ctx,
+    );
+    expect(await readFile(realFile, "utf8")).toBe("hello there\n");
   });
 
   it("allows Write to create a new file without a prior Read", async () => {
@@ -589,6 +611,40 @@ describe("reads state restore on session_start", () => {
     await expect(
       call(tools.get("Write")!, { file_path: filePath, content: "overwrite\n" }, ctx),
     ).rejects.toThrow(/modified since read/);
+  });
+
+  it("re-syncs reads state on session_tree and drops abandoned-branch reads", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-tree-restore-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "hello world\n", "utf8");
+    const { tools, handlers } = loadToolsWithHandlers();
+    const ctx = context(directory);
+
+    // 当前分支里有一次 Read，session_start 恢复后 Edit 成功
+    const readResult = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    const readBranch = [
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "Read",
+          details: { reads: readResult.details.reads },
+        },
+      },
+    ];
+    await handlers.get("session_start")!({}, { sessionManager: { getBranch: () => readBranch } });
+    await call(
+      tools.get("Edit")!,
+      { file_path: filePath, old_string: "world", new_string: "there" },
+      ctx,
+    );
+    expect(await readFile(filePath, "utf8")).toBe("hello there\n");
+
+    // rewind：session_tree 切到一个不含该 Read 的分支，记账应被清空重建
+    await handlers.get("session_tree")!({}, { sessionManager: { getBranch: () => [] } });
+    await expect(
+      call(tools.get("Write")!, { file_path: filePath, content: "x\n" }, ctx),
+    ).rejects.toThrow(/not been read/);
   });
 });
 
