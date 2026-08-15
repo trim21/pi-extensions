@@ -54,9 +54,9 @@ const MAX_PROGRESS_LINES = 5;
  * built-in tool, the matching opencode extension is loaded via `-e` so the
  * subagent uses the enhanced implementation instead of the built-in one.
  *
- * The bash override also carries the bwrap sandbox: opencode/bash.ts calls
- * bwrapRuntime.setup() and runs commands through bwrapRuntime.execute(), so
- * agents that declare the bash tool get sandboxing automatically. Agents
+ * The bash override also carries the bwrap sandbox: opencode/bash.ts creates
+ * its own bwrap runtime instance and runs commands through runtime.execute(),
+ * so agents that declare the bash tool get sandboxing automatically. Agents
  * without bash need no bwrap setup (there are no commands to sandbox).
  * (Workspace write protection is embedded in the opencode write/edit tools.)
  *

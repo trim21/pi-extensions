@@ -1,14 +1,17 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { bwrapRuntime } from "../bwrap/runtime.js";
+import { createBwrapRuntime } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 
 export default function opencodeBash(pi: ExtensionAPI): void {
-  bwrapRuntime.setup(pi);
+  // 每个扩展实例持有自己的 runtime：不依赖模块级全局状态，状态随扩展
+  // 实例生命周期（进程启动 / /reload / session 切换时工厂重建即重置）。
+  const runtime = createBwrapRuntime();
+  runtime.setup(pi);
   pi.registerTool({
     name: "bash",
     label: "bash",
@@ -52,7 +55,7 @@ export default function opencodeBash(pi: ExtensionAPI): void {
       const cwd = params.workdir ? await resolveWorkdir(params.workdir, ctx.cwd) : ctx.cwd;
 
       try {
-        return await bwrapRuntime.execute({
+        return await runtime.execute({
           ctx: { ...ctx, cwd },
           toolCallId: id,
           command: params.command,

@@ -2,22 +2,15 @@ import { mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bwrapRuntime } from "../src/bwrap/runtime.js";
+import { type BwrapRuntime, createBwrapRuntime } from "../src/bwrap/runtime.js";
 import { deserializeReads } from "../src/claude-code/common.js";
 import { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
 import { sortFilesByMtime, summarizeCountOutput } from "../src/claude-code/grep.js";
 import claudeCodeTools from "../src/claude-code/index.js";
 import { buildGrepArguments, pageGrepOutput } from "../src/claude-code/search.js";
-
-beforeEach(() => {
-  bwrapRuntime.setMode(process.cwd(), "allow-all");
-});
-
-afterEach(() => {
-  bwrapRuntime.reset();
-});
+import { registerShellTools } from "../src/claude-code/shell.js";
 
 interface RegisteredTool {
   name: string;
@@ -60,6 +53,24 @@ function loadToolsWithHandlers(): {
     exec: vi.fn(),
   } as never);
   return { tools, handlers };
+}
+
+/** 用注入的 runtime 单独注册 Bash 工具，测试可预置沙箱模式。 */
+function loadBashTool(runtime: BwrapRuntime): RegisteredTool {
+  let bashTool: RegisteredTool | undefined;
+  registerShellTools(
+    {
+      registerTool(tool: RegisteredTool) {
+        if (tool.name === "Bash") bashTool = tool;
+      },
+      registerFlag: vi.fn(),
+      registerCommand: vi.fn(),
+      on: vi.fn(),
+      exec: vi.fn(),
+    } as never,
+    runtime,
+  );
+  return bashTool!;
 }
 
 function context(cwd: string, overrides: Record<string, unknown> = {}) {
@@ -386,10 +397,18 @@ describe("Glob and Grep", () => {
 });
 
 describe("Bash", () => {
+  let bashTool: RegisteredTool;
+
+  beforeEach(() => {
+    // 直接执行命令，不走沙箱
+    const runtime = createBwrapRuntime();
+    runtime.setMode(process.cwd(), "allow-all");
+    bashTool = loadBashTool(runtime);
+  });
+
   it("waits for command completion and returns output", async () => {
-    const tools = loadTools();
     const result = await call(
-      tools.get("Bash")!,
+      bashTool,
       { command: "printf done", timeout: 5_000 },
       context(process.cwd()),
     );
@@ -400,17 +419,15 @@ describe("Bash", () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-bash-workdir-"));
     const nested = join(directory, "nested");
     await import("node:fs/promises").then(({ mkdir }) => mkdir(nested));
-    const tools = loadTools();
     const ctx = context(directory);
-    const result = await call(tools.get("Bash")!, { command: "pwd", workdir: nested }, ctx);
+    const result = await call(bashTool, { command: "pwd", workdir: nested }, ctx);
     expect(result.content[0].text).toBe(`${nested}\n`);
   });
 
   it("rejects a missing workdir", async () => {
-    const tools = loadTools();
     await expect(
       call(
-        tools.get("Bash")!,
+        bashTool,
         { command: "pwd", workdir: join(tmpdir(), "cc-bash-missing-workdir") },
         context(process.cwd()),
       ),
@@ -418,10 +435,9 @@ describe("Bash", () => {
   });
 
   it("waits for shell jobs started with ampersand", async () => {
-    const tools = loadTools();
     const startedAt = Date.now();
     const result = await call(
-      tools.get("Bash")!,
+      bashTool,
       { command: "sleep 0.05 & printf started", timeout: 5_000 },
       context(process.cwd()),
     );
@@ -430,17 +446,15 @@ describe("Bash", () => {
   });
 
   it("uses millisecond timeouts", async () => {
-    const tools = loadTools();
     await expect(
-      call(tools.get("Bash")!, { command: "sleep 1", timeout: 20 }, context(process.cwd())),
+      call(bashTool, { command: "sleep 1", timeout: 20 }, context(process.cwd())),
     ).rejects.toThrow(/20 milliseconds/);
   });
 
   it("force-stops commands that ignore SIGTERM", async () => {
-    const tools = loadTools();
     await expect(
       call(
-        tools.get("Bash")!,
+        bashTool,
         { command: "trap '' TERM; while :; do sleep 1; done", timeout: 20 },
         context(process.cwd()),
       ),

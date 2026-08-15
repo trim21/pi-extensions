@@ -320,5 +320,3 @@ export class BwrapRuntime {
 export function createBwrapRuntime(): BwrapRuntime {
   return new BwrapRuntime();
 }
-
-export const bwrapRuntime = createBwrapRuntime();

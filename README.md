@@ -17,6 +17,14 @@
 | [question](#question)           | opencode 风格的提问工具，阻塞式询问用户选择             |
 | [talk](#talk)                   | session 间消息传递，SQLite 邮箱 + 双向 ask 时间戳仲裁   |
 
+> **两套工具风格，按预期只启用其中一套**：本包同时提供 opencode 风格
+> （小写 `read`/`edit`/`write`/`bash`/`todowrite`/`question`）与 Claude Code
+> 风格（大写 `Read`/`Edit`/`Write`/`Bash`/`Grep`/`Glob`/`TodoWrite`/
+> `AskUserQuestion`）两套工具集，二者共享 bwrap 沙箱与写保护实现。两套同时
+> 启用会带来预期外的冗余：同名命令重复注册（如 `/bwrap` 出现 `/bwrap:1`
+> 后缀）、系统提示重复注入。请只启用其中一套：在 `~/.pi/agent/settings.json`
+> 的 `defaultTools` 中只列出一套，或启动时用 `--exclude-tools` 排除另一套。
+
 ---
 
 ## bwrap

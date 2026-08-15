@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { bwrapRuntime } from "../bwrap/runtime.js";
+import { type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -13,8 +13,15 @@ const MAX_TIMEOUT_MS = 600_000;
 /** Bash tool guidance, kept in markdown so it reads like documentation. */
 const BASH_PROMPT = readFileSync(fileURLToPath(new URL("bash.md", import.meta.url)), "utf8").trim();
 
-export function registerShellTools(pi: ExtensionAPI): void {
-  bwrapRuntime.setup(pi);
+/**
+ * runtime 由调用方注入：扩展工厂持有一个实例（不依赖模块级全局状态），
+ * 测试可注入预置模式的实例。状态随扩展实例生命周期，session 切换重建即重置。
+ */
+export function registerShellTools(
+  pi: ExtensionAPI,
+  runtime: BwrapRuntime = createBwrapRuntime(),
+): void {
+  runtime.setup(pi);
   pi.registerTool({
     name: "Bash",
     promptSnippet: "execute command",
@@ -58,7 +65,7 @@ export function registerShellTools(pi: ExtensionAPI): void {
       const cwd = params.workdir ? await resolveWorkdir(params.workdir, ctx.cwd) : ctx.cwd;
 
       try {
-        return await bwrapRuntime.execute({
+        return await runtime.execute({
           ctx: { ...ctx, cwd },
           toolCallId: id,
           command: params.command,
