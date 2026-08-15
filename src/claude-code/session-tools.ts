@@ -42,10 +42,15 @@ function formatTodos(todos: readonly ClaudeCodeTodo[]): string[] | undefined {
     in_progress: ">",
     completed: "x",
   };
-  return todos.map((todo) => {
-    const text = todo.status === "in_progress" ? todo.activeForm : todo.content;
-    return `- [${markers[todo.status]}] ${text}`;
-  });
+  const completed = todos.filter((todo) => todo.status === "completed").length;
+  const percent = Math.round((completed / todos.length) * 100);
+  return [
+    `Progress: ${completed}/${todos.length} (${percent}%)`,
+    ...todos.map((todo) => {
+      const text = todo.status === "in_progress" ? todo.activeForm : todo.content;
+      return `- [${markers[todo.status]}] ${text}`;
+    }),
+  ];
 }
 
 async function askSingle(
