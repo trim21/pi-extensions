@@ -34,9 +34,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 
-import { type ExtensionAPI, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+
+import { createSeqState } from "./lib/seq-state.js";
 
 interface GhResult {
   stdout: string;
@@ -380,8 +382,9 @@ export function stepsDetail(
   }));
 }
 
-/** In-flight dedup map to avoid concurrent fetches of the same log. */
-const inflightLogs = new Map<string, Promise<string>>();
+// 模块级串行状态：同一资源（如 CI 日志）的请求排队执行，配合函数内部的
+// 缓存检查避免重复网络请求。闭包状态不与其他扩展共享，key 无需全局前缀。
+const seq = createSeqState();
 
 async function getJobLog(
   runId: string,
@@ -393,13 +396,10 @@ async function getJobLog(
 ): Promise<string> {
   const cacheDir = join(homedir(), ".cache", "pi", "ci-logs", runId);
   const cacheFile = join(cacheDir, `${jobId}.log`);
-  const key = `${runId}:${jobId}`;
 
-  // Check in-flight dedup map
-  const inflight = inflightLogs.get(key);
-  if (inflight) return inflight;
-
-  const fetchAndCache = async (): Promise<string> => {
+  // 同一 runId:jobId 的请求串行执行：后一个进入时缓存已写入，直接命中缓存，
+  // 不会重复发网络请求；串行也保证不会有两个并发写同一 cache 文件。
+  return seq.execute(`${runId}:${jobId}`, async () => {
     // Check file cache
     try {
       return await readFile(cacheFile, "utf8");
@@ -424,20 +424,10 @@ async function getJobLog(
 
     // Write to cache
     await mkdir(cacheDir, { recursive: true });
-    await withFileMutationQueue(cacheFile, async () => {
-      await writeFile(cacheFile, log);
-    });
+    await writeFile(cacheFile, log);
 
     return log;
-  };
-
-  const promise = fetchAndCache();
-  inflightLogs.set(key, promise);
-  try {
-    return await promise;
-  } finally {
-    inflightLogs.delete(key);
-  }
+  });
 }
 
 async function resolveRepo(
@@ -1061,9 +1051,7 @@ export async function writeLogFile(
 
   const target = resolve(cwd ?? process.cwd(), outputFile);
   await mkdir(dirname(target), { recursive: true });
-  await withFileMutationQueue(target, async () => {
-    await writeFile(target, content);
-  });
+  await writeFile(target, content);
 
   const lines = content.split("\n").length;
   const bytes = Buffer.byteLength(content, "utf8");
