@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +9,7 @@ import {
   type BashToolDetails,
   DEFAULT_MAX_BYTES,
   formatSize,
+  getAgentDir,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -53,7 +53,11 @@ export async function formatBashSuccess(
   let text = truncation.content || "(no output)";
   let details: BashToolDetails | undefined;
   if (truncation.truncated) {
-    const fullOutputPath = join(tmpdir(), `pi-bash-${randomUUID()}.txt`);
+    // 完整输出落盘到 agent 数据目录的 tmp 子目录（与 pi 的 agent 状态同处，
+    // 模型可读；系统临时目录可能被清理）
+    const dir = join(getAgentDir(), "tmp");
+    await mkdir(dir, { recursive: true });
+    const fullOutputPath = join(dir, `${randomUUID()}.txt`);
     await writeFile(fullOutputPath, output, "utf8");
     details = { truncation, fullOutputPath };
     const startLine = truncation.totalLines - truncation.outputLines + 1;
