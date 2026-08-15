@@ -187,6 +187,7 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
     label: "Read",
     description: [
       "Reads a file from the local filesystem. You can access any file directly using this tool.",
+      "Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.",
       "The file_path parameter must be an absolute path. By default, it reads the entire file; files over 256 KB or 25K tokens require offset and limit.",
       "Results use cat -n style line numbers starting at 1. Images are returned visually.",
       "This tool reads files, not directories.",
@@ -294,7 +295,9 @@ export function registerFileTools(pi: ExtensionAPI, state: ClaudeCodeState): voi
       {
         file_path: Type.String({ description: "The absolute path to the file to modify" }),
         old_string: Type.String({ description: "The text to replace" }),
-        new_string: Type.String({ description: "The text to replace it with" }),
+        new_string: Type.String({
+          description: "The text to replace it with (must be different from old_string)",
+        }),
         replace_all: Type.Optional(
           Type.Boolean({ description: "Replace all occurrences of old_string", default: false }),
         ),
