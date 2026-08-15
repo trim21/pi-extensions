@@ -1,8 +1,14 @@
+import { mkdtempSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Bash 输出运行时落盘到 agent-dir/tmp：测试环境指向可写的临时目录
+beforeAll(() => {
+  process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "cc-tools-agent-dir-"));
+});
 
 import { type BwrapRuntime, createBwrapRuntime } from "../src/bwrap/runtime.js";
 import {
@@ -874,6 +880,28 @@ describe("Bash", () => {
         context(process.cwd()),
       ),
     ).rejects.toThrow(/^Exit code 1$/);
+  });
+
+  it("streams large output to a file and returns only the truncated tail", async () => {
+    const result = await call(
+      bashTool,
+      { command: "seq 1 3000", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    const text = result.content[0].text;
+    // 行数超限（3000 > 2000）→ 返回尾部 + 完整输出落盘
+    expect(text).toMatch(/\[Showing lines 1001-3000 of 3000\. Full output: .+\]/);
+    const path = text.match(/Full output: (.+)\]/)?.[1];
+    expect(path).toBeTruthy();
+    // 返回文本只含截断后的尾部
+    expect(text.startsWith("1001\n")).toBe(true);
+    expect(text.includes("1\n2\n")).toBe(false);
+    // 文件是完整输出，且 details 携带路径
+    const fileContent = await readFile(path, "utf8");
+    const fileLines = fileContent.split("\n");
+    expect(fileLines[0]).toBe("1");
+    expect(fileLines[2999]).toBe("3000");
+    expect(result.details?.fullOutputPath).toBe(path);
   });
 });
 

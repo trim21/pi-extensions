@@ -1,17 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-  type BashToolDetails,
-  DEFAULT_MAX_BYTES,
-  formatSize,
-  getAgentDir,
-  truncateTail,
-} from "@earendil-works/pi-coding-agent";
+import { type BashToolDetails, formatSize } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
@@ -42,24 +34,17 @@ function formatBashError(exitCode: number | null, output: string): string {
 }
 
 /**
- * 成功路径：truncateTail 截断 + 全量落盘临时文件，
- * 提示文本 `[Showing lines X-Y of N. Full output: path]`。
+ * 成功路径：消费 runtime 的截断结果（输出已由 runtime 截断并落盘），
+ * 截断时追加 `[Showing lines X-Y of N. Full output: path]` 提示。
  * opencode 套件的 bash 工具复用同一逻辑。
  */
-export async function formatBashSuccess(
-  output: string,
-): Promise<{ content: { type: "text"; text: string }[]; details: BashToolDetails | undefined }> {
-  const truncation = truncateTail(output);
-  let text = truncation.content || "(no output)";
-  let details: BashToolDetails | undefined;
-  if (truncation.truncated) {
-    // 完整输出落盘到 agent 数据目录的 tmp 子目录（与 pi 的 agent 状态同处，
-    // 模型可读；系统临时目录可能被清理）
-    const dir = join(getAgentDir(), "tmp");
-    await mkdir(dir, { recursive: true });
-    const fullOutputPath = join(dir, `${randomUUID()}.txt`);
-    await writeFile(fullOutputPath, output, "utf8");
-    details = { truncation, fullOutputPath };
+export function formatBashSuccess(result: Awaited<ReturnType<BwrapRuntime["execute"]>>): {
+  content: { type: "text"; text: string }[];
+  details: BashToolDetails | undefined;
+} {
+  const { output, truncation, fullOutputPath } = result;
+  let text = output || "(no output)";
+  if (fullOutputPath && truncation.truncated) {
     const startLine = truncation.totalLines - truncation.outputLines + 1;
     const endLine = truncation.totalLines;
     if (truncation.lastLinePartial) {
@@ -70,10 +55,13 @@ export async function formatBashSuccess(
     } else if (truncation.truncatedBy === "lines") {
       text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${fullOutputPath}]`;
     } else {
-      text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit). Full output: ${fullOutputPath}]`;
+      text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(truncation.maxBytes)} limit). Full output: ${fullOutputPath}]`;
     }
   }
-  return { content: [{ type: "text", text }], details };
+  return {
+    content: [{ type: "text", text }],
+    details: fullOutputPath && truncation.truncated ? { truncation, fullOutputPath } : undefined,
+  };
 }
 
 /**
@@ -151,13 +139,16 @@ export function registerShellTools(
       }
 
       // 对齐 Claude Code：非 0 退出码视为错误（不做 grep/find 等命令语义化特判，
-      // 任何非 0 都抛错）；成功路径返回纯输出
+      // 任何非 0 都抛错）；错误文本用完整输出（从落盘文件读取，必要时头尾截断）
       if (result.exitCode !== 0 && result.exitCode !== null) {
-        throw new Error(formatBashError(result.exitCode, result.output), {
+        const full = result.fullOutputPath
+          ? await readFile(result.fullOutputPath, "utf8")
+          : result.output;
+        throw new Error(formatBashError(result.exitCode, full), {
           cause: result,
         });
       }
-      return formatBashSuccess(result.output);
+      return formatBashSuccess(result);
     },
   });
 }

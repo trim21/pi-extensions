@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/bwrap/core.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/bwrap/core.js")>();
@@ -11,6 +15,11 @@ vi.mock("../src/bwrap/core.js", async (importOriginal) => {
 });
 
 import { type BwrapRuntime, createBwrapRuntime } from "../src/bwrap/runtime.js";
+
+beforeAll(() => {
+  // Bash 输出运行时落盘到 agent-dir/tmp：测试环境指向可写的临时目录
+  process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "cc-bwrap-agent-dir-"));
+});
 
 function setupRuntime() {
   const runtime = createBwrapRuntime();
@@ -73,7 +82,7 @@ describe("BwrapRuntime", () => {
         command: "printf runtime",
         ctx: { cwd: process.cwd(), hasUI: true } as never,
       });
-      expect(result).toEqual({ exitCode: 0, output: "runtime" });
+      expect(result).toMatchObject({ exitCode: 0, output: "runtime" });
     });
   });
 
@@ -85,7 +94,7 @@ describe("BwrapRuntime", () => {
       command: "printf runtime",
       ctx: { cwd: process.cwd(), hasUI: true } as never,
     });
-    expect(result).toEqual({ exitCode: 0, output: "runtime" });
+    expect(result).toMatchObject({ exitCode: 0, output: "runtime" });
   });
 
   it("returns the full result for non-zero exit codes instead of throwing", async () => {
@@ -96,7 +105,7 @@ describe("BwrapRuntime", () => {
       command: "sh -c 'printf oops; exit 3'",
       ctx: { cwd: process.cwd(), hasUI: true } as never,
     });
-    expect(result).toEqual({ exitCode: 3, output: "oops" });
+    expect(result).toMatchObject({ exitCode: 3, output: "oops" });
   });
 
   it("rejects full-access requests before execution without a UI", async () => {
@@ -123,7 +132,7 @@ describe("BwrapRuntime", () => {
         requestFullAccess: true,
         ctx: fullAccessContext({ select, input: vi.fn() }, abort),
       });
-      expect(result).toEqual({ exitCode: 0, output: "approved" });
+      expect(result).toMatchObject({ exitCode: 0, output: "approved" });
       expect(abort).not.toHaveBeenCalled();
     });
 

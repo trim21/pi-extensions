@@ -2,16 +2,25 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
-import { formatBashSuccess } from "../claude-code/shell.js";
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 
-export default function opencodeBash(pi: ExtensionAPI): void {
+/** 对齐上游 opencode 的截断提示文案（tools/BashTool/bash.ts）。 */
+const CAPTURE_TRUNCATED_NOTICE = "[output capture truncated at the in-memory safety limit]";
+
+/**
+ * 对齐上游 opencode（packages/core/src/tool/bash.ts）：
+ * 命令失败（非 0 退出码）与超时都不抛错，输出与状态文本一起返回，
+ * 由模型根据 `Command exited with code N.` 自行判断。
+ */
+export default function opencodeBash(
+  pi: ExtensionAPI,
+  runtime: BwrapRuntime = createBwrapRuntime(),
+): void {
   // 每个扩展实例持有自己的 runtime：不依赖模块级全局状态，状态随扩展
   // 实例生命周期（进程启动 / /reload / session 切换时工厂重建即重置）。
-  const runtime = createBwrapRuntime();
   runtime.setup(pi);
   pi.registerTool({
     name: "bash",
@@ -68,23 +77,39 @@ export default function opencodeBash(pi: ExtensionAPI): void {
         });
       } catch (error) {
         if (!(error instanceof Error)) throw error;
-        const timeoutMatch = /Command timed out after [\d.]+ seconds/.exec(error.message);
-        const message = timeoutMatch
-          ? error.message.slice(0, timeoutMatch.index) +
-            `Command timed out after ${timeout} milliseconds` +
-            error.message.slice(timeoutMatch.index + timeoutMatch[0].length)
-          : error.message;
-        throw new Error(message, { cause: error });
+        // 对齐上游 opencode：超时不抛错，返回提示文本（丢弃部分输出）
+        if (/Command timed out after [\d.]+ seconds/.test(error.message)) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
+              },
+              { type: "text" as const, text: "Command timed out before completion." },
+            ],
+            details: { timeout: true },
+          };
+        }
+        throw error;
       }
 
-      // 任何非 0 退出码都视为失败（不做命令语义化特判）
-      if (result.exitCode !== 0 && result.exitCode !== null) {
-        const status = `Command exited with code ${result.exitCode}`;
-        throw new Error(result.output ? `${result.output}\n\n${status}` : status, {
-          cause: result,
-        });
+      // 命令失败（非 0 退出码）不抛错：输出与状态文本一起返回
+      let text = result.output || "(no output)";
+      if (result.truncation.truncated) {
+        text += `\n\n${CAPTURE_TRUNCATED_NOTICE}`;
+        if (result.fullOutputPath) text += `\nFull output: ${result.fullOutputPath}`;
       }
-      return formatBashSuccess(result.output);
+      return {
+        content: [
+          { type: "text" as const, text },
+          { type: "text" as const, text: `Command exited with code ${result.exitCode}.` },
+        ],
+        details: {
+          exitCode: result.exitCode,
+          truncated: result.truncation.truncated,
+          ...(result.fullOutputPath && { fullOutputPath: result.fullOutputPath }),
+        },
+      };
     },
   });
 }

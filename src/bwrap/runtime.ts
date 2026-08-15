@@ -1,10 +1,19 @@
+import { randomUUID } from "node:crypto";
+import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import { join } from "node:path";
+
 import type {
   AgentToolUpdateCallback,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
+import {
+  createLocalBashOperations,
+  getAgentDir,
+  truncateTail,
+  type TruncationResult,
+} from "@earendil-works/pi-coding-agent";
 import { type TObject, Type } from "typebox";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
@@ -45,12 +54,18 @@ export interface BwrapExecutionRequest {
 }
 
 /**
- * 底层执行结果：完整退出码 + 完整输出（stdout/stderr 合并，未截断）。
- * 退出码语义（grep exit 1 等）由上层 Bash 工具解释，这里不做成败判定。
+ * 底层执行结果：完整退出码 + 截断后的输出文本。
+ * 输出在运行时就直接写入 agent-dir/tmp/{uuid}.txt（完整内容），内存不保留全量；
+ * `truncation.totalLines/totalBytes` 是精确统计值（非尾部缓冲的）。
+ * 退出码语义由上层 Bash 工具解释，这里不做成败判定。
  */
 export interface BwrapExecutionResult {
   exitCode: number | null;
+  /** 截断后的输出（尾部），未截断时为完整输出；空输出为空字符串。 */
   output: string;
+  /** 完整输出的文件路径；无输出时不存在。 */
+  fullOutputPath?: string;
+  truncation: TruncationResult;
 }
 
 function escapeHtml(text: string): string {
@@ -71,30 +86,87 @@ function fenceCodeBlock(code: string): string {
 const BASH_UPDATE_THROTTLE_MS = 100;
 /** 进度快照只保留尾部内容，避免大输出每 100ms 全量推给 TUI。 */
 const BASH_UPDATE_TAIL_BYTES = 64 * 1024;
+/** 内存尾部缓冲上限：必须大于 truncateTail 的默认上限（50KB / 2000 行）。 */
+const BASH_TAIL_LIMIT_BYTES = 1024 * 1024;
+
+function countNewlines(data: Buffer): number {
+  let count = 0;
+  for (const byte of data) {
+    if (byte === 0x0a) count++;
+  }
+  return count;
+}
 
 /**
- * 合并 stdout/stderr 的流式输出累积器。
- * 内存中保留全部输出供最终结果使用；进度快照只取尾部。
+ * 合并 stdout/stderr 的流式输出累积器：输出在运行时就直接写入
+ * agent-dir/tmp/{uuid}.txt（完整内容），内存只保留尾部缓冲。
+ * 大输出不会撑爆内存；最终结果只返回截断后的文本。
  */
 class BashOutput {
-  private chunks: Buffer[] = [];
+  private stream: WriteStream | undefined;
+  private writeError: Error | undefined;
+  private tail: Buffer[] = [];
+  private tailBytes = 0;
   private totalBytes = 0;
+  private totalLines = 0;
+  filePath: string | undefined;
 
   append(data: Buffer): void {
-    this.chunks.push(data);
     this.totalBytes += data.length;
+    this.totalLines += countNewlines(data);
+    if (!this.stream) {
+      const dir = join(getAgentDir(), "tmp");
+      mkdirSync(dir, { recursive: true });
+      this.filePath = join(dir, `${randomUUID()}.txt`);
+      this.stream = createWriteStream(this.filePath, { flags: "w" });
+      this.stream.on("error", (error) => {
+        this.writeError = error;
+      });
+    }
+    this.stream.write(data);
+    this.tail.push(data);
+    this.tailBytes += data.length;
+    while (this.tailBytes > BASH_TAIL_LIMIT_BYTES && this.tail.length > 1) {
+      this.tailBytes -= this.tail[0].length;
+      this.tail.shift();
+    }
+    if (this.tailBytes > BASH_TAIL_LIMIT_BYTES && this.tail.length === 1) {
+      // 单个 chunk 超过上限：截掉头部，只保留尾部
+      this.tail[0] = this.tail[0].subarray(this.tailBytes - BASH_TAIL_LIMIT_BYTES);
+      this.tailBytes = BASH_TAIL_LIMIT_BYTES;
+    }
   }
 
-  toString(): string {
-    return Buffer.concat(this.chunks, this.totalBytes).toString("utf8");
+  close(): Promise<void> {
+    if (!this.stream) return Promise.resolve();
+    const stream = this.stream;
+    this.stream = undefined;
+    return new Promise((resolve) => {
+      stream.end(() => {
+        if (this.writeError) {
+          // 落盘失败（如 readonly 沙箱）：降级为纯内存模式，命令仍正常返回
+          this.filePath = undefined;
+        }
+        resolve();
+      });
+    });
+  }
+
+  /** 尾部文本（截断结果的候选，未截断时即完整输出）。 */
+  tailText(): string {
+    return Buffer.concat(this.tail, this.tailBytes).toString("utf8");
+  }
+
+  get stats(): { totalBytes: number; totalLines: number } {
+    return { totalBytes: this.totalBytes, totalLines: this.totalLines };
   }
 
   /** 尾部快照（用于流式进度显示）。 */
   tailSnapshot(): string {
     let remaining = BASH_UPDATE_TAIL_BYTES;
     const tail: Buffer[] = [];
-    for (let i = this.chunks.length - 1; i >= 0 && remaining > 0; i--) {
-      const chunk = this.chunks[i];
+    for (let i = this.tail.length - 1; i >= 0 && remaining > 0; i--) {
+      const chunk = this.tail[i];
       if (chunk.length <= remaining) {
         tail.unshift(chunk);
         remaining -= chunk.length;
@@ -251,7 +323,15 @@ export class BwrapRuntime {
         signal: request.signal,
         timeout: request.timeout,
       });
-      return { exitCode, output: output.toString() };
+      await output.close();
+      const truncation = truncateTail(output.tailText());
+      return {
+        exitCode,
+        output: truncation.content,
+        ...(output.filePath && { fullOutputPath: output.filePath }),
+        // 用精确统计值覆盖尾部缓冲的估算（提示文本的行数/字节数要准确）
+        truncation: { ...truncation, ...output.stats },
+      };
     } catch (error) {
       // 底层统一把超时/中断转成可读文案（对齐 pi 内置 bash 工具）
       if (error instanceof Error && error.message.startsWith("timeout:")) {
@@ -267,6 +347,7 @@ export class BwrapRuntime {
     } finally {
       if (updateTimer) clearTimeout(updateTimer);
       if (onUpdate && dirty) emitUpdate();
+      await output.close();
     }
   }
 
