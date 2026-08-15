@@ -151,7 +151,10 @@ describe("BwrapRuntime", () => {
     it("includes the typed reason when the user blocks with reason", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
-      const select = vi.fn(async () => "Block with reason");
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce("Block")
+        .mockResolvedValueOnce("Block with reason");
       const input = vi.fn(async () => "too risky");
       await expect(
         runtime.execute({
@@ -163,28 +166,34 @@ describe("BwrapRuntime", () => {
       ).rejects.toThrow(/User denied unsandboxed execution: too risky/);
     });
 
-    it("re-asks when the reason input is cancelled", async () => {
+    it("denies without feedback when the reason input is cancelled", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
       const select = vi
         .fn()
-        .mockResolvedValueOnce("Block with reason")
-        .mockResolvedValueOnce("Approve once");
+        .mockResolvedValueOnce("Block")
+        .mockResolvedValueOnce("Block with reason");
       const input = vi.fn().mockResolvedValue(undefined);
-      const result = await runtime.execute({
-        toolCallId: "test",
-        command: "printf approved",
-        requestFullAccess: true,
-        ctx: fullAccessContext({ select, input }),
-      });
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "printf should-not-run",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input }),
+        }),
+      ).rejects.toThrow(/User denied unsandboxed execution\.$/);
+      // 无循环：单选 1 + 单选 2 各一次，input 取消后直接拒绝
       expect(select).toHaveBeenCalledTimes(2);
-      expect(result.content[0]).toMatchObject({ type: "text", text: "approved" });
+      expect(input).toHaveBeenCalledTimes(1);
     });
 
     it("denies without reason text when the reason input is blank", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
-      const select = vi.fn(async () => "Block with reason");
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce("Block")
+        .mockResolvedValueOnce("Block with reason");
       const input = vi.fn(async () => " ".repeat(3));
       await expect(
         runtime.execute({
@@ -194,6 +203,22 @@ describe("BwrapRuntime", () => {
           ctx: fullAccessContext({ select, input }),
         }),
       ).rejects.toThrow(/User denied unsandboxed execution\.$/);
+    });
+
+    it("denies without feedback when the second selection is dismissed", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn().mockResolvedValueOnce("Block").mockResolvedValueOnce(undefined);
+      const abort = vi.fn();
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "printf should-not-run",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input: vi.fn() }, abort),
+        }),
+      ).rejects.toThrow(/User denied unsandboxed execution\.$/);
+      expect(abort).not.toHaveBeenCalled();
     });
   });
 });

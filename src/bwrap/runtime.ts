@@ -182,31 +182,37 @@ export class BwrapRuntime {
     const policy = resolveEscalation({ hasUI: ctx.hasUI });
     if (policy.kind === "deny") throw new Error(policy.reason);
     const description = `Allow this command to run without sandbox?\n---\n\nReason: ${escapeHtml(reason ?? "(No reason provided by model)")}\n---\n${fenceCodeBlock(command)}`;
-    while (true) {
-      const result = await selectWithOptionalInput(
-        description,
-        [
-          { label: "Approve once" },
-          { label: "Block" },
-          { label: "Block with reason", inputPrompt: "Why was this denied?" },
-        ],
-        ctx.ui,
-        { signal: ctx.signal },
-      );
-      if (result === undefined) {
-        ctx.abort();
-        throw new Error("User denied the command execution.");
-      }
-      if (result.label === "Approve once") return;
-      if (result.label === "Block") throw new Error("User denied unsandboxed execution.");
-      // "Block with reason"：取消输入则重新询问；空输入同样拒绝（不带反馈文本）
-      if (result.input === undefined) continue;
-      throw new Error(
-        result.input
-          ? `User denied unsandboxed execution: ${result.input}`
-          : "User denied unsandboxed execution.",
-      );
+
+    // 单选 1：允许还是拦截（关闭对话框 = 中断并拒绝）
+    const verdict = await selectWithOptionalInput(
+      description,
+      [{ label: "Approve once" }, { label: "Block" }],
+      ctx.ui,
+      { signal: ctx.signal },
+    );
+    if (verdict === undefined) {
+      ctx.abort();
+      throw new Error("User denied the command execution.");
     }
+    if (verdict.label === "Approve once") return;
+
+    // 单选 2 + input 组合：直接拦截还是附带理由；选 "Block with reason"
+    // 自动弹输入框。关闭对话框/取消输入/空白都按无理由拒绝，不循环重问。
+    const style = await selectWithOptionalInput(
+      "Block this command?",
+      [{ label: "Block" }, { label: "Block with reason", inputPrompt: "Why was this denied?" }],
+      ctx.ui,
+      { signal: ctx.signal },
+    );
+    if (style === undefined || style.label === "Block") {
+      throw new Error("User denied unsandboxed execution.");
+    }
+    const feedback = style.input?.trim() ?? "";
+    throw new Error(
+      feedback
+        ? `User denied unsandboxed execution: ${feedback}`
+        : "User denied unsandboxed execution.",
+    );
   }
 
   private registerCommands(pi: ExtensionAPI): void {
