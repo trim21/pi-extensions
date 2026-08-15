@@ -20,8 +20,7 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import registerTools from "../src/gh-readonly.js";
-import { GhError } from "../src/gh-readonly.js";
+import registerTools, { GhError } from "../src/gh-readonly.js";
 
 /** A fake gh child process that exits with the given code when told. */
 class FakeChildProcess extends EventEmitter {

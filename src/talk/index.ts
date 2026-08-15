@@ -13,8 +13,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getAgentDir, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  getAgentDir,
+  truncateToVisualLines,
+} from "@earendil-works/pi-coding-agent";
 import { type TObject, Type } from "typebox";
 
 import { type CommandResult, type CommandSpec, parseCommand } from "../lib/cli.js";

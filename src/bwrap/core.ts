@@ -1,7 +1,5 @@
-import type { ChildProcess } from "node:child_process";
-import { spawn } from "node:child_process";
-import { constants } from "node:fs";
-import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
+import { type ChildProcess, spawn } from "node:child_process";
+import { closeSync, constants, existsSync, openSync, readFileSync } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";

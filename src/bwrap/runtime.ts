@@ -3,14 +3,12 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, type WriteStrea
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type {
-  AgentToolUpdateCallback,
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
 import {
+  type AgentToolUpdateCallback,
   createLocalBashOperations,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type ExtensionContext,
   getAgentDir,
   truncateTail,
   type TruncationResult,

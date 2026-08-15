@@ -5,8 +5,8 @@ import { dirname, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  type ExtensionAPI,
   generateDiffString,
   generateUnifiedPatch,
   withFileMutationQueue,

@@ -21,8 +21,8 @@ import { constants } from "node:fs";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  type ExtensionAPI,
   generateDiffString,
   generateUnifiedPatch,
   withFileMutationQueue,

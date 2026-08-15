@@ -2,8 +2,11 @@ import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { type BashToolDetails, formatSize } from "@earendil-works/pi-coding-agent";
+import {
+  type BashToolDetails,
+  type ExtensionAPI,
+  formatSize,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
