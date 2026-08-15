@@ -21,6 +21,12 @@ export interface DcgSuggestion {
   text: string;
 }
 
+/** dcg 扫描结果：正常判定 / 未安装（静默跳过）/ 扫描失败（应提示用户）。 */
+export type DcgScanOutcome =
+  | { kind: "suggestion"; suggestion: DcgSuggestion }
+  | { kind: "not-installed" }
+  | { kind: "failed"; detail: string };
+
 /** dcg 扫描的超时预算：超时视为无建议，不让审批弹窗被拖住。 */
 const DCG_SCAN_TIMEOUT_MS = 2000;
 
@@ -33,22 +39,26 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * 对命令做 dcg 扫描，返回建议文本；任何失败（未安装/退出码非 0/超时/
- * 输出不可解析）都返回 undefined，调用方按"无建议"处理。
+ * 对命令做 dcg 扫描。返回三种结果：
+ * - `suggestion`：正常判定，携带建议文本
+ * - `not-installed`：dcg 未安装（调用方静默跳过）
+ * - `failed`：dcg 已安装但扫描失败（退出码异常/超时/输出不可解析），
+ *   调用方应通过 `ui.notify` 提示用户
  */
-export async function dcgSuggestion(command: string): Promise<DcgSuggestion | undefined> {
+export async function dcgSuggestion(command: string): Promise<DcgScanOutcome> {
   let stdout: string;
   try {
     stdout = await runDcgScan(command);
-  } catch {
-    return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "not-installed" };
+    return { kind: "failed", detail: error instanceof Error ? error.message : String(error) };
   }
 
   let output: DcgTestOutput;
   try {
     output = JSON.parse(stdout) as DcgTestOutput;
   } catch {
-    return undefined;
+    return { kind: "failed", detail: "无法解析 dcg 输出" };
   }
 
   if (output.decision === "deny") {
@@ -60,20 +70,29 @@ export async function dcgSuggestion(command: string): Promise<DcgSuggestion | un
       .join(", ");
     const reason = output.reason ? escapeHtml(output.reason) : "检测到破坏性命令模式";
     return {
-      kind: "danger",
-      text: `⚡ dcg 建议拦截: ${reason}${details ? ` (${details})` : ""}`,
+      kind: "suggestion",
+      suggestion: {
+        kind: "danger",
+        text: `dcg 建议拦截: ${reason}${details ? ` (${details})` : ""}`,
+      },
     };
   }
   if (output.decision === "allow") {
-    return { kind: "clean", text: "✅ dcg 未检测到破坏性命令模式" };
+    return {
+      kind: "suggestion",
+      suggestion: { kind: "clean", text: "dcg 未检测到破坏性命令模式" },
+    };
   }
-  // indeterminate / 缺字段：没有可用的建议
-  return undefined;
+  // indeterminate / 缺字段：dcg 未能给出可用判定
+  return {
+    kind: "failed",
+    detail: `dcg 未返回可用判定 (decision=${output.decision ?? "missing"})`,
+  };
 }
 
 function runDcgScan(command: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const proc = spawn("dcg", ["test", "--stdin", "--format", "json", "--dialect", "posix"], {
+    const proc = spawn("dcg", ["test", "--stdin", "--format", "json"], {
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -98,7 +117,9 @@ function runDcgScan(command: string): Promise<string> {
       settle(error);
     });
     proc.on("close", (code) => {
-      if (code === 0) settle();
+      // dcg 的退出码是决策结果（deny 时非 0），不是失败标志：只要 stdout
+      // 有内容就交给上层解析；真正出错时（参数错误等）stdout 为空。
+      if (code === 0 || stdout.length > 0) settle();
       else settle(new Error(`dcg exited with code ${String(code)}`));
     });
     proc.stdin.end(command);

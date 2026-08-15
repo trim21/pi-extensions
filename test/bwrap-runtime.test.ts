@@ -64,6 +64,8 @@ describe("BwrapRuntime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     dcgSuggestionMock.mockReset();
+    // 默认视为 dcg 未安装：静默跳过，不影响任何审批断言
+    dcgSuggestionMock.mockResolvedValue({ kind: "not-installed" });
   });
 
   it("registers flags, lifecycle handlers, and bwrap commands in setup", () => {
@@ -213,7 +215,10 @@ describe("BwrapRuntime", () => {
     it("shows the dcg suggestion inside the approval dialog when available", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
-      dcgSuggestionMock.mockResolvedValue({ kind: "danger", text: "⚡ dcg 建议拦截: test" });
+      dcgSuggestionMock.mockResolvedValue({
+        kind: "suggestion",
+        suggestion: { kind: "danger", text: "dcg 建议拦截: test" },
+      });
       const select = vi.fn(async () => ALLOW_ONCE);
       const result = await runtime.execute({
         toolCallId: "test",
@@ -222,24 +227,47 @@ describe("BwrapRuntime", () => {
         ctx: fullAccessContext({ select, input: vi.fn() }),
       });
       expect(select).toHaveBeenCalledWith(
-        expect.stringContaining("⚡ dcg 建议拦截: test"),
+        expect.stringContaining("dcg 建议拦截: test"),
         expect.anything(),
         expect.anything(),
       );
       expect(result).toMatchObject({ exitCode: 0 });
     });
 
-    it("renders the dialog without a dcg block when no suggestion is available", async () => {
+    it("renders the dialog without a dcg block when dcg is not installed", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
-      // dcgSuggestionMock 默认返回 undefined（未安装/扫描失败）
+      // 默认 not-installed：不显示建议块，也不 notify
+      const notify = vi.fn();
       const select = vi.fn(async () => ALLOW_ONCE);
       await runtime.execute({
         toolCallId: "test",
         command: "printf ok",
         requestFullAccess: true,
-        ctx: fullAccessContext({ select, input: vi.fn() }),
+        ctx: fullAccessContext({ select, input: vi.fn(), notify }),
       });
+      expect(select).toHaveBeenCalledWith(
+        expect.not.stringContaining("dcg"),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it("notifies a warning when the dcg scan fails", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      dcgSuggestionMock.mockResolvedValue({ kind: "failed", detail: "dcg scan timed out" });
+      const notify = vi.fn();
+      const select = vi.fn(async () => ALLOW_ONCE);
+      await runtime.execute({
+        toolCallId: "test",
+        command: "printf ok",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn(), notify }),
+      });
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("dcg 扫描失败"), "warning");
+      // 失败时弹窗照常出现，只是没有建议块
       expect(select).toHaveBeenCalledWith(
         expect.not.stringContaining("dcg"),
         expect.anything(),

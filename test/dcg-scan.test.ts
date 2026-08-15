@@ -2,9 +2,9 @@
  * Tests for `dcgSuggestion` — the optional dcg (Destructive Command Guard)
  * scan layer shown inside the full-access approval dialog.
  *
- * dcg output must never affect execution: every failure (not installed,
- * non-zero exit, timeout, unparseable output) degrades to `undefined` and the
- * approval dialog renders exactly as it would without dcg.
+ * dcg output must never affect execution: a clean verdict is only a suggestion
+ * text, and every failure degrades to an outcome the caller can act on
+ * (`not-installed` = skip silently, `failed` = notify a warning).
  *
  * Run: npx vitest run test/dcg-scan.test.ts
  */
@@ -19,7 +19,7 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import { dcgSuggestion } from "../src/bwrap/dcg-scan.js";
+import { type DcgSuggestion, dcgSuggestion } from "../src/bwrap/dcg-scan.js";
 
 /** A fake dcg child process driven manually by each test. */
 class FakeChildProcess extends EventEmitter {
@@ -67,22 +67,29 @@ const denyOutput = (overrides: Record<string, unknown> = {}) =>
     ...overrides,
   });
 
+function expectSuggestion(result: Awaited<ReturnType<typeof dcgSuggestion>>): DcgSuggestion {
+  expect(result.kind).toBe("suggestion");
+  if (result.kind !== "suggestion") throw new Error("expected suggestion");
+  return result.suggestion;
+}
+
 describe("dcgSuggestion", () => {
-  it("returns undefined when dcg is not installed (ENOENT)", async () => {
+  it("reports not-installed when dcg is absent (ENOENT)", async () => {
     const promise = dcgSuggestion("rm -rf /");
     fakeProc.missing();
-    await expect(promise).resolves.toBeUndefined();
+
+    await expect(promise).resolves.toEqual({ kind: "not-installed" });
   });
 
   it("returns a danger suggestion for a denied command", async () => {
     const promise = dcgSuggestion("git reset --hard");
     fakeProc.exit(0, denyOutput());
 
-    const result = await promise;
-    expect(result?.kind).toBe("danger");
-    expect(result?.text).toContain("git reset --hard destroys uncommitted changes");
-    expect(result?.text).toContain("core.git:reset-hard");
-    expect(result?.text).toContain("critical");
+    const suggestion = expectSuggestion(await promise);
+    expect(suggestion.kind).toBe("danger");
+    expect(suggestion.text).toContain("git reset --hard destroys uncommitted changes");
+    expect(suggestion.text).toContain("core.git:reset-hard");
+    expect(suggestion.text).toContain("critical");
   });
 
   it("escapes html in dcg-provided fields", async () => {
@@ -95,47 +102,55 @@ describe("dcgSuggestion", () => {
       }),
     );
 
-    const result = await promise;
-    expect(result?.text).toContain("&lt;dangerous&gt;");
-    expect(result?.text).toContain("core.git:a&lt;b");
+    const suggestion = expectSuggestion(await promise);
+    expect(suggestion.text).toContain("&lt;dangerous&gt;");
+    expect(suggestion.text).toContain("core.git:a&lt;b");
   });
 
   it("returns a clean suggestion when the command is allowed", async () => {
     const promise = dcgSuggestion("git status");
     fakeProc.exit(0, JSON.stringify({ decision: "allow" }));
 
-    const result = await promise;
-    expect(result?.kind).toBe("clean");
-    expect(result?.text).toContain("未检测到破坏性命令模式");
+    const suggestion = expectSuggestion(await promise);
+    expect(suggestion.kind).toBe("clean");
+    expect(suggestion.text).toContain("未检测到破坏性命令模式");
   });
 
-  it("returns undefined when dcg exits non-zero", async () => {
+  it("returns a danger suggestion even when dcg exits non-zero (deny verdict)", async () => {
+    // dcg 的退出码是决策结果：deny 时返回 1，但 stdout 仍是有效 JSON
+    const promise = dcgSuggestion("rm -rf /");
+    fakeProc.exit(1, denyOutput());
+
+    expect(expectSuggestion(await promise).kind).toBe("danger");
+  });
+
+  it("reports failed on non-zero exit with unusable output", async () => {
     const promise = dcgSuggestion("git status");
-    fakeProc.exit(1, "some error");
+    fakeProc.exit(2, "");
 
-    await expect(promise).resolves.toBeUndefined();
+    await expect(promise).resolves.toMatchObject({ kind: "failed" });
   });
 
-  it("returns undefined on unparseable output", async () => {
+  it("reports failed on unparseable output", async () => {
     const promise = dcgSuggestion("git status");
     fakeProc.exit(0, "not json at all");
 
-    await expect(promise).resolves.toBeUndefined();
+    await expect(promise).resolves.toMatchObject({ kind: "failed" });
   });
 
-  it("returns undefined when the verdict is indeterminate", async () => {
+  it("reports failed when the verdict is indeterminate", async () => {
     const promise = dcgSuggestion("git status");
     fakeProc.exit(0, JSON.stringify({ decision: "indeterminate" }));
 
-    await expect(promise).resolves.toBeUndefined();
+    await expect(promise).resolves.toMatchObject({ kind: "failed" });
   });
 
-  it("returns undefined when dcg times out", async () => {
+  it("reports failed when dcg times out", async () => {
     vi.useFakeTimers();
     const promise = dcgSuggestion("rm -rf /");
     vi.advanceTimersByTime(2000);
 
-    await expect(promise).resolves.toBeUndefined();
+    await expect(promise).resolves.toMatchObject({ kind: "failed" });
     expect(fakeProc.killed).toBe(true);
   });
 
