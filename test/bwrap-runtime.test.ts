@@ -1,8 +1,8 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/bwrap/core.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/bwrap/core.js")>();
@@ -14,7 +14,14 @@ vi.mock("../src/bwrap/core.js", async (importOriginal) => {
   };
 });
 
-import { type BwrapRuntime, createBwrapRuntime } from "../src/bwrap/runtime.js";
+import {
+  ALLOW_FOREVER,
+  ALLOW_ONCE,
+  type BwrapRuntime,
+  createBwrapRuntime,
+  DENY,
+  DENY_WITH_REASON,
+} from "../src/bwrap/runtime.js";
 
 beforeAll(() => {
   // Bash 输出运行时落盘到 agent-dir/tmp：测试环境指向可写的临时目录
@@ -33,8 +40,8 @@ function setupRuntime() {
   return { runtime, pi };
 }
 
-function fullAccessContext(ui: unknown, abort: () => void = vi.fn()) {
-  return { cwd: process.cwd(), hasUI: true, signal: undefined, abort, ui } as never;
+function fullAccessContext(ui: unknown, abort: () => void = vi.fn(), cwd = process.cwd()) {
+  return { cwd, hasUI: true, signal: undefined, abort, ui } as never;
 }
 
 function startSession(runtime: BwrapRuntime, pi: { on: ReturnType<typeof vi.fn> }) {
@@ -120,11 +127,71 @@ describe("BwrapRuntime", () => {
     ).rejects.toThrow(/no UI is available/);
   });
 
+  describe("approval rules", () => {
+    beforeEach(() => {
+      // 在测试 agent 目录写入带 approvalRules 的全局配置
+      writeFileSync(
+        join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+        JSON.stringify({
+          approvalRules: [
+            { action: "allow", pattern: "git status *" },
+            { action: "deny", pattern: "git push *" },
+          ],
+        }),
+      );
+    });
+
+    it("auto-allows commands matching an allow rule without a dialog", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      // workspace-write + approvalRules.allow(git status *) → 直接放行，不弹框
+      const select = vi.fn();
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "git status",
+        requestFullAccess: true,
+        requestFullAccessReason: "test",
+        ctx: fullAccessContext({ select, input: vi.fn() }),
+      });
+      expect(result).toMatchObject({ exitCode: 0 });
+      expect(select).not.toHaveBeenCalled();
+    });
+
+    it("auto-denies commands matching a deny rule without a dialog", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn();
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "git push origin main",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input: vi.fn() }),
+        }),
+      ).rejects.toThrow(/Command denied by bwrap approval rule/);
+      expect(select).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the dialog when no rule matches", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async () => "Approve once");
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "git rev-parse --abbrev-ref HEAD",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }),
+      });
+      expect(select).toHaveBeenCalled();
+      expect(result).toMatchObject({ exitCode: 0 });
+    });
+  });
+
   describe("full-access approval dialog", () => {
     it("runs the command when the user approves once", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
-      const select = vi.fn(async () => "Approve once");
+      const select = vi.fn(async () => ALLOW_ONCE);
       const abort = vi.fn();
       const result = await runtime.execute({
         toolCallId: "test",
@@ -152,10 +219,10 @@ describe("BwrapRuntime", () => {
       expect(abort).toHaveBeenCalled();
     });
 
-    it("denies without feedback when the user blocks", async () => {
+    it("denies without feedback when the user denies", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
-      const select = vi.fn(async () => "Block");
+      const select = vi.fn(async () => DENY);
       const abort = vi.fn();
       await expect(
         runtime.execute({
@@ -168,13 +235,10 @@ describe("BwrapRuntime", () => {
       expect(abort).not.toHaveBeenCalled();
     });
 
-    it("includes the typed reason when the user blocks with reason", async () => {
+    it("includes the typed reason when the user denies with reason", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
-      const select = vi
-        .fn()
-        .mockResolvedValueOnce("Block")
-        .mockResolvedValueOnce("Block with reason");
+      const select = vi.fn(async () => DENY_WITH_REASON);
       const input = vi.fn(async () => "too risky");
       await expect(
         runtime.execute({
@@ -184,15 +248,14 @@ describe("BwrapRuntime", () => {
           ctx: fullAccessContext({ select, input }),
         }),
       ).rejects.toThrow(/User denied unsandboxed execution: too risky/);
+      expect(select).toHaveBeenCalledTimes(1);
+      expect(input).toHaveBeenCalledTimes(1);
     });
 
     it("denies without feedback when the reason input is cancelled", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
-      const select = vi
-        .fn()
-        .mockResolvedValueOnce("Block")
-        .mockResolvedValueOnce("Block with reason");
+      const select = vi.fn(async () => DENY_WITH_REASON);
       const input = vi.fn().mockResolvedValue(undefined);
       await expect(
         runtime.execute({
@@ -202,18 +265,15 @@ describe("BwrapRuntime", () => {
           ctx: fullAccessContext({ select, input }),
         }),
       ).rejects.toThrow(/User denied unsandboxed execution\.$/);
-      // 无循环：单选 1 + 单选 2 各一次，input 取消后直接拒绝
-      expect(select).toHaveBeenCalledTimes(2);
+      // 无循环：单选 1 次，input 取消后直接拒绝
+      expect(select).toHaveBeenCalledTimes(1);
       expect(input).toHaveBeenCalledTimes(1);
     });
 
     it("denies without reason text when the reason input is blank", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
-      const select = vi
-        .fn()
-        .mockResolvedValueOnce("Block")
-        .mockResolvedValueOnce("Block with reason");
+      const select = vi.fn(async () => DENY_WITH_REASON);
       const input = vi.fn(async () => " ".repeat(3));
       await expect(
         runtime.execute({
@@ -225,20 +285,36 @@ describe("BwrapRuntime", () => {
       ).rejects.toThrow(/User denied unsandboxed execution\.$/);
     });
 
-    it("denies without feedback when the second selection is dismissed", async () => {
+    it("allow forever persists an allow rule and auto-approves next time", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-forever-"));
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
-      const select = vi.fn().mockResolvedValueOnce("Block").mockResolvedValueOnce(undefined);
-      const abort = vi.fn();
-      await expect(
-        runtime.execute({
-          toolCallId: "test",
-          command: "printf should-not-run",
-          requestFullAccess: true,
-          ctx: fullAccessContext({ select, input: vi.fn() }, abort),
-        }),
-      ).rejects.toThrow(/User denied unsandboxed execution\.$/);
-      expect(abort).not.toHaveBeenCalled();
+      runtime.setMode(directory, "workspace-write");
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf forever",
+        requestFullAccess: true,
+        ctx: fullAccessContext(
+          { select: vi.fn(async () => ALLOW_FOREVER), input: vi.fn() },
+          undefined,
+          directory,
+        ),
+      });
+      expect(result).toMatchObject({ exitCode: 0, output: "forever" });
+      // 项目配置写入 allow 规则
+      const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
+        approvalRules: { action: string; pattern: string }[];
+      };
+      expect(config.approvalRules).toEqual([{ action: "allow", pattern: "printf *" }]);
+      // 同命令再次执行：命中规则，不再弹框
+      const select2 = vi.fn();
+      const result2 = await runtime.execute({
+        toolCallId: "test2",
+        command: "printf forever",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select: select2, input: vi.fn() }, undefined, directory),
+      });
+      expect(result2).toMatchObject({ exitCode: 0, output: "forever" });
+      expect(select2).not.toHaveBeenCalled();
     });
   });
 });

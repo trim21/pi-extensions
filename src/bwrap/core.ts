@@ -12,6 +12,7 @@ import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { expandHome } from "../lib/path.js";
+import { type ApprovalRule } from "./approval-rules.js";
 
 const PROTECTED_DIRS = [".git", ".pi", ".agent"];
 
@@ -26,6 +27,17 @@ const bwrapConfigProperties = {
   extraWritablePaths: Type.Array(Type.String()),
   tmpfsPaths: Type.Array(Type.String()),
   extraArgs: Type.Array(Type.String()),
+  approvalRules: Type.Optional(
+    Type.Array(
+      Type.Object(
+        {
+          action: StringEnum(["allow", "deny"] as const),
+          pattern: Type.String({ description: '命令模式，如 "git push *"、"npm install *"' }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  ),
 };
 
 export const bwrapConfigSchema = Type.Object(bwrapConfigProperties, {
@@ -48,6 +60,8 @@ export interface ResolvedBwrap {
   extraWritablePaths: string[];
   tmpfsPaths: string[];
   extraArgs: string[];
+  /** 全权限执行的自动审批规则（allow/deny 命令模式）。 */
+  approvalRules: ApprovalRule[];
 }
 
 const DEFAULT_CONFIG: BwrapConfig = {
@@ -66,6 +80,7 @@ export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
     extraWritablePaths: config.extraWritablePaths,
     tmpfsPaths: config.tmpfsPaths ?? [],
     extraArgs: config.extraArgs ?? [],
+    approvalRules: config.approvalRules ?? [],
   };
   switch (config.mode) {
     case "allow-all": {
@@ -102,6 +117,7 @@ function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapCon
     extraWritablePaths: [...base.extraWritablePaths, ...(overrides.extraWritablePaths ?? [])],
     tmpfsPaths: overrides.tmpfsPaths ?? base.tmpfsPaths,
     extraArgs: overrides.extraArgs ?? base.extraArgs,
+    approvalRules: [...(base.approvalRules ?? []), ...(overrides.approvalRules ?? [])],
   };
 }
 

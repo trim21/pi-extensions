@@ -81,8 +81,17 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
   "tmpfsPaths": [],
   // 额外 bwrap 参数
   "extraArgs": ["--die-with-parent"],
+  // 全权限执行的自动审批规则：命中规则的命令不弹确认框
+  // allow 直接放行，deny 直接拒绝；命令用 tree-sitter 解析，
+  // 按 BashArity 生成模式（git checkout main → "git checkout *"）
+  "approvalRules": [
+    { "action": "allow", "pattern": "git status *" },
+    { "action": "deny", "pattern": "git push *" },
+  ],
 }
 ```
+
+`dangerouslyDisableSandbox: true` 的审批流程：先按 `approvalRules` 匹配（含嵌套 `$(...)` 内的命令，规则后写优先），命中 allow/deny 直接放行/拒绝，未命中才弹确认框。
 
 ### 使用
 

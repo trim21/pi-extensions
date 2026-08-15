@@ -57,7 +57,7 @@ The capitalized tools below follow Claude Code behavior with a few deliberate de
 
 ## Bash
 
-- Commands run through the bwrap sandbox (modes: `allow-all` / `workspace-write` / `allow-net` / `readonly`), switchable via `/bwrap-*` commands. `dangerouslyDisableSandbox: true` requests one-time unsandboxed execution and needs user approval (denied in headless sessions).
+- Commands run through the bwrap sandbox (modes: `allow-all` / `workspace-write` / `allow-net` / `readonly`), switchable via `/bwrap-*` commands. `dangerouslyDisableSandbox: true` requests one-time unsandboxed execution. Approval flow: commands are parsed (tree-sitter, including nested `$(...)`) and matched against `approvalRules` from `bwrap.json` — an `allow` rule auto-approves, a `deny` rule rejects outright (last matching rule wins), and only unmatched commands show the approval dialog. In headless sessions unsandboxed execution is denied.
 - `timeout` is in milliseconds, default 120000, max 600000. `workdir` overrides the working directory.
 - **Non-zero exit code is a tool failure**: the error text starts with `Exit code N` followed by the full output (head/tail-truncated at 10000 chars if larger). **Deviation from Claude Code:** no command-semantics special cases — `grep` with no matches (exit 1), `diff` differences, `test` false, etc. all fail like any other non-zero exit.
 - Output is streamed to a file under `agent-dir/tmp/<uuid>.txt` during execution; the tool result only contains the truncated tail (2000 lines / 50 KB). On truncation a note is appended: `[Showing lines X-Y of N. Full output: <path>]` — read that file for the complete output. In a read-only sandbox where the write fails, the result degrades to the in-memory tail only.

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
-import { join } from "node:path";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, type WriteStream } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import type {
   AgentToolUpdateCallback,
@@ -17,11 +18,13 @@ import {
 import { type TObject, Type } from "typebox";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
-import { selectWithOptionalInput } from "../lib/ui.js";
+import { type SelectAction, selectWithOptionalInput } from "../lib/ui.js";
+import { type ApprovalRule, commandPatternsFor, evaluateBashApproval } from "./approval-rules.js";
 import {
   type BwrapMode,
   createBwrapBashOperations,
   findBwrap,
+  getBwrapConfigPaths,
   loadBwrapConfig,
   resolveBwrap,
   resolveBwrapPath,
@@ -41,6 +44,20 @@ export function resolveEscalation(opts: { hasUI: boolean }): EscalationDecision 
   }
   return { kind: "dialog" };
 }
+
+/** 全权限审批对话框的选项 label（也作为 switch 匹配键与测试引用）。 */
+export const ALLOW_ONCE = "Allow once";
+export const ALLOW_FOREVER = "Allow forever";
+export const DENY = "Deny";
+export const DENY_WITH_REASON = "Deny with reason";
+
+/** 审批对话框选项：允许一次 / 永久允许 / 拒绝 / 拒绝并附理由。 */
+export const FULL_ACCESS_CHOICES: readonly SelectAction[] = [
+  { label: ALLOW_ONCE },
+  { label: ALLOW_FOREVER },
+  { label: DENY },
+  { label: DENY_WITH_REASON, inputPrompt: "Why was this denied?" },
+];
 
 export interface BwrapExecutionRequest {
   toolCallId: string;
@@ -274,7 +291,14 @@ export class BwrapRuntime {
       );
     }
     if (request.requestFullAccess === true && runtime.bwrapEnabled) {
-      await this.approveFullAccess(request.ctx, request.command, request.requestFullAccessReason);
+      // 先按 approvalRules 自动判定：allow 直接放行，deny 直接拒绝，未命中才弹框
+      const decision = await evaluateBashApproval(request.command, runtime.approvalRules);
+      if (decision === "deny") {
+        throw new Error(`Command denied by bwrap approval rule: ${request.command}`);
+      }
+      if (decision === undefined) {
+        await this.approveFullAccess(request.ctx, request.command, request.requestFullAccessReason);
+      }
     }
     const operations =
       runtime.bwrapEnabled && request.requestFullAccess !== true
@@ -368,36 +392,57 @@ export class BwrapRuntime {
     if (policy.kind === "deny") throw new Error(policy.reason);
     const description = `Allow this command to run without sandbox?\n---\n\nReason: ${escapeHtml(reason ?? "(No reason provided by model)")}\n---\n${fenceCodeBlock(command)}`;
 
-    // 单选 1：允许还是拦截（关闭对话框 = 中断并拒绝）
-    const verdict = await selectWithOptionalInput(
-      description,
-      [{ label: "Approve once" }, { label: "Block" }],
-      ctx.ui,
-      { signal: ctx.signal },
-    );
+    // 单选：允许一次 / 永久允许（写入规则）/ 拒绝 / 拒绝并附理由（弹输入框）
+    const verdict = await selectWithOptionalInput(description, FULL_ACCESS_CHOICES, ctx.ui, {
+      signal: ctx.signal,
+    });
+    // 关闭对话框 = 中断并拒绝，不循环重问
     if (verdict === undefined) {
       ctx.abort();
       throw new Error("User denied the command execution.");
     }
-    if (verdict.label === "Approve once") return;
-
-    // 单选 2 + input 组合：直接拦截还是附带理由；选 "Block with reason"
-    // 自动弹输入框。关闭对话框/取消输入/空白都按无理由拒绝，不循环重问。
-    const style = await selectWithOptionalInput(
-      "Block this command?",
-      [{ label: "Block" }, { label: "Block with reason", inputPrompt: "Why was this denied?" }],
-      ctx.ui,
-      { signal: ctx.signal },
-    );
-    if (style === undefined || style.label === "Block") {
-      throw new Error("User denied unsandboxed execution.");
+    switch (verdict.label) {
+      case ALLOW_ONCE: {
+        return;
+      }
+      case ALLOW_FOREVER: {
+        await this.persistAllowRule(ctx, command);
+        return;
+      }
+      case DENY: {
+        throw new Error("User denied unsandboxed execution.");
+      }
+      case DENY_WITH_REASON: {
+        const feedback = verdict.input?.trim() ?? "";
+        throw new Error(
+          feedback
+            ? `User denied unsandboxed execution: ${feedback}`
+            : "User denied unsandboxed execution.",
+        );
+      }
     }
-    const feedback = style.input?.trim() ?? "";
-    throw new Error(
-      feedback
-        ? `User denied unsandboxed execution: ${feedback}`
-        : "User denied unsandboxed execution.",
-    );
+  }
+
+  /** 把命令的权限模式写入项目 bwrap.json 的 approvalRules（allow forever）。 */
+  private async persistAllowRule(ctx: ExtensionContext, command: string): Promise<void> {
+    const patterns = await commandPatternsFor(command);
+    if (patterns.length === 0) return; // 解析失败：本次放行，不写规则
+    const newRules: ApprovalRule[] = patterns.map((pattern) => ({ action: "allow", pattern }));
+    const { project } = getBwrapConfigPaths(ctx.cwd);
+    let config: Record<string, unknown> = {};
+    if (existsSync(project)) {
+      config = JSON.parse(readFileSync(project, "utf8")) as Record<string, unknown>;
+    }
+    const existing = Array.isArray(config.approvalRules)
+      ? (config.approvalRules as ApprovalRule[])
+      : [];
+    config.approvalRules = [...existing, ...newRules];
+    await mkdir(dirname(project), { recursive: true });
+    await writeFile(project, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    // 更新缓存的规则，立即生效
+    if (this.resolved) {
+      this.resolved.approvalRules = [...this.resolved.approvalRules, ...newRules];
+    }
   }
 
   private registerCommands(pi: ExtensionAPI): void {
