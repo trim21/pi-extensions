@@ -126,7 +126,7 @@ export interface BwrapConfigPaths {
 
 export function getBwrapConfigPaths(cwd: string): BwrapConfigPaths {
   return {
-    global: join(getAgentDir(), "extensions", "bwrap.json"),
+    global: join(getAgentDir(), "bwrap.json"),
     project: join(cwd, ".pi", "bwrap.json"),
   };
 }

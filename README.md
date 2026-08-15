@@ -56,7 +56,7 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
 
 配置文件（项目优先于全局）：
 
-- `~/.pi/agent/extensions/bwrap.json`（全局）
+- `~/.pi/agent/bwrap.json`（全局）
 - `.pi/bwrap.json`（项目）
 
 ```jsonc
