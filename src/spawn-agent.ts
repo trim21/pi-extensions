@@ -13,8 +13,9 @@
  * Progress is a rolling log: `tool: <name>` lines for tool calls and
  * `text: <content>` lines for completed text blocks, keeping the last
  * `MAX_PROGRESS_LINES` lines. Consecutive tool calls are merged into a
- * single `tool:` line (`read x 2, glob`), so a burst of tool calls does
- * not flood the window; any text block starts a new line.
+ * single `tool:` line (`read x 2, glob`) and line content is capped at
+ * `MAX_PROGRESS_CHARS` characters, so a burst of tool calls or a long
+ * text block does not flood the window; any text block starts a new line.
  *
  * Security default: without an explicit `tools:` in the frontmatter, the
  * subagent only gets read-only tools (read/grep/find/ls) — no bash/write/edit.
@@ -50,6 +51,8 @@ const MAX_OUTPUT_BYTES = 50 * 1024;
 const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
 /** Progress log keeps only the most recent lines (rolling window). */
 const MAX_PROGRESS_LINES = 5;
+/** Progress line content (without the `tool:` / `text:` prefix) is capped at 50 chars. */
+const MAX_PROGRESS_CHARS = 50;
 
 /**
  * Tool → extension override map: when a subagent's frontmatter enables a
@@ -375,7 +378,8 @@ export async function runAgent(
         toolLineSegments.push(toolSegment(toolLine.name, toolLine.count));
         toolLine = { name, count: 1 };
       }
-      const line = `tool: ${[...toolLineSegments, toolSegment(toolLine.name, toolLine.count)].join(", ")}`;
+      const parts = [...toolLineSegments, toolSegment(toolLine.name, toolLine.count)].join(", ");
+      const line = `tool: ${parts.slice(0, MAX_PROGRESS_CHARS)}`;
       if (firstInBatch) {
         logLines.push(line);
         if (logLines.length > MAX_PROGRESS_LINES) {
@@ -458,7 +462,7 @@ export async function runAgent(
           // `text:` log line. Deltas/thinking are intentionally not logged.
           const delta = event.assistantMessageEvent;
           if (delta.type === "text_end") {
-            pushLogLine(`text: ${delta.content}`);
+            pushLogLine(`text: ${delta.content.slice(0, MAX_PROGRESS_CHARS)}`);
             emitUpdate();
           }
 

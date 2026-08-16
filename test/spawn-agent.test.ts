@@ -621,6 +621,37 @@ describe("subagent progress log", () => {
     expect(lines[2]).toBe("tool: read");
   });
 
+  it("caps text block content at 50 characters", async () => {
+    const long = "a".repeat(120);
+    const updates = await runWithEvents([
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "text_end", contentIndex: 0, content: long },
+      },
+    ]);
+    expect(updates.at(-1)).toContain(`text: ${"a".repeat(50)}`);
+    expect(updates.at(-1)).not.toContain(`text: ${"a".repeat(51)}`);
+  });
+
+  it("caps merged tool lines at 50 characters", async () => {
+    const names = [
+      "alpha-tool-with-a-very-long-name",
+      "beta-tool-with-a-very-long-name",
+      "gamma-tool-with-a-very-long-name",
+    ];
+    const updates = await runWithEvents(
+      names.map((name, i) => ({
+        type: "tool_execution_start",
+        toolCallId: String(i),
+        toolName: name,
+        args: {},
+      })),
+    );
+    expect(updates.at(-1)).toContain(`tool: ${names.join(", ").slice(0, 50)}`);
+    expect(updates.at(-1)).not.toContain(`tool: ${names.join(", ").slice(0, 51)}`);
+  });
+
   it("interleaves tool: and text: lines in event order", async () => {
     const updates = await runWithEvents([
       {
