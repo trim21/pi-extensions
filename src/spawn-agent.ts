@@ -42,6 +42,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { type ToolPendant } from "./lib/pendant.js";
 import { type AgentConfig, discoverAgents, formatAgentList } from "./spawn-agent-agents.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -114,6 +115,8 @@ interface SubagentDetails {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
+  /** 折叠 markdown 面板：父 agent 的 prompt 与父 agent 看到的子 agent 结果。 */
+  pendant?: ToolPendant;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -158,6 +161,11 @@ function formatUsageStats(usage: UsageStats, model?: string): string {
   if (usage.contextTokens > 0) parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
   if (model) parts.push(model);
   return parts.join(" ");
+}
+
+/** 子 agent 结果的折叠面板 markdown：父 agent 的 prompt 与父 agent 看到的结果。 */
+function formatPendantMarkdown(task: string, response: string): string {
+  return `# prompt:\n${task.trim()}\n# response\n${response.trim()}`;
 }
 
 /**
@@ -669,7 +677,13 @@ export default function spawnAgent(pi: ExtensionAPI) {
           content: [
             { type: "text", text: `Subagent "${result.agent}" failed (${reason}): ${message}` },
           ],
-          details: result,
+          details: {
+            ...result,
+            pendant: {
+              markdown: formatPendantMarkdown(params.task, message),
+              expanded: true,
+            } satisfies ToolPendant,
+          },
           isError: true,
         };
       }
@@ -679,7 +693,16 @@ export default function spawnAgent(pi: ExtensionAPI) {
       const text = truncation.truncated
         ? `${truncation.content}\n\n[Output truncated to ${formatTokens(truncation.content.length)} bytes. Full result preserved in tool details.]`
         : output;
-      return { content: [{ type: "text", text }], details: result };
+      return {
+        content: [{ type: "text", text }],
+        details: {
+          ...result,
+          pendant: {
+            markdown: formatPendantMarkdown(params.task, text),
+            expanded: false,
+          } satisfies ToolPendant,
+        },
+      };
     },
 
     renderCall(args, theme) {
