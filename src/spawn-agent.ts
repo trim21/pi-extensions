@@ -544,6 +544,16 @@ export function formatAgentListSection(agents: AgentConfig[]): string {
 // ── extension ────────────────────────────────────────────────────────────────
 
 export default function spawnAgent(pi: ExtensionAPI) {
+  // Windows 上禁用：子代理进程的派生（node/bun 运行时下回退到 `pi` 命令，
+  // 而 npm 安装的 pi 是 .cmd shim，spawn 无法直接启动）与信号管理都是
+  // POSIX 假设，不做 Windows 适配。
+  if (process.platform === "win32") {
+    pi.on("session_start", (_event, ctx) => {
+      ctx.ui.notify("spawn-agent is disabled on Windows.", "warning");
+    });
+    return;
+  }
+
   // Discover the available subagent types once at extension startup. The
   // extension owns this discovery: the model never has to guess agent names
   // or read the agent directory itself. Editing ~/.pi/agent/agents/*.md

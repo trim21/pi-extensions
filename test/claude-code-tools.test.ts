@@ -266,27 +266,32 @@ describe("Read, Edit, and Write", () => {
     ).rejects.toThrow(/modified since read/);
   });
 
-  it("treats a symlinked path and its real path as the same file for read state", async () => {
-    const base = await mkdtemp(join(tmpdir(), "cc-symlink-"));
-    const realDir = join(base, "real");
-    await mkdir(realDir);
-    const realFile = join(realDir, "note.txt");
-    await writeFile(realFile, "hello world\n", "utf8");
-    const linkDir = join(base, "link");
-    await symlink(realDir, linkDir, "dir");
-    const linkFile = join(linkDir, "note.txt");
-    const tools = loadTools();
-    const ctx = context(base);
+  // Windows 上创建目录 symlink 需要特权/开发者模式，且 read state 的
+  // realpath 语义一致性问题不在此平台验证：只跑 Unix。
+  it.skipIf(process.platform === "win32")(
+    "treats a symlinked path and its real path as the same file for read state",
+    async () => {
+      const base = await mkdtemp(join(tmpdir(), "cc-symlink-"));
+      const realDir = join(base, "real");
+      await mkdir(realDir);
+      const realFile = join(realDir, "note.txt");
+      await writeFile(realFile, "hello world\n", "utf8");
+      const linkDir = join(base, "link");
+      await symlink(realDir, linkDir, "dir");
+      const linkFile = join(linkDir, "note.txt");
+      const tools = loadTools();
+      const ctx = context(base);
 
-    // 经 symlink 路径 Read，经真实路径 Edit 应视为同一文件（不报 not read yet）
-    await call(tools.get("Read")!, { file_path: linkFile }, ctx);
-    await call(
-      tools.get("Edit")!,
-      { file_path: realFile, old_string: "world", new_string: "there" },
-      ctx,
-    );
-    expect(await readFile(realFile, "utf8")).toBe("hello there\n");
-  });
+      // 经 symlink 路径 Read，经真实路径 Edit 应视为同一文件（不报 not read yet）
+      await call(tools.get("Read")!, { file_path: linkFile }, ctx);
+      await call(
+        tools.get("Edit")!,
+        { file_path: realFile, old_string: "world", new_string: "there" },
+        ctx,
+      );
+      expect(await readFile(realFile, "utf8")).toBe("hello there\n");
+    },
+  );
 
   it("allows Write to create a new file without a prior Read", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-write-"));
@@ -867,7 +872,9 @@ describe("Bash", () => {
     expect(result.content[0].text).toBe("done");
   });
 
-  it("runs commands in the given workdir", async () => {
+  // Git Bash 的 pwd 输出 POSIX 风格路径（/c/...），与 Windows 绝对路径断言
+  // 不兼容：此用例只跑 Unix。
+  it.skipIf(process.platform === "win32")("runs commands in the given workdir", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-bash-workdir-"));
     const nested = join(directory, "nested");
     await import("node:fs/promises").then(({ mkdir }) => mkdir(nested));

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,11 +14,34 @@ vi.mock("../src/bwrap/core.js", async (importOriginal) => {
   };
 });
 
-const { dcgSuggestionMock } = vi.hoisted(() => ({ dcgSuggestionMock: vi.fn() }));
+const { dcgSuggestionMock, localCreateMock } = vi.hoisted(() => ({
+  dcgSuggestionMock: vi.fn(),
+  localCreateMock: vi.fn(),
+}));
 
 vi.mock("../src/bwrap/dcg-scan.js", () => ({
   dcgSuggestion: (...args: unknown[]) => dcgSuggestionMock(...args),
 }));
+
+// createLocalBashOperations 默认走真实实现（Linux 上的 bash 测试），
+// Windows 语义测试通过 localCreateMock 覆盖为记录式 fake：mock win32 时
+// pi 的本地 shell 层会去找 Git Bash（Linux 上没有），审批通过后的"执行"
+// 只需验证走了本地执行路径，不需要真实 shell。
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  return {
+    ...actual,
+    createLocalBashOperations: (...args: unknown[]) => {
+      const overridden = localCreateMock(...args);
+      return (
+        overridden ??
+        actual.createLocalBashOperations(
+          ...(args as Parameters<typeof actual.createLocalBashOperations>),
+        )
+      );
+    },
+  };
+});
 
 import {
   ALLOW_FOREVER,
@@ -63,6 +86,7 @@ function startSession(runtime: BwrapRuntime, pi: { on: ReturnType<typeof vi.fn> 
 describe("BwrapRuntime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    localCreateMock.mockReset();
     dcgSuggestionMock.mockReset();
     // 默认视为 dcg 未安装：静默跳过，不影响任何审批断言
     dcgSuggestionMock.mockResolvedValue({ kind: "not-installed" });
@@ -77,17 +101,23 @@ describe("BwrapRuntime", () => {
   });
 
   describe("bwrap binary unavailable", () => {
-    it("refuses all commands instead of degrading to allow-all", async () => {
-      const { runtime, pi } = setupRuntime();
-      startSession(runtime, pi);
-      await expect(
-        runtime.execute({
-          toolCallId: "test",
-          command: "echo should-not-run",
-          ctx: { cwd: process.cwd(), hasUI: true } as never,
-        }),
-      ).rejects.toThrow(/refusing to execute commands without sandboxing/);
-    });
+    // Linux/macOS 语义：bwrap 缺失时 fail closed，普通命令一律拒绝。
+    // Windows 上 bwrap 缺失是预期状态，走"每条命令人工审核"分支（见下方
+    // "Windows" describe），此测试在 Windows CI 上跳过。
+    it.skipIf(process.platform === "win32")(
+      "refuses all commands instead of degrading to allow-all",
+      async () => {
+        const { runtime, pi } = setupRuntime();
+        startSession(runtime, pi);
+        await expect(
+          runtime.execute({
+            toolCallId: "test",
+            command: "echo should-not-run",
+            ctx: { cwd: process.cwd(), hasUI: true } as never,
+          }),
+        ).rejects.toThrow(/refusing to execute commands without sandboxing/);
+      },
+    );
 
     it("still runs commands after the user explicitly switches to allow-all", async () => {
       const { runtime, pi } = setupRuntime();
@@ -361,15 +391,16 @@ describe("BwrapRuntime", () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-forever-"));
       const { runtime } = setupRuntime();
       runtime.setMode(directory, "workspace-write");
+      // 弹框应预览将要持久化的规则（`echo 1` → `printf forever` → `printf *`）
+      const select = vi.fn(async (title: string) => {
+        expect(title).toContain("`printf *`");
+        return ALLOW_FOREVER;
+      });
       const result = await runtime.execute({
         toolCallId: "test",
         command: "printf forever",
         requestFullAccess: true,
-        ctx: fullAccessContext(
-          { select: vi.fn(async () => ALLOW_FOREVER), input: vi.fn() },
-          undefined,
-          directory,
-        ),
+        ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
       });
       expect(result).toMatchObject({ exitCode: 0, output: "forever" });
       // 项目配置写入 allow 规则
@@ -388,5 +419,130 @@ describe("BwrapRuntime", () => {
       expect(result2).toMatchObject({ exitCode: 0, output: "forever" });
       expect(select2).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("Windows (no bwrap): every command requires approval", () => {
+  // Windows 没有 bubblewrap：bwrap 缺失是预期状态，降级为每条命令人工审核。
+  // 无论测试跑在哪个平台都模拟 win32，保证两个 CI 上验证同一套行为。
+  beforeEach(() => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    // 重置全局 approvalRules，避免前序测试的规则残留影响审批判定
+    rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
+    // 审批通过后走本地执行路径：mock 掉 createLocalBashOperations，避免 mock
+    // win32 下 pi 去找 Git Bash；fake exec 把命令文本回显为输出，便于断言。
+    localCreateMock.mockReturnValue({
+      exec: async (
+        command: string,
+        _cwd: string,
+        { onData }: { onData: (data: Buffer) => void },
+      ) => {
+        onData(Buffer.from(`${command}\n`));
+        return { exitCode: 0 };
+      },
+    });
+  });
+
+  it("skips bwrap checks at session start and announces per-command approval", () => {
+    const { pi } = setupRuntime();
+    const call = pi.on.mock.calls.find((c) => c[0] === "session_start");
+    const handler = call?.[1] as (
+      event: unknown,
+      ctx: { cwd: string; hasUI: boolean; ui: unknown },
+    ) => void;
+    const ui = { notify: vi.fn(), setStatus: vi.fn(), theme: { fg: (_c: string, t: string) => t } };
+    handler({}, { cwd: process.cwd(), hasUI: true, ui });
+    expect(ui.notify).toHaveBeenCalledWith(
+      "Every bash command requires user approval before it runs.",
+      "info",
+    );
+    // Windows 上没有 bwrap 状态可言：不设置 bwrap status
+    expect(ui.setStatus).not.toHaveBeenCalled();
+  });
+
+  it("does not mention bwrap in the injected system prompt", () => {
+    const { pi } = setupRuntime();
+    const call = pi.on.mock.calls.find((c) => c[0] === "before_agent_start");
+    const handler = call?.[1] as (
+      event: { systemPrompt: string },
+      ctx: { cwd: string; hasUI: boolean },
+    ) => { systemPrompt: string } | undefined;
+    const result = handler?.({ systemPrompt: "base" }, { cwd: process.cwd(), hasUI: true });
+    expect(result?.systemPrompt).toContain("Every bash command requires user approval");
+    expect(result?.systemPrompt).not.toContain("bwrap");
+  });
+
+  it("gates a plain command behind the approval dialog and runs after approve", async () => {
+    const { runtime, pi } = setupRuntime();
+    startSession(runtime, pi);
+    const select = vi.fn(async () => ALLOW_ONCE);
+    const result = await runtime.execute({
+      toolCallId: "test",
+      command: "printf windows",
+      ctx: fullAccessContext({ select, input: vi.fn() }),
+    });
+    expect(select).toHaveBeenCalled();
+    expect(result).toMatchObject({ exitCode: 0 });
+    expect(result.output).toContain("printf windows");
+  });
+
+  it("auto-denies commands matching a deny rule without a dialog", async () => {
+    writeFileSync(
+      join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+      JSON.stringify({ approvalRules: [{ action: "deny", pattern: "printf *" }] }),
+    );
+    const { runtime } = setupRuntime();
+    const select = vi.fn();
+    await expect(
+      runtime.execute({
+        toolCallId: "test",
+        command: "printf windows",
+        ctx: fullAccessContext({ select, input: vi.fn() }),
+      }),
+    ).rejects.toThrow(/Command denied by bwrap approval rule/);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("auto-allows commands matching an allow rule without a dialog", async () => {
+    writeFileSync(
+      join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+      JSON.stringify({ approvalRules: [{ action: "allow", pattern: "printf *" }] }),
+    );
+    const { runtime } = setupRuntime();
+    const select = vi.fn();
+    const result = await runtime.execute({
+      toolCallId: "test",
+      command: "printf windows",
+      ctx: fullAccessContext({ select, input: vi.fn() }),
+    });
+    expect(result).toMatchObject({ exitCode: 0 });
+    expect(result.output).toContain("printf windows");
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("allow-all mode skips approval (explicit opt-out)", async () => {
+    const { runtime, pi } = setupRuntime();
+    startSession(runtime, pi);
+    runtime.setMode(process.cwd(), "allow-all");
+    const select = vi.fn();
+    const result = await runtime.execute({
+      toolCallId: "test",
+      command: "printf windows",
+      ctx: fullAccessContext({ select, input: vi.fn() }),
+    });
+    expect(result).toMatchObject({ exitCode: 0 });
+    expect(result.output).toContain("printf windows");
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("rejects commands without a UI (no approval possible)", async () => {
+    const { runtime } = setupRuntime();
+    await expect(
+      runtime.execute({
+        toolCallId: "test",
+        command: "printf should-not-run",
+        ctx: { cwd: process.cwd(), hasUI: false } as never,
+      }),
+    ).rejects.toThrow(/no UI is available/);
   });
 });

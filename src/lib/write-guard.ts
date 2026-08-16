@@ -6,6 +6,8 @@
  * - Paths outside require user approval via a confirmation dialog showing a
  *   `diff` code block preview of the pending change.
  * - Headless sessions (no UI) reject outside writes outright.
+ * - Windows (no sandbox fallback): writes are restricted to the workspace;
+ *   outside paths are rejected outright, with no approval path.
  *
  * Callers have already parsed their tool arguments, so the guard only takes the
  * resolved pieces: the raw target path and the pending change (oldText/newText).
@@ -121,6 +123,14 @@ export async function guardWriteAccess(
   if (!ctx) return;
   const { absolutePath } = opts;
   if (isPathAllowed(absolutePath, ctx.cwd)) return;
+
+  if (process.platform === "win32") {
+    // Windows 上退化为「只能写工作区」：无沙箱兜底，工作区外写入一律拒绝，
+    // 不提供审批路径。
+    throw new Error(
+      `Path "${absolutePath}" is outside workspace. Writes outside the workspace are not allowed on Windows.`,
+    );
+  }
 
   if (!ctx.hasUI || !ctx.ui) {
     throw new Error(`Path "${absolutePath}" is outside workspace. No UI available for approval.`);

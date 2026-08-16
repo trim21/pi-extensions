@@ -224,6 +224,12 @@ export class BwrapRuntime {
       this.sandboxDisabled = pi.getFlag("no-bwrap") === true && ctx.hasUI;
       this.resolved = undefined;
       this.bwrapUnavailable = false;
+      if (process.platform === "win32") {
+        // Windows 没有 bubblewrap：不做 bwrap 检测、不显示 bwrap 状态，
+        // 每条 bash 命令在 execute 时逐条人工审批，模型无需知道 bwrap 的存在。
+        ctx.ui.notify("Every bash command requires user approval before it runs.", "info");
+        return;
+      }
       const runtime = this.resolve(ctx);
       if (runtime.bwrapEnabled) {
         try {
@@ -254,12 +260,18 @@ export class BwrapRuntime {
 
     pi.on("before_agent_start", (event, ctx) => {
       const runtime = this.resolve(ctx);
+      const isWindows = process.platform === "win32";
       const modeText = ctx.hasUI
-        ? `Current bwrap mode: **${runtime.mode}**. The bwrap runtime selects sandboxing and, when requested, user approval for unsandboxed execution.`
-        : "This headless session is forced into bwrap readonly mode. Unsandboxed execution cannot be approved.";
-      const unavailableText = this.bwrapUnavailable
-        ? " bwrap is unavailable (binary not found): bash commands are refused unless the user explicitly approves unsandboxed execution."
-        : "";
+        ? isWindows
+          ? "Every bash command requires user approval before it runs."
+          : `Current bwrap mode: **${runtime.mode}**. The bwrap runtime selects sandboxing and, when requested, user approval for unsandboxed execution.`
+        : isWindows
+          ? "This headless session cannot approve commands: bash commands are refused."
+          : "This headless session is forced into bwrap readonly mode. Unsandboxed execution cannot be approved.";
+      const unavailableText =
+        !isWindows && this.bwrapUnavailable
+          ? " bwrap is unavailable (binary not found): bash commands are refused unless the user explicitly approves unsandboxed execution."
+          : "";
       return {
         systemPrompt:
           event.systemPrompt + `\n\n## Command Execution\n${modeText}${unavailableText}\n`,
@@ -283,13 +295,24 @@ export class BwrapRuntime {
 
   async execute(request: BwrapExecutionRequest): Promise<BwrapExecutionResult> {
     const runtime = this.resolve(request.ctx);
-    if (this.bwrapUnavailable && runtime.bwrapEnabled && request.requestFullAccess !== true) {
+    const isWindows = process.platform === "win32";
+    // 非 Windows：bwrap 缺失时 fail closed，普通命令一律拒绝（除非显式 full-access 审批）。
+    // Windows：没有 bubblewrap，这是预期状态，降级为每条命令都走人工审核。
+    if (
+      !isWindows &&
+      this.bwrapUnavailable &&
+      runtime.bwrapEnabled &&
+      request.requestFullAccess !== true
+    ) {
       throw new Error(
         "bwrap (bubblewrap) not found; refusing to execute commands without sandboxing. " +
           "Install bubblewrap and restart the session, or pass --no-bwrap to disable the sandbox explicitly.",
       );
     }
-    if (request.requestFullAccess === true && runtime.bwrapEnabled) {
+    // 需要人工审批：非 Windows 仅 requestFullAccess；Windows 上默认所有命令
+    // （allow-all 模式是显式 opt-out，仍直接执行）。
+    const needsApproval = request.requestFullAccess === true || (isWindows && runtime.bwrapEnabled);
+    if (needsApproval && runtime.bwrapEnabled) {
       // 先按 approvalRules 自动判定：allow 直接放行，deny 直接拒绝，未命中才弹框
       const decision = await evaluateBashApproval(request.command, runtime.approvalRules);
       if (decision === "deny") {
@@ -300,9 +323,9 @@ export class BwrapRuntime {
       }
     }
     const operations =
-      runtime.bwrapEnabled && request.requestFullAccess !== true
-        ? createBwrapBashOperations(runtime)
-        : createLocalBashOperations();
+      isWindows || needsApproval || !runtime.bwrapEnabled
+        ? createLocalBashOperations()
+        : createBwrapBashOperations(runtime);
     const output = new BashOutput();
     const { onUpdate } = request;
 
@@ -389,15 +412,36 @@ export class BwrapRuntime {
   ): Promise<void> {
     const policy = resolveEscalation({ hasUI: ctx.hasUI });
     if (policy.kind === "deny") throw new Error(policy.reason);
+    // 弹框前解析命令的持久化规则（Allow forever 会写入），在弹框里预览给
+    // 用户：`echo 1` → `echo *`，避免用户对"永久允许"持久化什么一无所知。
+    const patterns = await commandPatternsFor(command);
     // dcg 扫描建议是可选的参考文本：未安装时静默跳过；已安装但扫描失败
     // 时 notify 提示，弹窗本身与无 dcg 时一致
     const outcome = await dcgSuggestion(command);
-    const suggestionBlock =
-      outcome.kind === "suggestion" ? `\n${outcome.suggestion.text}\n---\n` : "";
     if (outcome.kind === "failed") {
       ctx.ui.notify(`dcg 扫描失败，本次无破坏性命令建议: ${outcome.detail}`, "warning");
     }
-    const description = `Allow this command to run without sandbox?\n---\n\nReason: ${escapeHtml(reason ?? "(No reason provided by model)")}\n---\n${suggestionBlock}${fenceCodeBlock(command)}`;
+    // 弹框主体按行组织（'\n' join），便于 review；suggestion 与 forever 预览
+    // 块带前导空行 + 尾部 "---" 分隔，输出与历史逐字符一致。
+    const lines: string[] = [
+      "Allow this command to run without sandbox?",
+      "---",
+      "",
+      `Reason: ${escapeHtml(reason ?? "(No reason provided by model)")}`,
+      "---",
+    ];
+    if (outcome.kind === "suggestion") {
+      lines.push("", outcome.suggestion.text, "---");
+    }
+    if (patterns.length > 0) {
+      lines.push(
+        "",
+        `Allow forever 将持久化规则: ${patterns.map((pattern) => `\`${pattern}\``).join(", ")}`,
+        "---",
+      );
+    }
+    lines.push(fenceCodeBlock(command));
+    const description = lines.join("\n");
 
     // 单选：允许一次 / 永久允许（写入规则）/ 拒绝 / 拒绝并附理由（弹输入框）
     const verdict = await selectWithOptionalInput(description, FULL_ACCESS_CHOICES, ctx.ui, {
@@ -413,7 +457,7 @@ export class BwrapRuntime {
         return;
       }
       case ALLOW_FOREVER: {
-        await this.persistAllowRule(ctx, command);
+        await this.persistAllowRule(ctx, command, patterns);
         return;
       }
       case DENY: {
@@ -431,10 +475,14 @@ export class BwrapRuntime {
   }
 
   /** 把命令的权限模式写入项目 bwrap.json 的 approvalRules（allow forever）。 */
-  private async persistAllowRule(ctx: ExtensionContext, command: string): Promise<void> {
-    const patterns = await commandPatternsFor(command);
-    if (patterns.length === 0) return; // 解析失败：本次放行，不写规则
-    const newRules: ApprovalRule[] = patterns.map((pattern) => ({ action: "allow", pattern }));
+  private async persistAllowRule(
+    ctx: ExtensionContext,
+    command: string,
+    patterns?: string[],
+  ): Promise<void> {
+    const rulePatterns = patterns ?? (await commandPatternsFor(command));
+    if (rulePatterns.length === 0) return; // 解析失败：本次放行，不写规则
+    const newRules: ApprovalRule[] = rulePatterns.map((pattern) => ({ action: "allow", pattern }));
     const { project } = getBwrapConfigPaths(ctx.cwd);
     let config: Record<string, unknown> = {};
     if (existsSync(project)) {

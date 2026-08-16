@@ -35,3 +35,34 @@ jobs:
           packages: bubblewrap ripgrep
 
       - run: pnpm test
+
+  # Windows 行为：bwrap 缺失是预期状态（命令逐条人工审批）、gh-readonly 与
+  # spawn-agent 禁用、写保护退化为只能写工作区。平台相关的测试用 skipIf 或
+  # 模拟 win32 分支在两边 CI 上分别覆盖。
+  windows:
+    runs-on: windows-latest
+    steps:
+      # autocrlf=false：保持 LF，prettier --check 与快照不受 CRLF 转换影响。
+      - uses: actions/checkout@v7
+        with:
+          autocrlf: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run lint
+
+      - run: pnpm run check
+
+      # Glob 测试（globFiles）直接 spawn rg，Windows 镜像未预装 ripgrep。
+      - name: Install ripgrep
+        run: choco install ripgrep -y
+
+      # bash 由镜像自带的 Git Bash 提供（pi 的本地 shell 执行会找到它）。
+      - run: pnpm test

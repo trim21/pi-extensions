@@ -1086,6 +1086,15 @@ export async function writeLogFile(
 // ── tools ────────────────────────────────────────────────────────────────────
 
 export default function ghReadonlyTools(pi: ExtensionAPI) {
+  // Windows 上禁用：gh 可执行文件的探测（无扩展名 + POSIX 路径）与进程
+  // 管理（SIGTERM 信号语义）都是 POSIX 假设，不做 Windows 适配。
+  if (process.platform === "win32") {
+    pi.on("session_start", (_event, ctx) => {
+      ctx.ui.notify("gh-readonly tools are disabled on Windows.", "warning");
+    });
+    return;
+  }
+
   // Fail fast: the `gh` CLI is the only backend for these tools. Without it the
   // extension registers nothing and reports the problem at session start, so
   // the user gets one clear error instead of a dozen failing tool calls.

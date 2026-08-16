@@ -267,17 +267,21 @@ describe("opencode read execute", () => {
     );
   });
 
+  // Windows 无 POSIX 权限位，chmod 0o000 不生效：此用例只在 Unix 上跑。
   // eslint-disable-next-line unicorn/no-optional-chaining-on-undeclared-variable -- process is a Node global at runtime
-  it.skipIf(process.getuid?.() === 0)("reports unreadable files", async () => {
-    const locked = join(dir, "locked.txt");
-    await writeFile(locked, "secret\n", "utf8");
-    await chmod(locked, 0o000);
-    try {
-      const tool = loadTool();
-      const result = await tool.execute("id", { filePath: locked }, undefined, undefined, ctx);
-      expect(result.content[0].text).toContain("File not readable");
-    } finally {
-      await chmod(locked, 0o600);
-    }
-  });
+  it.skipIf(process.getuid?.() === 0 || process.platform === "win32")(
+    "reports unreadable files",
+    async () => {
+      const locked = join(dir, "locked.txt");
+      await writeFile(locked, "secret\n", "utf8");
+      await chmod(locked, 0o000);
+      try {
+        const tool = loadTool();
+        const result = await tool.execute("id", { filePath: locked }, undefined, undefined, ctx);
+        expect(result.content[0].text).toContain("File not readable");
+      } finally {
+        await chmod(locked, 0o600);
+      }
+    },
+  );
 });

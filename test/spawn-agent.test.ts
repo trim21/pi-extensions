@@ -257,50 +257,92 @@ describe("formatAgentListSection", () => {
 });
 
 describe("tool registration", () => {
-  it("registers a spawn-agent tool with agent and task parameters", async () => {
-    const { default: spawnAgent } = await import("../src/spawn-agent.js");
-    let tool: { name: string; parameters: unknown } | undefined;
-    spawnAgent({
-      registerTool: (def: { name: string; parameters: unknown }) => {
-        tool = def;
-      },
-      on: () => false,
-    } as never);
+  // Windows 上扩展整体禁用（见下方 "Windows: spawn-agent disabled"），
+  // 注册行为只属于非 Windows 平台语义。
+  it.skipIf(process.platform === "win32")(
+    "registers a spawn-agent tool with agent and task parameters",
+    async () => {
+      const { default: spawnAgent } = await import("../src/spawn-agent.js");
+      let tool: { name: string; parameters: unknown } | undefined;
+      spawnAgent({
+        registerTool: (def: { name: string; parameters: unknown }) => {
+          tool = def;
+        },
+        on: () => false,
+      } as never);
 
-    expect(tool?.name).toBe("spawn-agent");
-    expect(tool?.parameters).toBeDefined();
-  });
+      expect(tool?.name).toBe("spawn-agent");
+      expect(tool?.parameters).toBeDefined();
+    },
+  );
 
-  it("appends the agent list to the system prompt on agent start", async () => {
-    vi.resetModules();
-    vi.doMock("../src/spawn-agent-agents.js", async (importOriginal) => {
-      const mod = await importOriginal<typeof import("../src/spawn-agent-agents.js")>();
-      return {
-        ...mod,
-        discoverAgents: () => [
-          { name: "scout", description: "Fast recon", systemPrompt: "", filePath: "" },
-        ],
-      };
-    });
+  it.skipIf(process.platform === "win32")(
+    "appends the agent list to the system prompt on agent start",
+    async () => {
+      vi.resetModules();
+      vi.doMock("../src/spawn-agent-agents.js", async (importOriginal) => {
+        const mod = await importOriginal<typeof import("../src/spawn-agent-agents.js")>();
+        return {
+          ...mod,
+          discoverAgents: () => [
+            { name: "scout", description: "Fast recon", systemPrompt: "", filePath: "" },
+          ],
+        };
+      });
 
-    const { default: spawnAgent } = await import("../src/spawn-agent.js");
-    let handler:
-      ((event: { systemPrompt: string }) => { systemPrompt: string } | undefined) | undefined;
-    spawnAgent({
-      registerTool: () => false,
-      on: (event: string, h: unknown) => {
-        if (event === "before_agent_start") handler = h as never;
-      },
-    } as never);
+      const { default: spawnAgent } = await import("../src/spawn-agent.js");
+      let handler:
+        ((event: { systemPrompt: string }) => { systemPrompt: string } | undefined) | undefined;
+      spawnAgent({
+        registerTool: () => false,
+        on: (event: string, h: unknown) => {
+          if (event === "before_agent_start") handler = h as never;
+        },
+      } as never);
 
-    expect(handler).toBeTypeOf("function");
+      expect(handler).toBeTypeOf("function");
 
-    const basePrompt = "You are pi, a coding agent.";
-    const result = handler?.({ systemPrompt: basePrompt });
-    expect(result?.systemPrompt).toContain(basePrompt);
-    expect(result?.systemPrompt).toContain("## Available subagents");
-    expect(result?.systemPrompt).toContain("`scout`: Fast recon");
-    vi.resetModules();
+      const basePrompt = "You are pi, a coding agent.";
+      const result = handler?.({ systemPrompt: basePrompt });
+      expect(result?.systemPrompt).toContain(basePrompt);
+      expect(result?.systemPrompt).toContain("## Available subagents");
+      expect(result?.systemPrompt).toContain("`scout`: Fast recon");
+      vi.resetModules();
+    },
+  );
+});
+
+describe("Windows: spawn-agent disabled", () => {
+  // 无论测试跑在哪个平台都模拟 win32：Windows 上扩展整体禁用，不注册
+  // 任何工具，session 启动时提示禁用原因。
+  it("registers no tool and notifies at session start", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const { default: spawnAgent } = await import("../src/spawn-agent.js");
+      const tools: unknown[] = [];
+      let sessionStart:
+        | ((
+            event: unknown,
+            ctx: { ui: { notify: (message: string, type?: string) => void } },
+          ) => void)
+        | undefined;
+      spawnAgent({
+        registerTool: (def: unknown) => {
+          tools.push(def);
+        },
+        on: (event: string, h: unknown) => {
+          if (event === "session_start") sessionStart = h as never;
+        },
+      } as never);
+
+      expect(tools).toHaveLength(0);
+
+      const notify = vi.fn();
+      sessionStart?.({}, { ui: { notify } });
+      expect(notify).toHaveBeenCalledWith("spawn-agent is disabled on Windows.", "warning");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 

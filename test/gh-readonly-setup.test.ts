@@ -4,7 +4,7 @@
  * problem at session start, instead of registering tools that fail on every
  * call.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { existsMock } = vi.hoisted(() => ({ existsMock: vi.fn() }));
 
@@ -28,7 +28,9 @@ function createPi() {
   return { pi, tools, handlers };
 }
 
-describe("gh-readonly setup", () => {
+describe.skipIf(process.platform === "win32")("gh-readonly setup", () => {
+  // Windows 上扩展整体禁用（见下方 "Windows: gh-readonly disabled"），
+  // 这两个 gh 可用性检测用例只属于非 Windows 平台语义。
   afterEach(() => {
     existsMock.mockReset();
   });
@@ -59,5 +61,33 @@ describe("gh-readonly setup", () => {
     expect(tools.map((t) => (t as { name: string }).name)).toEqual(
       expect.arrayContaining(["read-github-issue", "read-github-pr", "watch-github-run"]),
     );
+  });
+});
+
+describe("Windows: gh-readonly disabled", () => {
+  // 无论测试跑在哪个平台都模拟 win32：Windows 上扩展整体禁用，不注册任何
+  // 工具，session 启动时提示禁用原因。
+  beforeEach(() => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  });
+
+  it("registers no tools even when gh is available", () => {
+    existsMock.mockReturnValue(true);
+    const { pi, tools } = createPi();
+    registerTools(pi as never);
+    expect(tools).toHaveLength(0);
+  });
+
+  it("notifies the disable reason at session start", () => {
+    const { pi, handlers } = createPi();
+    registerTools(pi as never);
+    const sessionStart = handlers.find(([event]) => event === "session_start");
+    expect(sessionStart).toBeDefined();
+    const notify = vi.fn();
+    (sessionStart?.[1] as (event: unknown, ctx: { ui: { notify: typeof notify } }) => void)(
+      {},
+      { ui: { notify } },
+    );
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("disabled on Windows"), "warning");
   });
 });
