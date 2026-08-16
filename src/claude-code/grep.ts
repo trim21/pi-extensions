@@ -342,3 +342,8 @@ export function registerGrepTool(pi: ExtensionAPI): void {
     },
   });
 }
+
+// 独立扩展入口：spawn-agent 子代理声明 `Grep` 工具时按本文件 `-e` 加载，
+// 无需经 index.ts / search.ts 聚合。registerGrepTool 本身就是 (pi) => void，
+// 可直接作为扩展 factory。
+export default registerGrepTool;
