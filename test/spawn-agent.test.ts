@@ -569,7 +569,7 @@ describe("subagent progress log", () => {
         assistantMessageEvent: { type: "text_end", contentIndex: 1, content: "Found the flag." },
       },
     ]);
-    expect(updates.at(-1)).toContain("text: Let me inspect the config.");
+    expect(updates.at(-1)).toContain("text: Let me …config.");
     expect(updates.at(-1)).toContain("text: Found the flag.");
   });
 
@@ -595,14 +595,15 @@ describe("subagent progress log", () => {
   });
 
   it("lists different tools in call order, counting only consecutive repeats", async () => {
+    // 工具名用单字符,让合并行(12 字符)不触发折叠,完整验证合并结果。
     const updates = await runWithEvents([
-      { type: "tool_execution_start", toolCallId: "1", toolName: "read", args: {} },
-      { type: "tool_execution_start", toolCallId: "2", toolName: "read", args: {} },
-      { type: "tool_execution_start", toolCallId: "3", toolName: "glob", args: {} },
-      { type: "tool_execution_start", toolCallId: "4", toolName: "read", args: {} },
-      { type: "tool_execution_start", toolCallId: "5", toolName: "ls", args: {} },
+      { type: "tool_execution_start", toolCallId: "1", toolName: "a", args: {} },
+      { type: "tool_execution_start", toolCallId: "2", toolName: "a", args: {} },
+      { type: "tool_execution_start", toolCallId: "3", toolName: "b", args: {} },
+      { type: "tool_execution_start", toolCallId: "4", toolName: "a", args: {} },
+      { type: "tool_execution_start", toolCallId: "5", toolName: "c", args: {} },
     ]);
-    expect(updates.at(-1)).toContain("tool: read x 2, glob, read, ls");
+    expect(updates.at(-1)).toContain("tool: a x 2, b, a, c");
   });
 
   it("starts a fresh tool line after a text block", async () => {
@@ -621,7 +622,7 @@ describe("subagent progress log", () => {
     expect(lines[2]).toBe("tool: read");
   });
 
-  it("caps text block content at 50 characters", async () => {
+  it("folds long text block content to first/last 7 chars", async () => {
     const long = "a".repeat(120);
     const updates = await runWithEvents([
       {
@@ -630,11 +631,11 @@ describe("subagent progress log", () => {
         assistantMessageEvent: { type: "text_end", contentIndex: 0, content: long },
       },
     ]);
-    expect(updates.at(-1)).toContain(`text: ${"a".repeat(50)}`);
-    expect(updates.at(-1)).not.toContain(`text: ${"a".repeat(51)}`);
+    expect(updates.at(-1)).toContain(`text: ${"a".repeat(7)}…${"a".repeat(7)}`);
+    expect(updates.at(-1)).not.toContain(`text: ${"a".repeat(8)}`);
   });
 
-  it("caps merged tool lines at 50 characters", async () => {
+  it("folds long merged tool lines to first/last 7 chars", async () => {
     const names = [
       "alpha-tool-with-a-very-long-name",
       "beta-tool-with-a-very-long-name",
@@ -648,8 +649,8 @@ describe("subagent progress log", () => {
         args: {},
       })),
     );
-    expect(updates.at(-1)).toContain(`tool: ${names.join(", ").slice(0, 50)}`);
-    expect(updates.at(-1)).not.toContain(`tool: ${names.join(", ").slice(0, 51)}`);
+    expect(updates.at(-1)).toContain("tool: alpha-t…ng-name");
+    expect(updates.at(-1)).not.toContain("beta-tool");
   });
 
   it("interleaves tool: and text: lines in event order", async () => {
@@ -695,9 +696,9 @@ describe("subagent progress log", () => {
     const lines = updates.at(-1)!.split("\n");
     expect(lines).toHaveLength(5);
     expect(lines[0]).toBe("text: done0");
-    expect(lines[1]).toBe("tool: tool4, tool5, tool6, tool7");
+    expect(lines[1]).toBe("tool: tool4, …, tool7");
     expect(lines[2]).toBe("text: done1");
-    expect(lines[3]).toBe("tool: tool8, tool9, tool10, tool11");
+    expect(lines[3]).toBe("tool: tool8, … tool11");
     expect(lines[4]).toBe("text: done2");
   });
 });
