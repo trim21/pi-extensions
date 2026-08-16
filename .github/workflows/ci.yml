@@ -45,8 +45,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          autocrlf: false
 
       - uses: pnpm/action-setup@v6
 
