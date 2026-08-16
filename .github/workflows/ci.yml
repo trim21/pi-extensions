@@ -39,10 +39,11 @@ jobs:
   # Windows 行为：bwrap 缺失是预期状态（命令逐条人工审批）、gh-readonly 与
   # spawn-agent 禁用、写保护退化为只能写工作区。平台相关的测试用 skipIf 或
   # 模拟 win32 分支在两边 CI 上分别覆盖。
+  # 类型检查与格式检查（pnpm run check，tsc + prettier）只在 Linux job 跑：
+  # Windows 只验证平台行为（lint + test）。
   windows:
     runs-on: windows-latest
     steps:
-      # autocrlf=false：保持 LF，prettier --check 与快照不受 CRLF 转换影响。
       - uses: actions/checkout@v7
         with:
           autocrlf: false
@@ -57,8 +58,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm run lint
-
-      - run: pnpm run check
 
       # Glob 测试（globFiles）直接 spawn rg，Windows 镜像未预装 ripgrep。
       - name: Install ripgrep
