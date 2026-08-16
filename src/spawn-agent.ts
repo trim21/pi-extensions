@@ -12,7 +12,9 @@
  * `onUpdate`, the same channel the built-in bash tool uses for live output.
  * Progress is a rolling log: `tool: <name>` lines for tool calls and
  * `text: <content>` lines for completed text blocks, keeping the last
- * `MAX_PROGRESS_LINES` lines.
+ * `MAX_PROGRESS_LINES` lines. Consecutive tool calls are merged into a
+ * single `tool:` line (`read x 2, glob`), so a burst of tool calls does
+ * not flood the window; any text block starts a new line.
  *
  * Security default: without an explicit `tools:` in the frontmatter, the
  * subagent only gets read-only tools (read/grep/find/ls) — no bash/write/edit.
@@ -345,12 +347,44 @@ export async function runAgent(
     });
 
     let logLines: string[] = [];
+    // 工具调用行合并:连续的 tool_execution_start 事件合并在同一 `tool:` 行
+    // (如 `tool: read x 2, glob`),相同工具名连续出现时计为 `name x N`,
+    // 不同名按调用顺序罗列;任何非工具行都会打断合并。
+    let toolLineSegments: string[] = [];
+    let toolLine: { name: string; count: number } | undefined;
+
+    const toolSegment = (name: string, count: number) => (count > 1 ? `${name} x ${count}` : name);
 
     const pushLogLine = (line: string) => {
       logLines.push(line);
       if (logLines.length > MAX_PROGRESS_LINES) {
         logLines = logLines.slice(-MAX_PROGRESS_LINES);
       }
+      // 任何非工具行都会打断工具调用合并,下一批调用另起一行。
+      toolLine = undefined;
+    };
+
+    const appendToolLine = (name: string) => {
+      const firstInBatch = toolLine === undefined;
+      if (toolLine === undefined) {
+        toolLineSegments = [];
+        toolLine = { name, count: 1 };
+      } else if (toolLine.name === name) {
+        toolLine.count++;
+      } else {
+        toolLineSegments.push(toolSegment(toolLine.name, toolLine.count));
+        toolLine = { name, count: 1 };
+      }
+      const line = `tool: ${[...toolLineSegments, toolSegment(toolLine.name, toolLine.count)].join(", ")}`;
+      if (firstInBatch) {
+        logLines.push(line);
+        if (logLines.length > MAX_PROGRESS_LINES) {
+          logLines = logLines.slice(-MAX_PROGRESS_LINES);
+        }
+      } else {
+        logLines[logLines.length - 1] = line;
+      }
+      emitUpdate();
     };
 
     const emitUpdate = () => {
@@ -431,9 +465,7 @@ export async function runAgent(
           break;
         }
         case "tool_execution_start": {
-          pushLogLine(`tool: ${event.toolName}`);
-          emitUpdate();
-
+          appendToolLine(event.toolName);
           break;
         }
         case "message_end": {

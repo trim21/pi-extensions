@@ -585,6 +585,42 @@ describe("subagent progress log", () => {
     expect(updates.at(-1)).toContain("tool: read");
   });
 
+  it("merges consecutive executions of the same tool into a count", async () => {
+    const updates = await runWithEvents([
+      { type: "tool_execution_start", toolCallId: "1", toolName: "read", args: {} },
+      { type: "tool_execution_start", toolCallId: "2", toolName: "read", args: {} },
+      { type: "tool_execution_start", toolCallId: "3", toolName: "read", args: {} },
+    ]);
+    expect(updates.at(-1)).toContain("tool: read x 3");
+  });
+
+  it("lists different tools in call order, counting only consecutive repeats", async () => {
+    const updates = await runWithEvents([
+      { type: "tool_execution_start", toolCallId: "1", toolName: "read", args: {} },
+      { type: "tool_execution_start", toolCallId: "2", toolName: "read", args: {} },
+      { type: "tool_execution_start", toolCallId: "3", toolName: "glob", args: {} },
+      { type: "tool_execution_start", toolCallId: "4", toolName: "read", args: {} },
+      { type: "tool_execution_start", toolCallId: "5", toolName: "ls", args: {} },
+    ]);
+    expect(updates.at(-1)).toContain("tool: read x 2, glob, read, ls");
+  });
+
+  it("starts a fresh tool line after a text block", async () => {
+    const updates = await runWithEvents([
+      { type: "tool_execution_start", toolCallId: "1", toolName: "read", args: {} },
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "Found it." },
+      },
+      { type: "tool_execution_start", toolCallId: "2", toolName: "read", args: {} },
+    ]);
+    const lines = updates.at(-1)!.split("\n");
+    expect(lines[0]).toBe("tool: read");
+    expect(lines[1]).toBe("text: Found it.");
+    expect(lines[2]).toBe("tool: read");
+  });
+
   it("interleaves tool: and text: lines in event order", async () => {
     const updates = await runWithEvents([
       {
@@ -606,17 +642,32 @@ describe("subagent progress log", () => {
   });
 
   it("keeps only the most recent 5 lines", async () => {
-    const events = Array.from({ length: 25 }, (_, i) => ({
-      type: "tool_execution_start",
-      toolCallId: String(i),
-      toolName: `tool${i}`,
-      args: {},
-    }));
+    // 3 组「4 个连续工具调用 + 一个文本块」共产生 6 行;合并后的工具行按
+    // 单行参与滚动窗口,最后只保留 5 行,第 1 行(组 0 的工具行)被挤掉。
+    const events: unknown[] = [];
+    for (let g = 0; g < 3; g++) {
+      for (let i = 0; i < 4; i++) {
+        events.push({
+          type: "tool_execution_start",
+          toolCallId: `${g}-${i}`,
+          toolName: `tool${g * 4 + i}`,
+          args: {},
+        });
+      }
+      events.push({
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "text_end", contentIndex: 0, content: `done${g}` },
+      });
+    }
     const updates = await runWithEvents(events);
     const lines = updates.at(-1)!.split("\n");
     expect(lines).toHaveLength(5);
-    expect(lines[0]).toBe("tool: tool20");
-    expect(lines.at(-1)).toBe("tool: tool24");
+    expect(lines[0]).toBe("text: done0");
+    expect(lines[1]).toBe("tool: tool4, tool5, tool6, tool7");
+    expect(lines[2]).toBe("text: done1");
+    expect(lines[3]).toBe("tool: tool8, tool9, tool10, tool11");
+    expect(lines[4]).toBe("text: done2");
   });
 });
 
