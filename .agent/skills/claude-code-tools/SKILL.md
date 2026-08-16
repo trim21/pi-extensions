@@ -1,9 +1,14 @@
 ---
 name: claude-code-tools
-description: Exact behavior of the Claude Code style tools (Read/Edit/Write/Grep/Glob/Bash/TodoWrite/AskUserQuestion) in the @trim21/personal-pi-extensions package: output formats, matching rules, read-before-write requirements, pagination semantics, and conventions. Load whenever you use these tools or are unsure how they behave.
+description: "Exact behavior of the Claude Code style tools (Read/Edit/Write/Grep/Glob/Bash/TodoWrite/AskUserQuestion) in the @trim21/personal-pi-extensions package: output formats, matching rules, read-before-write requirements, pagination semantics, and conventions. Load whenever you use these tools or are unsure how they behave."
 ---
 
 # Claude Code Tools Behavior
+
+> Internal development reference. This skill documents the exact behavior of the tools
+> implemented in this repository and is **not registered in `package.json` `pi.skills`**
+> (only `src/talk/skills` is shipped to users). Do not re-add it to the plugin registration.
+> To load it during development, point your personal `settings.json` `skills` at this directory.
 
 This package registers two parallel tool suites: opencode style (lowercase `read`/`edit`/`write`/`bash`/`todowrite`/`question`) and Claude Code style (capitalized `Read`/`Edit`/`Write`/`Bash`/`Grep`/`Glob`/`TodoWrite`/`AskUserQuestion`). They share the bwrap sandbox and write-guard. **Only one suite should be enabled** — enabling both duplicates commands (e.g. `/bwrap` vs `/bwrap:1`) and injects the bwrap system-prompt section twice.
 
