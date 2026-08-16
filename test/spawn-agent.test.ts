@@ -99,11 +99,11 @@ Just read files.
   });
 });
 
-/** Extract the file paths passed via `-e` flags. */
+/** Extract the file paths passed via `-e` flags. 分隔符统一为 `/`，断言跨平台。 */
 function loadedExtensions(args: string[]): string[] {
   const exts: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "-e" && args[i + 1]) exts.push(args[i + 1]);
+    if (args[i] === "-e" && args[i + 1]) exts.push(args[i + 1].replaceAll("\\", "/"));
   }
   return exts;
 }

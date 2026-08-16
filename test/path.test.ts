@@ -19,7 +19,9 @@ describe("expandHome", () => {
 });
 
 describe("resolveHomePath", () => {
-  it("resolves relative paths against baseDir", () => {
+  // `/base` 是 POSIX 根路径语义：Windows 上会解析为当前盘符（D:\base），
+  // 这两个用例只跑 Unix。
+  it.skipIf(process.platform === "win32")("resolves relative paths against baseDir", () => {
     expect(resolveHomePath("talk.db", "/base")).toBe("/base/talk.db");
     expect(resolveHomePath("./talk.db", "/base")).toBe("/base/talk.db");
     // settings.json lives in ~/.pi/agent, so relative db_path resolves from there
@@ -28,7 +30,7 @@ describe("resolveHomePath", () => {
     );
   });
 
-  it("keeps absolute paths", () => {
+  it.skipIf(process.platform === "win32")("keeps absolute paths", () => {
     expect(resolveHomePath("/abs/talk.db", "/base")).toBe("/abs/talk.db");
   });
 

@@ -112,6 +112,7 @@ export class TalkCore {
   private inboxPoll: ReturnType<typeof setInterval> | undefined;
   private watchPoller: ReturnType<typeof setInterval> | undefined;
   private sweeper: ReturnType<typeof setInterval> | undefined;
+  private initialDrain: ReturnType<typeof setTimeout> | undefined;
   private lastDeliveryFailureAt = 0;
 
   constructor(options: TalkCoreOptions) {
@@ -155,9 +156,11 @@ export class TalkCore {
       void this.checkInbox();
     }, INITIAL_DRAIN_DELAY_MS);
     initial.unref();
+    this.initialDrain = initial;
   }
 
   async stop(): Promise<void> {
+    if (this.initialDrain) clearTimeout(this.initialDrain);
     if (this.watchPoller) clearInterval(this.watchPoller);
     if (this.inboxPoll) clearInterval(this.inboxPoll);
     if (this.sweeper) clearInterval(this.sweeper);

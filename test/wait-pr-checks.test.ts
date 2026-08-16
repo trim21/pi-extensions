@@ -69,9 +69,11 @@ function getWaitExecutor(): ToolDef["execute"] {
   return tool.execute;
 }
 
-const exec = getWaitExecutor();
+// gh-readonly 在 Windows 上整体禁用（见 gh-readonly.ts），executor 测试只属于
+// 非 Windows 平台；guard 避免模块加载时在 win32 上调用扩展工厂。
+const exec = process.platform === "win32" ? undefined : getWaitExecutor();
 const call = () =>
-  exec("id", { number: 1, repo: "owner/repo" }, undefined, undefined, { cwd: undefined });
+  exec!("id", { number: 1, repo: "owner/repo" }, undefined, undefined, { cwd: undefined });
 
 /** Queue a fake `gh` invocation whose output is resolved on the next tick. */
 function queueGh(outputs: { code: number; stdout: string }[]): void {
@@ -93,7 +95,7 @@ beforeEach(() => {
   spawnMock.mockReturnValue(new FakeChildProcess());
 });
 
-describe("wait-github-pr-checks", () => {
+describe.skipIf(process.platform === "win32")("wait-github-pr-checks", () => {
   it("reports PASSED when all jobs succeed, regardless of gh watch exit code", async () => {
     queueGh([
       { code: 0, stdout: "" }, // gh pr checks --watch
@@ -205,7 +207,7 @@ describe("wait-github-pr-checks", () => {
 
   it("throws when the watch process is killed (timeout/abort)", async () => {
     const ac = new AbortController();
-    const promise = exec("id", { number: 1, repo: "owner/repo" }, ac.signal, undefined, {
+    const promise = exec!("id", { number: 1, repo: "owner/repo" }, ac.signal, undefined, {
       cwd: undefined,
     });
     ac.abort();

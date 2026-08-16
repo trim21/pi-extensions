@@ -46,14 +46,27 @@ import {
 import { SqliteTalkStorage, type TalkStorage } from "../src/talk/storage.js";
 
 const dirs: string[] = [];
+const storages: SqliteTalkStorage[] = [];
+const cores: TalkCore[] = [];
 
 function makeStorage(): { storage: SqliteTalkStorage } {
   const dir = mkdtempSync(join(tmpdir(), "talk-test-"));
   dirs.push(dir);
-  return { storage: new SqliteTalkStorage(join(dir, "talk.db")) };
+  const storage = new SqliteTalkStorage(join(dir, "talk.db"));
+  storages.push(storage);
+  return { storage };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  // 顺序很重要：先停掉 core 的轮询定时器（否则会访问已关闭的 storage 并
+  // 产生 unhandled rejection），再关闭 SQLite 句柄，最后删目录——Windows 上
+  // 被占用的目录无法删除（EPERM）。
+  await Promise.allSettled(cores.map((core) => core.stop()));
+  cores.length = 0;
+  for (const storage of storages) {
+    storage.close();
+  }
+  storages.length = 0;
   for (const dir of dirs) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -706,7 +719,7 @@ describe("groups", () => {
 // ── Core integration ─────────────────────────────────────────────────────
 
 function makeCore(storage: TalkStorage, delivered: Letter[], now?: () => number): TalkCore {
-  return new TalkCore({
+  const core = new TalkCore({
     storage,
     events: {
       deliver: (letter) => {
@@ -719,6 +732,8 @@ function makeCore(storage: TalkStorage, delivered: Letter[], now?: () => number)
     },
     now,
   });
+  cores.push(core);
+  return core;
 }
 
 describe("TalkCore", () => {

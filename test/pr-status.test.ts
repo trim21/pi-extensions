@@ -72,8 +72,10 @@ function getPrStatusExecutor(): ToolDef["execute"] {
   return tool.execute;
 }
 
-const exec = getPrStatusExecutor();
-const call = () => exec("id", { number: 1 }, undefined, undefined, { cwd: undefined });
+// gh-readonly 在 Windows 上整体禁用（见 gh-readonly.ts），executor 测试只属于
+// 非 Windows 平台；guard 避免模块加载时在 win32 上调用扩展工厂。
+const exec = process.platform === "win32" ? undefined : getPrStatusExecutor();
+const call = () => exec!("id", { number: 1 }, undefined, undefined, { cwd: undefined });
 
 beforeEach(() => {
   fakeProc = new FakeChildProcess();
@@ -84,7 +86,7 @@ afterEach(() => {
   spawnMock.mockClear();
 });
 
-describe("read-github-pr-status", () => {
+describe.skipIf(process.platform === "win32")("read-github-pr-status", () => {
   it("returns the current checks immediately when all checks pass (exit 0)", async () => {
     const promise = call();
     fakeProc.exit(0, "passed table");

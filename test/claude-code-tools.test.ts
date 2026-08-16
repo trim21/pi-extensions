@@ -502,49 +502,62 @@ describe("did-you-mean suggestions", () => {
     expect(findSimilarFile(join(directory, "missing.ts"))).toBe(undefined);
   });
 
-  it("suggests a corrected path under cwd (dropped repo folder)", async () => {
-    const base = await mkdtemp(join(tmpdir(), "cc-suggest-"));
-    const repo = join(base, "repo");
-    await mkdir(repo);
-    await writeFile(join(repo, "foobar.txt"), "x");
-    // 请求 base/foobar.txt（不存在），但 repo/foobar.txt 存在
-    await expect(suggestPathUnderCwd(join(base, "foobar.txt"), repo)).resolves.toBe(
-      join(repo, "foobar.txt"),
-    );
-    // cwd 内的缺失路径不建议
-    await expect(suggestPathUnderCwd(join(repo, "missing.txt"), repo)).resolves.toBe(undefined);
-  });
+  // Windows 上 mkdtemp 返回 8.3 短路径名（RUNNER~1），realpath 会展开成完整名
+  // （runneradmin），字符串前缀比较因此失效：这些路径重定位建议只跑 Unix。
+  it.skipIf(process.platform === "win32")(
+    "suggests a corrected path under cwd (dropped repo folder)",
+    async () => {
+      const base = await mkdtemp(join(tmpdir(), "cc-suggest-"));
+      const repo = join(base, "repo");
+      await mkdir(repo);
+      await writeFile(join(repo, "foobar.txt"), "x");
+      // 请求 base/foobar.txt（不存在），但 repo/foobar.txt 存在
+      await expect(suggestPathUnderCwd(join(base, "foobar.txt"), repo)).resolves.toBe(
+        join(repo, "foobar.txt"),
+      );
+      // cwd 内的缺失路径不建议
+      await expect(suggestPathUnderCwd(join(repo, "missing.txt"), repo)).resolves.toBe(undefined);
+    },
+  );
 
-  it("prefers cwd relocation over same-base suggestion", async () => {
-    const base = await mkdtemp(join(tmpdir(), "cc-dym-"));
-    const repo = join(base, "repo");
-    await mkdir(repo);
-    await writeFile(join(repo, "target.ts"), "x");
-    await expect(didYouMean(join(base, "target.ts"), repo)).resolves.toBe(join(repo, "target.ts"));
-  });
+  it.skipIf(process.platform === "win32")(
+    "prefers cwd relocation over same-base suggestion",
+    async () => {
+      const base = await mkdtemp(join(tmpdir(), "cc-dym-"));
+      const repo = join(base, "repo");
+      await mkdir(repo);
+      await writeFile(join(repo, "target.ts"), "x");
+      await expect(didYouMean(join(base, "target.ts"), repo)).resolves.toBe(
+        join(repo, "target.ts"),
+      );
+    },
+  );
 
-  it("suggests a corrected path in Grep and Glob errors", async () => {
-    const base = await mkdtemp(join(tmpdir(), "cc-search-dym-"));
-    const repo = join(base, "repo");
-    const sub = join(repo, "sub");
-    await mkdir(sub, { recursive: true });
-    await writeFile(join(repo, "x.txt"), "needle\n");
-    await writeFile(join(sub, "y.txt"), "needle\n");
-    const tools = loadTools();
-    const ctx = context(repo);
+  it.skipIf(process.platform === "win32")(
+    "suggests a corrected path in Grep and Glob errors",
+    async () => {
+      const base = await mkdtemp(join(tmpdir(), "cc-search-dym-"));
+      const repo = join(base, "repo");
+      const sub = join(repo, "sub");
+      await mkdir(sub, { recursive: true });
+      await writeFile(join(repo, "x.txt"), "needle\n");
+      await writeFile(join(sub, "y.txt"), "needle\n");
+      const tools = loadTools();
+      const ctx = context(repo);
 
-    // 请求 repo 父目录下的 x.txt（不存在）→ 建议 repo/x.txt
-    const missingFile = join(base, "x.txt");
-    await expect(
-      call(tools.get("Grep")!, { pattern: "needle", path: missingFile }, ctx),
-    ).rejects.toThrow(`Did you mean ${join(repo, "x.txt")}?`);
+      // 请求 repo 父目录下的 x.txt（不存在）→ 建议 repo/x.txt
+      const missingFile = join(base, "x.txt");
+      await expect(
+        call(tools.get("Grep")!, { pattern: "needle", path: missingFile }, ctx),
+      ).rejects.toThrow(`Did you mean ${join(repo, "x.txt")}?`);
 
-    // 请求 base/sub（不存在）→ 建议 repo/sub
-    const missingDir = join(base, "sub");
-    await expect(
-      call(tools.get("Glob")!, { pattern: "*.txt", path: missingDir }, ctx),
-    ).rejects.toThrow(`Did you mean ${join(repo, "sub")}?`);
-  });
+      // 请求 base/sub（不存在）→ 建议 repo/sub
+      const missingDir = join(base, "sub");
+      await expect(
+        call(tools.get("Glob")!, { pattern: "*.txt", path: missingDir }, ctx),
+      ).rejects.toThrow(`Did you mean ${join(repo, "sub")}?`);
+    },
+  );
 });
 
 describe("reads state restore on session_start", () => {
