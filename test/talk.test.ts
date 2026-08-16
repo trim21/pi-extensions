@@ -784,6 +784,13 @@ describe("TalkCore", () => {
         },
       }),
     );
+    // Stop A's initialDrain/inboxPoll: otherwise they can consume the letter
+    // between deposit and ask, the fast-path refusal never runs, and ask falls
+    // into the ~4s awaitReceipt+waitForReply slow path — which flakes past
+    // vitest's 5s timeout on slow Windows runners. stop() is idempotent, so
+    // the afterEach cleanup still works. B stays live, changing nothing about
+    // the scenario.
+    await coreA.stop();
     const result = await coreA.ask("agent-bbbbbbbbbbbb", "question?", 1000);
     expect(result).toContain("unread message(s)");
     expect(result).toContain("reply before asking");
