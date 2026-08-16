@@ -99,8 +99,6 @@ const spawnAgentSchema = Type.Object({
 interface UsageStats {
   input: number;
   output: number;
-  cacheRead: number;
-  cacheWrite: number;
   cost: number;
   contextTokens: number;
   turns: number;
@@ -156,8 +154,6 @@ function formatUsageStats(usage: UsageStats, model?: string): string {
   if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
   if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
   if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
-  if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
-  if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
   if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
   if (usage.contextTokens > 0) parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
   if (model) parts.push(model);
@@ -339,8 +335,6 @@ export async function runAgent(
     usage: {
       input: 0,
       output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
       cost: 0,
       contextTokens: 0,
       turns: 0,
@@ -492,8 +486,6 @@ export async function runAgent(
             result.usage.turns++;
             result.usage.input += msg.usage.input;
             result.usage.output += msg.usage.output;
-            result.usage.cacheRead += msg.usage.cacheRead;
-            result.usage.cacheWrite += msg.usage.cacheWrite;
             result.usage.cost += msg.usage.cost.total;
             result.usage.contextTokens = msg.usage.totalTokens;
             if (!result.model) result.model = msg.model;
@@ -648,8 +640,6 @@ export default function spawnAgent(pi: ExtensionAPI) {
             usage: {
               input: 0,
               output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
               cost: 0,
               contextTokens: 0,
               turns: 0,
