@@ -31,12 +31,12 @@ export function resolvePathArg(cwd: string, input: string): string {
   return isAbsolute(input) ? input : resolve(cwd, input);
 }
 
-interface AftToolContext {
+export interface AftToolContext {
   cwd: string;
   pool: AftTransportPool;
 }
 
-function bridgeFor(ctx: AftToolContext): AftProjectTransport {
+export function bridgeFor(ctx: AftToolContext): AftProjectTransport {
   return ctx.pool.getBridge(ctx.cwd);
 }
 
