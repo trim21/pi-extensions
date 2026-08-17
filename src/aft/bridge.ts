@@ -50,6 +50,9 @@ export interface AftPool {
   projectRoot: string;
 }
 
+/** semantic_search 等待索引构建完成的上限（与 Rust 侧 AFT_WAIT_FOR_SEMANTIC_READY_MS 一致）。 */
+export const SEMANTIC_INDEX_WAIT_TIMEOUT_MS = 600_000;
+
 /** 创建 transport pool。每个项目根一个常驻 aft 进程，跨 session 共享。 */
 export async function createAftPool(cwd: string): Promise<AftPool> {
   const binaryPath = await resolveAftBinary();
@@ -57,7 +60,15 @@ export async function createAftPool(cwd: string): Promise<AftPool> {
   const pool = await createAftTransportPool({
     harness: "pi",
     binaryPath,
-    poolOptions: {},
+    poolOptions: {
+      childEnv: {
+        // Rust 侧 semantic_search 在索引 Building 时阻塞等待构建完成
+        // （main.rs wait_for_semantic_index_before_search），避免首次搜索拿到
+        // 词法 fallback 的部分结果。语义搜索未启用时该逻辑直接跳过。
+        AFT_WAIT_FOR_SEMANTIC_READY: "1",
+        AFT_WAIT_FOR_SEMANTIC_READY_MS: String(SEMANTIC_INDEX_WAIT_TIMEOUT_MS),
+      },
+    },
     configOverrides: {
       storage_dir: resolveCortexKitStorageRoot(),
       cortexkit_user_config_path: paths.userConfigPath,

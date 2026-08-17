@@ -20,7 +20,7 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { callAftTool } from "./bridge.js";
+import { callAftTool, SEMANTIC_INDEX_WAIT_TIMEOUT_MS } from "./bridge.js";
 
 /** 解析 `~` 前缀与相对路径（相对 session cwd）。URL 与绝对路径原样返回。 */
 export function resolvePathArg(cwd: string, input: string): string {
@@ -336,6 +336,7 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
       "精确名字、字符串、正则保持简短（'^export'、'Cargo.lock'）。",
       "需要语义索引可用（aft.jsonc 中 semantic_search: true 且 embedding 后端就绪）；",
       "否则退化为词法/正则匹配通道。",
+      "启用语义索引时，首次调用会阻塞到索引构建完成，避免返回部分结果。",
     ].join("\n"),
     promptSnippet: "Search code by meaning or exact text",
     parameters: SearchParams,
@@ -350,7 +351,13 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
         rawArgs.path = resolvePathArg(extCtx.cwd, params.path);
       }
 
-      const { text, response } = await callAftTool(bridgeFor(ctx), "search", rawArgs, extCtx);
+      const { text, response } = await callAftTool(bridgeFor(ctx), "search", rawArgs, extCtx, {
+        // 默认 search 传输超时仅 60s，会早于索引等待（600s）触发；覆盖为等待
+        // 上限 + 常规执行预算。超时只说明响应被挤掉而非 bridge 挂死，保留
+        // 常驻的语义索引/LSP 状态。
+        transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
+        keepBridgeOnTimeout: true,
+      });
       return {
         content: [{ type: "text", text }],
         details: { input: params, truncated: response.truncated === true },
