@@ -93,6 +93,6 @@
     "web-tree-sitter": "^0.26.12"
   },
   "optionalDependencies": {
-    "@cortexkit/aft-linux-x64": "0.51.0"
+    "@cortexkit/aft-linux-x64": "0.51.2"
   }
 }
