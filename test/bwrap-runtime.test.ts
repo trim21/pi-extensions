@@ -425,8 +425,8 @@ describe("BwrapRuntime", () => {
       const select = vi
         .fn()
         .mockImplementationOnce(async (_title: string, options: string[]) => {
-          expect(options).toContain("☐ echo *");
-          expect(options).toContain("☐ head *");
+          // 操作在前，checkbox 规则在后
+          expect(options).toEqual([ALLOW_ONCE, DENY, DENY_WITH_REASON, "☐ echo *", "☐ head *"]);
           return "☐ echo *";
         })
         .mockResolvedValueOnce(ALLOW_ONCE);

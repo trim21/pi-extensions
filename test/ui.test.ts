@@ -164,9 +164,9 @@ describe("selectCheckboxActions", () => {
     { action: "deny-with-reason", label: "Deny with reason", inputPrompt: "Why?" },
   ] as const;
 
-  it("lists checkbox entries and actions, and returns the picked action", async () => {
+  it("lists actions first, then checkbox entries, and returns the picked action", async () => {
     const select = vi.fn(async (_t: string, options: string[]) => {
-      expect(options).toEqual(["☐ echo *", "☐ head *", "Allow once", "Deny", "Deny with reason"]);
+      expect(options).toEqual(["Allow once", "Deny", "Deny with reason", "☐ echo *", "☐ head *"]);
       return "Deny";
     });
     await expect(selectCheckboxActions("Pick", entries, actions, uiWith(select))).resolves.toEqual({

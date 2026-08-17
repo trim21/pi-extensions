@@ -131,9 +131,9 @@ export interface CheckboxActionResult<T extends string> {
 /**
  * Checkbox 多选 + 结束动作的组合对话框（selectMultiple 的带操作变体）。
  *
- * 循环列出全部 `entries`（☑/☐ 前缀切换勾选）与全部 `actions`；选中任意
- * action 即结束循环并返回勾选结果，对话框关闭（dismiss）返回 undefined。
- * 结束动作是固定条目（无 ☑/☐ 前缀），不参与勾选。
+ * 循环列出全部 `actions`（固定操作，选中即结束循环）与全部 `entries`
+ * （☑/☐ 前缀切换勾选）；对话框关闭（dismiss）返回 undefined。操作在前、
+ * checkbox 条目在后，用户先决定本次动作，需要时再勾选要持久化的规则。
  */
 export async function selectCheckboxActions<T extends string>(
   title: string,
@@ -152,7 +152,7 @@ export async function selectCheckboxActions<T extends string>(
       displayToLabel.set(display, entry.label);
       round.push({ ...entry, label: display });
     }
-    const result = await selectWithOptionalInput(title, [...round, ...actions], ui, opts);
+    const result = await selectWithOptionalInput(title, [...actions, ...round], ui, opts);
     if (result === undefined) return undefined;
     const action = actions.find((candidate) => candidate.label === result.label);
     if (action !== undefined) return { selected, action: action.action, input: result.input };
