@@ -8,15 +8,16 @@
  *   （~/.pi/agent/models.json 的 baseUrl/apiKey/env/OAuth）与 AI SDK，
  *   不手写 HTTP 请求（模型来自 ~/.pi/agent/settings.json 的 sessionName 与
  *   defaultProvider，与 vision-agent 同一套配置体系）；
- * - 未配置模型、模型在注册表中找不到或模型调用失败时退化为启发式命名
- *   （取首行、去 markdown 装饰、截断到 maxLength）。
+ * - 未配置 sessionName、模型在注册表中找不到或模型调用失败时都不命名，
+ *   仅以 warning 通知。
  *
  * 已命名的会话（--name / /name / 恢复的已命名 session）不会被覆盖；
  * 恢复的无名会话从历史第一条 user 消息生成名字。命名在后台进行，不阻塞
  * agent 启动；会话切换 / reload 后捕获的 pi 会抛 stale 错误，被 catch
  * 忽略，名字绝不会写到错误的 session。
  *
- * 使用前提：无。未配置 sessionName 时开箱即用（启发式命名）。
+ * 使用前提：无。未配置 sessionName 时不自动命名，仅以 warning 提示；
+ * 配置后由命名模型生成，失败仅告警不命名。
  */
 
 import { readFileSync } from "node:fs";
@@ -32,12 +33,14 @@ import {
   type Model,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
+import { Value } from "typebox/value";
 
 // ── constants ────────────────────────────────────────────────────────────────
 
 /** ~/.pi/agent/settings.json：sessionName 配置所在文件 */
 export const SETTINGS_PATH = join(homedir(), ".pi", "agent", "settings.json");
-/** 会话名最大长度（字符），模型命名与启发式共用 */
+/** 会话名最大长度（字符），模型命名与输出清洗共用 */
 export const DEFAULT_MAX_LENGTH = 30;
 /** 命名请求超时。ctx.signal 在 agent 空闲时为 undefined，不能只依赖它 */
 export const REQUEST_TIMEOUT_MS = 30_000;
@@ -55,6 +58,20 @@ export interface SessionNameConfig {
   model?: string;
   maxLength?: number;
 }
+
+/** settings.json 中 sessionName 相关字段的 schema（只校验类型结构，约束清洗在解析后） */
+const sessionNameSettingsSchema = Type.Object({
+  sessionName: Type.Optional(
+    Type.Object({
+      provider: Type.Optional(Type.String()),
+      model: Type.Optional(Type.String()),
+      maxLength: Type.Optional(Type.Number()),
+    }),
+  ),
+  defaultProvider: Type.Optional(Type.String()),
+});
+
+type SessionNameSettings = Static<typeof sessionNameSettingsSchema>;
 
 /**
  * 命名所需的模型注册表操作：扩展传 ctx.modelRegistry，测试传 mock。
@@ -78,7 +95,7 @@ export interface NamerAPI {
 /** 触发时的 UI / 模型上下文；print / json 模式（hasUI=false）下不通知 */
 export interface SessionNamingContext {
   hasUI?: boolean;
-  notify?: (message: string) => void;
+  notify?: (message: string, level?: "info" | "warning" | "error") => void;
   /** 模型注册表（ctx.modelRegistry），用于按 provider/model 解析并调用命名模型 */
   registry?: ModelRegistryLike;
   /** 当前 abort signal；agent 空闲时为 undefined */
@@ -96,40 +113,35 @@ export interface UserMessageLike {
 /**
  * 读取 ~/.pi/agent/settings.json 的 sessionName 配置。
  * provider 缺省时回退到 defaultProvider；文件缺失 / JSON 损坏 / 无 sessionName
- * 时返回 undefined。
+ * 时返回 undefined。结构校验交给 typebox，字段级容错（空串、非法 maxLength
+ * 降级为 undefined）在解析后清洗，不波及其他字段。
  */
 export function loadSessionNameConfig(settingsPath = SETTINGS_PATH): SessionNameConfig | undefined {
-  let raw: string;
+  let raw: unknown;
   try {
-    raw = readFileSync(settingsPath, "utf8");
+    raw = JSON.parse(readFileSync(settingsPath, "utf8"));
   } catch {
-    return undefined;
+    return undefined; // 文件缺失或 JSON 损坏
   }
+  let settings: SessionNameSettings;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    const settings = parsed as Record<string, unknown>;
-    const sn = settings.sessionName;
-    if (!sn || typeof sn !== "object" || Array.isArray(sn)) return undefined;
-    const config = sn as Record<string, unknown>;
-    const provider =
-      typeof config.provider === "string" ? config.provider.trim() || undefined : undefined;
-    const defaultProvider =
-      typeof settings.defaultProvider === "string"
-        ? settings.defaultProvider.trim() || undefined
-        : undefined;
-    const maxLength =
-      typeof config.maxLength === "number" && config.maxLength > 0
-        ? Math.floor(config.maxLength)
-        : undefined;
-    return {
-      provider: provider ?? defaultProvider,
-      model: typeof config.model === "string" ? config.model.trim() || undefined : undefined,
-      maxLength,
-    };
+    settings = Value.Parse(sessionNameSettingsSchema, raw);
   } catch {
-    return undefined;
+    return undefined; // 结构不符（非 object / sessionName 非 object 等）
   }
+  const sn = settings.sessionName;
+  if (!sn) return undefined; // 未配置 sessionName
+  return {
+    provider: nonEmpty(sn.provider) ?? nonEmpty(settings.defaultProvider),
+    model: nonEmpty(sn.model),
+    maxLength:
+      sn.maxLength !== undefined && sn.maxLength > 0 ? Math.floor(sn.maxLength) : undefined,
+  };
+}
+
+/** 字符串字段清洗：trim 后为空视为未配置 */
+function nonEmpty(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
 }
 
 // ── 文本提取与命名生成（纯函数，可测试）────────────────────────────────────
@@ -179,30 +191,6 @@ export function sanitizeName(raw: string, maxLength = DEFAULT_MAX_LENGTH): strin
   if (!collapsed) return undefined;
   if (collapsed.length <= maxLength) return collapsed;
   return `${collapsed.slice(0, maxLength - 1).trimEnd()}…`;
-}
-
-/**
- * 启发式命名：取第一个非空行（首行为代码围栏时跳过），去掉常见 markdown
- * 装饰，截断到 maxLength。适用于未配置命名模型、模型调用失败等场景。
- */
-export function heuristicName(text: string, maxLength = DEFAULT_MAX_LENGTH): string | undefined {
-  const lines = text
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-  const first = lines[0];
-  // "```" / "```ts" 之类的纯代码围栏行不是内容，取下一行
-  const line = first && /^`{1,3}\w*$/.test(first) ? (lines[1] ?? first) : first;
-  if (!line) return undefined;
-  const cleaned = line
-    .replace(/^#{1,6}\s+/, "") // 标题
-    .replace(/^[-*+]\s+/, "") // 无序列表
-    .replace(/^\d+[.)]\s+/, "") // 有序列表
-    .replace(/^>\s?/, "") // 引用
-    .replace(/^`{1,3}/, "") // 行首代码围栏 / 行内代码
-    .replace(/`{1,3}$/, "") // 行尾代码围栏
-    .trim();
-  return sanitizeName(cleaned || line, maxLength);
 }
 
 // ── 命名模型调用 ─────────────────────────────────────────────────────────────
@@ -256,10 +244,13 @@ export async function callNamer(
 
 // ── 命名编排 ─────────────────────────────────────────────────────────────────
 
+/** 配置了命名模型但未能用其命名的原因 */
+export type ModelFallbackReason = "model-unavailable" | "model-error";
+
 /**
- * 生成会话名：配置了命名模型且能在注册表中解析到模型时优先用模型生成
- * （失败退化），否则用启发式。模型输出与启发式结果都经过 sanitizeName，
- * 保证 ≤ maxLength。
+ * 用命名模型生成会话名：模型不可用或调用失败时触发 onModelFallback
+ * 并返回 undefined（不设置会话名，由调用方告警）。模型输出经
+ * sanitizeName 清洗，保证 ≤ maxLength。
  */
 export async function generateSessionName(
   text: string,
@@ -267,6 +258,8 @@ export async function generateSessionName(
   options: {
     registry?: ModelRegistryLike;
     signal?: AbortSignal;
+    /** 配置了命名模型但未能用其命名（模型不可用 / 调用失败）时回调 */
+    onModelFallback?: (reason: ModelFallbackReason) => void;
   } = {},
 ): Promise<string | undefined> {
   const maxLength = config?.maxLength ?? DEFAULT_MAX_LENGTH;
@@ -282,14 +275,18 @@ export async function generateSessionName(
         const name = sanitizeName(raw, maxLength);
         if (name) return name;
       }
+      options.onModelFallback?.("model-error");
+    } else {
+      options.onModelFallback?.("model-unavailable");
     }
   }
-  return heuristicName(text, maxLength);
+  return undefined;
 }
 
 /**
  * 完整命名流程：读配置 → 生成名字 → 设置会话名并通知。
- * 失败（如会话已切换导致 pi stale）由调用方 catch 忽略。
+ * 未读取到 sessionName 配置、命名模型不可用或调用失败时都以 warning
+ * 通知且不设置会话名；会话切换等导致的 stale 错误由调用方 catch 忽略。
  */
 export async function nameSession(
   pi: NamerAPI,
@@ -297,14 +294,29 @@ export async function nameSession(
   ctx: SessionNamingContext = {},
 ): Promise<void> {
   const config = loadSessionNameConfig();
+  if (!config) {
+    // 未配置（含文件缺失 / 读取失败）：不自动命名，仅提示
+    ctx.notify?.("未读取到 sessionName 配置，未自动命名", "warning");
+    return;
+  }
   const name = await generateSessionName(text, config, {
     registry: ctx.registry,
     signal: ctx.signal,
+    onModelFallback: (reason) => {
+      if (ctx.hasUI) {
+        ctx.notify?.(
+          reason === "model-unavailable"
+            ? "命名模型不可用，未自动命名"
+            : "命名模型调用失败，未自动命名",
+          "warning",
+        );
+      }
+    },
   });
   if (!name) return;
   pi.setSessionName(name);
-  if (ctx.hasUI && ctx.notify) {
-    ctx.notify(`会话已命名为: ${name}`);
+  if (ctx.hasUI) {
+    ctx.notify?.(`会话已命名为: ${name}`);
   }
 }
 
@@ -320,7 +332,7 @@ export default function sessionNameExtension(pi: ExtensionAPI) {
     if (!text) return;
     void nameSession(pi, text, {
       hasUI: ctx.hasUI,
-      notify: (message) => ctx.ui.notify(message, "info"),
+      notify: (message, level = "info") => ctx.ui.notify(message, level),
       registry: ctx.modelRegistry,
       signal: ctx.signal,
     }).catch(() => {

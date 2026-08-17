@@ -62,6 +62,7 @@
       "src/session-name.ts",
       "src/gh-readonly.ts",
       "src/spawn-agent.ts",
+      "src/system-prompt/index.ts",
       "src/talk/index.ts"
     ],
     "skills": [

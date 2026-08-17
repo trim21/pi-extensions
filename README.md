@@ -12,7 +12,7 @@
 | [写保护（内置）](#写保护内置)   | 写工具内置：限制文件写入在 workspace 内，外部写入需审批 |
 | [opencode-edit](#opencode-edit) | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎  |
 | [vision-agent](#vision-agent)   | 视觉代理：主模型不支持视觉时，spawn 子 agent 识别图片   |
-| [session-name](#session-name)   | 首个 user prompt 自动生成会话名，模型命名 + 启发式兜底  |
+| [session-name](#session-name)   | 首个 user prompt 自动生成会话名，失败仅告警不命名       |
 | [todowrite](#todowrite)         | opencode 风格的任务列表工具，完整列表替换语义           |
 | [question](#question)           | opencode 风格的提问工具，阻塞式询问用户选择             |
 | [talk](#talk)                   | session 间消息传递，SQLite 邮箱 + 双向 ask 时间戳仲裁   |
@@ -175,11 +175,11 @@ pi -e ./src/vision-agent.ts
 
 根据会话的第一个 user prompt 自动生成显示名，在 `/resume` 和 `pi -r` 里更易区分会话。
 
-- **双模式命名**：配置了 `sessionName.model` 时调用命名模型（OpenAI 兼容 API，复用 `~/.pi/agent/models.json` 的 provider 配置）把 prompt 概括成短名；未配置模型、provider 不可解析或模型调用失败时退化为启发式（取首行、去 markdown 装饰、截断到 `maxLength`）。
+- **模型命名**：配置了 `sessionName.model` 时调用命名模型（OpenAI 兼容 API，复用 `~/.pi/agent/models.json` 的 provider 配置）把 prompt 概括成短名，输出截断到 `maxLength`。
+- **失败即告警**：未配置 `sessionName`、provider 不可解析或模型调用失败时都不设置名字，仅以 warning 通知，方便排查。
 - **不覆盖已有名字**：`--name`、`/name` 设置过名字的会话不会被改；恢复的已命名会话同样跳过。
 - **恢复无名会话**：resume/fork 恢复且无名字的会话，从历史第一条 user 消息生成名字。
 - **非阻塞**：命名在后台进行，不拖慢首轮回复；中途切换会话也不会把名字写到错误的 session。
-- **无需配置开箱即用**：缺省按启发式命名。
 
 ### 配置
 
@@ -188,7 +188,7 @@ pi -e ./src/vision-agent.ts
 {
   "sessionName": {
     "provider": "axonhub", // 可选，缺省回退 defaultProvider
-    "model": "deepseek-v4-flash", // 命名模型；不配置则用启发式
+    "model": "deepseek-v4-flash", // 命名模型；不配置则不做自动命名
     "maxLength": 30, // 可选，名字最大长度，默认 30
   },
 }
