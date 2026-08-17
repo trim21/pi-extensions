@@ -98,8 +98,6 @@ const spawnAgentSchema = Type.Object({
 // ── result types ─────────────────────────────────────────────────────────────
 
 interface UsageStats {
-  input: number;
-  output: number;
   cost: number;
   contextTokens: number;
   turns: number;
@@ -155,8 +153,6 @@ function formatTokens(count: number): string {
 function formatUsageStats(usage: UsageStats, model?: string): string {
   const parts: string[] = [];
   if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-  if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
-  if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
   if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
   if (usage.contextTokens > 0) parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
   if (model) parts.push(model);
@@ -341,8 +337,6 @@ export async function runAgent(
     messages: [],
     stderr: "",
     usage: {
-      input: 0,
-      output: 0,
       cost: 0,
       contextTokens: 0,
       turns: 0,
@@ -492,8 +486,6 @@ export async function runAgent(
           result.messages.push(msg);
           if (msg.role === "assistant") {
             result.usage.turns++;
-            result.usage.input += msg.usage.input;
-            result.usage.output += msg.usage.output;
             result.usage.cost += msg.usage.cost.total;
             result.usage.contextTokens = msg.usage.totalTokens;
             if (!result.model) result.model = msg.model;
@@ -646,8 +638,6 @@ export default function spawnAgent(pi: ExtensionAPI) {
             messages: [],
             stderr: "",
             usage: {
-              input: 0,
-              output: 0,
               cost: 0,
               contextTokens: 0,
               turns: 0,
