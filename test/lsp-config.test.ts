@@ -157,7 +157,7 @@ describe("lsp config integration", () => {
       spawn,
     };
 
-    const service = createLspService([adapter]);
+    const service = createLspService([adapter], join(dir, "no-global.json"));
     const start = Date.now();
     await service.touchFile(file, dir);
     expect(Date.now() - start).toBeLessThan(1_000);
@@ -178,7 +178,7 @@ describe("lsp config integration", () => {
     const a = mockAdapter("a", dir);
     const b = mockAdapter("b", dir);
 
-    const service = createLspService([a.adapter, b.adapter]);
+    const service = createLspService([a.adapter, b.adapter], join(dir, "no-global.json"));
     await service.touchFile(file, dir);
     expect(a.spawn).toHaveBeenCalledOnce();
     expect(b.spawn).not.toHaveBeenCalled();
@@ -196,7 +196,7 @@ describe("lsp config integration", () => {
     const a = mockAdapter("a", dir);
     const b = mockAdapter("b", dir);
 
-    const service = createLspService([a.adapter, b.adapter]);
+    const service = createLspService([a.adapter, b.adapter], join(dir, "no-global.json"));
     await service.touchFile(file, dir);
     expect(a.spawn).toHaveBeenCalledOnce();
     expect(b.spawn).not.toHaveBeenCalled();

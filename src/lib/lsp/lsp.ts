@@ -144,9 +144,13 @@ function containsPath(file: string, cwd: string): boolean {
 
 /**
  * 创建 LSP 服务实例。state 由闭包持有；adapters 可注入（测试传 [] 或
- * mock adapters 即可隔离真实服务器）。
+ * mock adapters 即可隔离真实服务器）。globalConfigPath 供测试注入
+ * 固定的全局配置路径，避免被本机 ~/.pi/agent/lsp.json 影响。
  */
-export function createLspService(adapters: LspServerAdapter[] = createAdapters()): LspService {
+export function createLspService(
+  adapters: LspServerAdapter[] = createAdapters(),
+  globalConfigPath?: string,
+): LspService {
   const state: LspState = {
     clients: [],
     adapters,
@@ -156,7 +160,7 @@ export function createLspService(adapters: LspServerAdapter[] = createAdapters()
 
   async function getClients(file: string, cwd: string): Promise<LspClient[]> {
     if (!containsPath(file, cwd)) return [];
-    const config = await loadLspConfig(cwd);
+    const config = await loadLspConfig(cwd, globalConfigPath);
     const timeout = timeoutOptions(config);
     const adapters = filterAdapters(state.adapters, config);
     const extension = extname(file) || file;

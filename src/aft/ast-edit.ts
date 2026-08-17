@@ -35,7 +35,7 @@ export interface PreviewExtract {
   truncated: boolean;
 }
 
-/** AFT preview diff 条目：`include_diff_content` 时带 before/after，>512KB 只带 truncated。 */
+/** AFT preview diff 条目：preview 模式下默认带 before/after，>512KB 只带 truncated。 */
 const previewDiffSchema = Type.Object({
   before: Type.Optional(Type.String()),
   after: Type.Optional(Type.String()),
@@ -232,12 +232,11 @@ export function registerAstEditTool(pi: ExtensionAPI, ctx: AftToolContext): void
       const rawArgs = buildWireArgs(params, filePath);
 
       // 第一步：preview（不写盘）拿所有变动文件的 before/after，供写保护审批。
-      const { response } = await callAftTool(
-        bridgeFor(ctx),
-        "edit",
-        { ...rawArgs, preview: true, include_diff_content: true },
-        extCtx,
-      );
+      // preview 必须经 options 传入（bridge 会放到 tool_call 消息顶层），
+      // 放进 arguments 会被 AFT 忽略并真的写盘。
+      const { response } = await callAftTool(bridgeFor(ctx), "edit", rawArgs, extCtx, {
+        preview: true,
+      });
       const { files: previewFiles, truncated } = extractPreviewFiles(response);
       if (truncated) {
         throw new Error("ast_edit: file too large for preview (over 512KB)");

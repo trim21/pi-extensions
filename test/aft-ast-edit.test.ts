@@ -149,9 +149,14 @@ describe("ast_edit execute", () => {
       1,
       pool.getBridge(dir),
       "edit",
-      { path: file, symbol: "foo", content: "new", preview: true, include_diff_content: true },
+      { path: file, symbol: "foo", content: "new" },
       expect.anything(),
+      { preview: true },
     );
+    // 回归：preview 走 options 通道，rawArgs 不携带 preview/include_diff_content
+    const previewCall = mockCallAftTool.mock.calls[0];
+    expect(previewCall[2]).not.toHaveProperty("preview");
+    expect(previewCall[2]).not.toHaveProperty("include_diff_content");
     expect(mockCallAftTool).toHaveBeenNthCalledWith(
       2,
       pool.getBridge(dir),
@@ -203,6 +208,10 @@ describe("ast_edit execute", () => {
     );
 
     expect(mockCallAftTool).toHaveBeenCalledTimes(2);
+    // 第一次（preview）走 options 通道，rawArgs 不携带 preview 标志
+    const firstCall = mockCallAftTool.mock.calls[0];
+    expect(firstCall[2]).not.toHaveProperty("preview");
+    expect(firstCall[4]).toEqual({ preview: true });
     // 第二次（真正写盘）不带 preview 标志
     const secondArgs = mockCallAftTool.mock.calls[1][2];
     expect(secondArgs.preview).toBeUndefined();

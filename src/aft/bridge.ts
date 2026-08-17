@@ -7,8 +7,6 @@
  * aft-bridge 锁一致就不会走到最后的网络下载。
  */
 
-import { createRequire } from "node:module";
-
 import {
   type AftProjectTransport,
   type AftTransportPool,
@@ -22,16 +20,6 @@ import {
 } from "@cortexkit/aft-bridge";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-/** aft-bridge 包自身版本，作为二进制版本匹配基准。 */
-const BRIDGE_VERSION: string = (() => {
-  try {
-    const req = createRequire(import.meta.url);
-    return (req("@cortexkit/aft-bridge/package.json") as { version?: string }).version ?? "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-})();
-
 /** Pi 会话 ID：Rust 侧用它做 session 作用域（undo/checkpoint），感知工具可留空。 */
 export function resolveSessionId(extCtx: ExtensionContext): string | undefined {
   const manager = (extCtx as unknown as { sessionManager?: { getSessionId?: () => string } })
@@ -40,9 +28,14 @@ export function resolveSessionId(extCtx: ExtensionContext): string | undefined {
   return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
-/** 解析 aft 二进制；失败时抛出（调用方决定是否降级不注册工具）。 */
+/**
+ * 解析 aft 二进制；失败时抛出（调用方决定是否降级不注册工具）。
+ * 不带版本参数：findBinary 内部用 @cortexkit/aft-bridge 自身版本作为匹配基准，
+ * 与 npm 平台包（@cortexkit/aft-<platform>）精确对齐，避免手动读 package.json
+ * （其 exports 不暴露 ./package.json）。
+ */
 export async function resolveAftBinary(): Promise<string> {
-  const path = await findBinary(BRIDGE_VERSION);
+  const path = await findBinary();
   if (!path) {
     throw new Error(
       "AFT binary not found. Install via npm platform package (@cortexkit/aft-<platform>), cargo install agent-file-tools, or place `aft` on PATH.",
@@ -64,7 +57,7 @@ export async function createAftPool(cwd: string): Promise<AftPool> {
   const pool = await createAftTransportPool({
     harness: "pi",
     binaryPath,
-    poolOptions: { minVersion: BRIDGE_VERSION },
+    poolOptions: {},
     configOverrides: {
       storage_dir: resolveCortexKitStorageRoot(),
       cortexkit_user_config_path: paths.userConfigPath,
@@ -85,7 +78,7 @@ export async function callAftTool(
   command: string,
   rawArgs: Record<string, unknown>,
   extCtx: ExtensionContext,
-  options?: BridgeRequestOptions,
+  options?: BridgeRequestOptions & { preview?: boolean },
   softCodes?: ReadonlySet<string>,
 ): Promise<{ text: string; response: Record<string, unknown> }> {
   const timeoutMs = timeoutForCommand(command);
