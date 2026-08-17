@@ -20,6 +20,7 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { type ToolPendant } from "../lib/pendant.js";
 import { callAftTool, SEMANTIC_INDEX_WAIT_TIMEOUT_MS } from "./bridge.js";
 
 /** 解析 `~` 前缀与相对路径（相对 session cwd）。URL 与绝对路径原样返回。 */
@@ -38,6 +39,32 @@ export interface AftToolContext {
 
 export function bridgeFor(ctx: AftToolContext): AftProjectTransport {
   return ctx.pool.getBridge(ctx.cwd);
+}
+
+/** 人类视角的调用记录：input params + 与 LLM 相同的输出结果。 */
+export function buildPendantMarkdown(params: {
+  title: string;
+  input: unknown;
+  output: string;
+  truncated?: boolean;
+}): string {
+  const lines = [
+    `## ${params.title}`,
+    "",
+    "**Input**",
+    "",
+    "```json",
+    JSON.stringify(params.input, null, 2),
+    "```",
+    "",
+    "**Output**",
+    "",
+    params.output,
+  ];
+  if (params.truncated) {
+    lines.push("", "_输出已截断_");
+  }
+  return lines.join("\n").trim();
 }
 
 const OutlineParams = Type.Object(
@@ -88,9 +115,21 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
       if (params.includeTests !== undefined) rawArgs.includeTests = params.includeTests;
 
       const { text, response } = await callAftTool(bridgeFor(ctx), "outline", rawArgs, extCtx);
+      const truncated = response.truncated === true;
       return {
         content: [{ type: "text", text }],
-        details: { input: params, truncated: response.truncated === true },
+        details: {
+          truncated,
+          pendant: {
+            markdown: buildPendantMarkdown({
+              title: "aft_outline",
+              input: params,
+              output: text,
+              truncated,
+            }),
+            expanded: true,
+          } satisfies ToolPendant,
+        },
       };
     },
   });
@@ -193,9 +232,21 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
       if (coerceBoolean(params.callgraph)) rawArgs.callgraph = true;
 
       const { text, response } = await callAftTool(bridgeFor(ctx), "zoom", rawArgs, extCtx);
+      const truncated = response.truncated === true;
       return {
         content: [{ type: "text", text }],
-        details: { input: params, truncated: response.truncated === true },
+        details: {
+          truncated,
+          pendant: {
+            markdown: buildPendantMarkdown({
+              title: "aft_zoom",
+              input: params,
+              output: text,
+              truncated,
+            }),
+            expanded: true,
+          } satisfies ToolPendant,
+        },
       };
     },
   });
@@ -291,9 +342,21 @@ export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): vo
         formatCallgraphSections(params.op, response, PLAIN_CALLGRAPH_THEME, {
           includeUnresolved: coerceBoolean(params.includeUnresolved),
         }).join("\n");
+      const truncated = response.truncated === true;
       return {
         content: [{ type: "text", text: out }],
-        details: { input: params, truncated: response.truncated === true },
+        details: {
+          truncated,
+          pendant: {
+            markdown: buildPendantMarkdown({
+              title: "aft_callgraph",
+              input: params,
+              output: out,
+              truncated,
+            }),
+            expanded: true,
+          } satisfies ToolPendant,
+        },
       };
     },
   });
@@ -354,9 +417,21 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
         transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
         keepBridgeOnTimeout: true,
       });
+      const truncated = response.truncated === true;
       return {
         content: [{ type: "text", text }],
-        details: { input: params, truncated: response.truncated === true },
+        details: {
+          truncated,
+          pendant: {
+            markdown: buildPendantMarkdown({
+              title: "aft_search",
+              input: params,
+              output: text,
+              truncated,
+            }),
+            expanded: true,
+          } satisfies ToolPendant,
+        },
       };
     },
   });

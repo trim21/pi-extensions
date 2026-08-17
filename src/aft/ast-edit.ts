@@ -16,9 +16,10 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { requireAbsolutePath } from "../claude-code/common.js";
+import { type ToolPendant } from "../lib/pendant.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { callAftTool } from "./bridge.js";
-import { type AftToolContext, bridgeFor } from "./tools.js";
+import { type AftToolContext, bridgeFor, buildPendantMarkdown } from "./tools.js";
 
 // ── 纯函数（可测） ──────────────────────────────────────────────────────────
 
@@ -256,9 +257,20 @@ export function registerAstEditTool(pi: ExtensionAPI, ctx: AftToolContext): void
 
       // 第三步：AFT 原子写盘（备份 + 格式化 + undo），结果由 Rust 格式化返回。
       const { text } = await callAftTool(bridgeFor(ctx), "edit", rawArgs, extCtx);
+      const files = previewFiles.map((f) => f.file || filePath);
       return {
         content: [{ type: "text", text }],
-        details: { input: params, files: previewFiles.map((f) => f.file || filePath) },
+        details: {
+          files,
+          pendant: {
+            markdown: buildPendantMarkdown({
+              title: "ast_edit",
+              input: params,
+              output: text,
+            }),
+            expanded: true,
+          } satisfies ToolPendant,
+        },
       };
     },
   });
