@@ -569,7 +569,7 @@ describe("subagent progress log", () => {
         assistantMessageEvent: { type: "text_end", contentIndex: 1, content: "Found the flag." },
       },
     ]);
-    expect(updates.at(-1)).toContain("text: Let me …config.");
+    expect(updates.at(-1)).toContain("text: Let me in … e config.");
     expect(updates.at(-1)).toContain("text: Found the flag.");
   });
 
@@ -622,7 +622,7 @@ describe("subagent progress log", () => {
     expect(lines[2]).toBe("tool: read");
   });
 
-  it("folds long text block content to first/last 7 chars", async () => {
+  it("folds long text block content to first/last 9 chars", async () => {
     const long = "a".repeat(120);
     const updates = await runWithEvents([
       {
@@ -631,11 +631,11 @@ describe("subagent progress log", () => {
         assistantMessageEvent: { type: "text_end", contentIndex: 0, content: long },
       },
     ]);
-    expect(updates.at(-1)).toContain(`text: ${"a".repeat(7)}…${"a".repeat(7)}`);
-    expect(updates.at(-1)).not.toContain(`text: ${"a".repeat(8)}`);
+    expect(updates.at(-1)).toContain(`text: ${"a".repeat(9)} … ${"a".repeat(9)}`);
+    expect(updates.at(-1)).not.toContain(`text: ${"a".repeat(10)}`);
   });
 
-  it("folds long merged tool lines to first/last 7 chars", async () => {
+  it("folds long merged tool lines to first/last 9 chars", async () => {
     const names = [
       "alpha-tool-with-a-very-long-name",
       "beta-tool-with-a-very-long-name",
@@ -649,7 +649,7 @@ describe("subagent progress log", () => {
         args: {},
       })),
     );
-    expect(updates.at(-1)).toContain("tool: alpha-t…ng-name");
+    expect(updates.at(-1)).toContain("tool: alpha-too … long-name");
     expect(updates.at(-1)).not.toContain("beta-tool");
   });
 
@@ -696,9 +696,9 @@ describe("subagent progress log", () => {
     const lines = updates.at(-1)!.split("\n");
     expect(lines).toHaveLength(5);
     expect(lines[0]).toBe("text: done0");
-    expect(lines[1]).toBe("tool: tool4, …, tool7");
+    expect(lines[1]).toBe("tool: tool4, to … l6, tool7");
     expect(lines[2]).toBe("text: done1");
-    expect(lines[3]).toBe("tool: tool8, … tool11");
+    expect(lines[3]).toBe("tool: tool8, to … 0, tool11");
     expect(lines[4]).toBe("text: done2");
   });
 });

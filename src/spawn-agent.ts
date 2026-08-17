@@ -53,8 +53,8 @@ const MAX_OUTPUT_BYTES = 50 * 1024;
 const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
 /** Progress log keeps only the most recent lines (rolling window). */
 const MAX_PROGRESS_LINES = 5;
-/** Progress line content (without the `tool:` / `text:` prefix) is capped at 15 chars; longer text is folded to the first/last 7 chars joined by `…`. */
-const MAX_PROGRESS_CHARS_PER_LINE = 15;
+/** Progress line content (without the `tool:` / `text:` prefix) is capped at 21 chars; longer text is folded to the first/last 9 chars joined by ` … `. */
+const MAX_PROGRESS_CHARS_PER_LINE = 21;
 
 /**
  * Tool → extension override map: when a subagent's frontmatter enables a
@@ -134,15 +134,15 @@ function getFinalOutput(messages: AgentMessage[]): string {
 }
 
 /**
- * Fold over-long progress line content: keep the first/last 7 chars joined by
- * a single `…` ellipsis, so the folded line never exceeds
- * `MAX_PROGRESS_CHARS_PER_LINE` chars (7 + 1 + 7 = 15). Shorter text is
+ * Fold over-long progress line content: keep the first/last 9 chars joined by
+ * ` … ` (space, ellipsis, space), so the folded line never exceeds
+ * `MAX_PROGRESS_CHARS_PER_LINE` chars (9 + 3 + 9 = 21). Shorter text is
  * returned as-is.
  */
 function foldProgressLine(text: string): string {
   if (text.length <= MAX_PROGRESS_CHARS_PER_LINE) return text;
-  const keep = Math.floor((MAX_PROGRESS_CHARS_PER_LINE - 1) / 2);
-  return `${text.slice(0, keep)}…${text.slice(-keep)}`;
+  const keep = Math.floor((MAX_PROGRESS_CHARS_PER_LINE - 3) / 2);
+  return `${text.slice(0, keep)} … ${text.slice(-keep)}`;
 }
 
 function formatTokens(count: number): string {
