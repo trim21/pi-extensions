@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       '@cortexkit/aft-bridge':
-        specifier: ^0.51.0
+        specifier: 0.51.0
         version: 0.51.0
       '@vscode/tree-sitter-wasm':
         specifier: ^0.3.1
@@ -87,6 +87,10 @@ importers:
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(@vitest/coverage-v8@4.1.10)(vite@8.2.1(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0))
+    optionalDependencies:
+      '@cortexkit/aft-linux-x64':
+        specifier: 0.51.0
+        version: 0.51.0
 
 packages:
 
@@ -223,6 +227,12 @@ packages:
 
   '@cortexkit/aft-bridge@0.51.0':
     resolution: {integrity: sha512-bDIubDoAhku8moWXu8kCF3jCeiScO4V/n/7+FoI0jFGl3q1aM+d77Lt3G5W+9z3J0jz8hzNuITQa2dbT1pufFA==}
+
+  '@cortexkit/aft-linux-x64@0.51.0':
+    resolution: {integrity: sha512-jbXwtnFeiVW3lUVrHU/WsBAZPHJvfWwqDdWq7hvepkb9f04N7zjBacyLMoY0szPCiCu/sY8/x/dX69SouGtKqA==}
+    cpu: [x64]
+    os: [linux]
+    hasBin: true
 
   '@cortexkit/subc-client@0.5.0':
     resolution: {integrity: sha512-kk+cwjngl0DuERweZSQnBiixL9y5xqhipIsjpQgfJpKjN5Tm9c38Afq471Tw0agBu9OZHXhUa0SSbElQHiudBw==}
@@ -2234,6 +2244,9 @@ snapshots:
     dependencies:
       '@cortexkit/subc-client': 0.5.0
       undici: 7.29.0
+
+  '@cortexkit/aft-linux-x64@0.51.0':
+    optional: true
 
   '@cortexkit/subc-client@0.5.0': {}
 
