@@ -3,3 +3,6 @@ pixi.lock
 .pixi/
 coverage/
 test/fixtures/
+.pi/
+.vscode/
+.kilo/
