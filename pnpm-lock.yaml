@@ -8,16 +8,22 @@ importers:
 
   .:
     dependencies:
-      '@earendil-works/pi-agent-core':
-        specifier: '>=0.84.1'
-        version: 0.84.2(supports-color@7.2.0)(ws@8.21.3)
+      '@cortexkit/aft-bridge':
+        specifier: ^0.51.0
+        version: 0.51.0
       '@vscode/tree-sitter-wasm':
         specifier: ^0.3.1
         version: 0.3.1
+      jsonc-parser:
+        specifier: ^3.3.1
+        version: 3.3.1
       web-tree-sitter:
         specifier: ^0.26.12
         version: 0.26.12
     devDependencies:
+      '@earendil-works/pi-agent-core':
+        specifier: '>=0.84.1'
+        version: 0.84.2(supports-color@7.2.0)(ws@8.21.3)
       '@earendil-works/pi-ai':
         specifier: ^0.84.1
         version: 0.84.2(supports-color@7.2.0)(ws@8.21.3)
@@ -213,6 +219,13 @@ packages:
 
   '@bcoe/v8-coverage@1.0.2':
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
+    engines: {node: '>=18'}
+
+  '@cortexkit/aft-bridge@0.51.0':
+    resolution: {integrity: sha512-bDIubDoAhku8moWXu8kCF3jCeiScO4V/n/7+FoI0jFGl3q1aM+d77Lt3G5W+9z3J0jz8hzNuITQa2dbT1pufFA==}
+
+  '@cortexkit/subc-client@0.5.0':
+    resolution: {integrity: sha512-kk+cwjngl0DuERweZSQnBiixL9y5xqhipIsjpQgfJpKjN5Tm9c38Afq471Tw0agBu9OZHXhUa0SSbElQHiudBw==}
     engines: {node: '>=18'}
 
   '@earendil-works/pi-agent-core@0.84.2':
@@ -1420,6 +1433,9 @@ packages:
   json-stable-stringify-without-jsonify@1.0.1:
     resolution: {integrity: sha512-Bdboy+l7tA3OGW6FjyFHWkP5LuByj1Tk33Ljyq0axyzdk9//JSi2u3fP1QSmd1KNwq6VOKYGlAu87CisVir6Pw==}
 
+  jsonc-parser@3.3.1:
+    resolution: {integrity: sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ==}
+
   jwa@2.0.1:
     resolution: {integrity: sha512-hRF04fqJIP8Abbkq5NKGN0Bbr3JxlQ+qhZufXVr0DvujKy93ZCbXZMHDL4EOtodSbCWxOqR8MS1tXA5hwqCXDg==}
 
@@ -1828,6 +1844,10 @@ packages:
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
 
+  undici@7.29.0:
+    resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
+    engines: {node: '>=20.18.1'}
+
   undici@8.9.0:
     resolution: {integrity: sha512-aWZpUj7XoGonMClx4gdDRfgBjqeA+F473aDmROQQbM9n6PRfK/u1q/a0X4wMTgcHfT8H6fpbt98PFuDUwFg2YA==}
     engines: {node: '>=22.19.0'}
@@ -2209,6 +2229,13 @@ snapshots:
       '@babel/helper-validator-identifier': 7.29.7
 
   '@bcoe/v8-coverage@1.0.2': {}
+
+  '@cortexkit/aft-bridge@0.51.0':
+    dependencies:
+      '@cortexkit/subc-client': 0.5.0
+      undici: 7.29.0
+
+  '@cortexkit/subc-client@0.5.0': {}
 
   '@earendil-works/pi-agent-core@0.84.2(supports-color@7.2.0)(ws@8.21.3)':
     dependencies:
@@ -3310,6 +3337,8 @@ snapshots:
 
   json-stable-stringify-without-jsonify@1.0.1: {}
 
+  jsonc-parser@3.3.1: {}
+
   jwa@2.0.1:
     dependencies:
       buffer-equal-constant-time: 1.0.1
@@ -3674,6 +3703,8 @@ snapshots:
       '@typescript/typescript-win32-x64': 7.0.2
 
   undici-types@7.18.2: {}
+
+  undici@7.29.0: {}
 
   undici@8.9.0: {}
 
