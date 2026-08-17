@@ -3,11 +3,12 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
-import { selectWithOptionalInput } from "../lib/ui.js";
+import { selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
 
 const TODO_STATUSES = ["pending", "in_progress", "completed"] as const;
 const OTHER_OPTION = "Other";
-const DONE_OPTION = "Done";
+/** 多选模式下用户手动确认提交的哨兵选项 */
+const DONE_OPTION = "Submit";
 
 /** AskUserQuestion guidance, kept as plain text like the tool .md files. */
 const ASK_PROMPT = [
@@ -104,26 +105,15 @@ async function askMultiple(
   signal: AbortSignal | undefined,
 ): Promise<string> {
   const title = `${question.header}: ${question.question}`;
-  const remaining = new Set(question.options.map((option) => option.label));
-  const selected: string[] = [];
-  while (remaining.size > 0) {
-    const result = await selectWithOptionalInput(
-      title,
-      [
-        ...[...remaining].map((label) => ({ label })),
-        { label: OTHER_OPTION, inputPrompt: "Type your answer" },
-        { label: DONE_OPTION },
-      ],
-      ctx.ui,
-      { signal },
-    );
-    if (result === undefined || result.label === DONE_OPTION) break;
-    if (result.prompted) {
-      if (result.input) selected.push(result.input);
-      break;
-    }
-    if (remaining.delete(result.label)) selected.push(result.label);
-  }
+  const selected = await selectMultiple(
+    title,
+    [
+      ...question.options.map((option) => ({ label: option.label })),
+      { label: OTHER_OPTION, inputPrompt: "Type your answer" },
+    ],
+    ctx.ui,
+    { signal, doneLabel: DONE_OPTION },
+  );
   return selected.length > 0 ? selected.join(", ") : "Unanswered";
 }
 

@@ -233,9 +233,9 @@ describe("execute", () => {
     const calls: string[][] = [];
     const select = vi.fn(async (_t: string, options: string[]) => {
       calls.push(options);
-      // 依次选 A、C，然后 Done（此时还剩 B，但用户结束勾选）
-      if (calls.length === 1) return "A";
-      if (calls.length === 2) return "C";
+      // 依次选 A、C，然后 Done（此时 B 仍可选，但用户结束勾选）
+      if (calls.length === 1) return "[ ]: A";
+      if (calls.length === 2) return "[ ]: C";
       return DONE_LABEL;
     });
     const result = await tool.execute(
@@ -247,22 +247,28 @@ describe("execute", () => {
     );
     expect(result.details.answers).toEqual([["A", "C"]]);
     expect(calls).toEqual([
-      ["A", "B", "C", DONE_LABEL],
-      ["B", "C", DONE_LABEL],
-      ["B", DONE_LABEL],
+      ["[ ]: A", "[ ]: B", "[ ]: C", DONE_LABEL],
+      ["[X]: A", "[ ]: B", "[ ]: C", DONE_LABEL],
+      ["[X]: A", "[ ]: B", "[X]: C", DONE_LABEL],
     ]);
   });
 
-  it("ignores a multi-select choice that is no longer in the remaining set", async () => {
+  it("unselects a multi-select option by re-selecting it", async () => {
     const { tool } = loadTool();
     const multi = q({
       multiple: true,
-      options: [{ label: "A", description: "a" }],
+      options: [
+        { label: "A", description: "a" },
+        { label: "B", description: "b" },
+      ],
     });
     let calls = 0;
     const select = vi.fn(async () => {
       calls++;
-      return calls === 1 ? "stale" : DONE_LABEL;
+      // 先选 A，再反选 A，然后 Done
+      if (calls === 1) return "[ ]: A";
+      if (calls === 2) return "[X]: A";
+      return DONE_LABEL;
     });
     const result = await tool.execute(
       "id",

@@ -52,3 +52,51 @@ export async function selectWithOptionalInput(
     input: answer === undefined ? undefined : answer.trim(),
   };
 }
+
+const CHECKED_PREFIX = "[X]: ";
+const UNCHECKED_PREFIX = "[ ]: ";
+
+/**
+ * Toggle-style multi-select loop built on `ui.select`.
+ *
+ * Every round lists ALL `entries` — already-selected ones render with a
+ * `[X]: ` checkbox marker, the rest with `[ ]: ` — so re-selecting an entry
+ * unchecks it. Picking an entry with `inputPrompt` opens an input dialog and,
+ * when non-empty, adds the typed text and ends the loop. Picking `doneLabel`
+ * (or dismissing the dialog) ends the loop and returns the selected labels in
+ * selection order. Display text is mapped back to the original label via an
+ * explicit table so a `[ ]:` / `[X]:` prefix inside a label is unambiguous.
+ */
+export async function selectMultiple(
+  title: string,
+  entries: readonly SelectAction[],
+  ui: ExtensionContext["ui"],
+  opts: { signal?: AbortSignal; doneLabel: string },
+): Promise<string[]> {
+  const selected: string[] = [];
+  while (true) {
+    const selectedSet = new Set(selected);
+    const displayToLabel = new Map<string, string>();
+    const round = entries.map((entry) => {
+      const display = `${selectedSet.has(entry.label) ? CHECKED_PREFIX : UNCHECKED_PREFIX}${entry.label}`;
+      displayToLabel.set(display, entry.label);
+      return { ...entry, label: display };
+    });
+    const result = await selectWithOptionalInput(
+      title,
+      [...round, { label: opts.doneLabel }],
+      ui,
+      opts,
+    );
+    if (result === undefined || result.label === opts.doneLabel) break;
+    if (result.prompted) {
+      if (result.input) selected.push(result.input);
+      break;
+    }
+    const label = displayToLabel.get(result.label);
+    if (label === undefined) continue;
+    if (selectedSet.has(label)) selected.splice(selected.indexOf(label), 1);
+    else selected.push(label);
+  }
+  return selected;
+}

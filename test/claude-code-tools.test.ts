@@ -1144,7 +1144,7 @@ describe("TodoWrite and AskUserQuestion", () => {
   it("supports free text in multi-select via Other", async () => {
     const tools = loadTools();
     const ctx = context(process.cwd());
-    ctx.ui.select.mockResolvedValueOnce("Postgres").mockResolvedValueOnce("Other");
+    ctx.ui.select.mockResolvedValueOnce("[ ]: Postgres").mockResolvedValueOnce("[ ]: Other");
     ctx.ui.input.mockResolvedValue("  CockroachDB  ");
     const result = await call(
       tools.get("AskUserQuestion")!,
@@ -1164,6 +1164,33 @@ describe("TodoWrite and AskUserQuestion", () => {
       ctx,
     );
     expect(result.content[0].text).toContain('"Which databases?"="Postgres, CockroachDB"');
+  });
+
+  it("unselects a multi-select option by re-selecting it", async () => {
+    const tools = loadTools();
+    const ctx = context(process.cwd());
+    ctx.ui.select
+      .mockResolvedValueOnce("[ ]: Postgres")
+      .mockResolvedValueOnce("[X]: Postgres")
+      .mockResolvedValueOnce("Submit");
+    const result = await call(
+      tools.get("AskUserQuestion")!,
+      {
+        questions: [
+          {
+            question: "Which databases?",
+            header: "Databases",
+            options: [
+              { label: "Postgres", description: "Relational" },
+              { label: "SQLite", description: "Embedded" },
+            ],
+            multiSelect: true,
+          },
+        ],
+      },
+      ctx,
+    );
+    expect(result.content[0].text).toContain('"Which databases?"="Unanswered"');
   });
 });
 
