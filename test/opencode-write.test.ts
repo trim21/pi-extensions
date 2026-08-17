@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import opencodeWrite, { resolveBom } from "../src/opencode/write.js";
+import opencodeFileTools, { resolveBom } from "../src/opencode/files.js";
 
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
@@ -68,9 +68,9 @@ interface Tool {
 
 function loadTool(): Tool {
   let tool: Tool | undefined;
-  opencodeWrite({
+  opencodeFileTools({
     registerTool: (def: Tool) => {
-      tool = def;
+      if (def.name === "write") tool = def;
     },
   } as never);
   return tool!;

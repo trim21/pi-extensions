@@ -140,14 +140,13 @@ describe("buildSubagentArgs", () => {
     expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(false);
   });
 
-  it("loads opencode-read for the default read-only toolset", () => {
+  it("loads opencode files.ts for the default read-only toolset", () => {
     const exts = loadedExtensions(buildSubagentArgs(baseAgent, "task", undefined));
-    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(true);
-    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/files.ts"))).toBe(true);
+    expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(false);
   });
 
-  it("loads opencode overrides for each declared tool (read/edit/write/bash)", () => {
+  it("loads the shared opencode files implementation once for read/edit/write", () => {
     const exts = loadedExtensions(
       buildSubagentArgs(
         { ...baseAgent, tools: ["read", "edit", "write", "bash"] },
@@ -155,9 +154,8 @@ describe("buildSubagentArgs", () => {
         undefined,
       ),
     );
-    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(true);
-    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(true);
-    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(true);
+    // read/edit/write 共享 opencode/files.ts（共享 LSP service 实例），只加载一次
+    expect(exts.filter((p) => p.endsWith("opencode/files.ts"))).toHaveLength(1);
     expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
   });
 
@@ -165,9 +163,7 @@ describe("buildSubagentArgs", () => {
     const exts = loadedExtensions(
       buildSubagentArgs({ ...baseAgent, tools: ["bash"] }, "task", undefined),
     );
-    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/files.ts"))).toBe(false);
     expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
   });
 
@@ -199,9 +195,7 @@ describe("buildSubagentArgs", () => {
       buildSubagentArgs({ ...baseAgent, tools: ["Read", "Edit", "Write"] }, "task", undefined),
     );
     expect(exts.filter((p) => p.endsWith("claude-code/files.ts"))).toHaveLength(1);
-    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/files.ts"))).toBe(false);
 
     const single = loadedExtensions(
       buildSubagentArgs({ ...baseAgent, tools: ["Edit"] }, "task", undefined),

@@ -88,6 +88,8 @@
     "@cortexkit/aft-bridge": "0.51.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "jsonc-parser": "^3.3.1",
+    "vscode-jsonrpc": "^9.0.1",
+    "vscode-languageserver-types": "^3.18.0",
     "web-tree-sitter": "^0.26.12"
   },
   "optionalDependencies": {

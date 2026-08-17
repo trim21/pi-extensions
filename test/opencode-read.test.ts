@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import opencodeRead, { truncateHead } from "../src/opencode/read.js";
+import opencodeFileTools, { truncateHead } from "../src/opencode/files.js";
 
 const MAX_LINE_LENGTH = 2000;
 const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`;
@@ -99,9 +99,9 @@ interface Tool {
 
 function loadTool(): Tool {
   let tool: Tool | undefined;
-  opencodeRead({
+  opencodeFileTools({
     registerTool: (def: Tool) => {
-      tool = def;
+      if (def.name === "read") tool = def;
     },
   } as never);
   return tool!;

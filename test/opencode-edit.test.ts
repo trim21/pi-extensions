@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import opencodeEdit from "../src/opencode/edit.js";
+import opencodeFileTools from "../src/opencode/files.js";
 
 interface EditParams {
   filePath: string;
@@ -37,9 +37,9 @@ interface Tool {
 
 function loadTool(): Tool {
   let tool: Tool | undefined;
-  opencodeEdit({
+  opencodeFileTools({
     registerTool: (def: Tool) => {
-      tool = def;
+      if (def.name === "edit") tool = def;
     },
   } as never);
   return tool!;
