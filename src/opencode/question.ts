@@ -5,13 +5,13 @@
  *   https://github.com/anomalyco/opencode/blob/999be62662/packages/opencode/src/tool/question.ts
  * 与 opencode 的差异：opencode 输出 title "Asked N question(s)"，这里未设置；
  * 多选交互是平台差异（opencode 用 checkbox，这里循环 ctx.ui.select 勾选，
- * 已选项显示 `[X]: ` 前缀，再次选择即反选，最后选「✓ Done」提交）。
+ * 已选项显示 `☑: ` 前缀，再次选择即反选，最后选「✓ Done」提交）。
  *
  * 参数与语义和 opencode 的 `question` 工具一致：
  *   questions 数组，每项含 question / header / options / multiple：
  *   - options 每项为 label / description
  *   - 单选（默认）：用户在选项里选一个，也可选「Type your own answer.」自由输入
- *   - 多选（multiple: true）：循环用 ui.select 勾选/反选（[X] 标记已选），直到「✓ Done」
+ *   - 多选（multiple: true）：循环用 ui.select 勾选/反选（☑ 标记已选），直到「✓ Done」
  *   - 每个问题返回一个 label 数组（Answer = string[]），跳过的为空数组
  *   - 输出与 opencode 一致：
  *     User has answered your questions: "q"="a", "q2"="Unanswered"...

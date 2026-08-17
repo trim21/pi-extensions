@@ -53,19 +53,20 @@ export async function selectWithOptionalInput(
   };
 }
 
-const CHECKED_PREFIX = "[X]: ";
-const UNCHECKED_PREFIX = "[ ]: ";
+/** 已选 / 未选 的符号标记：打勾方框 / 空方框 */
+const CHECKED_PREFIX = "☑: ";
+const UNCHECKED_PREFIX = "☐: ";
 
 /**
  * Toggle-style multi-select loop built on `ui.select`.
  *
  * Every round lists ALL `entries` — already-selected ones render with a
- * `[X]: ` checkbox marker, the rest with `[ ]: ` — so re-selecting an entry
- * unchecks it. Picking an entry with `inputPrompt` opens an input dialog and,
- * when non-empty, adds the typed text and ends the loop. Picking `doneLabel`
- * (or dismissing the dialog) ends the loop and returns the selected labels in
+ * `☑: ` marker, the rest with `☐: ` — so re-selecting an entry unchecks it.
+ * Picking an entry with `inputPrompt` opens an input dialog and, when
+ * non-empty, adds the typed text and ends the loop. Picking `doneLabel` (or
+ * dismissing the dialog) ends the loop and returns the selected labels in
  * selection order. Display text is mapped back to the original label via an
- * explicit table so a `[ ]:` / `[X]:` prefix inside a label is unambiguous.
+ * explicit table so a `☐: ` / `☑: ` prefix inside a label is unambiguous.
  */
 export async function selectMultiple(
   title: string,

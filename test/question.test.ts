@@ -234,8 +234,8 @@ describe("execute", () => {
     const select = vi.fn(async (_t: string, options: string[]) => {
       calls.push(options);
       // 依次选 A、C，然后 Done（此时 B 仍可选，但用户结束勾选）
-      if (calls.length === 1) return "[ ]: A";
-      if (calls.length === 2) return "[ ]: C";
+      if (calls.length === 1) return "☐: A";
+      if (calls.length === 2) return "☐: C";
       return DONE_LABEL;
     });
     const result = await tool.execute(
@@ -247,9 +247,9 @@ describe("execute", () => {
     );
     expect(result.details.answers).toEqual([["A", "C"]]);
     expect(calls).toEqual([
-      ["[ ]: A", "[ ]: B", "[ ]: C", DONE_LABEL],
-      ["[X]: A", "[ ]: B", "[ ]: C", DONE_LABEL],
-      ["[X]: A", "[ ]: B", "[X]: C", DONE_LABEL],
+      ["☐: A", "☐: B", "☐: C", DONE_LABEL],
+      ["☑: A", "☐: B", "☐: C", DONE_LABEL],
+      ["☑: A", "☐: B", "☑: C", DONE_LABEL],
     ]);
   });
 
@@ -266,8 +266,8 @@ describe("execute", () => {
     const select = vi.fn(async () => {
       calls++;
       // 先选 A，再反选 A，然后 Done
-      if (calls === 1) return "[ ]: A";
-      if (calls === 2) return "[X]: A";
+      if (calls === 1) return "☐: A";
+      if (calls === 2) return "☑: A";
       return DONE_LABEL;
     });
     const result = await tool.execute(
