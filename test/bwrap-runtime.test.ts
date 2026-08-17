@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -44,7 +44,6 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 });
 
 import {
-  ALLOW_FOREVER,
   ALLOW_ONCE,
   type BwrapRuntime,
   createBwrapRuntime,
@@ -214,7 +213,7 @@ describe("BwrapRuntime", () => {
     it("falls back to the dialog when no rule matches", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
-      const select = vi.fn(async () => "Approve once");
+      const select = vi.fn(async () => ALLOW_ONCE);
       const result = await runtime.execute({
         toolCallId: "test",
         command: "git rev-parse --abbrev-ref HEAD",
@@ -387,15 +386,12 @@ describe("BwrapRuntime", () => {
       ).rejects.toThrow(/User denied unsandboxed execution\.$/);
     });
 
-    it("allow forever persists an allow rule and auto-approves next time", async () => {
+    it("allow forever persists only the checked rules and auto-approves next time", async () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-forever-"));
       const { runtime } = setupRuntime();
       runtime.setMode(directory, "workspace-write");
-      // 弹框应预览将要持久化的规则（`echo 1` → `printf forever` → `printf *`）
-      const select = vi.fn(async (title: string) => {
-        expect(title).toContain("`printf *`");
-        return ALLOW_FOREVER;
-      });
+      // 勾选 `printf *`（checkbox 首轮为 ☐ 前缀），然后选 Allow once 放行本次
+      const select = vi.fn().mockResolvedValueOnce("☐ printf *").mockResolvedValueOnce(ALLOW_ONCE);
       const result = await runtime.execute({
         toolCallId: "test",
         command: "printf forever",
@@ -403,7 +399,7 @@ describe("BwrapRuntime", () => {
         ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
       });
       expect(result).toMatchObject({ exitCode: 0, output: "forever" });
-      // 项目配置写入 allow 规则
+      // 项目配置只写入勾选的规则
       const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
         approvalRules: { action: string; pattern: string }[];
       };
@@ -418,6 +414,67 @@ describe("BwrapRuntime", () => {
       });
       expect(result2).toMatchObject({ exitCode: 0, output: "forever" });
       expect(select2).not.toHaveBeenCalled();
+    });
+
+    it("persists only the checked patterns of a pipeline command", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-partial-"));
+      const { runtime } = setupRuntime();
+      runtime.setMode(directory, "workspace-write");
+      // `echo 1 | head` 识别出 `echo *` 与 `head *` 两个 pattern：
+      // 只勾选 `echo *`，`head *` 不持久化
+      const select = vi
+        .fn()
+        .mockImplementationOnce(async (_title: string, options: string[]) => {
+          expect(options).toContain("☐ echo *");
+          expect(options).toContain("☐ head *");
+          return "☐ echo *";
+        })
+        .mockResolvedValueOnce(ALLOW_ONCE);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "echo 1 | head",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
+      });
+      expect(result).toMatchObject({ exitCode: 0, output: "1\n" });
+      const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
+        approvalRules: { action: string; pattern: string }[];
+      };
+      expect(config.approvalRules).toEqual([{ action: "allow", pattern: "echo *" }]);
+      // 纯 head 命令仍未命中规则：需要重新审批
+      const select2 = vi.fn(async () => ALLOW_ONCE);
+      await runtime.execute({
+        toolCallId: "test2",
+        command: "head -n 1 file.txt",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select: select2, input: vi.fn() }, undefined, directory),
+      });
+      expect(select2).toHaveBeenCalled();
+    });
+
+    it("allow once without checking any rule runs without persisting", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-once-"));
+      const { runtime } = setupRuntime();
+      runtime.setMode(directory, "workspace-write");
+      const select = vi.fn(async () => ALLOW_ONCE);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf once",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
+      });
+      expect(result).toMatchObject({ exitCode: 0, output: "once" });
+      // 未勾选任何规则：不写入 bwrap.json
+      expect(existsSync(join(directory, ".pi", "bwrap.json"))).toBe(false);
+      // 同命令再次执行：无规则命中，仍需审批
+      const select2 = vi.fn(async () => ALLOW_ONCE);
+      await runtime.execute({
+        toolCallId: "test2",
+        command: "printf once",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select: select2, input: vi.fn() }, undefined, directory),
+      });
+      expect(select2).toHaveBeenCalled();
     });
   });
 });

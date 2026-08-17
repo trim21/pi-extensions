@@ -16,7 +16,12 @@ import {
 import { type TObject, Type } from "typebox";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
-import { type SelectAction, selectWithOptionalInput } from "../lib/ui.js";
+import {
+  type CheckboxAction,
+  type SelectAction,
+  selectCheckboxActions,
+  selectWithOptionalInput,
+} from "../lib/ui.js";
 import { type ApprovalRule, commandPatternsFor, evaluateBashApproval } from "./approval-rules.js";
 import {
   type BwrapMode,
@@ -412,8 +417,9 @@ export class BwrapRuntime {
   ): Promise<void> {
     const policy = resolveEscalation({ hasUI: ctx.hasUI });
     if (policy.kind === "deny") throw new Error(policy.reason);
-    // 弹框前解析命令的持久化规则（Allow forever 会写入），在弹框里预览给
-    // 用户：`echo 1` → `echo *`，避免用户对"永久允许"持久化什么一无所知。
+    // 弹框前解析命令的持久化规则（勾选的 pattern 会写入），在弹框里以
+    // checkbox 列出：`echo 1 | head` → `echo *`、`head *`，逐项决定是否
+    // allow forever，避免用户对"永久允许"持久化什么一无所知。
     const patterns = await commandPatternsFor(command);
     // dcg 扫描建议是可选的参考文本：未安装时静默跳过；已安装但扫描失败
     // 时 notify 提示，弹窗本身与无 dcg 时一致
@@ -421,7 +427,7 @@ export class BwrapRuntime {
     if (outcome.kind === "failed") {
       ctx.ui.notify(`dcg 扫描失败，本次无破坏性命令建议: ${outcome.detail}`, "warning");
     }
-    // 弹框主体按行组织（'\n' join），便于 review；suggestion 与 forever 预览
+    // 弹框主体按行组织（'\n' join），便于 review；suggestion 与规则说明
     // 块带前导空行 + 尾部 "---" 分隔，输出与历史逐字符一致。
     const lines: string[] = [
       "Allow this command to run without sandbox?",
@@ -434,36 +440,78 @@ export class BwrapRuntime {
       lines.push("", outcome.suggestion.text, "---");
     }
     if (patterns.length > 0) {
-      lines.push(
-        "",
-        `Allow forever 将持久化规则: ${patterns.map((pattern) => `\`${pattern}\``).join(", ")}`,
-        "---",
-      );
+      lines.push("", "勾选规则将永久允许（allow forever），未勾选规则仅本次放行:", "---");
     }
     lines.push(fenceCodeBlock(command));
     const description = lines.join("\n");
 
-    // 单选：允许一次 / 永久允许（写入规则）/ 拒绝 / 拒绝并附理由（弹输入框）
-    const verdict = await selectWithOptionalInput(description, FULL_ACCESS_CHOICES, ctx.ui, {
-      signal: ctx.signal,
-    });
+    // 解析失败（无 pattern 可勾选）：保持单选对话框（Allow forever 是空操作）
+    if (patterns.length === 0) {
+      // 单选：允许一次 / 永久允许（写入规则）/ 拒绝 / 拒绝并附理由（弹输入框）
+      const verdict = await selectWithOptionalInput(description, FULL_ACCESS_CHOICES, ctx.ui, {
+        signal: ctx.signal,
+      });
+      // 关闭对话框 = 中断并拒绝，不循环重问
+      if (verdict === undefined) {
+        ctx.abort();
+        throw new Error("User denied the command execution.");
+      }
+      switch (verdict.label) {
+        case ALLOW_ONCE: {
+          return;
+        }
+        case ALLOW_FOREVER: {
+          await this.persistAllowRule(ctx, command, patterns);
+          return;
+        }
+        case DENY: {
+          throw new Error("User denied unsandboxed execution.");
+        }
+        case DENY_WITH_REASON: {
+          const feedback = verdict.input?.trim() ?? "";
+          throw new Error(
+            feedback
+              ? `User denied unsandboxed execution: ${feedback}`
+              : "User denied unsandboxed execution.",
+          );
+        }
+      }
+    }
+
+    // 每个识别到的 pattern 一个 checkbox：勾选 = 该规则 allow forever。
+    // Allow once = 执行本次并持久化勾选的规则；Deny 系列不持久化任何规则。
+    const actions = [
+      { action: "allow-once", label: ALLOW_ONCE },
+      { action: "deny", label: DENY },
+      {
+        action: "deny-with-reason",
+        label: DENY_WITH_REASON,
+        inputPrompt: "Why was this denied?",
+      },
+    ] as const satisfies readonly CheckboxAction<"allow-once" | "deny" | "deny-with-reason">[];
+    const verdict = await selectCheckboxActions(
+      description,
+      [...new Set(patterns)].map((pattern) => ({ label: pattern })),
+      actions,
+      ctx.ui,
+      { signal: ctx.signal },
+    );
     // 关闭对话框 = 中断并拒绝，不循环重问
     if (verdict === undefined) {
       ctx.abort();
       throw new Error("User denied the command execution.");
     }
-    switch (verdict.label) {
-      case ALLOW_ONCE: {
+    switch (verdict.action) {
+      case "allow-once": {
+        if (verdict.selected.length > 0) {
+          await this.persistAllowRule(ctx, command, verdict.selected);
+        }
         return;
       }
-      case ALLOW_FOREVER: {
-        await this.persistAllowRule(ctx, command, patterns);
-        return;
-      }
-      case DENY: {
+      case "deny": {
         throw new Error("User denied unsandboxed execution.");
       }
-      case DENY_WITH_REASON: {
+      case "deny-with-reason": {
         const feedback = verdict.input?.trim() ?? "";
         throw new Error(
           feedback
