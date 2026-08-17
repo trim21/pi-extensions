@@ -167,7 +167,12 @@ describe("ast_edit execute", () => {
     expect((result as { content: { text: string }[] }).content[0].text).toBe(
       "Edited symbol foo in a.ts",
     );
-    expect((result as { details: { files: string[] } }).details.files).toEqual([file]);
+    const details = (result as { details: { files: string[]; diff: string; patch: string } })
+      .details;
+    expect(details.files).toEqual([file]);
+    expect(details.diff).toContain("+");
+    expect(details.diff).toContain("return 2");
+    expect(details.patch).toContain("return 2");
   });
 
   it("runs write-guard for every file in a glob batch and lets AFT write once", async () => {
@@ -216,7 +221,12 @@ describe("ast_edit execute", () => {
     const secondArgs = mockCallAftTool.mock.calls[1][2];
     expect(secondArgs.preview).toBeUndefined();
     expect(secondArgs.include_diff_content).toBeUndefined();
-    expect((result as { details: { files: string[] } }).details.files).toEqual([a, b]);
+    const details = (result as { details: { files: string[]; diff: string } }).details;
+    expect(details.files).toEqual([a, b]);
+    // 多文件时逐文件拼接 diff
+    expect(details.diff).toContain(`--- ${a}`);
+    expect(details.diff).toContain(`--- ${b}`);
+    expect(details.diff).toContain("V = 9");
   });
 
   it("rejects truncated preview", async () => {

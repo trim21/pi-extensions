@@ -11,7 +11,11 @@
  * 防呆不同，ast_edit 不要求先读）。
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionAPI,
+  generateDiffString,
+  generateUnifiedPatch,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -112,6 +116,35 @@ export function mapEditItems(
     if (item.occurrence !== undefined) out.occurrence = item.occurrence;
     return out;
   });
+}
+
+/**
+ * 参照 Edit 工具的结果输出：把 preview 的 before/after 转成行号 diff、
+ * unified patch 与首个变更行。多文件（glob 批量）时逐文件拼接 diff/patch，
+ * firstChangedLine 取首个文件的。
+ */
+export function buildEditDiffDetails(
+  previewFiles: PreviewFile[],
+  fallbackFile: string,
+): { diff: string; patch: string; firstChangedLine: number | undefined } {
+  const parts = previewFiles.map((f) => {
+    const file = f.file || fallbackFile;
+    const diff = generateDiffString(f.before, f.after);
+    return {
+      file,
+      diff: diff.diff,
+      patch: generateUnifiedPatch(file, f.before, f.after),
+      firstChangedLine: diff.firstChangedLine,
+    };
+  });
+  if (parts.length === 0) {
+    return { diff: "", patch: "", firstChangedLine: undefined };
+  }
+  return {
+    diff: parts.map((p) => `--- ${p.file}\n${p.diff}`).join("\n"),
+    patch: parts.map((p) => `--- ${p.file}\n${p.patch}`).join("\n"),
+    firstChangedLine: parts[0]?.firstChangedLine,
+  };
 }
 
 // ── 工具 ────────────────────────────────────────────────────────────────────
@@ -262,6 +295,7 @@ export function registerAstEditTool(pi: ExtensionAPI, ctx: AftToolContext): void
         content: [{ type: "text", text }],
         details: {
           files,
+          ...buildEditDiffDetails(previewFiles, filePath),
           pendant: {
             markdown: buildPendantMarkdown({
               title: "ast_edit",
