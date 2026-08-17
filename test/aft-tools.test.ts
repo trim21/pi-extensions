@@ -1,17 +1,17 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { resolvePathArg } from "../src/aft/tools.js";
 
 describe("resolvePathArg", () => {
-  const cwd = "/work/project";
+  const cwd = resolve("/work", "project");
 
   it("resolves relative paths against cwd", () => {
-    expect(resolvePathArg(cwd, "src/app.ts")).toBe("/work/project/src/app.ts");
-    expect(resolvePathArg(cwd, "./src/app.ts")).toBe("/work/project/src/app.ts");
-    expect(resolvePathArg(cwd, "../other/a.ts")).toBe("/work/other/a.ts");
+    expect(resolvePathArg(cwd, "src/app.ts")).toBe(resolve(cwd, "src/app.ts"));
+    expect(resolvePathArg(cwd, "./src/app.ts")).toBe(resolve(cwd, "./src/app.ts"));
+    expect(resolvePathArg(cwd, "../other/a.ts")).toBe(resolve(cwd, "../other/a.ts"));
   });
 
   it("keeps absolute paths unchanged", () => {
