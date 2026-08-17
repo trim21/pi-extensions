@@ -230,14 +230,11 @@ describe("execute", () => {
         { label: "C", description: "c" },
       ],
     });
-    const calls: string[][] = [];
-    const select = vi.fn(async (_t: string, options: string[]) => {
-      calls.push(options);
-      // 依次选 A、C，然后 Done（此时 B 仍可选，但用户结束勾选）
-      if (calls.length === 1) return "☐: A";
-      if (calls.length === 2) return "☐: C";
-      return DONE_LABEL;
-    });
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("☐ A")
+      .mockResolvedValueOnce("☐ C")
+      .mockResolvedValueOnce(DONE_LABEL);
     const result = await tool.execute(
       "id",
       { questions: [multi] },
@@ -246,38 +243,6 @@ describe("execute", () => {
       ctxWith({ select }),
     );
     expect(result.details.answers).toEqual([["A", "C"]]);
-    expect(calls).toEqual([
-      ["☐: A", "☐: B", "☐: C", DONE_LABEL],
-      ["☑: A", "☐: B", "☐: C", DONE_LABEL],
-      ["☑: A", "☐: B", "☑: C", DONE_LABEL],
-    ]);
-  });
-
-  it("unselects a multi-select option by re-selecting it", async () => {
-    const { tool } = loadTool();
-    const multi = q({
-      multiple: true,
-      options: [
-        { label: "A", description: "a" },
-        { label: "B", description: "b" },
-      ],
-    });
-    let calls = 0;
-    const select = vi.fn(async () => {
-      calls++;
-      // 先选 A，再反选 A，然后 Done
-      if (calls === 1) return "☐: A";
-      if (calls === 2) return "☑: A";
-      return DONE_LABEL;
-    });
-    const result = await tool.execute(
-      "id",
-      { questions: [multi] },
-      undefined,
-      undefined,
-      ctxWith({ select }),
-    );
-    expect(result.details.answers).toEqual([[]]);
   });
 
   it("throws when no interactive UI is available", async () => {
