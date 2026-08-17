@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -8,8 +8,11 @@ import { findBinaryInWorkspace, findModuleInWorkspace, walkUp } from "../src/lib
 
 describe("lsp bin lookup", () => {
   it("walkUp 从 fromDir 逐级向上到 stopDir（含两端）", () => {
-    expect(walkUp("/a/b/c", "/a")).toEqual(["/a/b/c", "/a/b", "/a"]);
-    expect(walkUp("/a", "/a")).toEqual(["/a"]);
+    // 用 join(sep, ...) 构造路径，保证 POSIX 与 Windows 都从根开始
+    const from = join(sep, "a", "b", "c");
+    const stop = join(sep, "a");
+    expect(walkUp(from, stop)).toEqual([from, join(sep, "a", "b"), stop]);
+    expect(walkUp(stop, stop)).toEqual([stop]);
   });
 
   it("findBinaryInWorkspace 工作区优先于 PATH 且逐级向上", async () => {
