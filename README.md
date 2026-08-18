@@ -344,6 +344,50 @@ pi -e ./src/talk/index.ts
 
 ---
 
+## LSP 配置
+
+read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级诊断）。LSP protocol 是统一的，因此服务器不需要为每个语言写 adapter：用一份 JSON 配置声明如何启动即可。
+
+配置文件（项目优先于全局，逐字段覆盖）：
+
+- `~/.pi/agent/lsp.json`（全局）
+- `.pi/lsp.json`（项目）
+
+```jsonc
+{
+  "version": 1,
+  "servers": {
+    "gopls": {
+      "include": ["**/*.go"],
+      "rootMarkers": ["go.mod"],
+      "bin": "gopls",
+      "args": [],
+      "cwd": "{root}", // 支持 {root} / {cwd} 模板
+      "languageIdByExtension": { ".go": "go" },
+      "startupTimeoutMs": 45000,
+      "diagnosticsWaitMs": 1500,
+      "initializationOptions": {}, // → initialize 请求
+      "settings": {}, // → didChangeConfiguration / workspace/configuration 请求
+    },
+  },
+}
+```
+
+字段说明：
+
+- `include`：文件 glob，相对项目根或调用 cwd，任一命中即启用；支持 `!` 否定排除，如 `["**/*.go", "!**/*_test.go"]`
+- `rootMarkers`：项目根标记文件，从文件目录向上查找；缺省用调用 cwd 作为根
+- `bin`：可执行文件——绝对路径、相对调用 cwd 的路径，或名字（先在项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin` 找，再走 PATH）
+- `languageIdByExtension`：扩展名 → LSP languageId（didOpen 用）；缺省回退内置映射表
+- `startupTimeoutMs` / `diagnosticsWaitMs`：per-server 超时，覆盖全局配置与默认值
+- `initializationOptions` 与 `settings` 按 LSP 语义分离：前者进 initialize 请求，后者进 didChangeConfiguration / workspace/configuration 请求
+
+内置默认服务器（typescript / pyright / ruff / clangd）始终存在；`servers` 以 key 为服务器 id 与默认合并——同 key 覆盖、新 key 新增、`"enabled": false` 移除（如 `"clangd": { "enabled": false }`）。executable 的发现逻辑（如 tsserver 路径、venv 里的 python）不内置，需要时用 `bin` / `args` / `settings` 自行表达。
+
+旧的 `enabled`（白名单）/ `disabled`（排除）与全局超时字段（`initializeTimeoutMs` 等）继续可用。
+
+---
+
 ## 安装
 
 ### 通过 npm/git 包

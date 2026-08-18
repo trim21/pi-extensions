@@ -20,7 +20,8 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { callAftTool } from "./bridge.js";
+import { type ToolPendant } from "../lib/pendant.js";
+import { callAftTool, SEMANTIC_INDEX_WAIT_TIMEOUT_MS } from "./bridge.js";
 
 /** 解析 `~` 前缀与相对路径（相对 session cwd）。URL 与绝对路径原样返回。 */
 export function resolvePathArg(cwd: string, input: string): string {
@@ -31,25 +32,51 @@ export function resolvePathArg(cwd: string, input: string): string {
   return isAbsolute(input) ? input : resolve(cwd, input);
 }
 
-interface AftToolContext {
+export interface AftToolContext {
   cwd: string;
   pool: AftTransportPool;
 }
 
-function bridgeFor(ctx: AftToolContext): AftProjectTransport {
+export function bridgeFor(ctx: AftToolContext): AftProjectTransport {
   return ctx.pool.getBridge(ctx.cwd);
+}
+
+/** 人类视角的调用记录：input params + 与 LLM 相同的输出结果。 */
+export function buildPendantMarkdown(params: {
+  title: string;
+  input: unknown;
+  output: string;
+  truncated?: boolean;
+}): string {
+  const lines = [
+    `## ${params.title}`,
+    "",
+    "**Input**",
+    "",
+    "```json",
+    JSON.stringify(params.input, null, 2),
+    "```",
+    "",
+    "**Output**",
+    "",
+    params.output,
+  ];
+  if (params.truncated) {
+    lines.push("", "_输出已截断_");
+  }
+  return lines.join("\n").trim();
 }
 
 const OutlineParams = Type.Object(
   {
-    target: Type.Union([Type.String(), Type.Array(Type.String())], {
+    target: Type.String({
       description:
-        "要 outline 的对象：文件路径、目录路径、URL（http:// 或 https://），或文件路径数组。模式自动识别：URL 按前缀、目录按 stat、数组按多文件。目录递归上限 200 个文件。",
+        "要 outline 的对象：文件路径、目录路径或 URL（http:// 或 https://）。只接受单个 target；目录递归上限 200 个文件。",
     }),
     files: Type.Optional(
       Type.Boolean({
         description:
-          "目录模式：为 true 时 target 必须是目录（或目录数组），返回带语言/符号数/字节大小的扁平文件树，而非符号大纲。",
+          "目录模式：为 true 时 target 必须是目录，返回带语言/符号数/字节大小的扁平文件树，而非符号大纲。",
       }),
     ),
     includeTests: Type.Optional(
@@ -67,24 +94,20 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
       "输出代码文件、目录、URL 的结构化大纲：函数/类/类型等符号及其行号范围；Markdown/HTML 返回标题层级。",
       "用它在读取具体内容之前先了解文件结构（比整文件 read 省 token）。",
       "深入了解某个符号用 aft_zoom；看跨文件调用关系用 aft_callgraph。",
-      "target 支持：文件路径（带签名的符号大纲）、目录路径（递归最多 200 文件）、URL、文件路径数组。",
+      "target 支持：文件路径（带签名的符号大纲）、目录路径（递归最多 200 文件）、URL。只接受单个 target。",
       "files: true 且 target 为目录时返回扁平文件树（语言、顶层符号数、字节大小）。",
     ].join("\n"),
     promptSnippet: "Output structural outline of a file/directory/URL",
     parameters: OutlineParams,
     async execute(_id, params, _signal, _onUpdate, extCtx) {
       const target = coerceTargetParam(params.target);
-      if (
-        (typeof target !== "string" || target.length === 0) &&
-        (!Array.isArray(target) || target.length === 0)
-      ) {
-        throw new Error("'target' must be a non-empty string or array of strings");
+      if (typeof target !== "string" || target.length === 0) {
+        throw new Error("'target' must be a single path or URL (array targets are not supported)");
       }
       const filesMode = coerceBoolean(params.files);
       const rawArgs: Record<string, unknown> = {
-        target: Array.isArray(target)
-          ? target.map((t) => resolvePathArg(extCtx.cwd, t))
-          : filesMode || target.startsWith("http://") || target.startsWith("https://")
+        target:
+          filesMode || target.startsWith("http://") || target.startsWith("https://")
             ? target
             : resolvePathArg(extCtx.cwd, target),
       };
@@ -92,9 +115,21 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
       if (params.includeTests !== undefined) rawArgs.includeTests = params.includeTests;
 
       const { text, response } = await callAftTool(bridgeFor(ctx), "outline", rawArgs, extCtx);
+      const truncated = response.truncated === true;
       return {
         content: [{ type: "text", text }],
-        details: { input: params, truncated: response.truncated === true },
+        details: {
+          truncated,
+          pendant: {
+            markdown: buildPendantMarkdown({
+              title: "aft_outline",
+              input: params,
+              output: text,
+              truncated,
+            }),
+            expanded: true,
+          } satisfies ToolPendant,
+        },
       };
     },
   });
@@ -197,9 +232,21 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
       if (coerceBoolean(params.callgraph)) rawArgs.callgraph = true;
 
       const { text, response } = await callAftTool(bridgeFor(ctx), "zoom", rawArgs, extCtx);
+      const truncated = response.truncated === true;
       return {
         content: [{ type: "text", text }],
-        details: { input: params, truncated: response.truncated === true },
+        details: {
+          truncated,
+          pendant: {
+            markdown: buildPendantMarkdown({
+              title: "aft_zoom",
+              input: params,
+              output: text,
+              truncated,
+            }),
+            expanded: true,
+          } satisfies ToolPendant,
+        },
       };
     },
   });
@@ -295,9 +342,21 @@ export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): vo
         formatCallgraphSections(params.op, response, PLAIN_CALLGRAPH_THEME, {
           includeUnresolved: coerceBoolean(params.includeUnresolved),
         }).join("\n");
+      const truncated = response.truncated === true;
       return {
         content: [{ type: "text", text: out }],
-        details: { input: params, truncated: response.truncated === true },
+        details: {
+          truncated,
+          pendant: {
+            markdown: buildPendantMarkdown({
+              title: "aft_callgraph",
+              input: params,
+              output: out,
+              truncated,
+            }),
+            expanded: true,
+          } satisfies ToolPendant,
+        },
       };
     },
   });
@@ -336,6 +395,7 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
       "精确名字、字符串、正则保持简短（'^export'、'Cargo.lock'）。",
       "需要语义索引可用（aft.jsonc 中 semantic_search: true 且 embedding 后端就绪）；",
       "否则退化为词法/正则匹配通道。",
+      "启用语义索引时，首次调用会阻塞到索引构建完成，避免返回部分结果。",
     ].join("\n"),
     promptSnippet: "Search code by meaning or exact text",
     parameters: SearchParams,
@@ -350,10 +410,28 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
         rawArgs.path = resolvePathArg(extCtx.cwd, params.path);
       }
 
-      const { text, response } = await callAftTool(bridgeFor(ctx), "search", rawArgs, extCtx);
+      const { text, response } = await callAftTool(bridgeFor(ctx), "search", rawArgs, extCtx, {
+        // 默认 search 传输超时仅 60s，会早于索引等待（600s）触发；覆盖为等待
+        // 上限 + 常规执行预算。超时只说明响应被挤掉而非 bridge 挂死，保留
+        // 常驻的语义索引/LSP 状态。
+        transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
+        keepBridgeOnTimeout: true,
+      });
+      const truncated = response.truncated === true;
       return {
         content: [{ type: "text", text }],
-        details: { input: params, truncated: response.truncated === true },
+        details: {
+          truncated,
+          pendant: {
+            markdown: buildPendantMarkdown({
+              title: "aft_search",
+              input: params,
+              output: text,
+              truncated,
+            }),
+            expanded: true,
+          } satisfies ToolPendant,
+        },
       };
     },
   });

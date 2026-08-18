@@ -1,11 +1,14 @@
 /**
- * AFT 感知工具扩展入口：aft_outline / aft_zoom / aft_callgraph / aft_search。
+ * AFT 扩展入口：感知工具（aft_outline / aft_zoom / aft_callgraph / aft_search）
+ * + ast_edit（符号级编辑，套用本仓库写保护机制）+ aft_refactor / aft_import
+ * （workspace-wide 重构与 import 管理，路径级写保护）。
  *
- * 只读接入 AFT 的结构感知能力（tree-sitter 符号表、trigram 索引、调用图、
- * 语义搜索），不触碰本仓库自己的 read/write/edit/bash 工具及其安全机制
+ * 感知工具只读，不触碰本仓库自己的 read/write/edit/bash 工具及其安全机制
  * （bwrap 沙箱、write-guard、reads 记账）。aft_search 仅当用户级
  * aft.jsonc 开启 semantic_search 时注册（本地语义索引需 ONNX 运行时，
- * 内网默认关闭）。
+ * 内网默认关闭）。ast_edit 是写工具：用 AFT 的 preview 计算 diff，落盘走
+ * 本仓库的 write-guard + reads 记账 + 写管线。aft_refactor / aft_import 的
+ * Rust 命令不支持 preview，写保护退化为路径级审批。
  *
  * 二进制缺失或 pool 创建失败时降级：不注册任何工具并在 session 开始时报
  * 一次错，而不是让每个工具调用失败。
@@ -17,8 +20,11 @@
 import { resolveCortexKitConfigPaths } from "@cortexkit/aft-bridge";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { registerAstEditTool } from "./ast-edit.js";
 import { type AftPool, createAftPool, shutdownAftPool } from "./bridge.js";
 import { loadAftConfig } from "./config.js";
+import { registerImportTool } from "./imports.js";
+import { registerRefactorTool } from "./refactor.js";
 import {
   registerCallgraphTool,
   registerOutlineTool,
@@ -49,6 +55,9 @@ export default async function aftReadTools(pi: ExtensionAPI): Promise<void> {
   registerOutlineTool(pi, toolCtx);
   registerZoomTool(pi, toolCtx);
   registerCallgraphTool(pi, toolCtx);
+  registerAstEditTool(pi, toolCtx);
+  registerRefactorTool(pi, toolCtx);
+  registerImportTool(pi, toolCtx);
   if (cfg.semanticSearch) {
     registerSearchTool(pi, toolCtx);
   }

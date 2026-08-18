@@ -1,44 +1,46 @@
 /**
- * Enhanced Read Tool Extension
+ * Opencode File Tools —— read / edit / write 统一构建点。
  *
- * Aligned with opencode commit 999be62662 (v1.2.25-1672-g999be62662, 2026-08-12):
- *   https://github.com/anomalyco/opencode/blob/999be62662/packages/opencode/src/tool/read.ts
- * Aligned behaviours: per-line `N: ` line-number prefix, single-line 2000-char
- * truncation, 1-based offset (0 treated as 1), out-of-range offset error,
- * cut/more/end truncation messages, `localeCompare` directory sorting.
- * Known gaps (intentionally not implemented): PDF attachment support,
- * instruction (AGENTS.md) loading and LSP warm-up.
- * BMP sniffing is kept but `image/bmp` is NOT in SUPPORTED_IMAGE_MIMES, so a
- * .bmp file falls through to binary detection — matching opencode, which only
- * serves jpeg/png/gif/webp as attachments.
+ * 三个工具在同一个 registerFileTools(pi, service) 里注册，共享同一个 LSP
+ * service 实例（createLspService 的闭包变量），与 claude-code/files.ts 共享
+ * read-snapshot state 的方式一致；不再用模块级全局缓存。
  *
- * Overrides the built-in `read` tool with additional features inspired by
- * opencode's read implementation:
+ * 各工具行为对齐 opencode commit 999be62662（v1.2.25-1672-g999be62662,
+ * 2026-08-12）：
+ * - read：每行 `N: ` 行号前缀、单行 2000 字符截断、1 起始 offset、目录
+ *   排序；读取后后台 LSP warm-up（fire-and-forget）。
+ * - edit：opencode 匹配引擎（9 个 replacer、0.65 相似度阈值、0.25 行差）；
+ *   写后等待文档诊断，ERROR 级追加到输出。
+ * - write：BOM 保留（source.bom || next.bom）；写后同 edit 的诊断输出。
  *
- * - Directory listing: When the path is a directory, lists its entries
- *   with "/" suffix for directories.
- * - "Did you mean?" suggestions: When a file is not found, searches the
- *   parent directory for similarly-named files.
- * - Binary file detection: Rejects binary files by extension and content
- *   sampling before handing them to the LLM.
- * - Structured output: Uses <path>, <type>, <content>/<entries> XML tags
- *   to help the LLM parse output.
- * - Image support: Detects and serves images as base64 attachments.
- *
- * Install:
- *   cp enhanced-read.ts ~/.pi/agent/extensions/
- *
- * Or for project-local:
- *   cp enhanced-read.ts .pi/extensions/
+ * 匹配引擎（replacers + replace()）在 edit-engine.ts，也被 lib/write-guard
+ * 复用。spawn-agent 子代理按工具名加载本文件（`--tools` allowlist 过滤）。
  */
 
 import { constants } from "node:fs";
-import { access, open, readdir, readFile, stat } from "node:fs/promises";
+import { access, mkdir, open, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, resolve as resolvePath, sep } from "node:path";
 
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionAPI,
+  generateDiffString,
+  generateUnifiedPatch,
+  withFileMutationQueue,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+
+import { createLspService, initLsp, type LspService } from "../lib/lsp/lsp.js";
+import { guardWriteAccess } from "../lib/write-guard.js";
+import {
+  detectLineEnding,
+  normalizeToLF,
+  replace,
+  restoreLineEndings,
+  stripBom,
+} from "./edit-engine.js";
+
+// ── read 工具 ────────────────────────────────────────────────────────────────
 
 const DEFAULT_MAX_LINES = 2000;
 const DEFAULT_MAX_BYTES = 50 * 1024;
@@ -283,7 +285,7 @@ async function formatDirectoryEntries(dirPath: string): Promise<string[]> {
   return results;
 }
 
-export default function opencodeRead(pi: ExtensionAPI) {
+function registerReadTool(pi: ExtensionAPI, service: LspService): void {
   pi.registerTool({
     name: "read",
     label: "read",
@@ -444,7 +446,250 @@ export default function opencodeRead(pi: ExtensionAPI) {
 
       content = [{ type: "text", text: outputText }];
 
+      // opencode: LSP warm-up 是后台任务，失败不影响读取
+      void service.touchFile(absolutePath, ctx.cwd).catch(() => {
+        // 后台 warm-up 失败不影响读取
+      });
+
       return { content, details };
     },
   });
+}
+
+// ── edit 工具 ────────────────────────────────────────────────────────────────
+
+const editSchema = Type.Object({
+  filePath: Type.String({ description: "The path to the file to modify (relative or absolute)" }),
+  oldString: Type.String({ description: "The text to replace" }),
+  newString: Type.String({
+    description: "The text to replace it with (must be different from oldString)",
+  }),
+  replaceAll: Type.Optional(
+    Type.Boolean({ description: "Replace all occurrences of oldString (default false)" }),
+  ),
+});
+
+function registerEditTool(pi: ExtensionAPI, service: LspService): void {
+  pi.registerTool({
+    name: "edit",
+    label: "edit",
+    description:
+      "Performs exact string replacements in an existing file.\n" +
+      "The edit will FAIL if oldString is not unique in the file.\n" +
+      " * Either provide a larger string with more surrounding context to make it unique, or use replaceAll to change every instance of oldString.",
+    promptSnippet:
+      "Make targeted string replacements in files using exact oldString/newString matching",
+    promptGuidelines: [
+      "Prefer editing existing files. Never write new files unless explicitly required.",
+      "Use the edit tool for targeted changes. Use oldString/newString with exact matching content.",
+      "Keep oldString as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
+      "The edit will FAIL if oldString is not found or is found multiple times. Provide more context to make it unique or use replaceAll.",
+      "Use replaceAll for renaming variables or replacing all instances of a string.",
+    ],
+    parameters: editSchema,
+
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const filePath = params.filePath;
+      const oldString = params.oldString;
+      const newString = params.newString;
+      const replaceAll = params.replaceAll ?? false;
+
+      const absolutePath = isAbsolute(filePath) ? filePath : resolvePath(ctx.cwd, filePath);
+
+      await guardWriteAccess(ctx, {
+        toolName: "edit",
+        absolutePath,
+        change: { oldText: oldString, newText: newString, replaceAll },
+      });
+
+      const throwIfAborted = (): void => {
+        if (signal?.aborted) throw new Error("Operation aborted");
+      };
+
+      const [message, details] = await withFileMutationQueue(absolutePath, async () => {
+        throwIfAborted();
+
+        // opencode: 前置校验，先于空 oldString 分支
+        if (oldString === newString) {
+          throw new Error("No changes to apply: oldString and newString are identical.");
+        }
+
+        // opencode: 空 oldString + 文件不存在 → 创建新文件；文件存在 → 报错
+        if (oldString === "") {
+          let exists = true;
+          try {
+            await access(absolutePath, constants.F_OK);
+          } catch {
+            exists = false;
+          }
+          throwIfAborted();
+          if (exists) {
+            throw new Error(
+              "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
+            );
+          }
+          // opencode: writeWithDirs 自动创建父目录；newString 开头的 BOM 原样保留
+          await mkdir(dirname(absolutePath), { recursive: true });
+          throwIfAborted();
+          await writeFile(absolutePath, newString, "utf8");
+          throwIfAborted();
+          return [
+            "Edit applied successfully.",
+            { diff: "", patch: "", firstChangedLine: 0 },
+          ] as const;
+        }
+
+        try {
+          await access(absolutePath, constants.R_OK | constants.W_OK);
+        } catch (error: unknown) {
+          throwIfAborted();
+          const msg =
+            error instanceof Error && "code" in error && typeof error.code === "string"
+              ? `Error code: ${error.code}`
+              : String(error);
+          throw new Error(`Could not edit file: ${filePath}. ${msg}.`, { cause: error });
+        }
+        throwIfAborted();
+
+        const buffer = await readFile(absolutePath);
+        const rawContent = buffer.toString("utf8");
+        throwIfAborted();
+
+        // Strip BOM then normalize line endings to LF.
+        // The opencode replacers split on \n and expect only LF.
+        const { bom, text: content } = stripBom(rawContent);
+        const originalEnding = detectLineEnding(content);
+        const normalizedContent = normalizeToLF(content);
+
+        const newContent = replace(normalizedContent, oldString, newString, replaceAll);
+        throwIfAborted();
+
+        const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+        await writeFile(absolutePath, finalContent, "utf8");
+        throwIfAborted();
+
+        const diffResult = generateDiffString(normalizedContent, newContent);
+        const patch = generateUnifiedPatch(filePath, normalizedContent, newContent);
+        return [
+          "Edit applied successfully.",
+          { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
+        ] as const;
+      });
+
+      throwIfAborted();
+      // opencode: 写后等待文档诊断，ERROR 级错误追加到输出让模型可见
+      const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd);
+      const text = diagnosticText
+        ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
+        : message;
+      return { content: [{ type: "text" as const, text }], details };
+    },
+  });
+}
+
+// ── write 工具 ───────────────────────────────────────────────────────────────
+
+/**
+ * opencode: desiredBom = source.bom || next.bom —— 优先保留原文件 BOM，
+ * 否则用新内容自带的 BOM。
+ * @param existing - 旧文件前几个字节（undefined 表示文件不存在）
+ * @param content - 要写入的完整内容
+ */
+export function resolveBom(
+  existing: Buffer | undefined,
+  content: string,
+): { bom: string; text: string } {
+  const sourceBom =
+    existing !== undefined &&
+    existing.length >= 3 &&
+    existing[0] === 0xef &&
+    existing[1] === 0xbb &&
+    existing[2] === 0xbf
+      ? "\uFEFF"
+      : "";
+  const { bom: nextBom, text } = stripBom(content);
+  return { bom: sourceBom || nextBom, text };
+}
+
+function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
+  pi.registerTool({
+    name: "write",
+    label: "write",
+    description:
+      "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+    promptSnippet: "Create or overwrite files",
+    promptGuidelines: ["Use write only for new files or complete rewrites."],
+    parameters: Type.Object({
+      filePath: Type.String({
+        description: "The absolute path to the file to write (must be absolute, not relative)",
+      }),
+      content: Type.String({ description: "The content to write to the file" }),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const { filePath: rawPath, content } = params;
+      const absolutePath = resolvePath(ctx.cwd, rawPath);
+      await guardWriteAccess(ctx, {
+        toolName: "write",
+        absolutePath,
+        change: { oldText: "", newText: content },
+      });
+      const dir = dirname(absolutePath);
+
+      const throwIfAborted = () => {
+        if (signal?.aborted) throw new Error("Operation aborted");
+      };
+
+      const [message, details] = await withFileMutationQueue(absolutePath, async () => {
+        throwIfAborted();
+
+        // opencode: desiredBom = source.bom || next.bom —— 保留原文件 BOM，
+        // 否则用新内容自带的 BOM
+        let existing: Buffer | undefined;
+        try {
+          const fh = await open(absolutePath, "r");
+          try {
+            existing = Buffer.alloc(3);
+            const { bytesRead } = await fh.read(existing, 0, 3, 0);
+            if (bytesRead < 3) existing = undefined;
+          } finally {
+            await fh.close();
+          }
+        } catch {
+          // 文件不存在：无旧 BOM
+        }
+        throwIfAborted();
+        const { bom: desiredBom, text: nextText } = resolveBom(existing, content);
+
+        await mkdir(dir, { recursive: true });
+        throwIfAborted();
+        await writeFile(absolutePath, desiredBom + nextText, "utf8");
+        throwIfAborted();
+
+        return ["Wrote file successfully.", undefined] as const;
+      });
+
+      throwIfAborted();
+      // opencode: 写后等待文档诊断，ERROR 级错误追加到输出让模型可见
+      const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd);
+      const text = diagnosticText
+        ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
+        : message;
+      return { content: [{ type: "text" as const, text }], details };
+    },
+  });
+}
+
+// ── 入口 ─────────────────────────────────────────────────────────────────────
+
+export function registerFileTools(pi: ExtensionAPI, service: LspService): void {
+  registerReadTool(pi, service);
+  registerEditTool(pi, service);
+  registerWriteTool(pi, service);
+}
+
+/** 独立入口：创建 LSP service（闭包共享给三个工具）并注册。 */
+export default function opencodeFileTools(pi: ExtensionAPI): void {
+  const service = createLspService();
+  initLsp(pi, service);
+  registerFileTools(pi, service);
 }

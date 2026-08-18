@@ -71,12 +71,14 @@ const MAX_PROGRESS_CHARS_PER_LINE = 21;
  * files, so a subagent can enable exactly the tools it declares — e.g. `Grep`
  * without `Glob`. The stateful file tools (`Read`/`Edit`/`Write`) share one
  * implementation file (they share a read-snapshot state); the `--tools`
- * allowlist still exposes only the declared subset.
+ * allowlist still exposes only the declared subset. The opencode file tools
+ * (read/edit/write) likewise share opencode/files.ts (they share the LSP
+ * service instance).
  */
 const TOOL_EXTENSION_OVERRIDES: Record<string, string> = {
-  read: "opencode/read.ts",
-  edit: "opencode/edit.ts",
-  write: "opencode/write.ts",
+  read: "opencode/files.ts",
+  edit: "opencode/files.ts",
+  write: "opencode/files.ts",
   bash: "opencode/bash.ts",
   Grep: "claude-code/grep.ts",
   Glob: "claude-code/glob.ts",
