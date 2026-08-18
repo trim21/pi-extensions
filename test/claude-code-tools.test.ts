@@ -19,7 +19,12 @@ import {
   findSimilarFile,
   suggestPathUnderCwd,
 } from "../src/claude-code/common.js";
-import claudeCodeFileTools, { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
+import claudeCodeFileTools, {
+  buildEditPendant,
+  buildReadPendant,
+  exactReplace,
+  formatReadOutput,
+} from "../src/claude-code/files.js";
 import claudeCodeGlobTool, { globFiles } from "../src/claude-code/glob.js";
 import claudeCodeGrepTool, {
   sortFilesByMtime,
@@ -315,6 +320,101 @@ describe("Read, Edit, and Write", () => {
 
     const updated = await call(tools.get("Write")!, { file_path: filePath, content: "y\n" }, ctx);
     expect(updated.content[0].text).toBe(`The file ${filePath} has been updated successfully.`);
+  });
+
+  it("builds an Edit pendant with a diff block and optional LSP errors", () => {
+    expect(
+      buildEditPendant({
+        filePath: "/tmp/a.ts",
+        diff: "+1 x\n-1 y",
+        diagnosticText: "",
+      }),
+    ).toEqual({
+      markdown: ["## Diff — `/tmp/a.ts`", "", "```diff", "+1 x", "-1 y", "```"].join("\n"),
+      expanded: true,
+    });
+
+    const withLsp = buildEditPendant({
+      filePath: "/tmp/a.ts",
+      diff: "+1 x",
+      diagnosticText: "ERROR [1:1] boom",
+    });
+    expect(withLsp.markdown).toContain("## LSP errors");
+    expect(withLsp.markdown).toContain("```text");
+    expect(withLsp.markdown).toContain("ERROR [1:1] boom");
+  });
+
+  it("builds a Read pendant with file metadata", () => {
+    expect(
+      buildReadPendant({ filePath: "/tmp/a.ts", byteSize: 14, offset: 2, limit: 2, totalLines: 4 }),
+    ).toEqual({
+      markdown: [
+        "## Read",
+        "",
+        "- **Path**: `/tmp/a.ts`",
+        "- **Total lines**: 4",
+        "- **Range**: 2-3",
+        "- **Size**: 14 B",
+      ].join("\n"),
+      expanded: false,
+    });
+    // 空文件不显示 Range
+    expect(buildReadPendant({ filePath: "/tmp/empty", byteSize: 0, totalLines: 0 }).markdown).toBe(
+      "## Read\n\n- **Path**: `/tmp/empty`\n- **Total lines**: 0\n- **Size**: 0 B",
+    );
+    // 图片读取显示类型而非行数
+    expect(
+      buildReadPendant({ filePath: "/tmp/a.png", byteSize: 100, type: "image/png" }).markdown,
+    ).toBe("## Read\n\n- **Path**: `/tmp/a.png`\n- **Type**: image/png\n- **Size**: 100 B");
+  });
+
+  it("returns a pendant with the diff for Edit and Write results", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-pendant-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "hello world\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+    await call(tools.get("Read")!, { file_path: filePath }, ctx);
+
+    const edited = await call(
+      tools.get("Edit")!,
+      { file_path: filePath, old_string: "world", new_string: "there" },
+      ctx,
+    );
+    expect(edited.details.pendant).toMatchObject({ expanded: true });
+    expect(edited.details.pendant.markdown).toContain("## Diff —");
+    expect(edited.details.pendant.markdown).toContain("```diff");
+    expect(edited.details.pendant.markdown).toContain("hello there");
+    // 测试环境无 LSP 服务器，不应出现 LSP 段落
+    expect(edited.details.pendant.markdown).not.toContain("LSP errors");
+
+    const written = await call(
+      tools.get("Write")!,
+      { file_path: join(directory, "new.txt"), content: "line1\nline2\n" },
+      ctx,
+    );
+    expect(written.details.pendant.expanded).toBe(true);
+    expect(written.details.pendant.markdown).toContain("```diff");
+    expect(written.details.pendant.markdown).toContain("+1 line1");
+  });
+
+  it("returns a pendant with read metadata", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-read-pendant-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "one\ntwo\nthree\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+
+    const result = await call(
+      tools.get("Read")!,
+      { file_path: filePath, offset: 2, limit: 2 },
+      ctx,
+    );
+    expect(result.details.pendant).toMatchObject({ expanded: false });
+    expect(result.details.pendant.markdown).toContain(filePath);
+    expect(result.details.pendant.markdown).toContain("**Total lines**: 4");
+    expect(result.details.pendant.markdown).toContain("**Range**: 2-3");
+    expect(result.details.pendant.markdown).toContain("**Size**: 14 B");
   });
 
   it("uses Claude Code wording for no-op, unmatched, and multi-match edits", async () => {

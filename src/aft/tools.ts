@@ -120,15 +120,6 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
         content: [{ type: "text", text }],
         details: {
           truncated,
-          pendant: {
-            markdown: buildPendantMarkdown({
-              title: "aft_outline",
-              input: params,
-              output: text,
-              truncated,
-            }),
-            expanded: true,
-          } satisfies ToolPendant,
         },
       };
     },

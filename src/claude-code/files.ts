@@ -15,6 +15,7 @@ import {
 import { Type } from "typebox";
 
 import { createLspService, initLsp, type LspService } from "../lib/lsp/lsp.js";
+import { type ToolPendant } from "../lib/pendant.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import {
   type ClaudeCodeState,
@@ -45,6 +46,43 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+/** Edit/Write 结果的可折叠面板：diff（```diff 代码块）+ LSP errors（有则显示）。 */
+export function buildEditPendant(options: {
+  filePath: string;
+  diff: string;
+  diagnosticText: string;
+}): ToolPendant {
+  const lines = [`## Diff — \`${options.filePath}\``, "", "```diff", options.diff, "```"];
+  if (options.diagnosticText !== "") {
+    lines.push("", "## LSP errors", "", "```text", options.diagnosticText, "```");
+  }
+  return { markdown: lines.join("\n"), expanded: true };
+}
+
+/** Read 结果的可折叠面板：路径、总行数、读取范围与文件大小。 */
+export function buildReadPendant(options: {
+  filePath: string;
+  byteSize: number;
+  offset?: number;
+  limit?: number;
+  totalLines?: number;
+  type?: string;
+}): ToolPendant {
+  const lines = ["## Read", "", `- **Path**: \`${options.filePath}\``];
+  if (options.type) lines.push(`- **Type**: ${options.type}`);
+  if (options.totalLines !== undefined) {
+    const start = options.offset ?? 1;
+    const end = Math.min(
+      options.limit === undefined ? options.totalLines : start + options.limit - 1,
+      options.totalLines,
+    );
+    lines.push(`- **Total lines**: ${options.totalLines}`);
+    if (start <= end) lines.push(`- **Range**: ${start}-${end}`);
+  }
+  lines.push(`- **Size**: ${formatFileSize(options.byteSize)}`);
+  return { markdown: lines.join("\n"), expanded: false };
+}
+
 /** Tool guidance, kept in markdown so it reads like documentation. */
 const READ_PROMPT = readFileSync(fileURLToPath(new URL("read.md", import.meta.url)), "utf8").trim();
 const EDIT_PROMPT = readFileSync(fileURLToPath(new URL("edit.md", import.meta.url)), "utf8").trim();
@@ -69,6 +107,8 @@ export interface FileToolDetails {
    * session 文件，resume 后由 session_start 重建 reads state。
    */
   reads?: Record<string, FileSnapshot>;
+  /** 可折叠的 diff / LSP 结果面板（pi TUI 渲染）。 */
+  pendant?: ToolPendant;
 }
 
 function snapshotOf(content: Uint8Array | string, textEditable = true): FileSnapshot {
@@ -286,7 +326,17 @@ export function registerFileTools(
         const snapshot = snapshotOf(image, false);
         const key = await readStateKey(filePath);
         state.reads.set(key, snapshot);
-        return { content, details: { reads: { [key]: snapshot } } };
+        return {
+          content,
+          details: {
+            reads: { [key]: snapshot },
+            pendant: buildReadPendant({
+              filePath,
+              byteSize: image.length,
+              type: imageMime,
+            }),
+          },
+        };
       }
 
       const buffer = await readFile(filePath);
@@ -316,7 +366,16 @@ export function registerFileTools(
       });
       return {
         content: [{ type: "text", text: formatted.text }],
-        details: { reads: { [key]: snapshot } },
+        details: {
+          reads: { [key]: snapshot },
+          pendant: buildReadPendant({
+            filePath,
+            byteSize: buffer.length,
+            offset: params.offset ?? 1,
+            limit: params.limit,
+            totalLines: formatted.totalLines,
+          }),
+        },
       };
     },
   });
@@ -388,9 +447,15 @@ export function registerFileTools(
             const snapshot = snapshotOf(newString);
             const key = await readStateKey(filePath);
             state.reads.set(key, snapshot);
+            const diff = generateDiffString("", newString);
             return [
               `The file ${filePath} has been updated successfully.`,
-              { reads: { [key]: snapshot } },
+              {
+                diff: diff.diff,
+                patch: generateUnifiedPatch(filePath, "", newString),
+                firstChangedLine: diff.firstChangedLine,
+                reads: { [key]: snapshot },
+              },
             ];
           }
           const replaceAll = params.replace_all ?? false;
@@ -477,7 +542,17 @@ export function registerFileTools(
       const text = diagnosticText
         ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
         : message;
-      return { content: [{ type: "text" as const, text }], details };
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          ...details,
+          pendant: buildEditPendant({
+            filePath,
+            diff: details.diff ?? "",
+            diagnosticText,
+          }),
+        },
+      };
     },
   });
 
@@ -556,7 +631,17 @@ export function registerFileTools(
       const text = diagnosticText
         ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
         : message;
-      return { content: [{ type: "text" as const, text }], details };
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          ...details,
+          pendant: buildEditPendant({
+            filePath,
+            diff: details.diff ?? "",
+            diagnosticText,
+          }),
+        },
+      };
     },
   });
 }
