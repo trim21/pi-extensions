@@ -170,10 +170,22 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 function stopProcess(process: LspServerHandle["process"]): Promise<void> {
   if (process.exitCode !== null) return Promise.resolve();
-  process.kill();
+  try {
+    process.kill();
+  } catch {
+    // Windows 上对已退出/从未成功启动的进程 kill 会抛 EINVAL
+    return Promise.resolve();
+  }
   return new Promise((resolve) => {
     process.once("exit", () => resolve());
-    setTimeout(() => process.kill("SIGKILL"), 1_000).unref();
+    process.once("error", () => resolve());
+    setTimeout(() => {
+      try {
+        process.kill("SIGKILL");
+      } catch {
+        // 进程已退出，忽略
+      }
+    }, 1_000).unref();
   });
 }
 
@@ -289,7 +301,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
       },
     }),
     initializeTimeoutMs,
-  ).catch((error: unknown) => {
+  ).catch(async (error: unknown) => {
+    // 握手失败（超时/拒绝）时清理连接并终止已 spawn 的子进程，避免进程泄漏
+    connection.end();
+    connection.dispose();
+    await stopProcess(input.server.process);
     throw new InitializeError(input.serverID, error);
   });
 

@@ -215,9 +215,14 @@ describe("ConfigAdapter.spawn", () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
     const binDir = join(dir, "bin");
     await mkdir(binDir);
-    const script = join(binDir, "my-lsp");
-    await writeFile(script, "#!/bin/sh\n");
-    await chmod(script, 0o755);
+    if (process.platform === "win32") {
+      // Windows 只能直接执行 .exe/.cmd/.bat；脚本挂起 60s 供 kill 断言
+      await writeFile(join(binDir, "my-lsp.cmd"), "@echo off\r\nping -n 60 127.0.0.1 >nul\r\n");
+    } else {
+      const script = join(binDir, "my-lsp");
+      await writeFile(script, "#!/bin/sh\n");
+      await chmod(script, 0o755);
+    }
 
     const adapter = new ConfigAdapter("x", parse({ bin: "my-lsp" }));
     vi.stubEnv("PATH", binDir);
