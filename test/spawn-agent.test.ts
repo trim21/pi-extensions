@@ -140,14 +140,13 @@ describe("buildSubagentArgs", () => {
     expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(false);
   });
 
-  it("loads opencode-read for the default read-only toolset", () => {
+  it("loads opencode files.ts for the default read-only toolset", () => {
     const exts = loadedExtensions(buildSubagentArgs(baseAgent, "task", undefined));
-    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(true);
-    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/files.ts"))).toBe(true);
+    expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(false);
   });
 
-  it("loads opencode overrides for each declared tool (read/edit/write/bash)", () => {
+  it("loads the shared opencode files implementation once for read/edit/write", () => {
     const exts = loadedExtensions(
       buildSubagentArgs(
         { ...baseAgent, tools: ["read", "edit", "write", "bash"] },
@@ -155,9 +154,8 @@ describe("buildSubagentArgs", () => {
         undefined,
       ),
     );
-    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(true);
-    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(true);
-    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(true);
+    // read/edit/write 共享 opencode/files.ts（共享 LSP service 实例），只加载一次
+    expect(exts.filter((p) => p.endsWith("opencode/files.ts"))).toHaveLength(1);
     expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
   });
 
@@ -165,9 +163,7 @@ describe("buildSubagentArgs", () => {
     const exts = loadedExtensions(
       buildSubagentArgs({ ...baseAgent, tools: ["bash"] }, "task", undefined),
     );
-    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/files.ts"))).toBe(false);
     expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
   });
 
@@ -199,9 +195,7 @@ describe("buildSubagentArgs", () => {
       buildSubagentArgs({ ...baseAgent, tools: ["Read", "Edit", "Write"] }, "task", undefined),
     );
     expect(exts.filter((p) => p.endsWith("claude-code/files.ts"))).toHaveLength(1);
-    expect(exts.some((p) => p.endsWith("opencode/read.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode/edit.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode/write.ts"))).toBe(false);
+    expect(exts.some((p) => p.endsWith("opencode/files.ts"))).toBe(false);
 
     const single = loadedExtensions(
       buildSubagentArgs({ ...baseAgent, tools: ["Edit"] }, "task", undefined),
@@ -569,7 +563,7 @@ describe("subagent progress log", () => {
         assistantMessageEvent: { type: "text_end", contentIndex: 1, content: "Found the flag." },
       },
     ]);
-    expect(updates.at(-1)).toContain("text: Let me inspect the config.");
+    expect(updates.at(-1)).toContain("text: Let me in … e config.");
     expect(updates.at(-1)).toContain("text: Found the flag.");
   });
 
@@ -583,6 +577,74 @@ describe("subagent progress log", () => {
       },
     ]);
     expect(updates.at(-1)).toContain("tool: read");
+  });
+
+  it("merges consecutive executions of the same tool into a count", async () => {
+    const updates = await runWithEvents([
+      { type: "tool_execution_start", toolCallId: "1", toolName: "read", args: {} },
+      { type: "tool_execution_start", toolCallId: "2", toolName: "read", args: {} },
+      { type: "tool_execution_start", toolCallId: "3", toolName: "read", args: {} },
+    ]);
+    expect(updates.at(-1)).toContain("tool: read x 3");
+  });
+
+  it("lists different tools in call order, counting only consecutive repeats", async () => {
+    // 工具名用单字符,让合并行(12 字符)不触发折叠,完整验证合并结果。
+    const updates = await runWithEvents([
+      { type: "tool_execution_start", toolCallId: "1", toolName: "a", args: {} },
+      { type: "tool_execution_start", toolCallId: "2", toolName: "a", args: {} },
+      { type: "tool_execution_start", toolCallId: "3", toolName: "b", args: {} },
+      { type: "tool_execution_start", toolCallId: "4", toolName: "a", args: {} },
+      { type: "tool_execution_start", toolCallId: "5", toolName: "c", args: {} },
+    ]);
+    expect(updates.at(-1)).toContain("tool: a x 2, b, a, c");
+  });
+
+  it("starts a fresh tool line after a text block", async () => {
+    const updates = await runWithEvents([
+      { type: "tool_execution_start", toolCallId: "1", toolName: "read", args: {} },
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "Found it." },
+      },
+      { type: "tool_execution_start", toolCallId: "2", toolName: "read", args: {} },
+    ]);
+    const lines = updates.at(-1)!.split("\n");
+    expect(lines[0]).toBe("tool: read");
+    expect(lines[1]).toBe("text: Found it.");
+    expect(lines[2]).toBe("tool: read");
+  });
+
+  it("folds long text block content to first/last 9 chars", async () => {
+    const long = "a".repeat(120);
+    const updates = await runWithEvents([
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "text_end", contentIndex: 0, content: long },
+      },
+    ]);
+    expect(updates.at(-1)).toContain(`text: ${"a".repeat(9)} … ${"a".repeat(9)}`);
+    expect(updates.at(-1)).not.toContain(`text: ${"a".repeat(10)}`);
+  });
+
+  it("folds long merged tool lines to first/last 9 chars", async () => {
+    const names = [
+      "alpha-tool-with-a-very-long-name",
+      "beta-tool-with-a-very-long-name",
+      "gamma-tool-with-a-very-long-name",
+    ];
+    const updates = await runWithEvents(
+      names.map((name, i) => ({
+        type: "tool_execution_start",
+        toolCallId: String(i),
+        toolName: name,
+        args: {},
+      })),
+    );
+    expect(updates.at(-1)).toContain("tool: alpha-too … long-name");
+    expect(updates.at(-1)).not.toContain("beta-tool");
   });
 
   it("interleaves tool: and text: lines in event order", async () => {
@@ -606,17 +668,32 @@ describe("subagent progress log", () => {
   });
 
   it("keeps only the most recent 5 lines", async () => {
-    const events = Array.from({ length: 25 }, (_, i) => ({
-      type: "tool_execution_start",
-      toolCallId: String(i),
-      toolName: `tool${i}`,
-      args: {},
-    }));
+    // 3 组「4 个连续工具调用 + 一个文本块」共产生 6 行;合并后的工具行按
+    // 单行参与滚动窗口,最后只保留 5 行,第 1 行(组 0 的工具行)被挤掉。
+    const events: unknown[] = [];
+    for (let g = 0; g < 3; g++) {
+      for (let i = 0; i < 4; i++) {
+        events.push({
+          type: "tool_execution_start",
+          toolCallId: `${g}-${i}`,
+          toolName: `tool${g * 4 + i}`,
+          args: {},
+        });
+      }
+      events.push({
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "text_end", contentIndex: 0, content: `done${g}` },
+      });
+    }
     const updates = await runWithEvents(events);
     const lines = updates.at(-1)!.split("\n");
     expect(lines).toHaveLength(5);
-    expect(lines[0]).toBe("tool: tool20");
-    expect(lines.at(-1)).toBe("tool: tool24");
+    expect(lines[0]).toBe("text: done0");
+    expect(lines[1]).toBe("tool: tool4, to … l6, tool7");
+    expect(lines[2]).toBe("text: done1");
+    expect(lines[3]).toBe("tool: tool8, to … 0, tool11");
+    expect(lines[4]).toBe("text: done2");
   });
 });
 

@@ -4,13 +4,14 @@
  * Aligned with opencode commit 999be62662 (v1.2.25-1672-g999be62662, 2026-08-12):
  *   https://github.com/anomalyco/opencode/blob/999be62662/packages/opencode/src/tool/question.ts
  * 与 opencode 的差异：opencode 输出 title "Asked N question(s)"，这里未设置；
- * 多选交互是平台差异（opencode 用 checkbox，这里循环 ctx.ui.select 勾选）。
+ * 多选交互是平台差异（opencode 用 checkbox，这里循环 ctx.ui.select 勾选，
+ * 已选项显示 `☑ ` 前缀，再次选择即反选，最后选「✓ Done」提交）。
  *
  * 参数与语义和 opencode 的 `question` 工具一致：
  *   questions 数组，每项含 question / header / options / multiple：
  *   - options 每项为 label / description
  *   - 单选（默认）：用户在选项里选一个，也可选「Type your own answer.」自由输入
- *   - 多选（multiple: true）：循环用 ui.select 逐个勾选，直到「✓ Done」
+ *   - 多选（multiple: true）：循环用 ui.select 勾选/反选（☑ 标记已选），直到「✓ Done」
  *   - 每个问题返回一个 label 数组（Answer = string[]），跳过的为空数组
  *   - 输出与 opencode 一致：
  *     User has answered your questions: "q"="a", "q2"="Unanswered"...
@@ -23,7 +24,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
-import { selectWithOptionalInput } from "../lib/ui.js";
+import { selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
 
@@ -124,16 +125,12 @@ async function askSingle(q: Question, ctx: ExtensionContext): Promise<Answer> {
 }
 
 async function askMultiple(q: Question, ctx: ExtensionContext): Promise<Answer> {
-  const title = dialogTitle(q);
-  const selected: string[] = [];
-  const remaining = new Set(q.options.map((o) => o.label));
-  while (remaining.size > 0) {
-    const choice = await ctx.ui.select(title, [...remaining, DONE_LABEL]);
-    if (choice === undefined || choice === DONE_LABEL) break;
-    if (!remaining.has(choice)) continue;
-    selected.push(choice);
-    remaining.delete(choice);
-  }
+  const selected = await selectMultiple(
+    dialogTitle(q),
+    q.options.map((o) => ({ label: o.label })),
+    ctx.ui,
+    { doneLabel: DONE_LABEL },
+  );
   return selected;
 }
 

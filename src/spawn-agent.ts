@@ -12,7 +12,11 @@
  * `onUpdate`, the same channel the built-in bash tool uses for live output.
  * Progress is a rolling log: `tool: <name>` lines for tool calls and
  * `text: <content>` lines for completed text blocks, keeping the last
- * `MAX_PROGRESS_LINES` lines.
+ * `MAX_PROGRESS_LINES` lines. Consecutive tool calls are merged into a
+ * single `tool:` line (`read x 2, glob`) and over-long line content is
+ * folded to the first/last 7 chars joined by `…`, so a burst of tool calls
+ * or a long text block does not flood the window; any text block starts a
+ * new line.
  *
  * Security default: without an explicit `tools:` in the frontmatter, the
  * subagent only gets read-only tools (read/grep/find/ls) — no bash/write/edit.
@@ -38,6 +42,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { type ToolPendant } from "./lib/pendant.js";
 import { type AgentConfig, discoverAgents, formatAgentList } from "./spawn-agent-agents.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -48,6 +53,8 @@ const MAX_OUTPUT_BYTES = 50 * 1024;
 const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
 /** Progress log keeps only the most recent lines (rolling window). */
 const MAX_PROGRESS_LINES = 5;
+/** Progress line content (without the `tool:` / `text:` prefix) is capped at 21 chars; longer text is folded to the first/last 9 chars joined by ` … `. */
+const MAX_PROGRESS_CHARS_PER_LINE = 21;
 
 /**
  * Tool → extension override map: when a subagent's frontmatter enables a
@@ -64,12 +71,14 @@ const MAX_PROGRESS_LINES = 5;
  * files, so a subagent can enable exactly the tools it declares — e.g. `Grep`
  * without `Glob`. The stateful file tools (`Read`/`Edit`/`Write`) share one
  * implementation file (they share a read-snapshot state); the `--tools`
- * allowlist still exposes only the declared subset.
+ * allowlist still exposes only the declared subset. The opencode file tools
+ * (read/edit/write) likewise share opencode/files.ts (they share the LSP
+ * service instance).
  */
 const TOOL_EXTENSION_OVERRIDES: Record<string, string> = {
-  read: "opencode/read.ts",
-  edit: "opencode/edit.ts",
-  write: "opencode/write.ts",
+  read: "opencode/files.ts",
+  edit: "opencode/files.ts",
+  write: "opencode/files.ts",
   bash: "opencode/bash.ts",
   Grep: "claude-code/grep.ts",
   Glob: "claude-code/glob.ts",
@@ -91,10 +100,6 @@ const spawnAgentSchema = Type.Object({
 // ── result types ─────────────────────────────────────────────────────────────
 
 interface UsageStats {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
   cost: number;
   contextTokens: number;
   turns: number;
@@ -110,6 +115,8 @@ interface SubagentDetails {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
+  /** 折叠 markdown 面板：父 agent 的 prompt 与父 agent 看到的子 agent 结果。 */
+  pendant?: ToolPendant;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -126,6 +133,18 @@ function getFinalOutput(messages: AgentMessage[]): string {
   return "";
 }
 
+/**
+ * Fold over-long progress line content: keep the first/last 9 chars joined by
+ * ` … ` (space, ellipsis, space), so the folded line never exceeds
+ * `MAX_PROGRESS_CHARS_PER_LINE` chars (9 + 3 + 9 = 21). Shorter text is
+ * returned as-is.
+ */
+function foldProgressLine(text: string): string {
+  if (text.length <= MAX_PROGRESS_CHARS_PER_LINE) return text;
+  const keep = Math.floor((MAX_PROGRESS_CHARS_PER_LINE - 3) / 2);
+  return `${text.slice(0, keep)} … ${text.slice(-keep)}`;
+}
+
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
   if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
@@ -136,14 +155,15 @@ function formatTokens(count: number): string {
 function formatUsageStats(usage: UsageStats, model?: string): string {
   const parts: string[] = [];
   if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-  if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
-  if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
-  if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
-  if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
   if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
   if (usage.contextTokens > 0) parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
   if (model) parts.push(model);
   return parts.join(" ");
+}
+
+/** 子 agent 结果的折叠面板 markdown：父 agent 的 prompt 与父 agent 看到的结果。 */
+function formatPendantMarkdown(task: string, response: string): string {
+  return `# prompt:\n${task.trim()}\n# response\n${response.trim()}`;
 }
 
 /**
@@ -319,10 +339,6 @@ export async function runAgent(
     messages: [],
     stderr: "",
     usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
       cost: 0,
       contextTokens: 0,
       turns: 0,
@@ -345,12 +361,45 @@ export async function runAgent(
     });
 
     let logLines: string[] = [];
+    // 工具调用行合并:连续的 tool_execution_start 事件合并在同一 `tool:` 行
+    // (如 `tool: read x 2, glob`),相同工具名连续出现时计为 `name x N`,
+    // 不同名按调用顺序罗列;任何非工具行都会打断合并。
+    let toolLineSegments: string[] = [];
+    let toolLine: { name: string; count: number } | undefined;
+
+    const toolSegment = (name: string, count: number) => (count > 1 ? `${name} x ${count}` : name);
 
     const pushLogLine = (line: string) => {
       logLines.push(line);
       if (logLines.length > MAX_PROGRESS_LINES) {
         logLines = logLines.slice(-MAX_PROGRESS_LINES);
       }
+      // 任何非工具行都会打断工具调用合并,下一批调用另起一行。
+      toolLine = undefined;
+    };
+
+    const appendToolLine = (name: string) => {
+      const firstInBatch = toolLine === undefined;
+      if (toolLine === undefined) {
+        toolLineSegments = [];
+        toolLine = { name, count: 1 };
+      } else if (toolLine.name === name) {
+        toolLine.count++;
+      } else {
+        toolLineSegments.push(toolSegment(toolLine.name, toolLine.count));
+        toolLine = { name, count: 1 };
+      }
+      const parts = [...toolLineSegments, toolSegment(toolLine.name, toolLine.count)].join(", ");
+      const line = `tool: ${foldProgressLine(parts)}`;
+      if (firstInBatch) {
+        logLines.push(line);
+        if (logLines.length > MAX_PROGRESS_LINES) {
+          logLines = logLines.slice(-MAX_PROGRESS_LINES);
+        }
+      } else {
+        logLines[logLines.length - 1] = line;
+      }
+      emitUpdate();
     };
 
     const emitUpdate = () => {
@@ -424,16 +473,14 @@ export async function runAgent(
           // `text:` log line. Deltas/thinking are intentionally not logged.
           const delta = event.assistantMessageEvent;
           if (delta.type === "text_end") {
-            pushLogLine(`text: ${delta.content}`);
+            pushLogLine(`text: ${foldProgressLine(delta.content)}`);
             emitUpdate();
           }
 
           break;
         }
         case "tool_execution_start": {
-          pushLogLine(`tool: ${event.toolName}`);
-          emitUpdate();
-
+          appendToolLine(event.toolName);
           break;
         }
         case "message_end": {
@@ -441,10 +488,6 @@ export async function runAgent(
           result.messages.push(msg);
           if (msg.role === "assistant") {
             result.usage.turns++;
-            result.usage.input += msg.usage.input;
-            result.usage.output += msg.usage.output;
-            result.usage.cacheRead += msg.usage.cacheRead;
-            result.usage.cacheWrite += msg.usage.cacheWrite;
             result.usage.cost += msg.usage.cost.total;
             result.usage.contextTokens = msg.usage.totalTokens;
             if (!result.model) result.model = msg.model;
@@ -597,10 +640,6 @@ export default function spawnAgent(pi: ExtensionAPI) {
             messages: [],
             stderr: "",
             usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
               cost: 0,
               contextTokens: 0,
               turns: 0,
@@ -630,7 +669,13 @@ export default function spawnAgent(pi: ExtensionAPI) {
           content: [
             { type: "text", text: `Subagent "${result.agent}" failed (${reason}): ${message}` },
           ],
-          details: result,
+          details: {
+            ...result,
+            pendant: {
+              markdown: formatPendantMarkdown(params.task, message),
+              expanded: true,
+            } satisfies ToolPendant,
+          },
           isError: true,
         };
       }
@@ -640,7 +685,16 @@ export default function spawnAgent(pi: ExtensionAPI) {
       const text = truncation.truncated
         ? `${truncation.content}\n\n[Output truncated to ${formatTokens(truncation.content.length)} bytes. Full result preserved in tool details.]`
         : output;
-      return { content: [{ type: "text", text }], details: result };
+      return {
+        content: [{ type: "text", text }],
+        details: {
+          ...result,
+          pendant: {
+            markdown: formatPendantMarkdown(params.task, text),
+            expanded: false,
+          } satisfies ToolPendant,
+        },
+      };
     },
 
     renderCall(args, theme) {

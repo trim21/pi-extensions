@@ -36,6 +36,7 @@ export default defineConfig(
       "*.swp",
       "**/__generated__/**",
       "**/generated/**",
+      "test/fixtures/**",
     ],
   },
   eslint.configs.recommended,

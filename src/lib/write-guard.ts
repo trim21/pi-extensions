@@ -108,7 +108,11 @@ export interface WriteGuardOptions {
   toolName: string;
   /** The resolved absolute target path (caller has already parsed its args). */
   absolutePath: string;
-  change: PendingChange;
+  /**
+   * 待审批的变更内容；缺省时（如 aft_refactor/aft_import 无 preview diff）
+   * 审批对话框不展示 diff 预览，仅按路径审批。
+   */
+  change?: PendingChange;
 }
 
 /**
@@ -137,7 +141,7 @@ export async function guardWriteAccess(
   }
 
   while (true) {
-    const diffPreview = await buildDiffPreview(absolutePath, opts.change);
+    const diffPreview = opts.change ? await buildDiffPreview(absolutePath, opts.change) : undefined;
     const title =
       `Model requests write access outside workspace:\n\n` +
       `  Tool:  ${opts.toolName}\n` +

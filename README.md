@@ -12,7 +12,7 @@
 | [写保护（内置）](#写保护内置)   | 写工具内置：限制文件写入在 workspace 内，外部写入需审批 |
 | [opencode-edit](#opencode-edit) | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎  |
 | [vision-agent](#vision-agent)   | 视觉代理：主模型不支持视觉时，spawn 子 agent 识别图片   |
-| [session-name](#session-name)   | 首个 user prompt 自动生成会话名，模型命名 + 启发式兜底  |
+| [session-name](#session-name)   | 首个 user prompt 自动生成会话名，失败仅告警不命名       |
 | [todowrite](#todowrite)         | opencode 风格的任务列表工具，完整列表替换语义           |
 | [question](#question)           | opencode 风格的提问工具，阻塞式询问用户选择             |
 | [talk](#talk)                   | session 间消息传递，SQLite 邮箱 + 双向 ask 时间戳仲裁   |
@@ -175,11 +175,11 @@ pi -e ./src/vision-agent.ts
 
 根据会话的第一个 user prompt 自动生成显示名，在 `/resume` 和 `pi -r` 里更易区分会话。
 
-- **双模式命名**：配置了 `sessionName.model` 时调用命名模型（OpenAI 兼容 API，复用 `~/.pi/agent/models.json` 的 provider 配置）把 prompt 概括成短名；未配置模型、provider 不可解析或模型调用失败时退化为启发式（取首行、去 markdown 装饰、截断到 `maxLength`）。
+- **模型命名**：配置了 `sessionName.model` 时调用命名模型（OpenAI 兼容 API，复用 `~/.pi/agent/models.json` 的 provider 配置）把 prompt 概括成短名，输出截断到 `maxLength`。
+- **失败即告警**：未配置 `sessionName`、provider 不可解析或模型调用失败时都不设置名字，仅以 warning 通知，方便排查。
 - **不覆盖已有名字**：`--name`、`/name` 设置过名字的会话不会被改；恢复的已命名会话同样跳过。
 - **恢复无名会话**：resume/fork 恢复且无名字的会话，从历史第一条 user 消息生成名字。
 - **非阻塞**：命名在后台进行，不拖慢首轮回复；中途切换会话也不会把名字写到错误的 session。
-- **无需配置开箱即用**：缺省按启发式命名。
 
 ### 配置
 
@@ -188,7 +188,7 @@ pi -e ./src/vision-agent.ts
 {
   "sessionName": {
     "provider": "axonhub", // 可选，缺省回退 defaultProvider
-    "model": "deepseek-v4-flash", // 命名模型；不配置则用启发式
+    "model": "deepseek-v4-flash", // 命名模型；不配置则不做自动命名
     "maxLength": 30, // 可选，名字最大长度，默认 30
   },
 }
@@ -341,6 +341,50 @@ sqlite 文件路径按优先级取第一个可用值：
 ```bash
 pi -e ./src/talk/index.ts
 ```
+
+---
+
+## LSP 配置
+
+read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级诊断）。LSP protocol 是统一的，因此服务器不需要为每个语言写 adapter：用一份 JSON 配置声明如何启动即可。
+
+配置文件（项目优先于全局，逐字段覆盖）：
+
+- `~/.pi/agent/lsp.json`（全局）
+- `.pi/lsp.json`（项目）
+
+```jsonc
+{
+  "version": 1,
+  "servers": {
+    "gopls": {
+      "include": ["**/*.go"],
+      "rootMarkers": ["go.mod"],
+      "bin": "gopls",
+      "args": [],
+      "cwd": "{root}", // 支持 {root} / {cwd} 模板
+      "languageIdByExtension": { ".go": "go" },
+      "startupTimeoutMs": 45000,
+      "diagnosticsWaitMs": 1500,
+      "initializationOptions": {}, // → initialize 请求
+      "settings": {}, // → didChangeConfiguration / workspace/configuration 请求
+    },
+  },
+}
+```
+
+字段说明：
+
+- `include`：文件 glob，相对项目根或调用 cwd，任一命中即启用；支持 `!` 否定排除，如 `["**/*.go", "!**/*_test.go"]`
+- `rootMarkers`：项目根标记文件，从文件目录向上查找；缺省用调用 cwd 作为根
+- `bin`：可执行文件——绝对路径、相对调用 cwd 的路径，或名字（先在项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin` 找，再走 PATH）
+- `languageIdByExtension`：扩展名 → LSP languageId（didOpen 用）；缺省回退内置映射表
+- `startupTimeoutMs` / `diagnosticsWaitMs`：per-server 超时，覆盖全局配置与默认值
+- `initializationOptions` 与 `settings` 按 LSP 语义分离：前者进 initialize 请求，后者进 didChangeConfiguration / workspace/configuration 请求
+
+内置默认服务器（typescript / pyright / ruff / clangd）始终存在；`servers` 以 key 为服务器 id 与默认合并——同 key 覆盖、新 key 新增、`"enabled": false` 移除（如 `"clangd": { "enabled": false }`）。executable 的发现逻辑（如 tsserver 路径、venv 里的 python）不内置，需要时用 `bin` / `args` / `settings` 自行表达。
+
+旧的 `enabled`（白名单）/ `disabled`（排除）与全局超时字段（`initializeTimeoutMs` 等）继续可用。
 
 ---
 

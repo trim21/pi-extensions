@@ -1,10 +1,10 @@
 /**
  * Tests for the session-name extension:
  * - loadSessionNameConfig: config resolution
- * - sanitizeName / heuristicName: name generation fallback
+ * - sanitizeName: name cleaning
  * - extractFirstUserPrompt: prompt text selection (fresh vs resumed)
  * - callNamer / generateSessionName: model-registry based naming calls
- * - extension behavior: first-prompt naming, skip rules, stale-pi safety
+ * - extension behavior: config-gated naming, skip rules, stale-pi safety
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +19,6 @@ import {
   DEFAULT_MAX_LENGTH,
   extractFirstUserPrompt,
   generateSessionName,
-  heuristicName,
   loadSessionNameConfig,
   type ModelRegistryLike,
   NAMER_MAX_TOKENS,
@@ -118,33 +117,6 @@ describe("sanitizeName", () => {
   it("keeps short names and truncates long ones with an ellipsis", () => {
     expect(sanitizeName("abcde", 5)).toBe("abcde");
     expect(sanitizeName("一二三四五六七八九十", 5)).toBe("一二三四…");
-  });
-});
-
-describe("heuristicName", () => {
-  it("uses the first non-empty line", () => {
-    expect(heuristicName("\n\n 修复登录页面的 bug\n详情：...")).toBe("修复登录页面的 bug");
-  });
-
-  it("strips markdown decorations", () => {
-    expect(heuristicName("# 重构 auth 模块")).toBe("重构 auth 模块");
-    expect(heuristicName("> 引用内容")).toBe("引用内容");
-    expect(heuristicName("`修复 bug`")).toBe("修复 bug");
-    expect(heuristicName("- [ ] 添加测试")).toBe("[ ] 添加测试");
-  });
-
-  it("skips a leading code fence line", () => {
-    expect(heuristicName("```ts\nconst x = 1\n```")).toBe("const x = 1");
-  });
-
-  it("truncates long lines to maxLength", () => {
-    const name = heuristicName("这是一个非常非常非常非常非常非常非常长的消息内容啊", 10);
-    expect(name).toBeDefined();
-    expect(name!.length).toBeLessThanOrEqual(10);
-  });
-
-  it("returns undefined for empty text", () => {
-    expect(heuristicName("  \n ")).toBeUndefined();
   });
 });
 
@@ -247,34 +219,72 @@ describe("generateSessionName", () => {
     expect(name).toBe("修复登录bug");
   });
 
-  it("falls back to heuristic when the model call fails", async () => {
+  it("returns undefined when the model call fails", async () => {
     const registry = {
       find: () => ({}) as Model<Api>,
       complete: vi.fn(async () => {
         throw new Error("boom");
       }),
     };
+    const onModelFallback = vi.fn();
     const name = await generateSessionName(
       "帮我修复登录页面的 bug",
       { provider: "axonhub", model: "m" },
-      { registry },
+      { registry, onModelFallback },
     );
-    expect(name).toBe("帮我修复登录页面的 bug");
+    expect(name).toBeUndefined();
+    expect(onModelFallback).toHaveBeenCalledWith("model-error");
   });
 
-  it("falls back to heuristic when the model is not in the registry", async () => {
+  it("returns undefined when the model is not in the registry", async () => {
     const registry = { find: (): Model<Api> | undefined => undefined, complete: vi.fn() };
+    const onModelFallback = vi.fn();
     const name = await generateSessionName(
       "修复 bug",
       { provider: "nope", model: "m" },
-      { registry },
+      { registry, onModelFallback },
     );
-    expect(name).toBe("修复 bug");
+    expect(name).toBeUndefined();
+    expect(onModelFallback).toHaveBeenCalledWith("model-unavailable");
   });
 
-  it("uses heuristic when no model is configured", async () => {
+  it("reports the model fallback reason", async () => {
+    const errorRegistry = {
+      find: () => ({}) as Model<Api>,
+      complete: vi.fn(async () => {
+        throw new Error("timeout");
+      }),
+    };
+    const onError = vi.fn();
+    const name = await generateSessionName(
+      "修复 bug",
+      { model: "m" },
+      { registry: errorRegistry, onModelFallback: onError },
+    );
+    expect(name).toBeUndefined();
+    expect(onError).toHaveBeenCalledWith("model-error");
+
+    const missingRegistry = { find: (): Model<Api> | undefined => undefined, complete: vi.fn() };
+    const onMissing = vi.fn();
+    await generateSessionName(
+      "修复 bug",
+      { model: "m" },
+      { registry: missingRegistry, onModelFallback: onMissing },
+    );
+    expect(onMissing).toHaveBeenCalledWith("model-unavailable");
+
+    const onSuccess = vi.fn();
+    await generateSessionName(
+      "修复 bug",
+      { model: "m" },
+      { registry: namerRegistry(), onModelFallback: onSuccess },
+    );
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined when no model is configured", async () => {
     const name = await generateSessionName("修复 bug\n详情", undefined);
-    expect(name).toBe("修复 bug");
+    expect(name).toBeUndefined();
   });
 
   it("truncates overly long model output", async () => {
@@ -335,13 +345,46 @@ function ctx(overrides: Record<string, unknown> = {}) {
 const delay = () => new Promise((resolve) => setTimeout(resolve, 20));
 
 describe("extension behavior", () => {
-  it("names a fresh session from the first prompt (heuristic)", async () => {
+  it("does not name the session when sessionName is not configured", async () => {
     const { sessionNameExtension, tempHome } = await loadExtensionWithHome({});
     try {
+      const notify = vi.fn();
       const { pi, handlers, setSessionName } = createPi();
       sessionNameExtension(pi as never);
-      handlers.before_agent_start?.({ prompt: "帮我修复登录页面的 bug" } as never, ctx() as never);
-      await vi.waitFor(() => expect(setSessionName).toHaveBeenCalledWith("帮我修复登录页面的 bug"));
+      handlers.before_agent_start?.(
+        { prompt: "帮我修复登录页面的 bug" } as never,
+        ctx({ hasUI: true, ui: { notify } }) as never,
+      );
+      await delay();
+      expect(setSessionName).not.toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("sessionName"), "warning");
+    } finally {
+      vi.resetModules();
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("does not notify a warning when sessionName is configured", async () => {
+    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({
+      "settings.json": JSON.stringify({ sessionName: { model: "m" } }),
+    });
+    try {
+      const notify = vi.fn();
+      const complete = vi.fn(async () => ({
+        content: [{ type: "text", text: "修复登录bug" }],
+      }));
+      const { pi, handlers, setSessionName } = createPi();
+      sessionNameExtension(pi as never);
+      handlers.before_agent_start?.(
+        { prompt: "帮我修复登录页面的 bug" } as never,
+        ctx({
+          hasUI: true,
+          ui: { notify },
+          modelRegistry: { find: () => ({}) as Model<Api>, complete },
+        }) as never,
+      );
+      await vi.waitFor(() => expect(setSessionName).toHaveBeenCalled());
+      expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("sessionName"), "warning");
     } finally {
       vi.resetModules();
       rmSync(tempHome, { recursive: true, force: true });
@@ -386,8 +429,13 @@ describe("extension behavior", () => {
   });
 
   it("names from the first user message when resuming an unnamed session", async () => {
-    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({});
+    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({
+      "settings.json": JSON.stringify({ sessionName: { model: "m" } }),
+    });
     try {
+      const complete = vi.fn(async () => ({
+        content: [{ type: "text", text: "历史第一条消息" }],
+      }));
       const { pi, handlers, setSessionName } = createPi();
       sessionNameExtension(pi as never);
       const branch = [
@@ -398,9 +446,15 @@ describe("extension behavior", () => {
       ];
       handlers.before_agent_start?.(
         { prompt: "当前 prompt" } as never,
-        ctx({ sessionManager: { getBranch: () => branch } }) as never,
+        ctx({
+          sessionManager: { getBranch: () => branch },
+          modelRegistry: { find: () => ({}) as Model<Api>, complete },
+        }) as never,
       );
       await vi.waitFor(() => expect(setSessionName).toHaveBeenCalledWith("历史第一条消息"));
+      // 喂给命名模型的是历史第一条 user 消息，而不是当前 prompt
+      const [, context] = complete.mock.calls[0] as unknown as [Model<Api>, Context];
+      expect(context.messages[0].content).toBe("历史第一条消息");
     } finally {
       vi.resetModules();
       rmSync(tempHome, { recursive: true, force: true });
@@ -422,14 +476,23 @@ describe("extension behavior", () => {
   });
 
   it("notifies when the session is named in a UI session", async () => {
-    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({});
+    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({
+      "settings.json": JSON.stringify({ sessionName: { model: "m" } }),
+    });
     try {
       const notify = vi.fn();
       const { pi, handlers } = createPi();
       sessionNameExtension(pi as never);
       handlers.before_agent_start?.(
         { prompt: "修复 bug" } as never,
-        ctx({ hasUI: true, ui: { notify } }) as never,
+        ctx({
+          hasUI: true,
+          ui: { notify },
+          modelRegistry: {
+            find: () => ({}) as Model<Api>,
+            complete: vi.fn(async () => ({ content: [{ type: "text", text: "修复 bug" }] })),
+          },
+        }) as never,
       );
       await vi.waitFor(() => expect(notify).toHaveBeenCalled());
       expect(String(notify.mock.calls[0][0])).toContain("修复 bug");
@@ -439,8 +502,59 @@ describe("extension behavior", () => {
     }
   });
 
+  it("notifies a warning when the naming model call fails", async () => {
+    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({
+      "settings.json": JSON.stringify({ sessionName: { provider: "axonhub", model: "m" } }),
+    });
+    try {
+      const notify = vi.fn();
+      const { pi, handlers, setSessionName } = createPi();
+      sessionNameExtension(pi as never);
+      const registry = {
+        find: () => ({}) as Model<Api>,
+        complete: vi.fn(async () => {
+          throw new Error("timeout");
+        }),
+      };
+      handlers.before_agent_start?.(
+        { prompt: "帮我修复 bug" } as never,
+        ctx({ hasUI: true, ui: { notify }, modelRegistry: registry }) as never,
+      );
+      await delay();
+      expect(setSessionName).not.toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("命名模型调用失败"), "warning");
+    } finally {
+      vi.resetModules();
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("notifies a warning when the naming model is unavailable", async () => {
+    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({
+      "settings.json": JSON.stringify({ sessionName: { provider: "nope", model: "m" } }),
+    });
+    try {
+      const notify = vi.fn();
+      const { pi, handlers, setSessionName } = createPi();
+      sessionNameExtension(pi as never);
+      const registry = { find: (): Model<Api> | undefined => undefined, complete: vi.fn() };
+      handlers.before_agent_start?.(
+        { prompt: "帮我修复 bug" } as never,
+        ctx({ hasUI: true, ui: { notify }, modelRegistry: registry }) as never,
+      );
+      await delay();
+      expect(setSessionName).not.toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("命名模型不可用"), "warning");
+    } finally {
+      vi.resetModules();
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
   it("swallows stale-pi errors after a session switch", async () => {
-    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({});
+    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({
+      "settings.json": JSON.stringify({ sessionName: { model: "m" } }),
+    });
     const unhandled: unknown[] = [];
     const listener = (reason: unknown) => {
       unhandled.push(reason);
@@ -453,7 +567,15 @@ describe("extension behavior", () => {
         },
       });
       sessionNameExtension(pi as never);
-      handlers.before_agent_start?.({ prompt: "帮我修复 bug" } as never, ctx() as never);
+      handlers.before_agent_start?.(
+        { prompt: "帮我修复 bug" } as never,
+        ctx({
+          modelRegistry: {
+            find: () => ({}) as Model<Api>,
+            complete: vi.fn(async () => ({ content: [{ type: "text", text: "修复 bug" }] })),
+          },
+        }) as never,
+      );
       await delay();
       expect(unhandled).toHaveLength(0);
     } finally {
@@ -464,12 +586,24 @@ describe("extension behavior", () => {
   });
 
   it("uses DEFAULT_MAX_LENGTH when maxLength is not configured", async () => {
-    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({});
+    // 未配 maxLength 时，超长模型输出按默认长度截断
+    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({
+      "settings.json": JSON.stringify({ sessionName: { model: "m" } }),
+    });
     try {
       const { pi, handlers, setSessionName } = createPi();
       sessionNameExtension(pi as never);
-      const longPrompt = "啊".repeat(100);
-      handlers.before_agent_start?.({ prompt: longPrompt } as never, ctx() as never);
+      handlers.before_agent_start?.(
+        { prompt: "帮我修复 bug" } as never,
+        ctx({
+          modelRegistry: {
+            find: () => ({}) as Model<Api>,
+            complete: vi.fn(async () => ({
+              content: [{ type: "text", text: "啊".repeat(100) }],
+            })),
+          },
+        }) as never,
+      );
       await vi.waitFor(() => expect(setSessionName).toHaveBeenCalledTimes(1));
       const name = setSessionName.mock.calls[0][0];
       expect(name.length).toBeLessThanOrEqual(DEFAULT_MAX_LENGTH);

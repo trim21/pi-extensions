@@ -230,14 +230,11 @@ describe("execute", () => {
         { label: "C", description: "c" },
       ],
     });
-    const calls: string[][] = [];
-    const select = vi.fn(async (_t: string, options: string[]) => {
-      calls.push(options);
-      // 依次选 A、C，然后 Done（此时还剩 B，但用户结束勾选）
-      if (calls.length === 1) return "A";
-      if (calls.length === 2) return "C";
-      return DONE_LABEL;
-    });
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("☐ A")
+      .mockResolvedValueOnce("☐ C")
+      .mockResolvedValueOnce(DONE_LABEL);
     const result = await tool.execute(
       "id",
       { questions: [multi] },
@@ -246,32 +243,6 @@ describe("execute", () => {
       ctxWith({ select }),
     );
     expect(result.details.answers).toEqual([["A", "C"]]);
-    expect(calls).toEqual([
-      ["A", "B", "C", DONE_LABEL],
-      ["B", "C", DONE_LABEL],
-      ["B", DONE_LABEL],
-    ]);
-  });
-
-  it("ignores a multi-select choice that is no longer in the remaining set", async () => {
-    const { tool } = loadTool();
-    const multi = q({
-      multiple: true,
-      options: [{ label: "A", description: "a" }],
-    });
-    let calls = 0;
-    const select = vi.fn(async () => {
-      calls++;
-      return calls === 1 ? "stale" : DONE_LABEL;
-    });
-    const result = await tool.execute(
-      "id",
-      { questions: [multi] },
-      undefined,
-      undefined,
-      ctxWith({ select }),
-    );
-    expect(result.details.answers).toEqual([[]]);
   });
 
   it("throws when no interactive UI is available", async () => {

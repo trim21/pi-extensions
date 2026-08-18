@@ -19,9 +19,12 @@ import {
   findSimilarFile,
   suggestPathUnderCwd,
 } from "../src/claude-code/common.js";
-import { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
-import { globFiles } from "../src/claude-code/glob.js";
-import { sortFilesByMtime, summarizeCountOutput } from "../src/claude-code/grep.js";
+import claudeCodeFileTools, { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
+import claudeCodeGlobTool, { globFiles } from "../src/claude-code/glob.js";
+import claudeCodeGrepTool, {
+  sortFilesByMtime,
+  summarizeCountOutput,
+} from "../src/claude-code/grep.js";
 import claudeCodeTools from "../src/claude-code/index.js";
 import { buildGrepArguments, pageGrepOutput } from "../src/claude-code/search.js";
 import { registerShellTools } from "../src/claude-code/shell.js";
@@ -1141,7 +1144,10 @@ describe("TodoWrite and AskUserQuestion", () => {
   it("supports free text in multi-select via Other", async () => {
     const tools = loadTools();
     const ctx = context(process.cwd());
-    ctx.ui.select.mockResolvedValueOnce("Postgres").mockResolvedValueOnce("Other");
+    ctx.ui.select
+      .mockResolvedValueOnce("☐ Postgres")
+      .mockResolvedValueOnce("☐ Other")
+      .mockResolvedValueOnce("Submit");
     ctx.ui.input.mockResolvedValue("  CockroachDB  ");
     const result = await call(
       tools.get("AskUserQuestion")!,
@@ -1161,5 +1167,51 @@ describe("TodoWrite and AskUserQuestion", () => {
       ctx,
     );
     expect(result.content[0].text).toContain('"Which databases?"="Postgres, CockroachDB"');
+  });
+});
+
+describe("standalone extension entries (spawn-agent -e loading)", () => {
+  // spawn-agent 子代理按工具名把 Read/Edit/Write/Grep/Glob 映射到
+  // claude-code/files.ts / grep.ts / glob.ts 并经 `-e` 加载，因此这三个文件
+  // 必须是有效的扩展入口：默认导出 factory 函数，且只注册自身工具
+  // （--tools 白名单负责按需暴露，注册本身不越界）。
+  it("files.ts default export registers Read/Edit/Write with its own state", () => {
+    const tools = new Map<string, RegisteredTool>();
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    claudeCodeFileTools({
+      registerTool(tool: RegisteredTool) {
+        tools.set(tool.name, tool);
+      },
+      registerFlag: vi.fn(),
+      registerCommand: vi.fn(),
+      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+      exec: vi.fn(),
+    } as never);
+    expect([...tools.keys()]).toEqual(["Read", "Edit", "Write"]);
+    // state 恢复依赖 session 事件，独立入口同样注册（与 index.ts 行为一致）
+    expect(handlers.has("session_start")).toBe(true);
+    expect(handlers.has("session_tree")).toBe(true);
+  });
+
+  it("grep.ts default export registers Grep only", () => {
+    const tools = new Map<string, RegisteredTool>();
+    claudeCodeGrepTool({
+      registerTool(tool: RegisteredTool) {
+        tools.set(tool.name, tool);
+      },
+      on: vi.fn(),
+    } as never);
+    expect([...tools.keys()]).toEqual(["Grep"]);
+  });
+
+  it("glob.ts default export registers Glob only", () => {
+    const tools = new Map<string, RegisteredTool>();
+    claudeCodeGlobTool({
+      registerTool(tool: RegisteredTool) {
+        tools.set(tool.name, tool);
+      },
+      on: vi.fn(),
+    } as never);
+    expect([...tools.keys()]).toEqual(["Glob"]);
   });
 });
