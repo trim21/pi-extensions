@@ -203,4 +203,77 @@ describe("lsp config integration", () => {
     await service.shutdownAll();
     await rm(dir, { recursive: true, force: true });
   });
+
+  it("notifies when an LSP server fails to start", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+
+    const boom = new Error("spawn ENOENT");
+    const adapter: LspServerAdapter = {
+      id: "a",
+      extensions: [".py"],
+      findRoot: async () => dir,
+      spawn: async () => {
+        throw boom;
+      },
+    };
+
+    const service = createLspService([adapter], join(dir, "no-global.json"));
+    const notify = vi.fn();
+    service.setUi({ notify });
+    await service.touchFile(file, dir);
+    expect(notify).toHaveBeenCalledWith(
+      `LSP server "a" failed to start for ${dir}: spawn ENOENT`,
+      "error",
+    );
+    // 启动失败记入 broken：第二次不再 spawn，也不重复通知
+    await service.touchFile(file, dir);
+    expect(notify).toHaveBeenCalledOnce();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("notifies when the LSP binary is unavailable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+
+    const adapter: LspServerAdapter = {
+      id: "a",
+      extensions: [".py"],
+      findRoot: async () => dir,
+      spawn: async () => {
+        return;
+      },
+    };
+
+    const service = createLspService([adapter], join(dir, "no-global.json"));
+    const notify = vi.fn();
+    service.setUi({ notify });
+    await service.touchFile(file, dir);
+    expect(notify).toHaveBeenCalledWith(
+      `LSP server "a" is not available for ${dir} (binary not found)`,
+      "error",
+    );
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("stays silent on spawn failure without a notify callback", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+
+    const adapter: LspServerAdapter = {
+      id: "a",
+      extensions: [".py"],
+      findRoot: async () => dir,
+      spawn: async () => {
+        throw new Error("boom");
+      },
+    };
+
+    const service = createLspService([adapter], join(dir, "no-global.json"));
+    await expect(service.touchFile(file, dir)).resolves.toBeUndefined();
+    await rm(dir, { recursive: true, force: true });
+  });
 });

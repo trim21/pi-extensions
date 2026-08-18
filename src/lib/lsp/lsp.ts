@@ -16,7 +16,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { extname, join, normalize, sep } from "node:path";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -137,6 +137,8 @@ export interface LspService {
   diagnostics(): Promise<Record<string, Diagnostic[]>>;
   lspDiagnosticsForFile(file: string, cwd: string): Promise<string>;
   shutdownAll(): Promise<void>;
+  /** 绑定当前会话的 UI 上下文，LSP 服务器启动失败时用它发错误通知（传 undefined 解绑）。 */
+  setUi(ui?: Pick<ExtensionUIContext, "notify">): void;
 }
 
 /** 文件必须在工作目录内才启用 LSP（对齐 opencode 的 containsPath）。 */
@@ -161,6 +163,7 @@ export function createLspService(
     broken: new Set(),
     spawning: new Map(),
   };
+  let ui: Pick<ExtensionUIContext, "notify"> | undefined;
 
   async function getClients(file: string, cwd: string): Promise<LspClient[]> {
     if (!containsPath(file, cwd)) return [];
@@ -195,6 +198,10 @@ export function createLspService(
           const handle = await adapter.spawn(root, cwd);
           if (!handle) {
             state.broken.add(key);
+            ui?.notify(
+              `LSP server "${adapter.id}" is not available for ${root} (binary not found)`,
+              "error",
+            );
             return;
           }
           const client = await create({
@@ -214,8 +221,14 @@ export function createLspService(
           }
           state.clients.push(client);
           return client;
-        } catch {
+        } catch (error) {
           state.broken.add(key);
+          ui?.notify(
+            `LSP server "${adapter.id}" failed to start for ${root}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            "error",
+          );
           return;
         }
       })();
@@ -284,7 +297,15 @@ export function createLspService(
     state.broken.clear();
   }
 
-  return { touchFile, diagnostics, lspDiagnosticsForFile, shutdownAll };
+  return {
+    touchFile,
+    diagnostics,
+    lspDiagnosticsForFile,
+    shutdownAll,
+    setUi(nextUi) {
+      ui = nextUi;
+    },
+  };
 }
 
 /** 注册进程级生命周期：session_shutdown 时清理全部服务器进程。 */
