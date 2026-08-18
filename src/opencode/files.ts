@@ -506,79 +506,84 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
         if (signal?.aborted) throw new Error("Operation aborted");
       };
 
-      const [message, details] = await withFileMutationQueue(absolutePath, async () => {
-        throwIfAborted();
+      const [message, details, diagnosticText] = await withFileMutationQueue(
+        absolutePath,
+        async () => {
+          throwIfAborted();
 
-        // opencode: 前置校验，先于空 oldString 分支
-        if (oldString === newString) {
-          throw new Error("No changes to apply: oldString and newString are identical.");
-        }
+          // opencode: 前置校验，先于空 oldString 分支
+          if (oldString === newString) {
+            throw new Error("No changes to apply: oldString and newString are identical.");
+          }
 
-        // opencode: 空 oldString + 文件不存在 → 创建新文件；文件存在 → 报错
-        if (oldString === "") {
-          let exists = true;
+          // opencode: 空 oldString + 文件不存在 → 创建新文件；文件存在 → 报错
+          if (oldString === "") {
+            let exists = true;
+            try {
+              await access(absolutePath, constants.F_OK);
+            } catch {
+              exists = false;
+            }
+            throwIfAborted();
+            if (exists) {
+              throw new Error(
+                "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
+              );
+            }
+            // opencode: writeWithDirs 自动创建父目录；newString 开头的 BOM 原样保留
+            await mkdir(dirname(absolutePath), { recursive: true });
+            throwIfAborted();
+            await writeFile(absolutePath, newString, "utf8");
+            throwIfAborted();
+            const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd);
+            return [
+              "Edit applied successfully.",
+              { diff: "", patch: "", firstChangedLine: 0 },
+              diagnosticText,
+            ] as const;
+          }
+
           try {
-            await access(absolutePath, constants.F_OK);
-          } catch {
-            exists = false;
+            await access(absolutePath, constants.R_OK | constants.W_OK);
+          } catch (error: unknown) {
+            throwIfAborted();
+            const msg =
+              error instanceof Error && "code" in error && typeof error.code === "string"
+                ? `Error code: ${error.code}`
+                : String(error);
+            throw new Error(`Could not edit file: ${filePath}. ${msg}.`, { cause: error });
           }
           throwIfAborted();
-          if (exists) {
-            throw new Error(
-              "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
-            );
-          }
-          // opencode: writeWithDirs 自动创建父目录；newString 开头的 BOM 原样保留
-          await mkdir(dirname(absolutePath), { recursive: true });
+
+          const buffer = await readFile(absolutePath);
+          const rawContent = buffer.toString("utf8");
           throwIfAborted();
-          await writeFile(absolutePath, newString, "utf8");
+
+          // Strip BOM then normalize line endings to LF.
+          // The opencode replacers split on \n and expect only LF.
+          const { bom, text: content } = stripBom(rawContent);
+          const originalEnding = detectLineEnding(content);
+          const normalizedContent = normalizeToLF(content);
+
+          const newContent = replace(normalizedContent, oldString, newString, replaceAll);
           throwIfAborted();
+
+          const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+          await writeFile(absolutePath, finalContent, "utf8");
+          throwIfAborted();
+
+          const diffResult = generateDiffString(normalizedContent, newContent);
+          const patch = generateUnifiedPatch(filePath, normalizedContent, newContent);
+          throwIfAborted();
+          const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd);
           return [
             "Edit applied successfully.",
-            { diff: "", patch: "", firstChangedLine: 0 },
+            { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
+            diagnosticText,
           ] as const;
-        }
+        },
+      );
 
-        try {
-          await access(absolutePath, constants.R_OK | constants.W_OK);
-        } catch (error: unknown) {
-          throwIfAborted();
-          const msg =
-            error instanceof Error && "code" in error && typeof error.code === "string"
-              ? `Error code: ${error.code}`
-              : String(error);
-          throw new Error(`Could not edit file: ${filePath}. ${msg}.`, { cause: error });
-        }
-        throwIfAborted();
-
-        const buffer = await readFile(absolutePath);
-        const rawContent = buffer.toString("utf8");
-        throwIfAborted();
-
-        // Strip BOM then normalize line endings to LF.
-        // The opencode replacers split on \n and expect only LF.
-        const { bom, text: content } = stripBom(rawContent);
-        const originalEnding = detectLineEnding(content);
-        const normalizedContent = normalizeToLF(content);
-
-        const newContent = replace(normalizedContent, oldString, newString, replaceAll);
-        throwIfAborted();
-
-        const finalContent = bom + restoreLineEndings(newContent, originalEnding);
-        await writeFile(absolutePath, finalContent, "utf8");
-        throwIfAborted();
-
-        const diffResult = generateDiffString(normalizedContent, newContent);
-        const patch = generateUnifiedPatch(filePath, normalizedContent, newContent);
-        return [
-          "Edit applied successfully.",
-          { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
-        ] as const;
-      });
-
-      throwIfAborted();
-      // opencode: 写后等待文档诊断，ERROR 级错误追加到输出让模型可见
-      const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd);
       const text = diagnosticText
         ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
         : message;
@@ -639,38 +644,39 @@ function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
         if (signal?.aborted) throw new Error("Operation aborted");
       };
 
-      const [message, details] = await withFileMutationQueue(absolutePath, async () => {
-        throwIfAborted();
+      const [message, details, diagnosticText] = await withFileMutationQueue(
+        absolutePath,
+        async () => {
+          throwIfAborted();
 
-        // opencode: desiredBom = source.bom || next.bom —— 保留原文件 BOM，
-        // 否则用新内容自带的 BOM
-        let existing: Buffer | undefined;
-        try {
-          const fh = await open(absolutePath, "r");
+          // opencode: desiredBom = source.bom || next.bom —— 保留原文件 BOM，
+          // 否则用新内容自带的 BOM
+          let existing: Buffer | undefined;
           try {
-            existing = Buffer.alloc(3);
-            const { bytesRead } = await fh.read(existing, 0, 3, 0);
-            if (bytesRead < 3) existing = undefined;
-          } finally {
-            await fh.close();
+            const fh = await open(absolutePath, "r");
+            try {
+              existing = Buffer.alloc(3);
+              const { bytesRead } = await fh.read(existing, 0, 3, 0);
+              if (bytesRead < 3) existing = undefined;
+            } finally {
+              await fh.close();
+            }
+          } catch {
+            // 文件不存在：无旧 BOM
           }
-        } catch {
-          // 文件不存在：无旧 BOM
-        }
-        throwIfAborted();
-        const { bom: desiredBom, text: nextText } = resolveBom(existing, content);
+          throwIfAborted();
+          const { bom: desiredBom, text: nextText } = resolveBom(existing, content);
 
-        await mkdir(dir, { recursive: true });
-        throwIfAborted();
-        await writeFile(absolutePath, desiredBom + nextText, "utf8");
-        throwIfAborted();
+          await mkdir(dir, { recursive: true });
+          throwIfAborted();
+          await writeFile(absolutePath, desiredBom + nextText, "utf8");
+          throwIfAborted();
+          const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd);
 
-        return ["Wrote file successfully.", undefined] as const;
-      });
+          return ["Wrote file successfully.", undefined, diagnosticText] as const;
+        },
+      );
 
-      throwIfAborted();
-      // opencode: 写后等待文档诊断，ERROR 级错误追加到输出让模型可见
-      const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd);
       const text = diagnosticText
         ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
         : message;
