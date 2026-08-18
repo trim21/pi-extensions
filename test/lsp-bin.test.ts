@@ -4,7 +4,7 @@ import { join, sep } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { findBinaryInWorkspace, findModuleInWorkspace, walkUp } from "../src/lib/lsp/bin.js";
+import { findBinaryInWorkspace, walkUp } from "../src/lib/lsp/bin.js";
 
 describe("lsp bin lookup", () => {
   it("walkUp 从 fromDir 逐级向上到 stopDir（含两端）", () => {
@@ -33,25 +33,6 @@ describe("lsp bin lookup", () => {
     );
     // 找不到返回 undefined
     expect(await findBinaryInWorkspace("nope", nested, dir)).toBeUndefined();
-
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it("findModuleInWorkspace 找到 node_modules 里的模块文件", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-bin-test-"));
-    const nested = join(dir, "packages", "foo");
-    await mkdir(join(nested, "node_modules", "typescript", "lib"), { recursive: true });
-    await writeFile(
-      join(nested, "node_modules", "typescript", "lib", "tsserver.js"),
-      "// tsserver",
-    );
-
-    expect(await findModuleInWorkspace("typescript/lib/tsserver.js", nested, dir)).toBe(
-      join(nested, "node_modules", "typescript", "lib", "tsserver.js"),
-    );
-    expect(
-      await findModuleInWorkspace("typescript/lib/tsserver.js", join(dir, "other"), dir),
-    ).toBeUndefined();
 
     await rm(dir, { recursive: true, force: true });
   });

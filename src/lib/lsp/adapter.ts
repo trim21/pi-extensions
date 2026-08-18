@@ -12,13 +12,22 @@ import { exists, walkUp } from "./bin.js";
 
 export interface LspServerHandle {
   process: ChildProcessWithoutNullStreams;
+  /** initialize 请求的 initializationOptions。 */
   initialization?: Record<string, unknown>;
+  /** didChangeConfiguration / workspace/configuration 的 settings；缺省回退 initialization。 */
+  settings?: Record<string, unknown>;
+  /** didOpen 的 per-server languageId 映射；缺省回退内置 LANGUAGE_EXTENSIONS 表。 */
+  languageIds?: Record<string, string>;
 }
 
 export interface LspServerAdapter {
   readonly id: string;
   /** 关联的文件扩展名（含点，小写）；空数组表示匹配所有文件。 */
   readonly extensions: readonly string[];
+  /** per-server initialize 握手超时（ms）；缺省用全局配置 / client 默认。 */
+  readonly startupTimeoutMs?: number;
+  /** per-server 诊断等待时长（ms）；缺省用全局配置 / client 默认。 */
+  readonly diagnosticsWaitMs?: number;
   findRoot(file: string, cwd: string): Promise<string | undefined>;
   spawn(root: string, cwd: string): Promise<LspServerHandle | undefined>;
 }

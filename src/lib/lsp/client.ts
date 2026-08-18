@@ -232,7 +232,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
   connection.onRequest("window/workDoneProgress/create", () => null);
   connection.onRequest("workspace/configuration", (params) => {
     const items = (params as { items?: { section?: string }[] }).items ?? [];
-    return items.map((item) => configurationValue(input.server.initialization, item.section));
+    return items.map((item) =>
+      configurationValue(input.server.settings ?? input.server.initialization, item.section),
+    );
   });
   connection.onRequest("client/registerCapability", (params) => {
     const registrations =
@@ -296,10 +298,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
   await connection.sendNotification("initialized", {});
 
-  if (input.server.initialization) {
-    await connection.sendNotification("workspace/didChangeConfiguration", {
-      settings: input.server.initialization,
-    });
+  const settings = input.server.settings ?? input.server.initialization;
+  if (settings) {
+    await connection.sendNotification("workspace/didChangeConfiguration", { settings });
   }
 
   const files: Record<string, { version: number; text: string }> = {};
@@ -618,7 +619,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
           isAbsolute(request.path) ? request.path : resolve(input.directory, request.path),
         );
         const text = await readFile(resolvedPath, "utf8");
-        const languageId = LANGUAGE_EXTENSIONS[extname(resolvedPath)] ?? "plaintext";
+        const extension = extname(resolvedPath);
+        const languageId =
+          input.server.languageIds?.[extension] ?? LANGUAGE_EXTENSIONS[extension] ?? "plaintext";
         const uri = pathToFileURL(resolvedPath).href;
 
         const document = files[resolvedPath];

@@ -62,19 +62,6 @@ export function findBinaryInWorkspace(
   return Promise.resolve(undefined);
 }
 
-/** 从 fromDir 向上（到 stopDir）找 node_modules/<modulePath>（如 typescript/lib/tsserver.js）。 */
-export function findModuleInWorkspace(
-  modulePath: string,
-  fromDir: string,
-  stopDir: string,
-): Promise<string | undefined> {
-  for (const dir of walkUp(fromDir, stopDir)) {
-    const candidate = join(dir, "node_modules", modulePath);
-    if (exists(candidate)) return Promise.resolve(candidate);
-  }
-  return Promise.resolve(undefined);
-}
-
 /** PATH 查找（同步，逻辑简单；调用频率低，无需缓存）。 */
 export function which(cmd: string): string | undefined {
   const pathDirs = (process.env.PATH ?? "").split(delimiter).filter(Boolean);

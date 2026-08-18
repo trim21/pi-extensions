@@ -4,8 +4,9 @@
  * - state（client 缓存、broken 集合、spawning 去重）是 createLspService 的
  *   闭包变量，不做成模块级全局；
  * - 配置来源：全局 `~/.pi/agent/lsp.json` + 本地 `<cwd>/.pi/lsp.json`
- *   （本地逐字段覆盖全局）：`enabled` 白名单（缺省全部）、`disabled` 排除
- *   （缺省无），以及各超时参数；配置在每个工具的调用 cwd 下惰性读取；
+ *   （本地逐字段覆盖全局）：`servers` 数组配置驱动地定义语言服务器
+ *   （按 id 与内置默认服务器合并），`enabled`/`disabled` 白名单与各超时
+ *   参数继续生效；配置在每个工具的调用 cwd 下惰性读取；
  * - client 按 (root, serverID) 缓存，并发 spawn 去重，启动失败记入 broken
  *   集合（服务实例生命周期内不再重试）；
  * - 工具只与 touchFile / diagnostics / lspDiagnosticsForFile 三个方法打交道。
@@ -20,15 +21,19 @@ import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { type LspServerAdapter } from "./adapter.js";
-import { createAdapters } from "./adapters/index.js";
 import { create, type CreateInput, type Diagnostic, type Info as LspClient } from "./client.js";
 import { report } from "./diagnostic.js";
+import { createAdapters, serverConfigSchema } from "./server-config.js";
 
 /** 超时值：number（毫秒，>=1）或字符串（"500"、"5s"、"1m"），Parse 后由 toMs 统一换算。 */
 const timeoutValue = Type.Union([Type.Number({ minimum: 1 }), Type.String()]);
 
 /** lsp.json 的配置项（全局与本地同构）。 */
 const lspConfigSchema = Type.Object({
+  /** 配置文件版本（当前 1）；未知版本会被 typebox 严格校验拒绝并回退空配置。 */
+  version: Type.Optional(Type.Number()),
+  /** 配置驱动的语言服务器定义（id → 配置）；按 id 与内置默认服务器合并（覆盖/enabled:false 禁用）。 */
+  servers: Type.Optional(Type.Record(Type.String(), serverConfigSchema)),
   /** 只启用列出的服务器 id（缺省 = 全部启用）。 */
   enabled: Type.Optional(Type.Array(Type.String())),
   /** 从启用集中排除的服务器 id（缺省 = 无）。 */
@@ -123,7 +128,6 @@ export function filterAdapters(
 
 interface LspState {
   clients: LspClient[];
-  adapters: LspServerAdapter[];
   broken: Set<string>;
   spawning: Map<string, Promise<LspClient | undefined>>;
 }
@@ -144,16 +148,16 @@ function containsPath(file: string, cwd: string): boolean {
 
 /**
  * 创建 LSP 服务实例。state 由闭包持有；adapters 可注入（测试传 [] 或
- * mock adapters 即可隔离真实服务器）。globalConfigPath 供测试注入
- * 固定的全局配置路径，避免被本机 ~/.pi/agent/lsp.json 影响。
+ * mock adapters 即可隔离真实服务器），不注入时按配置文件 servers 与
+ * 内置默认服务器合并构建。globalConfigPath 供测试注入固定的全局配置
+ * 路径，避免被本机 ~/.pi/agent/lsp.json 影响。
  */
 export function createLspService(
-  adapters: LspServerAdapter[] = createAdapters(),
+  adapters?: LspServerAdapter[],
   globalConfigPath?: string,
 ): LspService {
   const state: LspState = {
     clients: [],
-    adapters,
     broken: new Set(),
     spawning: new Map(),
   };
@@ -162,11 +166,11 @@ export function createLspService(
     if (!containsPath(file, cwd)) return [];
     const config = await loadLspConfig(cwd, globalConfigPath);
     const timeout = timeoutOptions(config);
-    const adapters = filterAdapters(state.adapters, config);
+    const active = filterAdapters(adapters ?? createAdapters(config.servers), config);
     const extension = extname(file) || file;
     const result: LspClient[] = [];
 
-    for (const adapter of adapters) {
+    for (const adapter of active) {
       if (adapter.extensions.length > 0 && !adapter.extensions.includes(extension)) continue;
       const root = await adapter.findRoot(file, cwd);
       if (!root) continue;
@@ -199,6 +203,9 @@ export function createLspService(
             root,
             directory: cwd,
             ...timeout,
+            initializeTimeoutMs: adapter.startupTimeoutMs ?? timeout.initializeTimeoutMs,
+            diagnosticsDocumentWaitTimeoutMs:
+              adapter.diagnosticsWaitMs ?? timeout.diagnosticsDocumentWaitTimeoutMs,
           });
           const duplicate = state.clients.find((c) => c.root === root && c.serverID === adapter.id);
           if (duplicate) {
