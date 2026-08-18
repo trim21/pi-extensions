@@ -72,6 +72,7 @@ export default function opencodeBash(
           command: params.command,
           timeout: timeout / 1000,
           requestFullAccess: params.dangerouslyDisableSandbox,
+          workdir: params.workdir,
           signal,
           onUpdate,
         });

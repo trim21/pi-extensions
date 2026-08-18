@@ -127,6 +127,7 @@ export function registerShellTools(
           timeout: timeout / 1000,
           requestFullAccess: params.dangerouslyDisableSandbox,
           requestFullAccessReason: params.description,
+          workdir: params.workdir,
           signal,
           onUpdate,
         });

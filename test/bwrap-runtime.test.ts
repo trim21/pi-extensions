@@ -241,6 +241,43 @@ describe("BwrapRuntime", () => {
       expect(abort).not.toHaveBeenCalled();
     });
 
+    it("shows the resolved workdir inside the approval dialog when provided", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async () => ALLOW_ONCE);
+      // workdir 传相对路径（原始参数值），ctx.cwd 模拟 bash 工具解析后的实际目录
+      const workdir = mkdtempSync(join(tmpdir(), "cc-bwrap-workdir-"));
+      await runtime.execute({
+        toolCallId: "test",
+        command: "printf wd",
+        requestFullAccess: true,
+        workdir: "some-relative-workdir",
+        ctx: fullAccessContext({ select, input: vi.fn() }, vi.fn(), workdir),
+      });
+      expect(select).toHaveBeenCalledWith(
+        expect.stringContaining(`Workdir: ${workdir}`),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it("omits the workdir line when the workdir argument is absent", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async () => ALLOW_ONCE);
+      await runtime.execute({
+        toolCallId: "test",
+        command: "printf ok",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }),
+      });
+      expect(select).toHaveBeenCalledWith(
+        expect.not.stringContaining("Workdir"),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
     it("shows the dcg suggestion inside the approval dialog when available", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");

@@ -69,6 +69,8 @@ export interface BwrapExecutionRequest {
   timeout?: number;
   requestFullAccess?: boolean;
   requestFullAccessReason?: string;
+  /** bash 工具显式传入的 workdir 参数；存在时审批对话框显示实际执行目录。 */
+  workdir?: string;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
   ctx: ExtensionContext;
@@ -324,7 +326,12 @@ export class BwrapRuntime {
         throw new Error(`Command denied by bwrap approval rule: ${request.command}`);
       }
       if (decision === undefined) {
-        await this.approveFullAccess(request.ctx, request.command, request.requestFullAccessReason);
+        await this.approveFullAccess(
+          request.ctx,
+          request.command,
+          request.requestFullAccessReason,
+          request.workdir,
+        );
       }
     }
     const operations =
@@ -414,6 +421,7 @@ export class BwrapRuntime {
     ctx: ExtensionContext,
     command: string,
     reason: string | undefined,
+    workdir?: string,
   ): Promise<void> {
     const policy = resolveEscalation({ hasUI: ctx.hasUI });
     if (policy.kind === "deny") throw new Error(policy.reason);
@@ -443,6 +451,10 @@ export class BwrapRuntime {
       lines.push("", "勾选规则将永久允许（allow forever），未勾选规则仅本次放行:", "---");
     }
     lines.push(fenceCodeBlock(command));
+    // workdir 存在时展示实际执行目录（ctx.cwd 已被 bash 工具解析为绝对路径）
+    if (workdir) {
+      lines.push(`Workdir: ${escapeHtml(ctx.cwd)}`);
+    }
     const description = lines.join("\n");
 
     // 解析失败（无 pattern 可勾选）：保持单选对话框（Allow forever 是空操作）
