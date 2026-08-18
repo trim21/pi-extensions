@@ -11,7 +11,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import {
   type ExtensionAPI,
@@ -34,9 +33,6 @@ const LIST_TYPE = "talk:list";
 const NOTIFY_TYPE = "talk:notify";
 
 const ASK_TIMEOUT_MS = 30 * 60 * 1000;
-
-/** Guide the model to the multi-agent workflow skill shipped with this package. */
-const SKILL_PATH = fileURLToPath(new URL("skills/multi-agent-dev/SKILL.md", import.meta.url));
 
 function toolResult(text: string) {
   return { content: [{ type: "text" as const, text }], details: {} };
@@ -187,13 +183,6 @@ export default function talk(pi: ExtensionAPI) {
   pi.on("agent_start", () => core.setWorking());
   pi.on("agent_end", () => core.setIdle());
   pi.on("agent_settled", () => core.setIdle());
-  pi.on("before_agent_start", (event) => {
-    // One-line nudge: before coordinating with other pi agents, read the
-    // shipped workflow skill.
-    return {
-      systemPrompt: `${event.systemPrompt}\n\nBefore multi-agent collaboration, read ${SKILL_PATH} to understand the talk workflow.`,
-    };
-  });
   pi.on("session_info_changed", () => {
     // A name set explicitly via `--name` wins over pi's session title;
     // otherwise follow pi's session name.
