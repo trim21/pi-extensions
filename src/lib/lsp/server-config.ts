@@ -4,8 +4,8 @@
  *
  * 配置文件沿用 lsp.json（全局 ~/.pi/agent/lsp.json + 本地 <cwd>/.pi/lsp.json）：
  * 顶层 `servers` 是 id → 配置的 record，按 id 与内置默认服务器合并
- * （覆盖同名、新增 id、enabled:false 禁用），之后仍受现有 enabled/disabled
- * 白名单过滤。
+ * （同名 id 整体覆盖、新增 id、enabled:false 禁用），之后仍受现有
+ * enabled/disabled 白名单过滤。
  *
  * executable 发现统一由用户配置：bin 支持绝对路径 / 项目工作区
  * （node_modules/.bin、.venv/bin、venv/bin）/ PATH，不再内置各语言的
@@ -111,7 +111,19 @@ export const defaultServers: Record<string, ServerConfig> = {
   },
 };
 
-/** 用户 servers（id → 配置）与默认配置合并：覆盖同名、新增 id、enabled:false 移除。 */
+/** 按 id 合并 servers record：同名 id 整体覆盖（不做逐字段 merge），其余保留；返回 undefined 表示没有任何 servers 定义。 */
+export function mergeServerRecords(
+  ...records: (Readonly<Record<string, ServerConfig>> | undefined)[]
+): Record<string, ServerConfig> | undefined {
+  const merged: Record<string, ServerConfig> = {};
+  for (const record of records) {
+    if (!record) continue;
+    Object.assign(merged, record);
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/** 用户 servers（id → 配置）与默认配置合并：同名 id 整体覆盖、新增 id、enabled:false 移除。 */
 export function mergeServerConfigs(
   defaults: Readonly<Record<string, ServerConfig>>,
   user: Readonly<Record<string, ServerConfig>> | undefined,

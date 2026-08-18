@@ -10,10 +10,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
 import type { LspServerAdapter } from "../src/lib/lsp/adapter.js";
-import { createLspService, filterAdapters, loadLspConfig } from "../src/lib/lsp/lsp.js";
+import {
+  createLspService,
+  filterAdapters,
+  loadLspConfig,
+  registerLsp,
+} from "../src/lib/lsp/lsp.js";
 
 const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
 
@@ -92,6 +98,58 @@ describe("loadLspConfig", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it("servers 全局与本地按 id 合并（同名 id 整体覆盖、新增 id，全局其余保留）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const globalFile = join(dir, "global.json");
+    await writeFile(
+      globalFile,
+      JSON.stringify({
+        servers: {
+          a: { bin: "/global/a", args: ["--x"] },
+          b: { bin: "/global/b" },
+        },
+      }),
+    );
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(
+      join(dir, ".pi", "lsp.json"),
+      JSON.stringify({
+        servers: {
+          a: { bin: "/local/a" }, // 整体覆盖全局 a（args 不保留）
+          c: { bin: "/local/c" }, // 新增 id
+        },
+      }),
+    );
+
+    expect(await loadLspConfig(dir, globalFile)).toEqual({
+      servers: {
+        a: { bin: "/local/a" },
+        b: { bin: "/global/b" }, // 本地未提及，全局保留
+        c: { bin: "/local/c" },
+      },
+    });
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("本地未写 servers 时全局 servers 保留", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const globalFile = join(dir, "global.json");
+    await writeFile(
+      globalFile,
+      JSON.stringify({
+        servers: { a: { bin: "/global/a" } },
+      }),
+    );
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(join(dir, ".pi", "lsp.json"), JSON.stringify({ enabled: ["a"] }));
+
+    expect(await loadLspConfig(dir, globalFile)).toEqual({
+      servers: { a: { bin: "/global/a" } },
+      enabled: ["a"],
+    });
+    await rm(dir, { recursive: true, force: true });
+  });
+
   it("缺配置文件或解析失败时返回空配置（全部启用）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
     expect(await loadLspConfig(dir, join(dir, "nope.json"))).toEqual({});
@@ -116,6 +174,37 @@ describe("loadLspConfig", () => {
   });
 });
 
+describe("lsp config validation", () => {
+  it("全局配置 enabled/disabled 引用不存在的服务器 id 时创建 service 即报错", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const globalFile = join(dir, "global.json");
+    await writeFile(globalFile, JSON.stringify({ enabled: ["nope"] }));
+    expect(() => createLspService(undefined, globalFile)).toThrow(/nope/);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("session 开始预加载配置：本地配置错误时 notify", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(join(dir, ".pi", "lsp.json"), JSON.stringify({ disabled: ["nope"] }));
+    const on = vi.fn();
+    registerLsp({ on } as unknown as ExtensionAPI, {
+      globalConfigPath: join(dir, "no-global.json"),
+    });
+    const call = on.mock.calls.find((c) => c[0] === "session_start");
+    const handler = call?.[1] as (
+      event: unknown,
+      ctx: { cwd: string; ui: { notify: ReturnType<typeof vi.fn> } },
+    ) => void;
+    const notify = vi.fn();
+    handler({}, { cwd: dir, ui: { notify } });
+    await vi.waitFor(() =>
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("nope"), "error"),
+    );
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+
 describe("filterAdapters", () => {
   const adapters = [plainAdapter("a"), plainAdapter("b"), plainAdapter("c")];
 
@@ -135,6 +224,11 @@ describe("filterAdapters", () => {
     expect(
       filterAdapters(adapters, { enabled: ["a", "b", "c"], disabled: ["b"] }).map((a) => a.id),
     ).toEqual(["a", "c"]);
+  });
+
+  it("enabled/disabled 引用不存在的服务器 id 时抛错", () => {
+    expect(() => filterAdapters(adapters, { enabled: ["a", "nope"] })).toThrow(/nope/);
+    expect(() => filterAdapters(adapters, { disabled: ["nope"] })).toThrow(/nope/);
   });
 });
 

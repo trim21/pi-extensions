@@ -4,14 +4,17 @@
  * - state（client 缓存、broken 集合、spawning 去重）是 service 工厂的
  *   闭包变量，不做成模块级全局；
  * - 配置来源：全局 `~/.pi/agent/lsp.json` + 本地 `<cwd>/.pi/lsp.json`
- *   （本地逐字段覆盖全局）：`servers` 数组配置驱动地定义语言服务器
- *   （按 id 与内置默认服务器合并），`enabled`/`disabled` 白名单与各超时
- *   参数继续生效；配置在每个工具的调用 cwd 下惰性读取；
+ *   （本地覆盖全局）：`servers` 按 id 合并（同名 id 整体覆盖、新增 id，全局
+ *   其余服务器保留），`enabled`/`disabled` 白名单与各超时参数继续生效；
+ *   配置在每个工具的调用 cwd 下惰性读取；enabled/disabled 引用不存在的
+ *   服务器 id 是配置错误：全局配置在扩展加载（createLspService）时抛错，
+ *   本地配置在 session 开始预加载时通知，工具调用时校验抛错兜底；
  * - client 按 (root, serverID) 缓存，并发 spawn 去重，启动失败记入 broken
  *   集合（服务实例生命周期内不再重试）；
  * - 工具只与 touchFile / diagnostics / lspDiagnosticsForFile 三个方法打交道；通知回调按请求传入。
  */
 
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { extname, join, normalize, sep } from "node:path";
@@ -23,7 +26,13 @@ import { Value } from "typebox/value";
 import { type LspServerAdapter } from "./adapter.js";
 import { create, type CreateInput, type Diagnostic, type Info as LspClient } from "./client.js";
 import { report } from "./diagnostic.js";
-import { createAdapters, serverConfigSchema } from "./server-config.js";
+import {
+  createAdapters,
+  defaultServers,
+  mergeServerConfigs,
+  mergeServerRecords,
+  serverConfigSchema,
+} from "./server-config.js";
 
 /** 超时值：number（毫秒，>=1）或字符串（"500"、"5s"、"1m"），Parse 后由 toMs 统一换算。 */
 const timeoutValue = Type.Union([Type.Number({ minimum: 1 }), Type.String()]);
@@ -99,9 +108,42 @@ async function readConfigFile(filePath: string): Promise<LspConfig> {
   }
 }
 
+/** 同步版 readConfigFile（扩展加载时校验全局配置用）。 */
+function readConfigFileSync(filePath: string): LspConfig {
+  try {
+    const raw = readFileSync(filePath, "utf8");
+    return Value.Parse(lspConfigSchema, JSON.parse(raw) as unknown);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * enabled/disabled 引用的 id 必须存在于实际生效的服务器集合（注入的 adapters
+ * 或默认 + 配置 servers），否则抛配置错误（避免静默失效）。
+ */
+function validateConfig(config: LspConfig, adapters?: LspServerAdapter[]): void {
+  const available = new Set(
+    adapters
+      ? adapters.map((adapter) => adapter.id)
+      : Object.keys(mergeServerConfigs(defaultServers, config.servers)),
+  );
+  const unknown = [...(config.enabled ?? []), ...(config.disabled ?? [])].filter(
+    (id) => !available.has(id),
+  );
+  if (unknown.length > 0) {
+    const list = [...available].toSorted().join(", ") || "none";
+    throw new Error(
+      `lsp.json: unknown server id in enabled/disabled: ${unknown.join(", ")} (available: ${list})`,
+    );
+  }
+}
+
 /**
  * 合并后的生效配置：全局 `~/.pi/agent/lsp.json` 为基底，本地
- * `<cwd>/.pi/lsp.json` 逐字段覆盖。
+ * `<cwd>/.pi/lsp.json` 覆盖——顶层标量字段（enabled/disabled、超时等）本地
+ * 直接替换；`servers` 按 id 合并（同名 id 整体覆盖、新增 id，全局其余服务器
+ * 保留）。
  */
 export async function loadLspConfig(
   cwd: string,
@@ -111,14 +153,23 @@ export async function loadLspConfig(
     readConfigFile(globalConfigPath),
     readConfigFile(join(cwd, ".pi", "lsp.json")),
   ]);
-  return { ...globalConfig, ...localConfig };
+  const servers = mergeServerRecords(globalConfig.servers, localConfig.servers);
+  return {
+    ...globalConfig,
+    ...localConfig,
+    ...(servers && { servers }),
+  };
 }
 
-/** 按配置过滤 adapter 列表。 */
+/**
+ * 按配置过滤 adapter 列表。enabled/disabled 引用了实际生效集合中不存在的
+ * 服务器 id 时抛错（配置错误，避免静默失效）。
+ */
 export function filterAdapters(
   adapters: LspServerAdapter[],
   config: LspConfig,
 ): LspServerAdapter[] {
+  validateConfig(config, adapters);
   return adapters.filter((adapter) => {
     if (config.enabled && !config.enabled.includes(adapter.id)) return false;
     if (config.disabled?.includes(adapter.id)) return false;
@@ -166,6 +217,11 @@ export function createLspService(
   adapters?: LspServerAdapter[],
   globalConfigPath?: string,
 ): LspService {
+  // 扩展加载时校验全局配置（本地配置在 session_start 预加载时校验）
+  validateConfig(
+    readConfigFileSync(globalConfigPath ?? join(homedir(), ".pi", "agent", "lsp.json")),
+    adapters,
+  );
   const state: LspState = {
     clients: [],
     broken: new Set(),
@@ -333,5 +389,13 @@ export interface LspServiceOptions {
 export function registerLsp(pi: ExtensionAPI, options?: LspServiceOptions): LspService {
   const service = createLspService(options?.adapters, options?.globalConfigPath);
   pi.on?.("session_shutdown", () => service.shutdownAll());
+  // session 开始是最早能拿到本地配置 cwd 的时机：预加载并校验，配置错误立即通知
+  pi.on?.("session_start", (_event, ctx) => {
+    void loadLspConfig(ctx.cwd, options?.globalConfigPath)
+      .then((config) => validateConfig(config, options?.adapters))
+      .catch((error: unknown) => {
+        if (error instanceof Error) ctx.ui.notify?.(error.message, "error");
+      });
+  });
   return service;
 }

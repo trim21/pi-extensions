@@ -91,6 +91,14 @@ describe("mergeServerConfigs", () => {
     expect(Object.keys(merged)).toHaveLength(Object.keys(defaultServers).length);
   });
 
+  it("同 id 整体替换，未配置的字段不保留默认", () => {
+    const merged = mergeServerConfigs(defaultServers, {
+      pyright: parse({ bin: "custom-pyright" }),
+    });
+    expect(merged.pyright).toEqual(parse({ bin: "custom-pyright" }));
+    expect(merged.pyright?.include).toBeUndefined();
+  });
+
   it("enabled:false 移除对应 id（包括默认服务器）", () => {
     const merged = mergeServerConfigs(defaultServers, { clangd: parse({ enabled: false }) });
     expect(Object.keys(merged)).not.toContain("clangd");

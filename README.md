@@ -348,7 +348,7 @@ pi -e ./src/talk/index.ts
 
 read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级诊断）。LSP protocol 是统一的，因此服务器不需要为每个语言写 adapter：用一份 JSON 配置声明如何启动即可。
 
-配置文件（项目优先于全局，逐字段覆盖）：
+配置文件（项目优先于全局）：顶层字段（`enabled`/`disabled`、超时等）本地覆盖全局；`servers` 按服务器 id 合并——同名 id 本地整体覆盖、新增 id，全局其余服务器保留。
 
 - `~/.pi/agent/lsp.json`（全局）
 - `.pi/lsp.json`（项目）
@@ -382,7 +382,7 @@ read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级�
 - `startupTimeoutMs` / `diagnosticsWaitMs`：per-server 超时，覆盖全局配置与默认值
 - `initializationOptions` 与 `settings` 按 LSP 语义分离：前者进 initialize 请求，后者进 didChangeConfiguration / workspace/configuration 请求
 
-内置默认服务器（typescript / pyright / ruff / clangd）始终存在；`servers` 以 key 为服务器 id 与默认合并——同 key 覆盖、新 key 新增、`"enabled": false` 移除（如 `"clangd": { "enabled": false }`）。executable 的发现逻辑（如 tsserver 路径、venv 里的 python）不内置，需要时用 `bin` / `args` / `settings` 自行表达。
+内置默认服务器（typescript / pyright / ruff / clangd）始终存在；`servers` 以 key 为服务器 id 与默认合并——同 key 整体覆盖（整个配置替换默认）、新 key 新增、`"enabled": false` 移除（如 `"clangd": { "enabled": false }`）。executable 的发现逻辑（如 tsserver 路径、venv 里的 python）不内置，需要时用 `bin` / `args` / `settings` 自行表达。
 
 旧的 `enabled`（白名单）/ `disabled`（排除）与全局超时字段（`initializeTimeoutMs` 等）继续可用。
 
