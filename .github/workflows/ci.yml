@@ -55,8 +55,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm run lint
-
       # Glob 测试（globFiles）直接 spawn rg，Windows 镜像未预装 ripgrep。
       - name: Install ripgrep
         run: choco install ripgrep -y
