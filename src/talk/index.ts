@@ -189,8 +189,7 @@ export default function talk(pi: ExtensionAPI) {
   pi.on("agent_settled", () => core.setIdle());
   pi.on("before_agent_start", (event) => {
     // One-line nudge: before coordinating with other pi agents, read the
-    // shipped workflow skill. Skipped when the skill file is absent.
-    if (!fs.existsSync(SKILL_PATH)) return;
+    // shipped workflow skill.
     return {
       systemPrompt: `${event.systemPrompt}\n\nBefore multi-agent collaboration, read ${SKILL_PATH} to understand the talk workflow.`,
     };
