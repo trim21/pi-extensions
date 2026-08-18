@@ -34,6 +34,7 @@ import {
   type AgentSessionEvent,
   type ExtensionAPI,
   type ExtensionUIContext,
+  getAgentDir,
   type RpcExtensionUIRequest,
   type RpcExtensionUIResponse,
   truncateTail,
@@ -43,7 +44,13 @@ import {
 import { Type } from "typebox";
 
 import { type ToolPendant } from "./lib/pendant.js";
-import { type AgentConfig, discoverAgents, formatAgentList } from "./spawn-agent-agents.js";
+import {
+  type AgentConfig,
+  applyAgentDefaults,
+  discoverAgents,
+  formatAgentList,
+  loadSpawnAgentConfig,
+} from "./spawn-agent-agents.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
 
@@ -55,6 +62,13 @@ const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
 const MAX_PROGRESS_LINES = 5;
 /** Progress line content (without the `tool:` / `text:` prefix) is capped at 21 chars; longer text is folded to the first/last 9 chars joined by ` … `. */
 const MAX_PROGRESS_CHARS_PER_LINE = 21;
+/** stderr 采集上限：防止子代理崩溃循环输出撑爆内存；保留尾部（错误信息通常在尾部）。 */
+const MAX_STDERR_CAPTURE_BYTES = 64 * 1024;
+/** 错误消息里 stderr 的展示上限。 */
+const MAX_STDERR_ERROR_BYTES = 4 * 1024;
+/** 全局默认配置：~/.pi/agent/spawn-agent.json，字段可被 frontmatter 覆盖。 */
+const SPAWN_AGENT_CONFIG_PATH = join(getAgentDir(), "spawn-agent.json");
+const SETTINGS_PATH = join(getAgentDir(), "settings.json");
 
 /**
  * Tool → extension override map: when a subagent's frontmatter enables a
@@ -131,6 +145,26 @@ function getFinalOutput(messages: AgentMessage[]): string {
     }
   }
   return "";
+}
+
+/**
+ * 组装失败消息，按来源分行（error/stderr/output）让父模型能分辨信息出处；
+ * stderr 截断到尾部（错误信息通常在最后）。全空时保底 "(no output)"，
+ * 避免只回一个 exit code。
+ */
+export function formatSubagentError(result: SubagentDetails): { reason: string; message: string } {
+  const reason =
+    result.stopReason ?? (result.exitCode === 0 ? "failed" : `exit ${result.exitCode}`);
+  const parts: string[] = [];
+  if (result.errorMessage) parts.push(`error: ${result.errorMessage}`);
+  const stderr = truncateTail(result.stderr, { maxBytes: MAX_STDERR_ERROR_BYTES });
+  if (stderr.content.trim()) {
+    const truncatedMark = stderr.truncated ? "\n[stderr truncated]" : "";
+    parts.push(`stderr: ${stderr.content.trim()}${truncatedMark}`);
+  }
+  const output = getFinalOutput(result.messages);
+  if (output) parts.push(`output: ${output}`);
+  return { reason, message: parts.length > 0 ? parts.join("\n") : "(no output)" };
 }
 
 /**
@@ -219,13 +253,15 @@ export function buildSubagentArgs(
   // per-tool overrides) run inside the subagent.
   const args: string[] = ["--mode", "rpc", "--no-session", "--no-extensions"];
 
-  // Thinking level rides on the model shorthand ("model:level"); it cannot be
-  // set without a model, so a level without a model is ignored.
-  const model =
-    agent.model !== undefined && agent.thinkingLevel !== undefined
-      ? `${agent.model}:${agent.thinkingLevel}`
-      : agent.model;
-  if (model) args.push("--model", model);
+  // provider/model/thinkingLevel 已由 applyAgentDefaults 合并进 agent。
+  // --provider 只在 model 不含 "/" 前缀时传：带前缀的 model（如
+  // "openai/gpt-4o"）由 pi 自己解析 provider，显式传 provider 会冲突。
+  if (agent.model && !agent.model.includes("/") && agent.provider) {
+    args.push("--provider", agent.provider);
+  }
+  if (agent.model) args.push("--model", agent.model);
+  // --thinking 独立传参；pi 支持 "off" 显式关闭思考。
+  if (agent.thinkingLevel) args.push("--thinking", agent.thinkingLevel);
   // Read-only default unless the agent explicitly declares a toolset.
   const tools = agent.tools ?? DEFAULT_TOOLS;
   // Load the opencode override for each built-in tool the agent declares
@@ -514,7 +550,7 @@ export async function runAgent(
     });
 
     proc.stderr.on("data", (data: Buffer) => {
-      result.stderr += data.toString();
+      result.stderr = (result.stderr + data.toString()).slice(-MAX_STDERR_CAPTURE_BYTES);
     });
 
     proc.stdin.on("error", (error) => {
@@ -524,13 +560,23 @@ export async function runAgent(
     sendRpc({ type: "prompt", message: `Task: ${task}` });
 
     const exitCode = await new Promise<number>((resolve) => {
-      proc.on("close", (code) => {
+      proc.on("close", (code, childSignal) => {
         if (buffer.trim()) processLine(buffer);
-        resolve(code ?? 0);
+        // 被信号终止时 code 为 null，不能算 0——否则中断会被误判为成功
+        resolve(code ?? (childSignal ? 1 : 0));
       });
-      proc.on("error", () => resolve(1));
+      proc.on("error", (error) => {
+        // spawn 失败（如 pi 命令不存在）时 error 先于 close 触发；
+        // 记录真实错误，而不是只留一个 exit code。
+        result.errorMessage = error.message;
+        result.stopReason ??= "error";
+        resolve(1);
+      });
 
       const kill = () => {
+        // abort 可能发生在子代理产生任何结果之前；标记 aborted 让上层
+        // 识别中断（已有 stopReason 则保留，避免误报）。
+        result.stopReason ??= "aborted";
         proc.kill("SIGTERM");
         setTimeout(() => {
           if (!proc.killed) proc.kill("SIGKILL");
@@ -599,9 +645,12 @@ export default function spawnAgent(pi: ExtensionAPI) {
 
   // Discover the available subagent types once at extension startup. The
   // extension owns this discovery: the model never has to guess agent names
-  // or read the agent directory itself. Editing ~/.pi/agent/agents/*.md
-  // requires /reload to take effect.
-  const agents = discoverAgents();
+  // or read the agent directory itself. Editing ~/.pi/agent/agents/*.md or
+  // ~/.pi/agent/spawn-agent.json requires /reload to take effect.
+  const agents = applyAgentDefaults(
+    discoverAgents(),
+    loadSpawnAgentConfig(SPAWN_AGENT_CONFIG_PATH, SETTINGS_PATH),
+  );
   const agentListSection = agents.length > 0 ? formatAgentListSection(agents) : null;
 
   if (agentListSection) {
@@ -661,13 +710,10 @@ export default function spawnAgent(pi: ExtensionAPI) {
       const isError =
         result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
       if (isError) {
-        const reason =
-          result.stopReason ?? (result.exitCode === 0 ? "failed" : `exit ${result.exitCode}`);
-        const message =
-          result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+        const { reason, message } = formatSubagentError(result);
         return {
           content: [
-            { type: "text", text: `Subagent "${result.agent}" failed (${reason}): ${message}` },
+            { type: "text", text: `Subagent "${result.agent}" failed (${reason}):\n${message}` },
           ],
           details: {
             ...result,

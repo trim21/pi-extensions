@@ -9,14 +9,21 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   buildSubagentArgs,
   formatAgentListSection,
+  formatSubagentError,
   forwardSubagentUIRequest,
 } from "../src/spawn-agent.js";
-import { discoverAgents } from "../src/spawn-agent-agents.js";
+import {
+  applyAgentDefaults,
+  discoverAgents,
+  loadSpawnAgentConfig,
+  type SpawnAgentDefaults,
+} from "../src/spawn-agent-agents.js";
 
 function withTempDir(files: Record<string, string>, fn: (dir: string) => void) {
   const dir = mkdtempSync(join(tmpdir(), "spawn-agent-test-"));
@@ -97,6 +104,26 @@ Just read files.
   it("returns an empty list for a missing directory", () => {
     expect(discoverAgents(join(tmpdir(), "definitely-not-here"))).toEqual([]);
   });
+
+  it("parses provider from frontmatter", () => {
+    withTempDir({ "p.md": "---\nname: p\ndescription: d\nprovider: openai\n---\nbody" }, (dir) => {
+      const [agent] = discoverAgents(dir);
+      expect(agent.provider).toBe("openai");
+    });
+  });
+
+  it("accepts thinkingLevel off and rejects max", () => {
+    withTempDir(
+      {
+        "off.md": "---\nname: off\ndescription: d\nthinkingLevel: off\n---\nbody",
+        "max.md": "---\nname: max\ndescription: d\nthinkingLevel: max\n---\nbody",
+      },
+      (dir) => {
+        const agents = discoverAgents(dir);
+        expect(agents.map((a) => a.name)).toEqual(["off"]);
+      },
+    );
+  });
 });
 
 /** Extract the file paths passed via `-e` flags. 分隔符统一为 `/`，断言跨平台。 */
@@ -107,6 +134,123 @@ function loadedExtensions(args: string[]): string[] {
   }
   return exts;
 }
+
+describe("loadSpawnAgentConfig", () => {
+  it("returns undefined when spawn-agent.json is missing", () => {
+    withTempDir({}, (dir) => {
+      expect(
+        loadSpawnAgentConfig(join(dir, "spawn-agent.json"), join(dir, "settings.json")),
+      ).toBeUndefined();
+    });
+  });
+
+  it("returns undefined on broken JSON or an empty config", () => {
+    withTempDir({ "broken.json": "{ not json", "empty.json": "{}" }, (dir) => {
+      expect(
+        loadSpawnAgentConfig(join(dir, "broken.json"), join(dir, "settings.json")),
+      ).toBeUndefined();
+      expect(
+        loadSpawnAgentConfig(join(dir, "empty.json"), join(dir, "settings.json")),
+      ).toBeUndefined();
+    });
+  });
+
+  it("parses provider/model/thinkingLevel from spawn-agent.json", () => {
+    withTempDir(
+      {
+        "spawn-agent.json": JSON.stringify({
+          provider: "axonhub",
+          model: "deepseek-v4-flash",
+          thinkingLevel: "high",
+        }),
+      },
+      (dir) => {
+        expect(
+          loadSpawnAgentConfig(join(dir, "spawn-agent.json"), join(dir, "settings.json")),
+        ).toEqual({
+          provider: "axonhub",
+          model: "deepseek-v4-flash",
+          thinkingLevel: "high",
+        });
+      },
+    );
+  });
+
+  it("falls back to settings.json top-level defaults per field", () => {
+    withTempDir(
+      {
+        "spawn-agent.json": JSON.stringify({ model: "gpt-4o-mini" }),
+        "settings.json": JSON.stringify({
+          defaultProvider: "openai",
+          defaultModel: "gpt-4o",
+          defaultThinkingLevel: "high",
+        }),
+      },
+      (dir) => {
+        expect(
+          loadSpawnAgentConfig(join(dir, "spawn-agent.json"), join(dir, "settings.json")),
+        ).toEqual({
+          provider: "openai",
+          model: "gpt-4o-mini",
+          thinkingLevel: "high",
+        });
+      },
+    );
+  });
+
+  it("ignores invalid thinking levels from the settings fallback", () => {
+    withTempDir(
+      {
+        "spawn-agent.json": JSON.stringify({ model: "gpt-4o-mini" }),
+        "settings.json": JSON.stringify({ defaultThinkingLevel: "max" }),
+      },
+      (dir) => {
+        expect(
+          loadSpawnAgentConfig(join(dir, "spawn-agent.json"), join(dir, "settings.json")),
+        ).toEqual({ model: "gpt-4o-mini" });
+      },
+    );
+  });
+});
+
+describe("applyAgentDefaults", () => {
+  const base = { name: "s", description: "d", systemPrompt: "", filePath: "/x/s.md" };
+  const defaults = {
+    provider: "axonhub",
+    model: "deepseek-v4-flash",
+    thinkingLevel: "high",
+  } satisfies SpawnAgentDefaults;
+
+  it("returns the agents unchanged when there are no defaults", () => {
+    const agents = [base];
+    expect(applyAgentDefaults(agents, undefined)).toBe(agents);
+    expect(agents[0]).toEqual(base);
+  });
+
+  it("fills absent fields from the defaults", () => {
+    const [agent] = applyAgentDefaults([base], defaults);
+    expect(agent.provider).toBe("axonhub");
+    expect(agent.model).toBe("deepseek-v4-flash");
+    expect(agent.thinkingLevel).toBe("high");
+  });
+
+  it("lets frontmatter values win over the defaults", () => {
+    const [agent] = applyAgentDefaults(
+      [{ ...base, provider: "openai", model: "gpt-4o", thinkingLevel: "off" }],
+      defaults,
+    );
+    expect(agent.provider).toBe("openai");
+    expect(agent.model).toBe("gpt-4o");
+    expect(agent.thinkingLevel).toBe("off");
+  });
+
+  it("merges field by field", () => {
+    const [agent] = applyAgentDefaults([{ ...base, model: "gpt-4o" }], defaults);
+    expect(agent.model).toBe("gpt-4o");
+    expect(agent.provider).toBe("axonhub");
+    expect(agent.thinkingLevel).toBe("high");
+  });
+});
 
 describe("buildSubagentArgs", () => {
   const baseAgent = {
@@ -214,17 +358,57 @@ describe("buildSubagentArgs", () => {
     expect(args[args.indexOf("--tools") + 1]).toBe("bash,edit");
   });
 
-  it("appends the thinking level to the model id as a suffix", () => {
+  it("passes the thinking level via --thinking", () => {
     const args = buildSubagentArgs(
       { ...baseAgent, model: "claude-sonnet-4", thinkingLevel: "high" },
       "task",
       undefined,
     );
-    expect(args[args.indexOf("--model") + 1]).toBe("claude-sonnet-4:high");
+    expect(args[args.indexOf("--model") + 1]).toBe("claude-sonnet-4");
+    expect(args[args.indexOf("--thinking") + 1]).toBe("high");
   });
 
-  it("ignores the thinking level when no model is declared", () => {
-    const args = buildSubagentArgs({ ...baseAgent, thinkingLevel: "max" }, "task", undefined);
+  it("passes --provider when the provider is set and the model has no slash", () => {
+    const args = buildSubagentArgs(
+      { ...baseAgent, provider: "axonhub", model: "deepseek-v4-flash", thinkingLevel: "high" },
+      "task",
+      undefined,
+    );
+    expect(args[args.indexOf("--provider") + 1]).toBe("axonhub");
+    expect(args[args.indexOf("--model") + 1]).toBe("deepseek-v4-flash");
+    expect(args[args.indexOf("--thinking") + 1]).toBe("high");
+  });
+
+  it("omits --provider when the model carries a provider prefix", () => {
+    // "openai/gpt-4o" 由 pi 自己解析 provider；显式传 --provider 会冲突
+    const args = buildSubagentArgs(
+      { ...baseAgent, provider: "axonhub", model: "openai/gpt-4o" },
+      "task",
+      undefined,
+    );
+    expect(args).not.toContain("--provider");
+    expect(args[args.indexOf("--model") + 1]).toBe("openai/gpt-4o");
+  });
+
+  it("passes --thinking off to disable thinking", () => {
+    const args = buildSubagentArgs(
+      { ...baseAgent, model: "claude-sonnet-4", thinkingLevel: "off" },
+      "task",
+      undefined,
+    );
+    expect(args[args.indexOf("--thinking") + 1]).toBe("off");
+  });
+
+  it("passes no provider/model/thinking flags when the agent declares none", () => {
+    const args = buildSubagentArgs(baseAgent, "task", undefined);
+    expect(args).not.toContain("--provider");
+    expect(args).not.toContain("--model");
+    expect(args).not.toContain("--thinking");
+  });
+
+  it("passes --thinking independently of the model", () => {
+    const args = buildSubagentArgs({ ...baseAgent, thinkingLevel: "off" }, "task", undefined);
+    expect(args[args.indexOf("--thinking") + 1]).toBe("off");
     expect(args).not.toContain("--model");
   });
 
@@ -351,7 +535,7 @@ function fakeProc() {
   (proc as unknown as { stdin: EventEmitter }).stdin = stdin;
   (proc as unknown as { stdout: EventEmitter }).stdout = new EventEmitter();
   (proc as unknown as { stderr: EventEmitter }).stderr = new EventEmitter();
-  (proc as unknown as { kill: () => boolean }).kill = () => true;
+  (proc as unknown as { kill: ReturnType<typeof vi.fn> }).kill = vi.fn(() => true);
   (proc as unknown as { killed: boolean }).killed = false;
   return proc;
 }
@@ -387,6 +571,79 @@ describe("subagent RPC process", () => {
     const result = await running;
     expect(result.exitCode).toBe(0);
     vi.resetModules();
+  });
+
+  it("records the spawn error message instead of a bare exit code", async () => {
+    vi.resetModules();
+    const spawnMock = vi.fn();
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const mod = await importOriginal<typeof import("node:child_process")>();
+      spawnMock.mockImplementation(fakeProc);
+      return { ...mod, spawn: spawnMock };
+    });
+
+    const { runAgent } = await import("../src/spawn-agent.js");
+    const agent = { name: "scout", description: "desc", systemPrompt: "", filePath: "/x/scout.md" };
+    const running = runAgent(agent, "task", "/cwd", undefined, undefined);
+
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+    const proc = spawnMock.mock.results[0].value as EventEmitter;
+    proc.emit("error", new Error("spawn pi ENOENT"));
+    proc.emit("close", null, null);
+    const result = await running;
+    expect(result.exitCode).toBe(1);
+    expect(result.errorMessage).toBe("spawn pi ENOENT");
+    vi.resetModules();
+  });
+
+  it("treats a signal-terminated process as a non-zero exit", async () => {
+    vi.resetModules();
+    const spawnMock = vi.fn();
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const mod = await importOriginal<typeof import("node:child_process")>();
+      spawnMock.mockImplementation(fakeProc);
+      return { ...mod, spawn: spawnMock };
+    });
+
+    const { runAgent } = await import("../src/spawn-agent.js");
+    const agent = { name: "scout", description: "desc", systemPrompt: "", filePath: "/x/scout.md" };
+    const running = runAgent(agent, "task", "/cwd", undefined, undefined);
+
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+    (spawnMock.mock.results[0].value as EventEmitter).emit("close", null, "SIGTERM");
+    const result = await running;
+    expect(result.exitCode).toBe(1);
+    vi.resetModules();
+  });
+
+  it("marks the result aborted when the abort signal fires", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const spawnMock = vi.fn();
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const mod = await importOriginal<typeof import("node:child_process")>();
+      spawnMock.mockImplementation(fakeProc);
+      return { ...mod, spawn: spawnMock };
+    });
+
+    const { runAgent } = await import("../src/spawn-agent.js");
+    const agent = { name: "scout", description: "desc", systemPrompt: "", filePath: "/x/scout.md" };
+    const controller = new AbortController();
+    const running = runAgent(agent, "task", "/cwd", controller.signal, undefined);
+
+    expect(spawnMock).toHaveBeenCalled();
+    const proc = spawnMock.mock.results[0].value as unknown as {
+      kill: ReturnType<typeof vi.fn>;
+      emit: (event: string, ...args: unknown[]) => boolean;
+    };
+    controller.abort();
+    expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+    proc.emit("close", null, "SIGTERM");
+    const result = await running;
+    expect(result.exitCode).toBe(1);
+    expect(result.stopReason).toBe("aborted");
+    vi.resetModules();
+    vi.useRealTimers();
   });
 });
 
@@ -727,3 +984,51 @@ async function runWithEvents(events: unknown[]) {
   vi.resetModules();
   return updates;
 }
+
+describe("formatSubagentError", () => {
+  const base = {
+    agent: "scout",
+    task: "task",
+    exitCode: 1,
+    messages: [] as AgentMessage[],
+    stderr: "",
+    usage: { cost: 0, contextTokens: 0, turns: 0 },
+  };
+
+  it("falls back to (no output) when nothing is available", () => {
+    expect(formatSubagentError(base)).toEqual({ reason: "exit 1", message: "(no output)" });
+  });
+
+  it("uses the stop reason and error message", () => {
+    expect(formatSubagentError({ ...base, stopReason: "error", errorMessage: "boom" })).toEqual({
+      reason: "error",
+      message: "error: boom",
+    });
+  });
+
+  it("combines error, stderr and output by source", () => {
+    const { message } = formatSubagentError({
+      ...base,
+      errorMessage: "spawn pi ENOENT",
+      stderr: "some log line\nfatal: cannot start",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "I looked but failed." }],
+        } as AgentMessage,
+      ],
+    });
+    expect(message).toBe(
+      "error: spawn pi ENOENT\nstderr: some log line\nfatal: cannot start\noutput: I looked but failed.",
+    );
+  });
+
+  it("truncates long stderr to the tail with a marker", () => {
+    const long = "x".repeat(10_000);
+    const { message } = formatSubagentError({ ...base, stderr: `${long}\nerror at the end` });
+    expect(message.startsWith("stderr: ")).toBe(true);
+    expect(message).toContain("error at the end");
+    expect(message).toContain("[stderr truncated]");
+    expect(message.length).toBeLessThan(5_000);
+  });
+});
