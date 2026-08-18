@@ -38,7 +38,7 @@ export default function opencodeBash(
         workdir: Type.Optional(
           Type.String({
             description:
-              "Working directory to execute the command in. Defaults to the current directory; relative paths resolve from there.",
+              "Working directory to execute the command in. Defaults to the current directory; relative paths resolve from there. prefer use this argument over `cd ...`",
           }),
         ),
         timeout: Type.Optional(
