@@ -2,7 +2,7 @@
  * Opencode File Tools —— read / edit / write 统一构建点。
  *
  * 三个工具在同一个 registerFileTools(pi, service) 里注册，共享同一个 LSP
- * service 实例（createLspService 的闭包变量），与 claude-code/files.ts 共享
+ * service 实例（registerLsp 创建的闭包变量），与 claude-code/files.ts 共享
  * read-snapshot state 的方式一致；不再用模块级全局缓存。
  *
  * 各工具行为对齐 opencode commit 999be62662（v1.2.25-1672-g999be62662,
@@ -30,7 +30,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { createLspService, initLsp, type LspService } from "../lib/lsp/lsp.js";
+import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import {
   detectLineEnding,
@@ -695,7 +695,6 @@ export function registerFileTools(pi: ExtensionAPI, service: LspService): void {
 
 /** 独立入口：创建 LSP service（闭包共享给三个工具）并注册。 */
 export default function opencodeFileTools(pi: ExtensionAPI): void {
-  const service = createLspService();
-  initLsp(pi, service);
+  const service = registerLsp(pi);
   registerFileTools(pi, service);
 }

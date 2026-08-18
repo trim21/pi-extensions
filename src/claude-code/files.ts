@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { createLspService, initLsp, type LspService } from "../lib/lsp/lsp.js";
+import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import {
   type ClaudeCodeState,
@@ -390,7 +390,9 @@ export function registerFileTools(
           state.reads.set(key, snapshot);
           const diff = generateDiffString("", newString);
           throwIfAborted(signal);
-          const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd);
+          const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+            notify: (message, level) => ctx.ui.notify(message, level),
+          });
           return [
             `The file ${filePath} has been updated successfully.`,
             {
@@ -469,7 +471,9 @@ export function registerFileTools(
           ? `The file ${filePath} has been updated. All occurrences were successfully replaced.`
           : `The file ${filePath} has been updated successfully.`;
         throwIfAborted(signal);
-        const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd);
+        const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+          notify: (message, level) => ctx.ui.notify(message, level),
+        });
         return [
           text,
           {
@@ -547,7 +551,9 @@ export function registerFileTools(
             ? `File created successfully at: ${filePath}`
             : `The file ${filePath} has been updated successfully.`;
         throwIfAborted(signal);
-        const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd);
+        const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+          notify: (message, level) => ctx.ui.notify(message, level),
+        });
         return [
           text,
           {
@@ -598,8 +604,7 @@ function restoreFileReads(
  * 与主进程 index.ts 聚合加载时的行为一致。
  */
 export default function claudeCodeFileTools(pi: ExtensionAPI): void {
-  const service = createLspService();
-  initLsp(pi, service);
+  const service = registerLsp(pi);
   const state = createClaudeCodeState();
 
   // 扩展实例在进程启动 / /reload / /new / /resume / /fork 时重建，内存里的
@@ -607,7 +612,6 @@ export default function claudeCodeFileTools(pi: ExtensionAPI): void {
   // 若文件在此期间被外部修改，Edit/Write 时的指纹对比仍会要求重新 Read，
   // 防呆语义不因重建而弱化。
   pi.on("session_start", (_event, ctx) => {
-    service.setUi(ctx.ui);
     restoreFileReads(state, ctx.sessionManager);
   });
 
@@ -615,7 +619,6 @@ export default function claudeCodeFileTools(pi: ExtensionAPI): void {
   // session_start，扩展实例也不重建。这里同样重放当前分支，丢弃被抛弃分支
   // 的记账，避免 state 与当前分支脱节。
   pi.on("session_tree", (_event, ctx) => {
-    service.setUi(ctx.ui);
     restoreFileReads(state, ctx.sessionManager);
   });
 

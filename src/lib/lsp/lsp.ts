@@ -1,7 +1,7 @@
 /**
  * LSP 管理器：所有语言服务器连接的注册表与统一入口。
  *
- * - state（client 缓存、broken 集合、spawning 去重）是 createLspService 的
+ * - state（client 缓存、broken 集合、spawning 去重）是 service 工厂的
  *   闭包变量，不做成模块级全局；
  * - 配置来源：全局 `~/.pi/agent/lsp.json` + 本地 `<cwd>/.pi/lsp.json`
  *   （本地逐字段覆盖全局）：`servers` 数组配置驱动地定义语言服务器
@@ -9,7 +9,7 @@
  *   参数继续生效；配置在每个工具的调用 cwd 下惰性读取；
  * - client 按 (root, serverID) 缓存，并发 spawn 去重，启动失败记入 broken
  *   集合（服务实例生命周期内不再重试）；
- * - 工具只与 touchFile / diagnostics / lspDiagnosticsForFile 三个方法打交道。
+ * - 工具只与 touchFile / diagnostics / lspDiagnosticsForFile 三个方法打交道；通知回调按请求传入。
  */
 
 import { readFile } from "node:fs/promises";
@@ -130,15 +130,23 @@ interface LspState {
   clients: LspClient[];
   broken: Set<string>;
   spawning: Map<string, Promise<LspClient | undefined>>;
+  closing: boolean;
+}
+
+export interface LspRequestOptions {
+  notify?: ExtensionUIContext["notify"];
 }
 
 export interface LspService {
-  touchFile(file: string, cwd: string, diagnostics?: "document" | "full"): Promise<void>;
+  touchFile(
+    file: string,
+    cwd: string,
+    diagnostics?: "document" | "full",
+    options?: LspRequestOptions,
+  ): Promise<void>;
   diagnostics(): Promise<Record<string, Diagnostic[]>>;
-  lspDiagnosticsForFile(file: string, cwd: string): Promise<string>;
+  lspDiagnosticsForFile(file: string, cwd: string, options?: LspRequestOptions): Promise<string>;
   shutdownAll(): Promise<void>;
-  /** 绑定当前会话的 UI 上下文，LSP 服务器启动失败时用它发错误通知（传 undefined 解绑）。 */
-  setUi(ui?: Pick<ExtensionUIContext, "notify">): void;
 }
 
 /** 文件必须在工作目录内才启用 LSP（对齐 opencode 的 containsPath）。 */
@@ -162,10 +170,15 @@ export function createLspService(
     clients: [],
     broken: new Set(),
     spawning: new Map(),
+    closing: false,
   };
-  let ui: Pick<ExtensionUIContext, "notify"> | undefined;
 
-  async function getClients(file: string, cwd: string): Promise<LspClient[]> {
+  async function getClients(
+    file: string,
+    cwd: string,
+    notify?: ExtensionUIContext["notify"],
+  ): Promise<LspClient[]> {
+    if (state.closing) return [];
     if (!containsPath(file, cwd)) return [];
     const config = await loadLspConfig(cwd, globalConfigPath);
     const timeout = timeoutOptions(config);
@@ -198,7 +211,7 @@ export function createLspService(
           const handle = await adapter.spawn(root, cwd);
           if (!handle) {
             state.broken.add(key);
-            ui?.notify(
+            notify?.(
               `LSP server "${adapter.id}" is not available for ${root} (binary not found)`,
               "error",
             );
@@ -214,6 +227,10 @@ export function createLspService(
             diagnosticsDocumentWaitTimeoutMs:
               adapter.diagnosticsWaitMs ?? timeout.diagnosticsDocumentWaitTimeoutMs,
           });
+          if (state.closing) {
+            await client.shutdown();
+            return;
+          }
           const duplicate = state.clients.find((c) => c.root === root && c.serverID === adapter.id);
           if (duplicate) {
             await client.shutdown();
@@ -223,7 +240,7 @@ export function createLspService(
           return client;
         } catch (error) {
           state.broken.add(key);
-          ui?.notify(
+          notify?.(
             `LSP server "${adapter.id}" failed to start for ${root}: ${
               error instanceof Error ? error.message : String(error)
             }`,
@@ -252,8 +269,9 @@ export function createLspService(
     file: string,
     cwd: string,
     diagnostics?: "document" | "full",
+    options?: LspRequestOptions,
   ): Promise<void> {
-    const clients = await getClients(file, cwd);
+    const clients = await getClients(file, cwd, options?.notify);
     await Promise.all(
       clients.map(async (client) => {
         const after = Date.now();
@@ -281,8 +299,12 @@ export function createLspService(
    * edit/write 用：等待文档诊断并返回该文件的 ERROR 报告（空串表示无错误）。
    * 内部所有 LSP 失败都会被吞掉，不干扰写操作本身。
    */
-  async function lspDiagnosticsForFile(file: string, cwd: string): Promise<string> {
-    await touchFile(file, cwd, "document");
+  async function lspDiagnosticsForFile(
+    file: string,
+    cwd: string,
+    options?: LspRequestOptions,
+  ): Promise<string> {
+    await touchFile(file, cwd, "document", options);
     const all = await diagnostics();
     const normalized = normalize(file);
     return report(normalized, all[normalized] ?? []);
@@ -290,6 +312,8 @@ export function createLspService(
 
   /** 终止全部服务器进程（session_shutdown 时调用）。 */
   async function shutdownAll(): Promise<void> {
+    if (state.closing) return;
+    state.closing = true;
     await Promise.all(state.clients.map((client) => client.shutdown())).catch(() => {
       // 个别进程退出失败不阻止清理流程
     });
@@ -297,21 +321,17 @@ export function createLspService(
     state.broken.clear();
   }
 
-  return {
-    touchFile,
-    diagnostics,
-    lspDiagnosticsForFile,
-    shutdownAll,
-    setUi(nextUi) {
-      ui = nextUi;
-    },
-  };
+  return { touchFile, diagnostics, lspDiagnosticsForFile, shutdownAll };
 }
 
-/** 注册进程级生命周期：session_shutdown 时清理全部服务器进程。 */
-export function initLsp(pi: ExtensionAPI, service: LspService): void {
-  // 测试里的 fake pi 没有事件订阅；生产环境 pi.on 必然存在
-  pi.on?.("session_shutdown", () => {
-    void service.shutdownAll();
-  });
+export interface LspServiceOptions {
+  adapters?: LspServerAdapter[];
+  globalConfigPath?: string;
+}
+
+/** 创建 LSP service 并注册 pi 的进程级清理生命周期。 */
+export function registerLsp(pi: ExtensionAPI, options?: LspServiceOptions): LspService {
+  const service = createLspService(options?.adapters, options?.globalConfigPath);
+  pi.on?.("session_shutdown", () => service.shutdownAll());
+  return service;
 }

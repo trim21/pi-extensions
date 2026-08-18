@@ -221,8 +221,7 @@ describe("lsp config integration", () => {
 
     const service = createLspService([adapter], join(dir, "no-global.json"));
     const notify = vi.fn();
-    service.setUi({ notify });
-    await service.touchFile(file, dir);
+    await service.touchFile(file, dir, undefined, { notify });
     expect(notify).toHaveBeenCalledWith(
       `LSP server "a" failed to start for ${dir}: spawn ENOENT`,
       "error",
@@ -249,8 +248,7 @@ describe("lsp config integration", () => {
 
     const service = createLspService([adapter], join(dir, "no-global.json"));
     const notify = vi.fn();
-    service.setUi({ notify });
-    await service.touchFile(file, dir);
+    await service.touchFile(file, dir, undefined, { notify });
     expect(notify).toHaveBeenCalledWith(
       `LSP server "a" is not available for ${dir} (binary not found)`,
       "error",
