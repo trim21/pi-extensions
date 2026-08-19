@@ -37,6 +37,7 @@
     "@earendil-works/pi-coding-agent": "^0.84.1",
     "@eslint/js": "10.0.1",
     "@types/node": "^24.13.3",
+    "@types/turndown": "^5.0.6",
     "@typescript/native": "npm:typescript@^7.0.2",
     "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.8.1",
@@ -65,7 +66,8 @@
       "src/gh-readonly.ts",
       "src/spawn-agent.ts",
       "src/system-prompt/index.ts",
-      "src/talk/index.ts"
+      "src/talk/index.ts",
+      "src/web/index.ts"
     ],
     "skills": [
       "src/talk/skills"
@@ -86,9 +88,12 @@
   },
   "dependencies": {
     "@cortexkit/aft-bridge": "0.51.2",
+    "@mozilla/readability": "^0.6.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "jsonc-parser": "^3.3.1",
+    "linkedom": "^0.16.0",
     "minimatch": "^10.2.6",
+    "turndown": "^7.2.0",
     "vscode-jsonrpc": "^9.0.1",
     "vscode-languageserver-types": "^3.18.0",
     "web-tree-sitter": "^0.26.12"
