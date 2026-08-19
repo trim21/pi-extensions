@@ -209,21 +209,23 @@ export async function commandPatternsFor(command: string): Promise<string[]> {
 }
 
 /**
- * 对命令（含所有嵌套命令）求值：任一命令命中规则即生效，规则后写优先
- * （findLast，对齐 opencode PermissionV2）。返回 allow/deny；无规则命中
- * 返回 undefined（交给人审）。
+ * 对命令（含所有嵌套命令）求值：
+ * - deny 优先：任一命令命中 deny 规则即整体拒绝
+ * - allow 需全量：所有命令都命中 allow 规则才整体放行，否则返回
+ *   undefined（有命令未命中规则，交给人审），避免未允许的命令被同链放行带过。
+ * 规则内后写优先（findLast，对齐 opencode PermissionV2）。
  */
-export function evaluateBashApproval(
+export async function evaluateBashApproval(
   command: string,
   rules: readonly ApprovalRule[],
 ): Promise<ApprovalAction | undefined> {
-  return commandPatternsFor(command).then((patterns) => {
-    if (patterns.length === 0) return;
-    // 规则后写优先（对齐 opencode PermissionV2 的 findLast）
-    for (const pattern of patterns) {
-      const rule = rules.findLast((r) => matchRule(pattern, r.pattern));
-      if (rule) return rule.action;
-    }
-    return;
-  });
+  const patterns = await commandPatternsFor(command);
+  if (patterns.length === 0) return;
+  let allowed = 0;
+  for (const pattern of patterns) {
+    const rule = rules.findLast((r) => matchRule(pattern, r.pattern));
+    if (rule?.action === "deny") return "deny";
+    if (rule?.action === "allow") allowed++;
+  }
+  return allowed === patterns.length ? "allow" : undefined;
 }

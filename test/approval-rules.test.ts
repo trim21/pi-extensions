@@ -109,6 +109,38 @@ describe("evaluateBashApproval", () => {
     ).toBeUndefined();
   });
 
+  it("does not allow a chain when only part of it matches an allow rule", async () => {
+    // 只允许了 echo *，mkdir 未命中任何规则，应交给人工审批而非整体放行
+    expect(
+      await evaluateBashApproval("mkdir -p /tmp/x && echo hi", [
+        { action: "allow", pattern: "echo *" },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("allows a chain when every command matches an allow rule", async () => {
+    expect(
+      await evaluateBashApproval("echo a && echo b", [{ action: "allow", pattern: "echo *" }]),
+    ).toBe("allow");
+  });
+
+  it("denies when any command matches a deny rule even if others allow", async () => {
+    expect(
+      await evaluateBashApproval("echo hi && git push origin main", [
+        { action: "allow", pattern: "echo *" },
+        { action: "deny", pattern: "git push *" },
+      ]),
+    ).toBe("deny");
+  });
+
+  it("does not allow a command with an unallowed nested command", async () => {
+    expect(
+      await evaluateBashApproval("echo $(curl -s https://x)", [
+        { action: "allow", pattern: "echo *" },
+      ]),
+    ).toBeUndefined();
+  });
+
   it("last matching rule wins (later rules take precedence)", async () => {
     // 命令模式是 arity 粒度（git push *），规则需按同粒度写
     expect(
