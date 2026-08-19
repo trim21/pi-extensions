@@ -16,7 +16,10 @@ export interface ToolPendant {
    * 面板副标题
    */
   subtitle?: string;
-  markdown: string;
+  /**
+   * 面板正文（完整 markdown），建议以 `## ` 标题开头、末尾 trim
+   */
+  markdown?: string;
   /**
    * @default false
    */

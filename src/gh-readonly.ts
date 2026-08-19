@@ -38,6 +38,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { type ToolPendant } from "./lib/pendant.js";
 import { createSeqState } from "./lib/seq-state.js";
 
 interface GhResult {
@@ -1531,7 +1532,14 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       const { repo, limit } = params;
       const args = ["release", "list", ...repoArgs(repo)];
       if (limit) args.push("--limit", String(limit));
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }), params);
+      const result = toToolResult(
+        await ghExec(args, { cwd: ctx.cwd, signal, input: params }),
+        params,
+      );
+      result.details.pendant = {
+        subtitle: `repo=${params.repo}`,
+      } satisfies ToolPendant;
+      return result;
     },
   });
 
