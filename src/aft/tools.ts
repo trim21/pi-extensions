@@ -5,6 +5,7 @@
  * 由 Rust 侧（tree-sitter 符号表 / trigram 索引 / 调用图）计算。
  */
 
+import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
@@ -84,16 +85,18 @@ const OutlineParams = Type.Object(
   {
     target: Type.String({
       description:
-        "要 outline 的对象：文件路径、目录路径或 URL（http:// 或 https://）。只接受单个 target；目录递归上限 200 个文件。",
+        "要 outline 的对象：文件路径或目录路径。只接受单个 target；目录递归上限 200 个文件。",
     }),
     files: Type.Optional(
       Type.Boolean({
         description:
-          "目录模式：为 true 时 target 必须是目录，返回带语言/符号数/字节大小的扁平文件树，而非符号大纲。",
+          "为 true 时 target 必须是目录，返回带语言/符号数/字节大小的扁平文件树，而非符号大纲。默认：target 为目录时 true，为文件时 false。",
       }),
     ),
     includeTests: Type.Optional(
-      Type.Boolean({ description: "目录大纲：包含测试文件。默认 false。" }),
+      Type.Boolean({
+        description: "目录符号大纲（files: false）模式：包含测试文件。默认 false。",
+      }),
     ),
   },
   { additionalProperties: false },
@@ -104,25 +107,27 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
     name: "aft_outline",
     label: "aft_outline",
     description: [
-      "输出代码文件、目录、URL 的结构化大纲：函数/类/类型等符号及其行号范围；Markdown/HTML 返回标题层级。",
+      "输出代码文件、目录的结构化大纲：函数/类/类型等符号及其行号范围；Markdown/HTML 返回标题层级。",
       "用它在读取具体内容之前先了解文件结构（比整文件 read 省 token）。",
       "深入了解某个符号用 aft_zoom；看跨文件调用关系用 aft_callgraph。",
-      "target 支持：文件路径（带签名的符号大纲）、目录路径（递归最多 200 文件）、URL。只接受单个 target。",
-      "files: true 且 target 为目录时返回扁平文件树（语言、顶层符号数、字节大小）。",
+      "target 支持：文件路径（带签名的符号大纲）、目录路径（递归最多 200 文件）。只接受单个 target。",
+      "target 为目录时默认返回扁平文件树（语言、顶层符号数、字节大小）；传 files: false 可改回符号大纲。",
     ].join("\n"),
-    promptSnippet: "Output structural outline of a file/directory/URL",
+    promptSnippet: "Output structural outline of a file/directory",
     parameters: OutlineParams,
     async execute(_id, params, _signal, _onUpdate, extCtx) {
       const target = coerceTargetParam(params.target);
       if (typeof target !== "string" || target.length === 0) {
-        throw new Error("'target' must be a single path or URL (array targets are not supported)");
+        throw new Error("'target' must be a single path (array targets are not supported)");
       }
-      const filesMode = coerceBoolean(params.files);
+      const resolved = resolvePathArg(extCtx.cwd, target);
+      let filesMode = coerceBoolean(params.files);
+      if (params.files === undefined) {
+        const stats = await stat(resolved).catch(() => null);
+        filesMode = stats?.isDirectory() ?? false;
+      }
       const rawArgs: Record<string, unknown> = {
-        target:
-          filesMode || target.startsWith("http://") || target.startsWith("https://")
-            ? target
-            : resolvePathArg(extCtx.cwd, target),
+        target: filesMode ? target : resolved,
       };
       if (filesMode) rawArgs.files = true;
       if (params.includeTests !== undefined) rawArgs.includeTests = params.includeTests;
@@ -139,23 +144,12 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
   });
 }
 
-const ZoomTarget = Type.Object({
-  path: Type.String({ description: "文件路径（绝对或相对项目根）" }),
-  symbol: Type.String({ description: "该文件中的符号名" }),
-});
-
 const ZoomParams = Type.Object(
   {
-    path: Type.Optional(Type.String({ description: "文件路径（绝对或相对项目根）" })),
-    url: Type.Optional(Type.String({ description: "要 zoom 的 HTML/Markdown 文档 URL" })),
+    path: Type.String({ description: "文件路径（绝对或相对项目根）" }),
     symbols: Type.Optional(
       Type.Union([Type.String(), Type.Array(Type.String())], {
-        description: "符号名（代码）或标题文本（Markdown/HTML）；字符串或数组（同文件批量查询）。",
-      }),
-    ),
-    targets: Type.Optional(
-      Type.Union([ZoomTarget, Type.Array(ZoomTarget)], {
-        description: "跨文件批量：`{ path, symbol }` 或数组。与 path/url/symbols 互斥。",
+        description: "符号名（代码）或标题文本；字符串或数组（同文件批量查询）。",
       }),
     ),
     contextLines: Type.Optional(
@@ -180,51 +174,15 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
       "查看命名符号（函数/类/类型）的完整源码，或 Markdown/HTML 的标题段落内容。",
       "需要理解某个具体符号时用它（读整个文件用 read）。",
       "callgraph: true 时附带同文件内的调用关系标注。",
-      "三种模式互斥，用且仅用一种：`{ path, symbols }`、`{ url, symbols }`、`{ targets }`。",
+      "同文件多符号用 `symbols` 数组。",
     ].join("\n"),
     promptSnippet: "Inspect the full source of a named symbol",
     parameters: ZoomParams,
     async execute(_id, params, _signal, _onUpdate, extCtx) {
-      const isEmpty = (v: unknown): boolean =>
-        v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
-
-      const hasPath = !isEmpty(params.path);
-      const hasUrl = !isEmpty(params.url);
-      const hasSymbols = !isEmpty(params.symbols);
-      const hasTargets = !isEmpty(params.targets);
-
-      if (hasTargets && (hasPath || hasUrl || hasSymbols)) {
-        throw new Error("'targets' 与 'path'/'url'/'symbols' 互斥，只能提供一种模式");
-      }
-      if (hasPath && hasUrl) {
-        throw new Error("'path' 与 'url' 互斥，只能提供一种");
-      }
-      if (!hasTargets && !hasPath && !hasUrl) {
-        throw new Error("Provide exactly one of 'path', 'url', or 'targets'");
-      }
-
-      const rawArgs: Record<string, unknown> = {};
-      if (hasTargets) {
-        const targetList = params.targets;
-        if (!targetList) {
-          throw new Error("'targets' must be a non-empty object or array");
-        }
-        const list = Array.isArray(targetList) ? targetList : [targetList];
-        rawArgs.targets = list.map((t) => ({
-          filePath: resolvePathArg(extCtx.cwd, t.path),
-          symbol: t.symbol,
-        }));
-      } else if (hasUrl) {
-        rawArgs.url = params.url;
-        if (hasSymbols) rawArgs.symbols = params.symbols;
-      } else {
-        const filePath = params.path;
-        if (!filePath) {
-          throw new Error("'path' must be a non-empty string");
-        }
-        rawArgs.filePath = resolvePathArg(extCtx.cwd, filePath);
-        if (hasSymbols) rawArgs.symbols = params.symbols;
-      }
+      const rawArgs: Record<string, unknown> = {
+        filePath: resolvePathArg(extCtx.cwd, params.path),
+        ...(params.symbols && { symbols: params.symbols }),
+      };
 
       const contextLines = coerceOptionalInt(
         params.contextLines,
@@ -260,35 +218,15 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
   });
 }
 
-/** 构建 aft_zoom pendant 的 subtitle：`path="…" symbol="…"`，url 模式为 `url="…"`。 */
+/** 构建 aft_zoom pendant 的 subtitle：`path="…" symbol="…"`。 */
 export function buildZoomSubtitle(
   cwd: string,
   params: Type.Static<typeof ZoomParams>,
 ): string | undefined {
-  const isEmpty = (v: unknown): boolean =>
-    v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
-
-  const parts: string[] = [];
-  const targets = params.targets;
-  if (Array.isArray(targets)) {
-    for (const t of targets) {
-      parts.push(
-        `path="${formatDisplayPath(cwd, resolvePathArg(cwd, t.path))}" symbol="${t.symbol}"`,
-      );
-    }
-  } else if (targets) {
-    parts.push(
-      `path="${formatDisplayPath(cwd, resolvePathArg(cwd, targets.path))}" symbol="${targets.symbol}"`,
-    );
-  } else if (!isEmpty(params.url)) {
-    parts.push(`url="${params.url}"`);
-  } else if (params.path) {
-    const symbols = params.symbols;
-    const symbolStr = Array.isArray(symbols) ? symbols.join(", ") : symbols;
-    const pathPart = `path="${formatDisplayPath(cwd, resolvePathArg(cwd, params.path))}"`;
-    parts.push(symbolStr ? `${pathPart} symbol="${symbolStr}"` : pathPart);
-  }
-  return parts.length > 0 ? parts.join(" ") : undefined;
+  const symbols = params.symbols;
+  const symbolStr = Array.isArray(symbols) ? symbols.join(", ") : symbols;
+  const pathPart = `path="${formatDisplayPath(cwd, resolvePathArg(cwd, params.path))}"`;
+  return symbolStr ? `${pathPart} symbol="${symbolStr}"` : pathPart;
 }
 
 const CALLGRAPH_OPS = [

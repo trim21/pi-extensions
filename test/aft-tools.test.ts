@@ -75,31 +75,4 @@ describe("buildZoomSubtitle", () => {
   it("omits symbol when absent", () => {
     expect(buildZoomSubtitle(cwd, { path: "./src/app.ts" })).toBe('path="./src/app.ts"');
   });
-
-  it("handles a single targets object", () => {
-    expect(buildZoomSubtitle(cwd, { targets: { path: "./a.ts", symbol: "x" } })).toBe(
-      'path="./a.ts" symbol="x"',
-    );
-  });
-
-  it("joins multiple targets", () => {
-    expect(
-      buildZoomSubtitle(cwd, {
-        targets: [
-          { path: "./a.ts", symbol: "x" },
-          { path: "./b.ts", symbol: "y" },
-        ],
-      }),
-    ).toBe('path="./a.ts" symbol="x" path="./b.ts" symbol="y"');
-  });
-
-  it("formats url mode", () => {
-    expect(buildZoomSubtitle(cwd, { url: "https://example.com/a.md", symbols: "Intro" })).toBe(
-      'url="https://example.com/a.md"',
-    );
-  });
-
-  it("returns undefined for empty params", () => {
-    expect(buildZoomSubtitle(cwd, {})).toBeUndefined();
-  });
 });
