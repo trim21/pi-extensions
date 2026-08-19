@@ -8,6 +8,14 @@
  *   列表等常驻信息用 false
  */
 export interface ToolPendant {
+  /**
+   * 面板标题
+   */
+  title?: string;
+  /**
+   * 面板副标题
+   */
+  subtitle?: string;
   markdown: string;
   /**
    * @default false
