@@ -498,9 +498,8 @@ describe("execute", () => {
       expect(String(result.details?.output)).toContain("图中有一只猫");
       expect(result.details?.count).toBe(1);
 
-      // pendant markdown 总结关键信息并自动展开
-      const pendant = result.details?.pendant as { markdown?: string; expanded?: boolean };
-      expect(pendant?.expanded).toBe(true);
+      // pendant markdown 总结关键信息
+      const pendant = result.details?.pendant as { markdown?: string };
       expect(pendant?.markdown).toContain("## 图片识别");
       expect(pendant?.markdown).toContain("cat.png");
       expect(pendant?.markdown).toContain("图中有什么动物？");

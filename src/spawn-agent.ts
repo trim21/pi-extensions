@@ -711,7 +711,6 @@ export default function spawnAgent(pi: ExtensionAPI) {
             ...result,
             pendant: {
               markdown: formatPendantMarkdown(params.task, message),
-              expanded: true,
             } satisfies ToolPendant,
           },
           isError: true,
@@ -729,7 +728,6 @@ export default function spawnAgent(pi: ExtensionAPI) {
           ...result,
           pendant: {
             markdown: formatPendantMarkdown(params.task, text),
-            expanded: false,
           } satisfies ToolPendant,
         },
       };

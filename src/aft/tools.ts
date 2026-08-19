@@ -427,7 +427,6 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
               output: text,
               truncated,
             }),
-            expanded: true,
           } satisfies ToolPendant,
         },
       };

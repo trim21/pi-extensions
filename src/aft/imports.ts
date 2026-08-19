@@ -126,7 +126,6 @@ export function registerImportTool(pi: ExtensionAPI, ctx: AftToolContext): void 
               input: params,
               output: text,
             }),
-            expanded: true,
           } satisfies ToolPendant,
         },
       };

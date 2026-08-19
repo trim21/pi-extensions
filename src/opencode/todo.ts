@@ -173,7 +173,6 @@ export default function todowrite(pi: ExtensionAPI) {
           todos,
           pendant: {
             markdown: buildTodoMarkdown(todos),
-            expanded: false,
           },
         },
       });

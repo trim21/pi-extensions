@@ -445,7 +445,6 @@ export default function visionAgent(pi: ExtensionAPI) {
             count: paths.length,
             pendant: {
               markdown,
-              expanded: true,
             } satisfies ToolPendant,
           },
         };
@@ -465,7 +464,6 @@ export default function visionAgent(pi: ExtensionAPI) {
             error: message,
             pendant: {
               markdown: `## 图片识别失败\n\n${message}`,
-              expanded: true,
             } satisfies ToolPendant,
           },
         };

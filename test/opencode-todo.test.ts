@@ -34,7 +34,7 @@ interface Tool {
     ctx: MockCtx,
   ) => Promise<{
     content: { type: string; text: string }[];
-    details: { todos: TodoInfo[]; pendant: { markdown: string; expanded: boolean } };
+    details: { todos: TodoInfo[]; pendant: { markdown: string } };
   }>;
 }
 
@@ -160,7 +160,6 @@ describe("execute", () => {
     const result1 = await tool.execute("id-1", { todos: first }, undefined, undefined, ctx);
     expect(result1.content[0].text).toBe(JSON.stringify(first, null, 2));
     expect(result1.details.todos).toEqual(first);
-    expect(result1.details.pendant.expanded).toBe(false);
     expect(result1.details.pendant.markdown).toBe(
       ["## Tasks", "", "**1 open · 1 total**", "", "- [>] one `high`"].join("\n"),
     );

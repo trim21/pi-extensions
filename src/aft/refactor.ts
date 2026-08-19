@@ -145,7 +145,6 @@ export function registerRefactorTool(pi: ExtensionAPI, ctx: AftToolContext): voi
               input: params,
               output: text,
             }),
-            expanded: true,
           } satisfies ToolPendant,
         },
       };
