@@ -267,6 +267,21 @@ export class TalkCore {
       // both timing out.
       await this.resolveInterlock(letter);
       await trackIncomingAsk(this.storage, self.addr, letter);
+    } else if (letter.kind === "message") {
+      // A plain message from a peer we are blocked asking breaks the wait: the
+      // peer is engaging, so do not keep the caller stuck waiting for a reply.
+      const myAsk = await this.findOutAskTo(letter.from.addr);
+      if (myAsk) {
+        const waiter = this.askWaiters.get(myAsk.askId);
+        if (waiter) {
+          this.askWaiters.delete(myAsk.askId);
+          waiter({
+            replied: false,
+            reason: "peer sent a message instead of replying to your ask",
+          });
+          await clearAsk(this.storage, self.addr, myAsk.askId);
+        }
+      }
     }
     return true;
   }

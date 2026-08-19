@@ -818,6 +818,34 @@ describe("TalkCore", () => {
     expect(askResult).toContain("the answer");
   });
 
+  it("a plain message from the peer breaks the ask wait", async () => {
+    const { storage } = makeStorage();
+    const deliveredA: Letter[] = [];
+    const deliveredB: Letter[] = [];
+    const coreA = makeCore(storage, deliveredA);
+    const coreB = makeCore(storage, deliveredB);
+    await coreA.start(makeSelf("aaaaaaaaaaaa"));
+    await coreB.start(makeSelf("bbbbbbbbbbbb"));
+    await coreB.groupJoin(groupIdFrom(await coreA.groupJoin()));
+
+    const askPromise = coreA.ask("agent-bbbbbbbbbbbb", "question?", 5000);
+    await vi.waitFor(async () => {
+      expect(await listInbox(storage, "bbbbbbbbbbbb")).toHaveLength(1);
+    });
+    await coreB.checkInbox();
+    expect(deliveredB.find((l) => l.kind === "ask")).toBeDefined();
+
+    // B engages with a plain message instead of a reply — the ask must not
+    // keep waiting until timeout.
+    await coreB.send("agent-aaaaaaaaaaaa", "hi, busy here");
+    await coreA.checkInbox();
+
+    const askResult = await askPromise;
+    expect(askResult).toContain("peer sent a message instead of replying");
+    // the message itself is still handed to A's model
+    expect(deliveredA.find((l) => l.kind === "message")?.body).toBe("hi, busy here");
+  });
+
   it("ask refuses when the target already sent a message", async () => {
     const { storage } = makeStorage();
     const coreA = makeCore(storage, []);
