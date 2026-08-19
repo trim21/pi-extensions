@@ -305,6 +305,25 @@ function toToolResult(
   };
 }
 
+/**
+ * Pendant subtitle for a tool result: `repo=x/y` (when provided) plus the
+ * tool's id parameter, e.g. `repo=x/y number=123`. Returns undefined when
+ * neither is available, so the pendant is omitted rather than shown empty.
+ */
+function subtitlePendant(
+  params: { repo?: string } & Record<string, unknown>,
+  idKey?: string,
+): ToolPendant | undefined {
+  const parts: string[] = [];
+  if (params.repo) parts.push(`repo=${params.repo}`);
+  if (idKey) {
+    const id = params[idKey];
+    if (typeof id === "string" || typeof id === "number") parts.push(`${idKey}=${id}`);
+  }
+  if (parts.length === 0) return undefined;
+  return { subtitle: parts.join(" ") };
+}
+
 interface ListFilters {
   repo?: string;
   keywords?: string;
@@ -1121,7 +1140,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params;
-      return toToolResult(
+      const result = toToolResult(
         await ghExec(
           [
             "issue",
@@ -1135,6 +1154,8 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         ),
         params,
       );
+      result.details.pendant = subtitlePendant(params, "number");
+      return result;
     },
   });
 
@@ -1156,10 +1177,12 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Max results (default 30)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      return toToolResult(
+      const result = toToolResult(
         await listGithub("issue", params, { cwd: ctx.cwd, signal, input: params }),
         params,
       );
+      result.details.pendant = subtitlePendant(params);
+      return result;
     },
   });
 
@@ -1175,7 +1198,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params;
-      return toToolResult(
+      const result = toToolResult(
         await ghExec(
           [
             "pr",
@@ -1189,6 +1212,8 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         ),
         params,
       );
+      result.details.pendant = subtitlePendant(params, "number");
+      return result;
     },
   });
 
@@ -1212,10 +1237,12 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Max results (default 30)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      return toToolResult(
+      const result = toToolResult(
         await listGithub("pr", params, { cwd: ctx.cwd, signal, input: params }),
         params,
       );
+      result.details.pendant = subtitlePendant(params);
+      return result;
     },
   });
 
@@ -1232,7 +1259,12 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params;
       const args = ["pr", "diff", String(number), ...repoArgs(repo)];
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }), params);
+      const result = toToolResult(
+        await ghExec(args, { cwd: ctx.cwd, signal, input: params }),
+        params,
+      );
+      result.details.pendant = subtitlePendant(params, "number");
+      return result;
     },
   });
 
@@ -1260,7 +1292,9 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         // Anything else is a real error (cancelled, auth, network, ...)
         throw new GhError(args, result, params);
       }
-      return toToolResult(result.stdout, params);
+      const toolResult = toToolResult(result.stdout, params);
+      toolResult.details.pendant = subtitlePendant(params, "number");
+      return toolResult;
     },
   });
 
@@ -1322,9 +1356,10 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         );
       }
       const { text, truncated } = truncate(out);
+      const pendant = subtitlePendant(params, "number");
       return {
         content: [{ type: "text", text }],
-        details: { input: params, truncated },
+        details: { input: params, truncated, ...(pendant && { pendant }) },
       };
     },
   });
@@ -1341,7 +1376,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params;
-      return toToolResult(
+      const result = toToolResult(
         await ghExec(["issue", "view", String(number), ...repoArgs(repo), "--json", "comments"], {
           cwd: ctx.cwd,
           signal,
@@ -1349,6 +1384,8 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         }),
         params,
       );
+      result.details.pendant = subtitlePendant(params, "number");
+      return result;
     },
   });
 
@@ -1372,7 +1409,12 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       if (limit) args.push("--limit", String(limit));
       if (status) args.push("--status", status);
       if (workflow) args.push("--workflow", workflow);
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }), params);
+      const result = toToolResult(
+        await ghExec(args, { cwd: ctx.cwd, signal, input: params }),
+        params,
+      );
+      result.details.pendant = subtitlePendant(params);
+      return result;
     },
   });
 
@@ -1425,6 +1467,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     async execute(_id, params, signal, onUpdate, ctx) {
       const { run_id, repo, job, step, offset, limit, full, output_file } = params;
 
+      const pendant = subtitlePendant(params, "run_id");
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
       const jobsOut = await ghExec(["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`], {
         cwd: ctx.cwd,
@@ -1438,13 +1481,14 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
 
       // ── Write the complete log to a file ───────────────────────────────
       if (output_file !== undefined && output_file !== null && output_file !== "") {
-        return writeLogFile(
+        const result = await writeLogFile(
           { runId: String(run_id), job, step, outputFile: output_file },
           jobs,
           fetchJobLog,
           ctx.cwd,
           params,
         );
+        return { ...result, details: { ...result.details, ...(pendant && { pendant }) } };
       }
 
       // ── Fetch a specific step's logs (requires `job`) ─────────────────
@@ -1459,7 +1503,10 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
           fetchJobLog,
           onUpdate,
         );
-        return { ...stepResult, details: { ...stepResult.details, input: params } };
+        return {
+          ...stepResult,
+          details: { ...stepResult.details, input: params, ...(pendant && { pendant }) },
+        };
       }
 
       // ── List jobs/steps, with failed step logs expanded ────────────────
@@ -1472,7 +1519,10 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         jobs,
         fetchJobLog,
       );
-      return { ...jobsResult, details: { ...jobsResult.details, input: params } };
+      return {
+        ...jobsResult,
+        details: { ...jobsResult.details, input: params, ...(pendant && { pendant }) },
+      };
     },
   });
 
@@ -1490,7 +1540,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { run_id, repo } = params;
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-      return toToolResult(
+      const result = toToolResult(
         await ghExec(["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`], {
           cwd: ctx.cwd,
           signal,
@@ -1498,6 +1548,8 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         }),
         params,
       );
+      result.details.pendant = subtitlePendant(params, "run_id");
+      return result;
     },
   });
 
@@ -1514,7 +1566,12 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       const { repo } = params;
       const args = ["repo", "view"];
       if (repo) args.push(repo);
-      return toToolResult(await ghExec(args, { cwd: ctx.cwd, signal, input: params }), params);
+      const result = toToolResult(
+        await ghExec(args, { cwd: ctx.cwd, signal, input: params }),
+        params,
+      );
+      result.details.pendant = subtitlePendant(params);
+      return result;
     },
   });
 
@@ -1536,9 +1593,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         await ghExec(args, { cwd: ctx.cwd, signal, input: params }),
         params,
       );
-      result.details.pendant = {
-        subtitle: `repo=${params.repo}`,
-      } satisfies ToolPendant;
+      result.details.pendant = subtitlePendant(params);
       return result;
     },
   });
@@ -1555,7 +1610,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { tag, repo } = params;
-      return toToolResult(
+      const result = toToolResult(
         await ghExec(["release", "view", tag, ...repoArgs(repo)], {
           cwd: ctx.cwd,
           signal,
@@ -1563,6 +1618,8 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         }),
         params,
       );
+      result.details.pendant = subtitlePendant(params, "tag");
+      return result;
     },
   });
 
@@ -1584,6 +1641,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     async execute(_id, params, signal, onUpdate, ctx) {
       const { number, repo, fail_fast } = params;
 
+      const pendant = subtitlePendant(params, "number");
       onUpdate?.({
         content: [{ type: "text", text: `Watching CI checks for PR #${number}...` }],
         details: {},
@@ -1665,7 +1723,12 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
               text: `## PR #${number} CI Checks\n\nNo workflow runs found for head commit ${headRefOid.slice(0, 7)}.`,
             },
           ],
-          details: { status: "no-jobs", totalJobs: 0, input: params },
+          details: {
+            status: "no-jobs",
+            totalJobs: 0,
+            input: params,
+            ...(pendant && { pendant }),
+          },
         };
       }
 
@@ -1689,6 +1752,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
             totalJobs,
             failedJobs,
             input: params,
+            ...(pendant && { pendant }),
           },
         };
       }
@@ -1700,7 +1764,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
             text: `## PR #${number} CI Checks - PASSED\n\nAll ${totalJobs} job(s) succeeded.`,
           },
         ],
-        details: { status: "success", totalJobs, input: params },
+        details: { status: "success", totalJobs, input: params, ...(pendant && { pendant }) },
       };
     },
   });
@@ -1720,6 +1784,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     async execute(_id, params, signal, onUpdate, ctx) {
       const { run_id, repo } = params;
 
+      const pendant = subtitlePendant(params, "run_id");
       onUpdate?.({
         content: [{ type: "text", text: `Watching workflow run ${run_id}...` }],
         details: {},
@@ -1739,7 +1804,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         content: [
           { type: "text", text: `## Workflow Run ${run_id} Completed\n\n${result.stdout}` },
         ],
-        details: { exitCode: 0, input: params },
+        details: { exitCode: 0, input: params, ...(pendant && { pendant }) },
       };
     },
   });
