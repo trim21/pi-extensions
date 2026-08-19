@@ -185,7 +185,7 @@ describe("opencode edit execute", () => {
         undefined,
         ctx,
       ),
-    ).rejects.toThrow(/Operation aborted/);
+    ).rejects.toThrow(/aborted/i);
     expect(await readFile(target, "utf8")).toBe("content\n");
   });
 });

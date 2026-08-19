@@ -164,7 +164,7 @@ describe("opencode write execute", () => {
     const tool = loadTool();
     await expect(
       tool.execute("id", { filePath: target, content: "never" }, controller.signal, undefined, ctx),
-    ).rejects.toThrow(/Operation aborted/);
+    ).rejects.toThrow(/aborted/i);
     await expect(readFile(target, "utf8")).rejects.toThrow(/ENOENT/);
   });
 });

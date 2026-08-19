@@ -392,6 +392,7 @@ export function registerFileTools(
           throwIfAborted(signal);
           const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
             notify: (message, level) => ctx.ui.notify(message, level),
+            signal,
           });
           return [
             `The file ${filePath} has been updated successfully.`,

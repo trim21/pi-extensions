@@ -186,6 +186,20 @@ interface LspState {
 
 export interface LspRequestOptions {
   notify?: ExtensionUIContext["notify"];
+  /** 中止时提前结束诊断等待（已中止时直接跳过诊断）。 */
+  signal?: AbortSignal;
+}
+
+/** 让 promise 在 signal 中止时提前结算；用于中断 LSP 诊断等待。 */
+async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<void> {
+  if (!signal || signal.aborted) {
+    await promise;
+    return;
+  }
+  const abort = new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+  await Promise.race([promise, abort]);
 }
 
 export interface LspService {
@@ -333,7 +347,10 @@ export function createLspService(
         const after = Date.now();
         const version = await client.notify.open({ path: file });
         if (!diagnostics) return;
-        await client.waitForDiagnostics({ path: file, version, mode: diagnostics, after });
+        await abortable(
+          client.waitForDiagnostics({ path: file, version, mode: diagnostics, after }),
+          options?.signal,
+        );
       }),
     ).catch(() => {
       // 诊断等待失败不影响写操作本身
@@ -360,6 +377,7 @@ export function createLspService(
     cwd: string,
     options?: LspRequestOptions,
   ): Promise<string> {
+    if (options?.signal?.aborted) return "";
     await touchFile(file, cwd, "document", options);
     const all = await diagnostics();
     const normalized = normalize(file);

@@ -25,7 +25,7 @@ import { type TObject, Type } from "typebox";
 import { type CommandResult, type CommandSpec, parseCommand } from "../lib/cli.js";
 import { resolveHomePath } from "../lib/path.js";
 import { restoreTalkAgentId, TALK_JOIN_ENTRY_TYPE, TalkCore } from "./core.js";
-import { formatDelivery } from "./format.js";
+import { age, formatDelivery } from "./format.js";
 import type { Letter } from "./mailbox.js";
 import { type AgentRecord, deriveAddr } from "./registry.js";
 import { SqliteTalkStorage } from "./storage.js";
@@ -66,14 +66,6 @@ function shortCwd(cwd: string): string {
   const display =
     cwd === home ? "~" : cwd.startsWith(`${home}/`) ? `~/${cwd.slice(home.length + 1)}` : cwd;
   return sanitizeTerminal(display);
-}
-
-function relativeTime(ts: number, now: number = Date.now()): string {
-  const s = Math.max(0, Math.round((now - ts) / 1000));
-  if (s < 60) return `${s}s ago`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}m ago`;
-  return `${Math.round(m / 60)}h ago`;
 }
 
 /** Presentation metadata for a delivery. `details` is never sent to the LLM. */
@@ -483,7 +475,7 @@ export default function talk(pi: ExtensionAPI) {
     const idTail = d.id.slice(-8);
     const chip = theme.inverse(` ${d.kind.toUpperCase()} `);
     const header = `${theme.fg("accent", theme.bold(displayName(d.from.name)))} ${theme.fg("dim", `(${shortCwd(d.from.cwd)})`)} ${chip}`;
-    const footer = theme.fg("dim", `id ${idTail} · ${d.kind} · ${relativeTime(d.ts)}`);
+    const footer = theme.fg("dim", `id ${idTail} · ${d.kind} · ${age(d.ts)}`);
     const out = [header, sanitizeTerminal(d.body), "", footer];
     // plain 组件：不引入 pi-tui，直接输出带背景色的文本行
     const text = out.join("\n");

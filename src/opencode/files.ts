@@ -19,7 +19,7 @@
 
 import { constants } from "node:fs";
 import { access, mkdir, open, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, resolve as resolvePath, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, resolve as resolvePath, sep } from "node:path";
 
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -154,9 +154,7 @@ async function detectImageMimeTypeFromFile(filePath: string): Promise<string | n
 }
 
 function isBinaryExtension(filePath: string): boolean {
-  const dotIndex = filePath.lastIndexOf(".");
-  if (dotIndex === -1) return false;
-  return BINARY_EXTENSIONS.has(filePath.slice(dotIndex).toLowerCase());
+  return BINARY_EXTENSIONS.has(extname(filePath).toLowerCase());
 }
 
 function isBinaryFileBySample(sample: Uint8Array): boolean {
@@ -308,9 +306,7 @@ function registerReadTool(pi: ExtensionAPI, service: LspService): void {
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      if (signal?.aborted) {
-        throw new Error("Operation aborted");
-      }
+      signal?.throwIfAborted();
 
       const { filePath: rawPath, offset, limit } = params;
 
@@ -502,14 +498,10 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
         change: { oldText: oldString, newText: newString, replaceAll },
       });
 
-      const throwIfAborted = (): void => {
-        if (signal?.aborted) throw new Error("Operation aborted");
-      };
-
       const [message, details, diagnosticText] = await withFileMutationQueue(
         absolutePath,
         async () => {
-          throwIfAborted();
+          signal?.throwIfAborted();
 
           // opencode: 前置校验，先于空 oldString 分支
           if (oldString === newString) {
@@ -524,7 +516,6 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
             } catch {
               exists = false;
             }
-            throwIfAborted();
             if (exists) {
               throw new Error(
                 "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
@@ -532,10 +523,11 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
             }
             // opencode: writeWithDirs 自动创建父目录；newString 开头的 BOM 原样保留
             await mkdir(dirname(absolutePath), { recursive: true });
-            throwIfAborted();
+            signal?.throwIfAborted();
             await writeFile(absolutePath, newString, "utf8");
-            throwIfAborted();
-            const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd);
+            const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, {
+              signal,
+            });
             return [
               "Edit applied successfully.",
               { diff: "", patch: "", firstChangedLine: 0 },
@@ -546,18 +538,15 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
           try {
             await access(absolutePath, constants.R_OK | constants.W_OK);
           } catch (error: unknown) {
-            throwIfAborted();
             const msg =
               error instanceof Error && "code" in error && typeof error.code === "string"
                 ? `Error code: ${error.code}`
                 : String(error);
             throw new Error(`Could not edit file: ${filePath}. ${msg}.`, { cause: error });
           }
-          throwIfAborted();
 
           const buffer = await readFile(absolutePath);
           const rawContent = buffer.toString("utf8");
-          throwIfAborted();
 
           // Strip BOM then normalize line endings to LF.
           // The opencode replacers split on \n and expect only LF.
@@ -566,16 +555,16 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
           const normalizedContent = normalizeToLF(content);
 
           const newContent = replace(normalizedContent, oldString, newString, replaceAll);
-          throwIfAborted();
+          signal?.throwIfAborted();
 
           const finalContent = bom + restoreLineEndings(newContent, originalEnding);
           await writeFile(absolutePath, finalContent, "utf8");
-          throwIfAborted();
 
           const diffResult = generateDiffString(normalizedContent, newContent);
           const patch = generateUnifiedPatch(filePath, normalizedContent, newContent);
-          throwIfAborted();
-          const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd);
+          const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, {
+            signal,
+          });
           return [
             "Edit applied successfully.",
             { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
@@ -640,14 +629,10 @@ function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
       });
       const dir = dirname(absolutePath);
 
-      const throwIfAborted = () => {
-        if (signal?.aborted) throw new Error("Operation aborted");
-      };
-
       const [message, details, diagnosticText] = await withFileMutationQueue(
         absolutePath,
         async () => {
-          throwIfAborted();
+          signal?.throwIfAborted();
 
           // opencode: desiredBom = source.bom || next.bom —— 保留原文件 BOM，
           // 否则用新内容自带的 BOM
@@ -664,14 +649,14 @@ function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
           } catch {
             // 文件不存在：无旧 BOM
           }
-          throwIfAborted();
           const { bom: desiredBom, text: nextText } = resolveBom(existing, content);
 
           await mkdir(dir, { recursive: true });
-          throwIfAborted();
+          signal?.throwIfAborted();
           await writeFile(absolutePath, desiredBom + nextText, "utf8");
-          throwIfAborted();
-          const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd);
+          const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, {
+            signal,
+          });
 
           return ["Wrote file successfully.", undefined, diagnosticText] as const;
         },
