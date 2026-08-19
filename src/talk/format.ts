@@ -25,9 +25,7 @@ export function formatDelivery(letter: Letter, now: number = Date.now()): string
   const from = letter.from;
   const header = `From pi agent ${from.agentId} (${from.cwd}) — "${from.name}"`;
   const meta = `_id ${letter.id} · ${letter.kind} · sent ${age(letter.ts, now)}_`;
-  const hint =
-    letter.kind === "ask" ? `\n\nReply with the talk-reply tool, replyTo: "${letter.id}"` : "";
-  return `${BOUNDARY_PREAMBLE}\n\n${header}:\n\n${letter.body}\n\n${meta}${hint}`;
+  return `${BOUNDARY_PREAMBLE}\n\n${header}:\n\n${letter.body}\n\n${meta}`;
 }
 
 /** One agent as the model sees it in a listing. `id` is the stable pi

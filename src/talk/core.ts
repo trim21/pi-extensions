@@ -38,8 +38,6 @@ import {
   previewBody,
   readOutgoingAsk,
   removeLetter,
-  resolveAskByRef,
-  trackIncomingAsk,
   trackOutgoingAsk,
   unreadCount,
 } from "./mailbox.js";
@@ -56,8 +54,9 @@ import {
 } from "./registry.js";
 import type { TalkStorage } from "./storage.js";
 
-type AskOutcome =
-  { replied: true; body: string; from: string } | { replied: false; reason: string };
+interface AskOutcome {
+  reason: string;
+}
 type TargetResult = { ok: true; record: AgentRecord } | { ok: false; error: string };
 type SendResult = { ok: true; letter: Letter; verdict: string } | { ok: false; error: string };
 
@@ -241,44 +240,28 @@ export class TalkCore {
   }
 
   /**
-   * Shared per-letter inbound handling: route replies/cancels to their
-   * waiters, and run ask interlock arbitration + incoming-ask tracking.
-   * Returns false when the letter was fully handled here (routed to a waiter)
-   * and must not be handed to the model.
+   * Shared per-letter inbound handling: run ask interlock arbitration on
+   * incoming asks, and break the wait of an outstanding ask to the peer when
+   * the peer sends a plain message (ask = send + wait; any peer message is a
+   * response). Returns false when the letter was fully handled here (routed to
+   * a waiter) and must not be handed to the model.
    */
   private async processIncoming(letter: Letter): Promise<boolean> {
     const self = this.requireSelf();
-    if ((letter.kind === "reply" || letter.kind === "cancel") && letter.replyTo) {
-      const waiter = this.askWaiters.get(letter.replyTo);
-      await clearAsk(this.storage, self.addr, letter.replyTo);
-      if (waiter) {
-        this.askWaiters.delete(letter.replyTo);
-        waiter(
-          letter.kind === "reply"
-            ? { replied: true, body: letter.body, from: letter.from.name }
-            : { replied: false, reason: `cancelled by ${letter.from.name}` },
-        );
-        return false;
-      }
-    }
     if (letter.kind === "ask") {
       // Both sides asking each other: timestamp arbitration before delivering,
       // so the later asker yields and answers the earlier ask instead of
       // both timing out.
       await this.resolveInterlock(letter);
-      await trackIncomingAsk(this.storage, self.addr, letter);
     } else if (letter.kind === "message") {
       // A plain message from a peer we are blocked asking breaks the wait: the
-      // peer is engaging, so do not keep the caller stuck waiting for a reply.
+      // peer is engaging, so do not keep the caller stuck waiting.
       const myAsk = await this.findOutAskTo(letter.from.addr);
       if (myAsk) {
         const waiter = this.askWaiters.get(myAsk.askId);
         if (waiter) {
           this.askWaiters.delete(myAsk.askId);
-          waiter({
-            replied: false,
-            reason: "peer sent a message instead of replying to your ask",
-          });
+          waiter({ reason: "peer sent a message in response" });
           await clearAsk(this.storage, self.addr, myAsk.askId);
         }
       }
@@ -343,7 +326,6 @@ export class TalkCore {
     target: AgentRecord,
     kind: LetterKind,
     body: string,
-    replyTo?: string,
   ): Promise<SendResult> {
     const self = this.requireSelf();
     const presence = presenceOf(target);
@@ -360,7 +342,6 @@ export class TalkCore {
       body,
       ts: this.now(),
     };
-    if (replyTo !== undefined) letter.replyTo = replyTo;
     await deposit(this.storage, target.addr, letter);
     this.policy.recordSend(body, target.addr);
     if (presence === "live") {
@@ -392,11 +373,10 @@ export class TalkCore {
         resolve(outcome);
       };
       const timer = setTimeout(
-        () =>
-          settle({ replied: false, reason: `no reply within ${Math.round(timeoutMs / 1000)}s` }),
+        () => settle({ reason: `no response within ${Math.round(timeoutMs / 1000)}s` }),
         timeoutMs,
       );
-      const onAbort = () => settle({ replied: false, reason: "aborted" });
+      const onAbort = () => settle({ reason: "aborted" });
       this.askWaiters.set(askId, settle);
       if (signal?.aborted) onAbort();
       else signal?.addEventListener("abort", onAbort, { once: true });
@@ -440,8 +420,7 @@ export class TalkCore {
     if (!peerFirst) return; // we asked first; keep waiting — the peer will yield
     this.askWaiters.delete(myAsk.askId);
     waiter({
-      replied: false,
-      reason: `peer asked first (their ask id ${letter.id.slice(-8)}) — answer it with talk-reply before re-asking`,
+      reason: `peer asked first (their ask id ${letter.id.slice(-8)}) — respond with a message before re-asking`,
     });
     await clearAsk(this.storage, self.addr, myAsk.askId);
   }
@@ -696,7 +675,7 @@ export class TalkCore {
     const inbox = await listInbox(this.storage, self.addr);
     const fromTarget = inbox.filter((item) => item.letter.from.addr === record.addr);
     if (fromTarget.length > 0) {
-      return `You have ${fromTarget.length} unread message(s) from "${record.name}" — reply before asking.`;
+      return `You have ${fromTarget.length} unread message(s) from "${record.name}" — respond to them before asking.`;
     }
     const sent = await this.sendLetter(record, "ask", body);
     if (!sent.ok) return sent.error;
@@ -710,44 +689,11 @@ export class TalkCore {
     try {
       const outcome = await this.waitForReply(sent.letter.id, Math.max(1000, timeoutMs), signal);
       await clearAsk(this.storage, self.addr, sent.letter.id);
-      if (!outcome.replied)
-        return `Ask ${sent.letter.id.slice(-8)} to "${record.name}": ${outcome.reason}.`;
-      return `"${record.name}" replied:\n\n${outcome.body}`;
+      return `Ask ${sent.letter.id.slice(-8)} to "${record.name}": ${outcome.reason}.`;
     } finally {
       // The ask tool call is still part of a running agent turn.
       this.setWorking();
     }
-  }
-
-  async reply(replyTo: string, body: string): Promise<string> {
-    if (!body) return "reply requires 'message'.";
-    if (!replyTo) {
-      return "reply requires 'replyTo' (the ask/message id, shown in the delivered message).";
-    }
-    const self = this.requireSelf();
-    const ask = await resolveAskByRef(this.storage, self.addr, replyTo);
-    if (!ask) return `No pending ask matches '${replyTo}'.`;
-    const records = await listRecords(this.storage);
-    const asker = records.find((r) => r.addr === ask.from.addr);
-    const target = asker ?? this.recordFromLetter(ask);
-    const sent = await this.sendLetter(target, "reply", body, ask.id);
-    if (!sent.ok) return sent.error;
-    await clearAsk(this.storage, self.addr, ask.id);
-    return `Replied to "${target.name}" (ask ${ask.id.slice(-8)}): ${sent.verdict}.`;
-  }
-
-  /** Build a minimal record from a letter's sender when the peer record is gone. */
-  private recordFromLetter(letter: Letter): AgentRecord {
-    return {
-      addr: letter.from.addr,
-      agentId: letter.from.agentId,
-      name: letter.from.name,
-      cwd: letter.from.cwd,
-      pid: 0,
-      startedAt: letter.ts,
-      lastSeenAt: letter.ts,
-      status: "idle",
-    };
   }
 
   // ── Presence watch ─────────────────────────────────────────────────────

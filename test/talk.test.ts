@@ -25,12 +25,10 @@ import {
   type Letter,
   listInbox,
   newMessageId,
-  pendingAsks,
   previewBody,
   readAudit,
+  readOutgoingAsk,
   removeLetter,
-  resolveAskByRef,
-  trackIncomingAsk,
   trackOutgoingAsk,
 } from "../src/talk/mailbox.js";
 import { BACKLOG_CAP, OutboundPolicy } from "../src/talk/policy.js";
@@ -284,22 +282,18 @@ describe("mailbox", () => {
     expect(inbox[0].letter.body).toBe("hello from the past");
   });
 
-  it("tracks asks, lists pending, and resolves by ref", async () => {
+  it("tracks outgoing asks and clears them", async () => {
     const { storage } = makeStorage();
     const ask = makeLetter({ kind: "ask", body: "question?" });
-    await trackIncomingAsk(storage, "bbbbbbbbbbbb", ask);
     await trackOutgoingAsk(storage, "bbbbbbbbbbbb", {
       askId: ask.id,
       toAddr: ask.from.addr,
       body: "question?",
       ts: ask.ts,
     });
-    const pending = await pendingAsks(storage, "bbbbbbbbbbbb");
-    expect(pending.map((a) => a.id)).toEqual([ask.id]);
-    expect(await resolveAskByRef(storage, "bbbbbbbbbbbb", ask.id.slice(-8))).not.toBeNull();
-    expect(await resolveAskByRef(storage, "bbbbbbbbbbbb", "nope")).toBeNull();
+    expect(await readOutgoingAsk(storage, "bbbbbbbbbbbb", ask.id)).not.toBeNull();
     await clearAsk(storage, "bbbbbbbbbbbb", ask.id);
-    expect(await pendingAsks(storage, "bbbbbbbbbbbb")).toEqual([]);
+    expect(await readOutgoingAsk(storage, "bbbbbbbbbbbb", ask.id)).toBeNull();
   });
 
   it("audits deposits with a preview, never the full body", async () => {
@@ -368,7 +362,6 @@ describe("format", () => {
     const text = formatDelivery(makeLetter({ kind: "ask", body: "the question" }));
     expect(text).toContain(BOUNDARY_PREAMBLE);
     expect(text).toContain("the question");
-    expect(text).toContain("talk-reply");
   });
 
   it("formatDelivery header carries the sender agent id", () => {
@@ -793,10 +786,11 @@ function makeCore(storage: TalkStorage, delivered: Letter[], now?: () => number)
 }
 
 describe("TalkCore", () => {
-  it("ask/reply round-trips between two cores", async () => {
+  it("ask is answered when the peer sends a message", async () => {
     const { storage } = makeStorage();
+    const deliveredA: Letter[] = [];
     const deliveredB: Letter[] = [];
-    const coreA = makeCore(storage, []);
+    const coreA = makeCore(storage, deliveredA);
     const coreB = makeCore(storage, deliveredB);
     await coreA.start(makeSelf("aaaaaaaaaaaa"));
     await coreB.start(makeSelf("bbbbbbbbbbbb"));
@@ -808,42 +802,18 @@ describe("TalkCore", () => {
       expect(await listInbox(storage, "bbbbbbbbbbbb")).toHaveLength(1);
     });
     await coreB.checkInbox();
-    const ask = deliveredB.find((l) => l.kind === "ask");
-    if (!ask) throw new Error("expected an ask to be delivered to B");
-    const replyResult = await coreB.reply(ask.id, "the answer");
-    expect(replyResult).toContain("delivered");
-
-    await coreA.checkInbox();
-    const askResult = await askPromise;
-    expect(askResult).toContain("the answer");
-  });
-
-  it("a plain message from the peer breaks the ask wait", async () => {
-    const { storage } = makeStorage();
-    const deliveredA: Letter[] = [];
-    const deliveredB: Letter[] = [];
-    const coreA = makeCore(storage, deliveredA);
-    const coreB = makeCore(storage, deliveredB);
-    await coreA.start(makeSelf("aaaaaaaaaaaa"));
-    await coreB.start(makeSelf("bbbbbbbbbbbb"));
-    await coreB.groupJoin(groupIdFrom(await coreA.groupJoin()));
-
-    const askPromise = coreA.ask("agent-bbbbbbbbbbbb", "question?", 5000);
-    await vi.waitFor(async () => {
-      expect(await listInbox(storage, "bbbbbbbbbbbb")).toHaveLength(1);
-    });
-    await coreB.checkInbox();
     expect(deliveredB.find((l) => l.kind === "ask")).toBeDefined();
 
-    // B engages with a plain message instead of a reply — the ask must not
-    // keep waiting until timeout.
-    await coreB.send("agent-aaaaaaaaaaaa", "hi, busy here");
-    await coreA.checkInbox();
+    // B answers with a plain message (ask = send + wait; any peer message is
+    // the response — the ask must not keep waiting until timeout).
+    const sendResult = await coreB.send("agent-aaaaaaaaaaaa", "the answer");
+    expect(sendResult).toContain("delivered");
 
+    await coreA.checkInbox();
     const askResult = await askPromise;
-    expect(askResult).toContain("peer sent a message instead of replying");
+    expect(askResult).toContain("peer sent a message in response");
     // the message itself is still handed to A's model
-    expect(deliveredA.find((l) => l.kind === "message")?.body).toBe("hi, busy here");
+    expect(deliveredA.find((l) => l.kind === "message")?.body).toBe("the answer");
   });
 
   it("ask refuses when the target already sent a message", async () => {
@@ -877,7 +847,7 @@ describe("TalkCore", () => {
     await coreA.stop();
     const result = await coreA.ask("agent-bbbbbbbbbbbb", "question?", 1000);
     expect(result).toContain("unread message(s)");
-    expect(result).toContain("reply before asking");
+    expect(result).toContain("respond to them before asking");
   });
 
   it("list shows only self when not in any group", async () => {

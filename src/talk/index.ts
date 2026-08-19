@@ -83,7 +83,6 @@ interface DeliveryDetails {
   from: Letter["from"];
   ts: number;
   body: string;
-  replyTo?: string;
 }
 
 /**
@@ -126,7 +125,6 @@ export default function talk(pi: ExtensionAPI) {
       from: letter.from,
       ts: letter.ts,
       body: letter.body,
-      ...(letter.replyTo !== undefined && { replyTo: letter.replyTo }),
     };
     try {
       // The core only removes the letter from the inbox after this returns
@@ -225,8 +223,8 @@ export default function talk(pi: ExtensionAPI) {
     name: "talk-ask",
     label: "Ask Talk",
     description:
-      "Ask another pi agent a question and block until it replies (or times out). Before asking, it checks whether that agent already sent you something; if so, you are told to read and reply first instead of asking.",
-    promptSnippet: "Ask another pi agent a question and wait for the reply",
+      "Ask another pi agent a question and block until it responds (or times out). Before asking, it checks whether that agent already sent you something; if so, you are told to read and respond first instead of asking.",
+    promptSnippet: "Ask another pi agent a question and wait for a response",
     parameters: Type.Object({
       to: Type.String({ description: "Target agent (name/address/@alias)" }),
       message: Type.String({ description: "The question" }),
@@ -262,23 +260,6 @@ export default function talk(pi: ExtensionAPI) {
       const initError = requireInit();
       if (initError) return toolResult(initError);
       return toolResult(await core.send(params.to, params.message));
-    },
-  });
-
-  pi.registerTool({
-    name: "talk-reply",
-    label: "Reply Talk",
-    description:
-      "Reply to a received ask. `replyTo` is the ask/message id (shown in the delivered message).",
-    promptSnippet: "Reply to a talk ask",
-    parameters: Type.Object({
-      replyTo: Type.String({ description: "The ask/message id to reply to" }),
-      message: Type.String({ description: "The reply body" }),
-    }),
-    async execute(_toolCallId, params) {
-      const initError = requireInit();
-      if (initError) return toolResult(initError);
-      return toolResult(await core.reply(params.replyTo, params.message));
     },
   });
 
@@ -496,9 +477,6 @@ export default function talk(pi: ExtensionAPI) {
     const header = `${theme.fg("accent", theme.bold(displayName(d.from.name)))} ${theme.fg("dim", `(${shortCwd(d.from.cwd)})`)} ${chip}`;
     const footer = theme.fg("dim", `id ${idTail} · ${d.kind} · ${relativeTime(d.ts)}`);
     const out = [header, sanitizeTerminal(d.body), "", footer];
-    if (d.kind === "ask") {
-      out.push(theme.fg("dim", `└─ reply via talk-reply, replyTo: "${idTail}"`));
-    }
     // plain 组件：不引入 pi-tui，直接输出带背景色的文本行
     const text = out.join("\n");
     return {

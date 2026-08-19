@@ -202,26 +202,12 @@ export async function awaitReceipt(
 }
 
 // ── Ask tracking ─────────────────────────────────────────────────────────
-// Received asks live at asks/<addr>/<id>.json until we reply; our outgoing
-// asks live at asks/<addr>/out-<id>.json until a reply/cancel arrives or we
-// time out.
-
-function askKey(askId: string): string {
-  assertMessageId(askId);
-  return `${askId}.json`;
-}
+// Our outgoing asks live at asks/<addr>/out-<id>.json until a message from
+// the peer breaks the wait, the peer answers first, or we time out.
 
 function outAskKey(askId: string): string {
   assertMessageId(askId);
   return `out-${askId}.json`;
-}
-
-export async function trackIncomingAsk(
-  storage: TalkStorage,
-  addr: string,
-  letter: Letter,
-): Promise<void> {
-  await storage.writeJson(asksNs(addr), askKey(letter.id), letter);
 }
 
 export async function trackOutgoingAsk(
@@ -230,15 +216,6 @@ export async function trackOutgoingAsk(
   out: OutAsk,
 ): Promise<void> {
   await storage.writeJson(asksNs(addr), outAskKey(out.askId), out);
-}
-
-export async function readIncomingAsk(
-  storage: TalkStorage,
-  addr: string,
-  askId: string,
-): Promise<Letter | null> {
-  const raw = await storage.readJson(asksNs(addr), askKey(askId));
-  return normalizeLetter(raw);
 }
 
 export async function readOutgoingAsk(
@@ -250,22 +227,9 @@ export async function readOutgoingAsk(
   return Value.Check(OutAskSchema, raw) ? raw : null;
 }
 
-/** Remove both sides of an ask id (incoming and/or outgoing). Idempotent. */
+/** Remove our outstanding ask. Idempotent. */
 export async function clearAsk(storage: TalkStorage, addr: string, askId: string): Promise<void> {
-  await storage.removeKey(asksNs(addr), askKey(askId));
   await storage.removeKey(asksNs(addr), outAskKey(askId));
-}
-
-/** Asks we have received and not yet answered, oldest first. */
-export async function pendingAsks(storage: TalkStorage, addr: string): Promise<Letter[]> {
-  const out: Letter[] = [];
-  for (const key of await storage.listKeys(asksNs(addr))) {
-    if (key.startsWith("out-")) continue;
-    const raw = await storage.readJson(asksNs(addr), key);
-    const letter = normalizeLetter(raw);
-    if (letter) out.push(letter);
-  }
-  return out;
 }
 
 /** Outgoing ask ids, used by the core for interlock arbitration. */
@@ -276,21 +240,6 @@ export async function outgoingAskIds(storage: TalkStorage, addr: string): Promis
     out.push(key.slice("out-".length, -".json".length));
   }
   return out;
-}
-
-/**
- * Resolve a pending ask by explicit replyTo id or unique suffix. No inference.
- * Matching is on the suffix: the prefix of a time-ordered (v7-style) id is the
- * timestamp part and collides easily, the suffix is the random part.
- */
-export async function resolveAskByRef(
-  storage: TalkStorage,
-  addr: string,
-  replyTo: string,
-): Promise<Letter | null> {
-  if (!replyTo) return null; // empty suffix matches every id — an explicit ref is required
-  const asks = await pendingAsks(storage, addr);
-  return asks.find((a) => a.id === replyTo || a.id.endsWith(replyTo)) ?? null;
 }
 
 // ── Audit log ────────────────────────────────────────────────────────────

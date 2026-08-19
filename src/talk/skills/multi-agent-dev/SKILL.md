@@ -34,7 +34,7 @@ The core rule: **a peer only knows what you tell it.** Messages must be self-con
 
 ### Status
 
-- `idle` / `working` (agent actively running) / `waiting-talk-message` (blocked in `talk-ask` waiting for a reply)
+- `idle` / `working` (agent actively running) / `waiting-talk-message` (blocked in `talk-ask` waiting for a response)
 - `offline` (process exited or marked dead)
 - `talk-list-agents` lists every visible agent — live or offline — with its current status.
 
@@ -51,8 +51,7 @@ The core rule: **a peer only knows what you tell it.** Messages must be self-con
 | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `talk-list-agents` | List visible agents (`id` / `status` / `work_dir` / `name`); only group co-members (or only yourself when ungrouped) |
 | `talk-send`        | Send a plain message to a single agent id (async — the main collaboration primitive)                                 |
-| `talk-ask`         | Ask a question and block for the reply (default 30 min timeout)                                                      |
-| `talk-reply`       | Reply to a received ask; `replyTo` is the ask id shown in the delivered message                                      |
+| `talk-ask`         | Ask a question and block for a response (default 30 min timeout); any message from the peer breaks the wait          |
 
 Pairing into groups is a user action (`/talk-group-*` in the TUI); you only observe its effect through `talk-list-agents`.
 
@@ -68,7 +67,7 @@ Pairing into groups is a user action (`/talk-group-*` in the TUI); you only obse
 ### Synchronous question/answer (need the answer to continue)
 
 - Use `talk-ask` when the next step depends on the peer's information and the peer is reachable.
-- On receiving an ask, reply with `talk-reply` using the `replyTo` id from the delivered message.
+- On receiving an ask, respond with `talk-send` — any message you send breaks the peer's wait, so a plain `talk-send` back is the reply.
 - If two agents ask each other simultaneously: the later asker yields — answer the peer's ask first, then re-ask.
 
 ### Async notifications
@@ -93,5 +92,5 @@ Pairing into groups is a user action (`/talk-group-*` in the TUI); you only obse
 
 - **Avoid message loops**: if the peer sent you something or is asking you, answer it before sending new ones. Two agents pinging each other deadlock.
 - **Address from known ids**: only run `talk-list-agents` to discover agents or verify an id. If you already hold a valid id (e.g. from an incoming message or a previous listing), send directly — an unknown or invisible id is refused with `Unknown agent id`.
-- **Respect status**: asking an offline agent blocks until the 30 min timeout. Prefer `talk-send` there — the message queues on disk and the peer receives it when it resumes.
+- **Respect status**: asking an offline agent blocks until the 30 min timeout (nothing breaks the wait). Prefer `talk-send` there — the message queues on disk and the peer receives it when it resumes.
 - **Visibility boundary**: you can only collaborate with agents that share your group; ungrouped agents and other groups' members are unreachable by design. Ask the user to pair agents before collaborating.
