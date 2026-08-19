@@ -352,7 +352,6 @@ export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): vo
               output: out,
               truncated,
             }),
-            expanded: true,
           } satisfies ToolPendant,
         },
       };
