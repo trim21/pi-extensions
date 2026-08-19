@@ -91,7 +91,7 @@
     "@mozilla/readability": "^0.6.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "jsonc-parser": "^3.3.1",
-    "linkedom": "^0.16.0",
+    "linkedom": "^0.18.0",
     "minimatch": "^10.2.6",
     "turndown": "^7.2.0",
     "vscode-jsonrpc": "^9.0.1",
