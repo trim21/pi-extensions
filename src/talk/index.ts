@@ -14,7 +14,9 @@ import * as path from "node:path";
 
 import {
   type ExtensionAPI,
+  type ExtensionCommandContext,
   type ExtensionContext,
+  type ExtensionUIContext,
   getAgentDir,
   truncateToVisualLines,
 } from "@earendil-works/pi-coding-agent";
@@ -161,6 +163,19 @@ export default function talk(pi: ExtensionAPI) {
     return undefined;
   }
 
+  /** Refresh the talk footer/status-bar text: "alias@group", or "@group" with no explicit alias. */
+  function refreshGroupStatus(ui: ExtensionUIContext): void {
+    void (async () => {
+      if (!self) return;
+      try {
+        const text = await core.groupStatus();
+        ui.setStatus("talk", text && ui.theme.fg("accent", text));
+      } catch {
+        // status bar is best-effort; never break the agent
+      }
+    })();
+  }
+
   // ── Lifecycle ──────────────────────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx: ExtensionContext) => {
@@ -177,7 +192,7 @@ export default function talk(pi: ExtensionAPI) {
       lastSeenAt: now,
       status: "idle",
     };
-    void core.start(self);
+    void core.start(self).then(() => refreshGroupStatus(ctx.ui));
   });
 
   pi.on("agent_start", () => core.setWorking());
@@ -278,6 +293,7 @@ export default function talk(pi: ExtensionAPI) {
   function handleCommand<TFlags extends TObject>(
     spec: CommandSpec<TFlags>,
     args: string,
+    ctx: ExtensionCommandContext,
     run: (parsed: OkResult<TFlags>) => Promise<string> | string,
   ): Promise<void> {
     const parsed = parseCommand(spec, args);
@@ -289,6 +305,9 @@ export default function talk(pi: ExtensionAPI) {
       const initError = requireInit();
       const text = initError ?? (await run(parsed));
       pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
+      // Group membership can change under any of these commands; keep the
+      // footer/status-bar text in sync.
+      refreshGroupStatus(ctx.ui);
     })();
   }
 
@@ -372,13 +391,13 @@ export default function talk(pi: ExtensionAPI) {
 
   pi.registerCommand("talk", {
     description: TALK_SPEC.description,
-    handler: (args) => handleCommand(TALK_SPEC, args, async () => core.list()),
+    handler: (args, ctx) => handleCommand(TALK_SPEC, args, ctx, async () => core.list()),
   });
 
   pi.registerCommand("talk-dead", {
     description: TALK_DEAD_SPEC.description,
-    handler: (args) =>
-      handleCommand(TALK_DEAD_SPEC, args, async (parsed) => {
+    handler: (args, ctx) =>
+      handleCommand(TALK_DEAD_SPEC, args, ctx, async (parsed) => {
         if (parsed.flags.all && parsed.args.length > 0) {
           return "--all cannot be combined with an agent id.\nTry '/talk-dead --help' for usage.";
         }
@@ -392,8 +411,8 @@ export default function talk(pi: ExtensionAPI) {
 
   pi.registerCommand("talk-group-join", {
     description: TALK_GROUP_JOIN_SPEC.description,
-    handler: (args) =>
-      handleCommand(TALK_GROUP_JOIN_SPEC, args, async (parsed) => {
+    handler: (args, ctx) =>
+      handleCommand(TALK_GROUP_JOIN_SPEC, args, ctx, async (parsed) => {
         const agentName = parsed.flags.name?.trim() || undefined;
         if (agentName !== undefined) explicitName = agentName;
         return core.groupJoin(parsed.args[0], agentName);
@@ -402,8 +421,8 @@ export default function talk(pi: ExtensionAPI) {
 
   pi.registerCommand("talk-group-join-last", {
     description: TALK_GROUP_JOIN_LAST_SPEC.description,
-    handler: (args) =>
-      handleCommand(TALK_GROUP_JOIN_LAST_SPEC, args, async (parsed) => {
+    handler: (args, ctx) =>
+      handleCommand(TALK_GROUP_JOIN_LAST_SPEC, args, ctx, async (parsed) => {
         const agentName = parsed.flags.name?.trim() || undefined;
         if (agentName !== undefined) explicitName = agentName;
         return core.groupJoinLast(agentName);
@@ -412,23 +431,28 @@ export default function talk(pi: ExtensionAPI) {
 
   pi.registerCommand("talk-group-leave", {
     description: TALK_GROUP_LEAVE_SPEC.description,
-    handler: (args) => handleCommand(TALK_GROUP_LEAVE_SPEC, args, async () => core.groupLeave()),
+    handler: (args, ctx) =>
+      handleCommand(TALK_GROUP_LEAVE_SPEC, args, ctx, async () => core.groupLeave()),
   });
 
   pi.registerCommand("talk-group-list", {
     description: TALK_GROUP_LIST_SPEC.description,
-    handler: (args) => handleCommand(TALK_GROUP_LIST_SPEC, args, async () => core.groupList()),
+    handler: (args, ctx) =>
+      handleCommand(TALK_GROUP_LIST_SPEC, args, ctx, async () => core.groupList()),
   });
 
   pi.registerCommand("talk-group-del", {
     description: TALK_GROUP_DEL_SPEC.description,
-    handler: (args) =>
-      handleCommand(TALK_GROUP_DEL_SPEC, args, async (parsed) => core.groupDelete(parsed.args[0])),
+    handler: (args, ctx) =>
+      handleCommand(TALK_GROUP_DEL_SPEC, args, ctx, async (parsed) =>
+        core.groupDelete(parsed.args[0]),
+      ),
   });
 
   pi.registerCommand("talk-group-clear", {
     description: TALK_GROUP_CLEAR_SPEC.description,
-    handler: (args) => handleCommand(TALK_GROUP_CLEAR_SPEC, args, async () => core.groupClear()),
+    handler: (args, ctx) =>
+      handleCommand(TALK_GROUP_CLEAR_SPEC, args, ctx, async () => core.groupClear()),
   });
 
   // ── Delivery card ──────────────────────────────────────────────────────

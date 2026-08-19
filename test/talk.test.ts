@@ -555,8 +555,32 @@ describe("groups", () => {
     expect(result).toContain('visible as "frontend"');
     const rec = await readRecord(storage, "aaaaaaaaaaaa");
     expect(rec?.name).toBe("frontend");
+    expect(rec?.alias).toBe("frontend");
     const listing = JSON.parse(await core.list()) as { name?: string }[];
     expect(listing[0].name).toBe("frontend");
+  });
+
+  it("groupStatus reflects the group and the explicit alias", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    // not in any group → no status text
+    expect(await core.groupStatus()).toBeUndefined();
+    // in a group without an alias → "@group"
+    await core.groupJoin("abc");
+    expect(await core.groupStatus()).toBe("@abc");
+    // alias set via --name → "alias@group"
+    await core.groupJoin("abc", "frontend");
+    expect(await core.groupStatus()).toBe("frontend@abc");
+  });
+
+  it("groupStatus keeps the alias when moving groups without renaming", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    await core.groupJoin("abc", "frontend");
+    await core.groupJoin("xyz");
+    expect(await core.groupStatus()).toBe("frontend@xyz");
   });
 
   it("groupJoin with a agent name renames an already-joined member", async () => {

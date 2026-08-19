@@ -36,6 +36,8 @@ export const AgentRecordSchema = Type.Object({
   addr: Type.String(),
   agentId: Type.String(),
   name: Type.String(),
+  /** Display name explicitly set via `talk-group-join --name`, distinct from the session name. */
+  alias: Type.Optional(Type.String()),
   cwd: Type.String(),
   pid: Type.Number(),
   pidStart: Type.Optional(Type.Number()),

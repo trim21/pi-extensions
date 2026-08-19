@@ -530,7 +530,7 @@ export class TalkCore {
       return `Invalid group name '${name}'. Allowed: letters, digits, '-' and '_' (max 64 chars).`;
     }
     if (agentName !== undefined) {
-      await this.writeSelf({ name: agentName });
+      await this.writeSelf({ name: agentName, alias: agentName });
     }
     const nameNote = agentName === undefined ? "" : ` You are visible as "${agentName}".`;
     const existing = await readGroup(this.storage, name);
@@ -619,6 +619,18 @@ export class TalkCore {
         return `- ${g.id} (created ${age(g.createdAt)}): ${members.join(", ")}`;
       });
     return `Groups (${groups.length}):\n${lines.join("\n")}`;
+  }
+
+  /**
+   * Status-bar text for the caller: "alias@group" when an explicit alias was
+   * set via `talk-group-join --name`, "@group" otherwise; undefined when the
+   * caller is in no group (the adapter clears its status bar).
+   */
+  async groupStatus(): Promise<string | undefined> {
+    const self = this.requireSelf();
+    const group = await groupForAgent(this.storage, self.agentId);
+    if (!group) return undefined;
+    return self.alias ? `${self.alias}@${group.id}` : `@${group.id}`;
   }
 
   async send(to: string, body: string): Promise<string> {
