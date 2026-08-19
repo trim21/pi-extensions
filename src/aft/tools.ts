@@ -156,6 +156,7 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
         content: [{ type: "text", text }],
         details: {
           truncated,
+          params,
         },
       };
     },
@@ -220,6 +221,7 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
         content: [{ type: "text", text }],
         details: {
           truncated,
+          params,
           pendant: {
             title: "aft_zoom",
             subtitle,
