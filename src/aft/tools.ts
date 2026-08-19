@@ -125,7 +125,7 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
     label: "aft_outline",
     description: [
       "输出代码文件、目录的结构化大纲：函数/类/类型等符号及其行号范围；Markdown/HTML 返回标题层级。",
-      "用它在读取具体内容之前先了解文件结构（比整文件 read 省 token）。",
+      "用它在读取具体内容之前先了解文件结构。",
       "深入了解某个符号用 aft_zoom；看跨文件调用关系用 aft_callgraph。",
       "target 支持：文件路径（带签名的符号大纲）、目录路径（递归最多 200 文件）。只接受单个 target。",
       "target 为目录时默认返回扁平文件树（语言、顶层符号数、字节大小）；传 files: false 可改回符号大纲。",
