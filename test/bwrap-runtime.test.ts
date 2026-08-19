@@ -223,6 +223,41 @@ describe("BwrapRuntime", () => {
       expect(select).toHaveBeenCalled();
       expect(result).toMatchObject({ exitCode: 0 });
     });
+
+    it("shows only unallowed patterns as checkboxes when part of a chain is pre-approved", async () => {
+      // 覆盖全局规则：`echo *` 已 allow，`head *` 未允许
+      writeFileSync(
+        join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+        JSON.stringify({
+          approvalRules: [{ action: "allow", pattern: "echo *" }],
+        }),
+      );
+      const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-partial-allow-"));
+      const { runtime } = setupRuntime();
+      runtime.setMode(directory, "workspace-write");
+      const select = vi
+        .fn()
+        .mockImplementationOnce(async (_title: string, options: string[]) => {
+          // checkbox 只列出未允许的 `head *`，不含已允许的 `echo *`
+          expect(options).toEqual([ALLOW_ONCE, DENY, DENY_WITH_REASON, "☐ head *"]);
+          return "☐ head *";
+        })
+        .mockResolvedValueOnce(ALLOW_ONCE);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "echo hi && head -n 1 /dev/null",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
+      });
+      expect(result).toMatchObject({ exitCode: 0 });
+      // 勾选持久化只写入未允许的 pattern，已 allow 的不重复写入
+      const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
+        approvalRules: { action: string; pattern: string }[];
+      };
+      expect(config.approvalRules).toEqual([{ action: "allow", pattern: "head *" }]);
+      // 重置全局规则，避免残留影响后续 describe 的审批断言
+      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
+    });
   });
 
   describe("full-access approval dialog", () => {

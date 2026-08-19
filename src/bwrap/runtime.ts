@@ -22,7 +22,12 @@ import {
   selectCheckboxActions,
   selectWithOptionalInput,
 } from "../lib/ui.js";
-import { type ApprovalRule, commandPatternsFor, evaluateBashApproval } from "./approval-rules.js";
+import {
+  type ApprovalRule,
+  commandPatternsFor,
+  evaluateBashApproval,
+  matchRule,
+} from "./approval-rules.js";
 import {
   type BwrapMode,
   createBwrapBashOperations,
@@ -62,6 +67,19 @@ export const FULL_ACCESS_CHOICES: readonly SelectAction[] = [
   { label: DENY },
   { label: DENY_WITH_REASON, inputPrompt: "Why was this denied?" },
 ];
+
+/**
+ * 全权限审批 UI 的决策结果：业务层（execute/approveFullAccess）据此
+ * 决定放行、拒绝并持久化勾选的规则，UI 层不直接产生副作用。
+ */
+export interface FullAccessUIDecision {
+  /** 用户选择的动作 label（ALLOW_ONCE / ALLOW_FOREVER / DENY / DENY_WITH_REASON）。 */
+  result: string;
+  /** 用户勾选、需持久化为 allow 规则的 pattern；未勾选时为空数组。 */
+  foreverApprovedPattern: string[];
+  /** DENY_WITH_REASON 时用户输入的理由。 */
+  reason?: string;
+}
 
 export interface BwrapExecutionRequest {
   toolCallId: string;
@@ -425,10 +443,66 @@ export class BwrapRuntime {
   ): Promise<void> {
     const policy = resolveEscalation({ hasUI: ctx.hasUI });
     if (policy.kind === "deny") throw new Error(policy.reason);
+    const decision = await this.approveFullAccessUI(ctx, command, reason, workdir);
+    // 关闭对话框 = 中断并拒绝，不循环重问
+    if (decision === undefined) {
+      ctx.abort();
+      throw new Error("User denied the command execution.");
+    }
+    const { result, foreverApprovedPattern } = decision;
+    switch (result) {
+      case ALLOW_ONCE: {
+        if (foreverApprovedPattern.length > 0) {
+          await this.persistAllowRule(ctx, command, foreverApprovedPattern);
+        }
+        return;
+      }
+      case ALLOW_FOREVER: {
+        await this.persistAllowRule(ctx, command, foreverApprovedPattern);
+        return;
+      }
+      case DENY: {
+        if (foreverApprovedPattern.length > 0) {
+          await this.persistAllowRule(ctx, command, foreverApprovedPattern);
+        }
+        throw new Error("User denied unsandboxed execution.");
+      }
+      case DENY_WITH_REASON: {
+        if (foreverApprovedPattern.length > 0) {
+          await this.persistAllowRule(ctx, command, foreverApprovedPattern);
+        }
+        const feedback = decision.reason?.trim() ?? "";
+        throw new Error(
+          feedback
+            ? `User denied unsandboxed execution: ${feedback}`
+            : "User denied unsandboxed execution.",
+        );
+      }
+    }
+  }
+
+  /**
+   * 全权限审批的 UI 层：弹对话框收集用户决策并返回结构化结果，副作用
+   * （abort / throw / 持久化规则）由调用方根据结果处理。
+   * 返回 undefined 表示对话框被关闭（用户取消）。
+   */
+  private async approveFullAccessUI(
+    ctx: ExtensionContext,
+    command: string,
+    reason: string | undefined,
+    workdir?: string,
+  ): Promise<FullAccessUIDecision | undefined> {
     // 弹框前解析命令的持久化规则（勾选的 pattern 会写入），在弹框里以
     // checkbox 列出：`echo 1 | head` → `echo *`、`head *`，逐项决定是否
     // allow forever，避免用户对"永久允许"持久化什么一无所知。
     const patterns = await commandPatternsFor(command);
+    // checkbox 只列出未命中 allow 规则的 pattern：已提前允许的部分自动放行，
+    // 无需再展示或重复勾选持久化（deny 命中的命令在 evaluate 阶段已被拒绝）。
+    const rules = this.resolve(ctx).approvalRules;
+    const unallowedPatterns = patterns.filter((pattern) => {
+      const rule = rules.findLast((r) => matchRule(pattern, r.pattern));
+      return rule?.action !== "allow";
+    });
     // dcg 扫描建议是可选的参考文本：未安装时静默跳过；已安装但扫描失败
     // 时 notify 提示，弹窗本身与无 dcg 时一致
     const outcome = await dcgSuggestion(command);
@@ -447,7 +521,7 @@ export class BwrapRuntime {
     if (outcome.kind === "suggestion") {
       lines.push("", outcome.suggestion.text, "---");
     }
-    if (patterns.length > 0) {
+    if (unallowedPatterns.length > 0) {
       lines.push(
         "",
         "勾选规则将持久化为允许规则（后续同模式命令自动放行），未勾选规则仅本次处理:",
@@ -468,30 +542,12 @@ export class BwrapRuntime {
         signal: ctx.signal,
       });
       // 关闭对话框 = 中断并拒绝，不循环重问
-      if (verdict === undefined) {
-        ctx.abort();
-        throw new Error("User denied the command execution.");
-      }
-      switch (verdict.label) {
-        case ALLOW_ONCE: {
-          return;
-        }
-        case ALLOW_FOREVER: {
-          await this.persistAllowRule(ctx, command, patterns);
-          return;
-        }
-        case DENY: {
-          throw new Error("User denied unsandboxed execution.");
-        }
-        case DENY_WITH_REASON: {
-          const feedback = verdict.input?.trim() ?? "";
-          throw new Error(
-            feedback
-              ? `User denied unsandboxed execution: ${feedback}`
-              : "User denied unsandboxed execution.",
-          );
-        }
-      }
+      if (verdict === undefined) return undefined;
+      return {
+        result: verdict.label,
+        foreverApprovedPattern: [],
+        reason: verdict.input,
+      };
     }
 
     // 每个识别到的 pattern 一个 checkbox：勾选 = 持久化为 allow 规则。
@@ -508,41 +564,22 @@ export class BwrapRuntime {
     ] as const satisfies readonly CheckboxAction<"allow-once" | "deny" | "deny-with-reason">[];
     const verdict = await selectCheckboxActions(
       description,
-      [...new Set(patterns)].map((pattern) => ({ label: pattern })),
+      [...new Set(unallowedPatterns)].map((pattern) => ({ label: pattern })),
       actions,
       ctx.ui,
       { signal: ctx.signal },
     );
-    // 关闭对话框 = 中断并拒绝，不循环重问
-    if (verdict === undefined) {
-      ctx.abort();
-      throw new Error("User denied the command execution.");
-    }
-    switch (verdict.action) {
-      case "allow-once": {
-        if (verdict.selected.length > 0) {
-          await this.persistAllowRule(ctx, command, verdict.selected);
-        }
-        return;
-      }
-      case "deny": {
-        if (verdict.selected.length > 0) {
-          await this.persistAllowRule(ctx, command, verdict.selected);
-        }
-        throw new Error("User denied unsandboxed execution.");
-      }
-      case "deny-with-reason": {
-        if (verdict.selected.length > 0) {
-          await this.persistAllowRule(ctx, command, verdict.selected);
-        }
-        const feedback = verdict.input?.trim() ?? "";
-        throw new Error(
-          feedback
-            ? `User denied unsandboxed execution: ${feedback}`
-            : "User denied unsandboxed execution.",
-        );
-      }
-    }
+    if (verdict === undefined) return undefined;
+    const resultByAction = {
+      "allow-once": ALLOW_ONCE,
+      deny: DENY,
+      "deny-with-reason": DENY_WITH_REASON,
+    } as const;
+    return {
+      result: resultByAction[verdict.action],
+      foreverApprovedPattern: verdict.selected,
+      reason: verdict.input,
+    };
   }
 
   /** 把命令的权限模式写入项目 bwrap.json 的 approvalRules（allow forever）。 */
