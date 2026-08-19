@@ -24,7 +24,7 @@ import { type TObject, Type } from "typebox";
 
 import { type CommandResult, type CommandSpec, parseCommand } from "../lib/cli.js";
 import { resolveHomePath } from "../lib/path.js";
-import { TalkCore } from "./core.js";
+import { restoreTalkAgentId, TALK_JOIN_ENTRY_TYPE, TalkCore } from "./core.js";
 import { formatDelivery } from "./format.js";
 import type { Letter } from "./mailbox.js";
 import { type AgentRecord, deriveAddr } from "./registry.js";
@@ -150,6 +150,11 @@ export default function talk(pi: ExtensionAPI) {
         // in LLM context.
         pi.appendEntry(NOTIFY_TYPE, content);
       },
+      identityChange(agentId) {
+        // Pin the identity to the session branch so a fork/resume of this
+        // session keeps the same talk address and group membership.
+        pi.appendEntry(TALK_JOIN_ENTRY_TYPE, { agentId, ts: Date.now() });
+      },
     },
   });
 
@@ -174,9 +179,12 @@ export default function talk(pi: ExtensionAPI) {
   // ── Lifecycle ──────────────────────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx: ExtensionContext) => {
-    const agentId = ctx.sessionManager.getSessionId();
     const cwd = ctx.sessionManager.getCwd() ?? ctx.cwd;
     const now = Date.now();
+    // A fork/branch/resume of a session that joined a group keeps that talk
+    // identity (agentId); a fresh session gets the new session id.
+    const agentId =
+      restoreTalkAgentId(ctx.sessionManager.getBranch()) ?? ctx.sessionManager.getSessionId();
     self = {
       addr: deriveAddr(cwd, agentId),
       agentId,

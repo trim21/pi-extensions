@@ -65,6 +65,12 @@ export interface TalkCoreEvents {
   deliver(letter: Letter): boolean | Promise<boolean>;
   /** Surface a notification (e.g. a presence transition) without waking a busy agent. */
   notify(content: string): void;
+  /**
+   * The agent's talk identity (agentId) was committed to a group by join or
+   * leave. The adapter persists it onto the session branch so a fork/resume
+   * of this session keeps the same identity.
+   */
+  identityChange?(agentId: string): void;
 }
 
 export interface TalkCoreOptions {
@@ -78,6 +84,35 @@ const WATCH_POLL_MS = 5000;
 const DELIVERY_BACKOFF_MS = 5000;
 const INITIAL_DRAIN_DELAY_MS = 1200;
 const SWEEP_INTERVAL_MS = 30 * 60 * 1000;
+
+/**
+ * custom entry type that pins an agent's talk identity to the session branch.
+ * join/leave commit the agentId here; fork/branch/resume copy the entry, and
+ * restoreTalkAgentId recovers the identity on the next session_start.
+ */
+export const TALK_JOIN_ENTRY_TYPE = "talk:join";
+
+/**
+ * Recover the talk identity (agentId) pinned to a session branch by its most
+ * recent join/leave record, or undefined when the branch never joined a group
+ * (a fresh session or one rewound before its join). Mirrors how the file tools
+ * rebuild their reads state from the current branch's history.
+ */
+export function restoreTalkAgentId(branchEntries: readonly unknown[]): string | undefined {
+  let agentId: string | undefined;
+  for (const entry of branchEntries) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { type, customType, data } = entry as {
+      type?: unknown;
+      customType?: unknown;
+      data?: unknown;
+    };
+    if (type !== "custom" || customType !== TALK_JOIN_ENTRY_TYPE) continue;
+    const recorded = (data as { agentId?: unknown } | undefined)?.agentId;
+    if (typeof recorded === "string" && recorded.length > 0) agentId = recorded;
+  }
+  return agentId;
+}
 
 /**
  * Mutual-ask arbitration: true when the peer asked first. The `ts` fields of
@@ -528,31 +563,36 @@ export class TalkCore {
     }
     const nameNote = agentName === undefined ? "" : ` You are visible as "${agentName}".`;
     const existing = await readGroup(this.storage, name);
+    let text: string;
     if (existing?.members.includes(self.agentId)) {
-      return `Already in group ${name} (${existing.members.length} member(s)). Members: ${await this.groupMemberNames(existing.members)}.${nameNote}`;
+      text = `Already in group ${name} (${existing.members.length} member(s)). Members: ${await this.groupMemberNames(existing.members)}.${nameNote}`;
+    } else {
+      await this.leaveCurrentGroup();
+      if (existing) {
+        await writeGroup(this.storage, {
+          ...existing,
+          members: [...existing.members, self.agentId],
+          updatedAt: this.now(),
+        });
+        text = `Joined group ${name} (${
+          existing.members.length + 1
+        } member(s)). Members: ${await this.groupMemberNames([
+          ...existing.members,
+          self.agentId,
+        ])}. You now see only co-members.${nameNote}`;
+      } else {
+        const now = this.now();
+        await writeGroup(this.storage, {
+          id: name,
+          members: [self.agentId],
+          createdAt: now,
+          updatedAt: now,
+        });
+        text = `Created group ${name}. Members: ${await this.groupMemberNames([self.agentId])}.${nameNote} Other agents join it with /talk-group-join ${name}.`;
+      }
     }
-    await this.leaveCurrentGroup();
-    if (existing) {
-      await writeGroup(this.storage, {
-        ...existing,
-        members: [...existing.members, self.agentId],
-        updatedAt: this.now(),
-      });
-      return `Joined group ${name} (${
-        existing.members.length + 1
-      } member(s)). Members: ${await this.groupMemberNames([
-        ...existing.members,
-        self.agentId,
-      ])}. You now see only co-members.${nameNote}`;
-    }
-    const now = this.now();
-    await writeGroup(this.storage, {
-      id: name,
-      members: [self.agentId],
-      createdAt: now,
-      updatedAt: now,
-    });
-    return `Created group ${name}. Members: ${await this.groupMemberNames([self.agentId])}.${nameNote} Other agents join it with /talk-group-join ${name}.`;
+    this.events.identityChange?.(self.agentId);
+    return text;
   }
 
   /**
@@ -574,9 +614,11 @@ export class TalkCore {
     const others = group.members.filter((m) => m !== self.agentId);
     if (others.length === 0) {
       await deleteGroup(this.storage, group.id);
+      this.events.identityChange?.(self.agentId);
       return `Left group ${group.id} (deleted — it was empty).`;
     }
     await writeGroup(this.storage, { ...group, members: others, updatedAt: this.now() });
+    this.events.identityChange?.(self.agentId);
     return `Left group ${group.id} (${others.length} member(s) remain).`;
   }
 

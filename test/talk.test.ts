@@ -9,7 +9,12 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { peerAskedFirst, TalkCore } from "../src/talk/core.js";
+import {
+  peerAskedFirst,
+  restoreTalkAgentId,
+  TALK_JOIN_ENTRY_TYPE,
+  TalkCore,
+} from "../src/talk/core.js";
 import { BOUNDARY_PREAMBLE, formatDelivery, formatListing } from "../src/talk/format.js";
 import {
   deleteGroup,
@@ -763,6 +768,79 @@ describe("groups", () => {
     expect(groupNameFromLine(lines[2])).toBe("middle");
     expect(groupNameFromLine(lines[3])).toBe("oldest");
   });
+
+  // ── Identity across branches ───────────────────────────────────────────
+
+  describe("talk identity across branches", () => {
+    it("restoreTalkAgentId recovers the agentId of the newest join record", () => {
+      expect(restoreTalkAgentId([])).toBeUndefined();
+      expect(restoreTalkAgentId([{ type: "message", message: { role: "user" } }])).toBeUndefined();
+      expect(restoreTalkAgentId([joinEntry("agent-aaaaaaaaaaaa")])).toBe("agent-aaaaaaaaaaaa");
+      expect(
+        restoreTalkAgentId([joinEntry("agent-aaaaaaaaaaaa"), joinEntry("agent-bbbbbbbbbbbb")]),
+      ).toBe("agent-bbbbbbbbbbbb");
+      // unrelated custom entries are ignored
+      expect(
+        restoreTalkAgentId([
+          { type: "custom", customType: "talk:notify", data: { agentId: "x" } },
+          joinEntry("agent-aaaaaaaaaaaa"),
+        ]),
+      ).toBe("agent-aaaaaaaaaaaa");
+      // corrupt records are skipped; the newest valid record still wins
+      expect(
+        restoreTalkAgentId([joinEntry(42), joinEntry("agent-aaaaaaaaaaaa"), joinEntry(null)]),
+      ).toBe("agent-aaaaaaaaaaaa");
+      expect(restoreTalkAgentId([joinEntry({})])).toBeUndefined();
+    });
+
+    it("identityChange fires on successful join and leave, not on failures", async () => {
+      const { storage } = makeStorage();
+      const changes: string[] = [];
+      const core = makeCoreWithIdentity(storage, changes);
+      await core.start(makeSelf("aaaaaaaaaaaa"));
+      expect(await core.groupJoin("bad name")).toContain("Invalid group name");
+      expect(changes).toEqual([]);
+      await core.groupJoin("abc");
+      expect(changes).toEqual(["agent-aaaaaaaaaaaa"]);
+      await core.groupJoin("abc"); // idempotent rejoin still confirms identity
+      expect(changes).toEqual(["agent-aaaaaaaaaaaa", "agent-aaaaaaaaaaaa"]);
+      await core.groupLeave();
+      expect(changes).toHaveLength(3);
+    });
+
+    it("leave without a group does not fire identityChange", async () => {
+      const { storage } = makeStorage();
+      const changes: string[] = [];
+      const core = makeCoreWithIdentity(storage, changes);
+      await core.start(makeSelf("aaaaaaaaaaaa"));
+      expect(await core.groupLeave()).toContain("Not in any group");
+      expect(changes).toEqual([]);
+    });
+
+    it("a session forked from a joined one sees its co-members via the recovered identity", async () => {
+      const { storage } = makeStorage();
+      const cwd = "/tmp/identity-test";
+      const agentIdA = "agent-identity-a";
+      const agentIdB = "agent-identity-b";
+
+      const coreA = makeCore(storage, []);
+      await coreA.start(makeSelf(deriveAddr(cwd, agentIdA), { agentId: agentIdA, cwd }));
+      await coreA.groupJoin("abc");
+      const coreB = makeCore(storage, []);
+      await coreB.start(makeSelf(deriveAddr(cwd, agentIdB), { agentId: agentIdB, cwd }));
+      await coreB.groupJoin("abc");
+
+      // A fork of B's session carries the join record; the fork recovers B's
+      // identity instead of starting fresh with a new session id.
+      const recovered = restoreTalkAgentId([joinEntry(agentIdB)]);
+      expect(recovered).toBe(agentIdB);
+
+      const fork = makeCore(storage, []);
+      await fork.start(makeSelf(deriveAddr(cwd, recovered!), { agentId: recovered!, cwd }));
+      const listing = JSON.parse(await fork.list()) as { id: string }[];
+      expect(listing.map((s) => s.id).toSorted()).toEqual([agentIdA, agentIdB]);
+    });
+  });
 });
 
 // ── Core integration ─────────────────────────────────────────────────────
@@ -780,6 +858,33 @@ function makeCore(storage: TalkStorage, delivered: Letter[], now?: () => number)
       },
     },
     now,
+  });
+  cores.push(core);
+  return core;
+}
+
+/** A `talk:join` custom entry as a fork of a joined session would carry. */
+function joinEntry(agentId: unknown): {
+  type: "custom";
+  customType: string;
+  data: { agentId: unknown };
+} {
+  return { type: "custom", customType: TALK_JOIN_ENTRY_TYPE, data: { agentId } };
+}
+
+/** TalkCore that records identityChange events for assertion. */
+function makeCoreWithIdentity(storage: TalkStorage, changes: string[]): TalkCore {
+  const core = new TalkCore({
+    storage,
+    events: {
+      deliver: () => true,
+      notify: () => {
+        // presence notifications are not asserted in these tests
+      },
+      identityChange: (agentId) => {
+        changes.push(agentId);
+      },
+    },
   });
   cores.push(core);
   return core;
