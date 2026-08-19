@@ -6,7 +6,7 @@
  */
 
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import {
   type AftProjectTransport,
@@ -30,6 +30,19 @@ export function resolvePathArg(cwd: string, input: string): string {
   }
   if (input.startsWith("http://") || input.startsWith("https://")) return input;
   return isAbsolute(input) ? input : resolve(cwd, input);
+}
+
+/** 人类可读的显示路径：cwd 内用 `./…`，home 内用 `~/…`，否则原样绝对路径。 */
+export function formatDisplayPath(cwd: string, filePath: string): string {
+  const relToCwd = relative(cwd, filePath);
+  if (relToCwd !== "" && !relToCwd.startsWith("..") && !isAbsolute(relToCwd)) {
+    return `./${relToCwd}`;
+  }
+  const relToHome = relative(homedir(), filePath);
+  if (relToHome !== "" && !relToHome.startsWith("..") && !isAbsolute(relToHome)) {
+    return `~/${relToHome}`;
+  }
+  return filePath;
 }
 
 export interface AftToolContext {
@@ -222,6 +235,8 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
       if (contextLines !== undefined) rawArgs.contextLines = contextLines;
       if (coerceBoolean(params.callgraph)) rawArgs.callgraph = true;
 
+      const subtitle = buildZoomSubtitle(extCtx.cwd, params);
+
       const { text, response } = await callAftTool(bridgeFor(ctx), "zoom", rawArgs, extCtx);
       const truncated = response.truncated === true;
       return {
@@ -229,6 +244,8 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
         details: {
           truncated,
           pendant: {
+            title: "aft_zoom",
+            subtitle,
             markdown: buildPendantMarkdown({
               title: "aft_zoom",
               input: params,
@@ -241,6 +258,37 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
       };
     },
   });
+}
+
+/** 构建 aft_zoom pendant 的 subtitle：`path="…" symbol="…"`，url 模式为 `url="…"`。 */
+export function buildZoomSubtitle(
+  cwd: string,
+  params: Type.Static<typeof ZoomParams>,
+): string | undefined {
+  const isEmpty = (v: unknown): boolean =>
+    v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
+
+  const parts: string[] = [];
+  const targets = params.targets;
+  if (Array.isArray(targets)) {
+    for (const t of targets) {
+      parts.push(
+        `path="${formatDisplayPath(cwd, resolvePathArg(cwd, t.path))}" symbol="${t.symbol}"`,
+      );
+    }
+  } else if (targets) {
+    parts.push(
+      `path="${formatDisplayPath(cwd, resolvePathArg(cwd, targets.path))}" symbol="${targets.symbol}"`,
+    );
+  } else if (!isEmpty(params.url)) {
+    parts.push(`url="${params.url}"`);
+  } else if (params.path) {
+    const symbols = params.symbols;
+    const symbolStr = Array.isArray(symbols) ? symbols.join(", ") : symbols;
+    const pathPart = `path="${formatDisplayPath(cwd, resolvePathArg(cwd, params.path))}"`;
+    parts.push(symbolStr ? `${pathPart} symbol="${symbolStr}"` : pathPart);
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 const CALLGRAPH_OPS = [
