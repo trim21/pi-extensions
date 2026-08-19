@@ -642,8 +642,10 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
         const document = files[resolvedPath];
         if (document !== undefined) {
-          // didChange：不清空既有诊断（如 clangd 只在内容变化时重发），
-          // 让服务器下一次 push/pull 自然覆盖。
+          // didChange：内容已变，旧诊断立即失效。清空缓存避免等待窗口内服务器
+          // 重算未完成时（大项目可远超窗口）聚合到过期诊断；新 push 到达即填充。
+          pushDiagnostics.delete(resolvedPath);
+          pullDiagnostics.delete(resolvedPath);
           await connection.sendNotification("workspace/didChangeWatchedFiles", {
             changes: [{ uri, type: FILE_CHANGE_CHANGED }],
           });

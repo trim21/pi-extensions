@@ -54,6 +54,27 @@ function handle(msg) {
     }, 50);
     return;
   }
+  if (msg.method === "textDocument/didChange") {
+    // 模拟慢服务器：重算耗时 300ms 后才推送基于新内容的结果
+    const uri = msg.params.textDocument.uri;
+    setTimeout(() => {
+      send({
+        jsonrpc: "2.0",
+        method: "textDocument/publishDiagnostics",
+        params: {
+          uri,
+          diagnostics: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+              severity: 1,
+              message: "new error message",
+            },
+          ],
+        },
+      });
+    }, 300);
+    return;
+  }
   if (msg.method === "shutdown") {
     send({ jsonrpc: "2.0", id: msg.id, result: null });
     return;
