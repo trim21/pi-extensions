@@ -448,7 +448,11 @@ export class BwrapRuntime {
       lines.push("", outcome.suggestion.text, "---");
     }
     if (patterns.length > 0) {
-      lines.push("", "勾选规则将永久允许（allow forever），未勾选规则仅本次放行:", "---");
+      lines.push(
+        "",
+        "勾选规则将持久化为允许规则（后续同模式命令自动放行），未勾选规则仅本次处理:",
+        "---",
+      );
     }
     lines.push(fenceCodeBlock(command));
     // workdir 存在时展示实际执行目录（ctx.cwd 已被 bash 工具解析为绝对路径）
@@ -490,8 +494,9 @@ export class BwrapRuntime {
       }
     }
 
-    // 每个识别到的 pattern 一个 checkbox：勾选 = 该规则 allow forever。
-    // Allow once = 执行本次并持久化勾选的规则；Deny 系列不持久化任何规则。
+    // 每个识别到的 pattern 一个 checkbox：勾选 = 持久化为 allow 规则。
+    // Allow once = 执行本次并持久化勾选的规则；Deny 系列 = 拒绝本次，
+    // 勾选的规则仍持久化（用户确认该模式可信，只是本次命令不执行）。
     const actions = [
       { action: "allow-once", label: ALLOW_ONCE },
       { action: "deny", label: DENY },
@@ -521,9 +526,15 @@ export class BwrapRuntime {
         return;
       }
       case "deny": {
+        if (verdict.selected.length > 0) {
+          await this.persistAllowRule(ctx, command, verdict.selected);
+        }
         throw new Error("User denied unsandboxed execution.");
       }
       case "deny-with-reason": {
+        if (verdict.selected.length > 0) {
+          await this.persistAllowRule(ctx, command, verdict.selected);
+        }
         const feedback = verdict.input?.trim() ?? "";
         throw new Error(
           feedback
@@ -541,7 +552,7 @@ export class BwrapRuntime {
     patterns?: string[],
   ): Promise<void> {
     const rulePatterns = patterns ?? (await commandPatternsFor(command));
-    if (rulePatterns.length === 0) return; // 解析失败：本次放行，不写规则
+    if (rulePatterns.length === 0) return; // 解析失败：本次处理，不写规则
     const newRules: ApprovalRule[] = rulePatterns.map((pattern) => ({ action: "allow", pattern }));
     const { project } = getBwrapConfigPaths(ctx.cwd);
     let config: Record<string, unknown> = {};

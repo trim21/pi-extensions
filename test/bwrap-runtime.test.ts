@@ -513,6 +513,59 @@ describe("BwrapRuntime", () => {
       });
       expect(select2).toHaveBeenCalled();
     });
+
+    it("checked rules persist as allow even when the user denies", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-deny-allow-"));
+      const { runtime } = setupRuntime();
+      runtime.setMode(directory, "workspace-write");
+      // 勾选 `printf *` 后点 Deny：本次拒绝，但规则持久化为 allow
+      const select = vi.fn().mockResolvedValueOnce("☐ printf *").mockResolvedValueOnce(DENY);
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "printf no",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
+        }),
+      ).rejects.toThrow(/User denied unsandboxed execution/);
+      const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
+        approvalRules: { action: string; pattern: string }[];
+      };
+      expect(config.approvalRules).toEqual([{ action: "allow", pattern: "printf *" }]);
+      // 同 pattern 命令后续自动放行，不再弹框
+      const select2 = vi.fn();
+      const result2 = await runtime.execute({
+        toolCallId: "test2",
+        command: "printf yes",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select: select2, input: vi.fn() }, undefined, directory),
+      });
+      expect(result2).toMatchObject({ exitCode: 0, output: "yes" });
+      expect(select2).not.toHaveBeenCalled();
+    });
+
+    it("checked rules persist as allow even when the user denies with reason", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-deny-reason-"));
+      const { runtime } = setupRuntime();
+      runtime.setMode(directory, "workspace-write");
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce("☐ printf *")
+        .mockResolvedValueOnce(DENY_WITH_REASON);
+      const input = vi.fn(async () => "risky args");
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "printf no",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input }, undefined, directory),
+        }),
+      ).rejects.toThrow(/User denied unsandboxed execution: risky args/);
+      const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
+        approvalRules: { action: string; pattern: string }[];
+      };
+      expect(config.approvalRules).toEqual([{ action: "allow", pattern: "printf *" }]);
+    });
   });
 });
 
