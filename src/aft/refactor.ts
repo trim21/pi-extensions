@@ -7,6 +7,9 @@
  * （workspace 内自动放行，外部路径经 write-guard 确认，无 diff 预览）。
  */
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { coerceOptionalInt } from "@cortexkit/aft-bridge";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -15,6 +18,12 @@ import { type ToolPendant } from "../lib/pendant.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { callAftTool } from "./bridge.js";
 import { type AftToolContext, bridgeFor, buildPendantMarkdown, resolvePathArg } from "./tools.js";
+
+/** 工具使用指南，以 markdown 形式维护，读起来像文档。 */
+const REFACTOR_PROMPT = readFileSync(
+  fileURLToPath(new URL("refactor.md", import.meta.url)),
+  "utf8",
+).trim();
 
 const REFACTOR_OPS = ["move", "extract", "inline"] as const;
 
@@ -68,6 +77,7 @@ export function registerRefactorTool(pi: ExtensionAPI, ctx: AftToolContext): voi
       "move / rename 整个文件用 aft_move（OS 层操作，不更新引用）；移动代码符号用本工具 op=move。",
     ].join("\n"),
     promptSnippet: "Workspace-wide symbol move / function extraction / inlining",
+    promptGuidelines: [REFACTOR_PROMPT],
     parameters: RefactorParams,
     async execute(_id, params, _signal, _onUpdate, extCtx) {
       const startLine = coerceOptionalInt(

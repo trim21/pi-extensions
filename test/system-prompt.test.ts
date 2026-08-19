@@ -41,9 +41,9 @@ describe("formatTools", () => {
 });
 
 describe("formatGuidelines", () => {
-  it("renders bullets under a Guidelines heading, trimmed", () => {
+  it("renders guidelines verbatim under a Guidelines heading, trimmed", () => {
     expect(formatGuidelines(["Use custom_tool when scanning", "  padded  "])).toBe(
-      "## Guidelines\n\n- Use custom_tool when scanning\n- padded",
+      "## Guidelines\n\nUse custom_tool when scanning\n\npadded",
     );
   });
 
@@ -134,7 +134,7 @@ describe("buildSystemPromptText", () => {
 
     expect(out).toContain("You are an expert coding assistant operating inside pi");
     expect(out).toContain("- read: Read files\n- bash: Run commands");
-    expect(out).toContain("## Guidelines\n\n- Use read for files");
+    expect(out).toContain("## Guidelines\n\nUse read for files");
     expect(out).toContain('<project_instructions path="/home/user/proj/AGENTS.md">');
     expect(out).toContain("<available_skills>");
     expect(out).toContain("extra");

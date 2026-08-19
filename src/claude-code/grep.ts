@@ -241,7 +241,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
       'output_mode defaults to "files_with_matches"; use "content" for matching lines or "count" for match counts.',
     ].join("\n"),
     promptSnippet: "Search file contents with regular expressions",
-    promptGuidelines: [`- -\n${GREP_PROMPT}`],
+    promptGuidelines: [GREP_PROMPT],
     parameters: grepParametersSchema,
     async execute(_id, params, signal, _onUpdate, ctx) {
       if (

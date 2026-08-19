@@ -71,11 +71,11 @@ export function formatTools(
   return lines.length > 0 ? lines.join("\n") : "(none)";
 }
 
-/** 渲染工具特定 guideline bullets；为空时整个块（含标题）省略 */
+/** 渲染工具特定 guideline 块；为空时整个块（含标题）省略。guide 本身是 md 文档，直接拼接。 */
 export function formatGuidelines(promptGuidelines: string[] | undefined): string {
-  const bullets = (promptGuidelines ?? []).map((g) => g.trim()).filter((g) => g.length > 0);
-  if (bullets.length === 0) return "";
-  return `## Guidelines\n\n${bullets.map((g) => `- ${g}`).join("\n")}`;
+  const items = (promptGuidelines ?? []).map((g) => g.trim()).filter((g) => g.length > 0);
+  if (items.length === 0) return "";
+  return `## Guidelines\n\n${items.join("\n\n")}`;
 }
 
 /** 渲染 AGENTS.md 等上下文文件；为空时省略 */

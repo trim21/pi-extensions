@@ -1,4 +1,4 @@
-# Grep tool
+### Grep tool
 
 A powerful search tool built on ripgrep.
 

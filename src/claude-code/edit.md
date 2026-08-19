@@ -1,4 +1,4 @@
-# Edit tool
+### Edit tool
 
 Performs exact string replacements in files.
 

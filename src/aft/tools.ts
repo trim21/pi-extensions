@@ -5,9 +5,11 @@
  * 由 Rust 侧（tree-sitter 符号表 / trigram 索引 / 调用图）计算。
  */
 
+import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   type AftProjectTransport,
@@ -23,6 +25,21 @@ import { Type } from "typebox";
 
 import { type ToolPendant } from "../lib/pendant.js";
 import { callAftTool, SEMANTIC_INDEX_WAIT_TIMEOUT_MS } from "./bridge.js";
+
+/** 工具使用指南，以 markdown 形式维护，读起来像文档。 */
+const OUTLINE_PROMPT = readFileSync(
+  fileURLToPath(new URL("outline.md", import.meta.url)),
+  "utf8",
+).trim();
+const ZOOM_PROMPT = readFileSync(fileURLToPath(new URL("zoom.md", import.meta.url)), "utf8").trim();
+const CALLGRAPH_PROMPT = readFileSync(
+  fileURLToPath(new URL("callgraph.md", import.meta.url)),
+  "utf8",
+).trim();
+const SEARCH_PROMPT = readFileSync(
+  fileURLToPath(new URL("search.md", import.meta.url)),
+  "utf8",
+).trim();
 
 /** 解析 `~` 前缀与相对路径（相对 session cwd）。URL 与绝对路径原样返回。 */
 export function resolvePathArg(cwd: string, input: string): string {
@@ -114,6 +131,7 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
       "target 为目录时默认返回扁平文件树（语言、顶层符号数、字节大小）；传 files: false 可改回符号大纲。",
     ].join("\n"),
     promptSnippet: "Output structural outline of a file/directory",
+    promptGuidelines: [OUTLINE_PROMPT],
     parameters: OutlineParams,
     async execute(_id, params, _signal, _onUpdate, extCtx) {
       const target = coerceTargetParam(params.target);
@@ -177,6 +195,7 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
       "同文件多符号用 `symbols` 数组。",
     ].join("\n"),
     promptSnippet: "Inspect the full source of a named symbol",
+    promptGuidelines: [ZOOM_PROMPT],
     parameters: ZoomParams,
     async execute(_id, params, _signal, _onUpdate, extCtx) {
       const rawArgs: Record<string, unknown> = {
@@ -283,6 +302,7 @@ export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): vo
       "标记：~ = 仅按名字解析的边（可能指向同名符号）；[unresolved] = 未解析到定义的调用点。",
     ].join("\n"),
     promptSnippet: "Call graph and data-flow navigation",
+    promptGuidelines: [CALLGRAPH_PROMPT],
     parameters: CallgraphParams,
     async execute(_id, params, _signal, _onUpdate, extCtx) {
       const rawArgs: Record<string, unknown> = {
@@ -375,6 +395,7 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
       "启用语义索引时，首次调用会阻塞到索引构建完成，避免返回部分结果。",
     ].join("\n"),
     promptSnippet: "Search code by meaning or exact text",
+    promptGuidelines: [SEARCH_PROMPT],
     parameters: SearchParams,
     async execute(_id, params, _signal, _onUpdate, extCtx) {
       if (typeof params.query !== "string" || params.query.trim().length === 0) {

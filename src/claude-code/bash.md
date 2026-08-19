@@ -1,4 +1,4 @@
-# Bash tool
+### Bash tool
 
 Executes a given bash command and returns its output.
 

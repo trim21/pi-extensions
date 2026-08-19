@@ -4,9 +4,9 @@
  *
  * The subagent definition comes from `~/.pi/agent/agents/*.md` (markdown with
  * YAML frontmatter, see spawn-agent-agents.ts). The extension discovers the
- * available subagent types once at startup and appends them to the system
- * prompt on every agent start (same pattern as the bwrap extension), so the
- * model always knows which `agent` names it can pass to the tool. Execution
+ * available subagent types once at startup and injects the list via the tool's
+ * `promptGuidelines`, so the model always knows which `agent` names it can
+ * pass to the tool. Execution
  * is blocking: the tool awaits the subagent process until it exits and
  * returns its final output to the parent model. Progress is streamed through
  * `onUpdate`, the same channel the built-in bash tool uses for live output.
@@ -622,7 +622,7 @@ function parseJsonRecord(line: string): Record<string, unknown> | null {
 export function formatAgentListSection(agents: AgentConfig[]): string {
   const lines = agents.map((a) => `- \`${a.name}\`: ${a.description}`);
   return [
-    "## Available subagents",
+    "### Available subagents",
     "",
     "You can delegate tasks to the following subagent types by calling the `spawn-agent` tool with their name in the `agent` parameter:",
     "",
@@ -653,15 +653,6 @@ export default function spawnAgent(pi: ExtensionAPI) {
   );
   const agentListSection = agents.length > 0 ? formatAgentListSection(agents) : null;
 
-  if (agentListSection) {
-    // Same pattern as the bwrap extension: append the list to the system
-    // prompt on every agent start. The system prompt is rebuilt each turn
-    // anyway, so a persistent per-session injection would add no value.
-    pi.on("before_agent_start", (event) => {
-      return { systemPrompt: `${event.systemPrompt}\n\n${agentListSection}` };
-    });
-  }
-
   pi.registerTool<typeof spawnAgentSchema, SubagentDetails>({
     name: "spawn-agent",
     label: "spawn-agent",
@@ -670,6 +661,7 @@ export default function spawnAgent(pi: ExtensionAPI) {
       "The `agent` parameter must be one of the available subagent types listed in the system prompt.",
       `Subagents run read-only (${DEFAULT_TOOLS.join(", ")}) unless the agent declares an explicit toolset.`,
     ].join(" "),
+    promptGuidelines: agentListSection ? [agentListSection] : undefined,
     parameters: spawnAgentSchema,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {

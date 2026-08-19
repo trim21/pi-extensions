@@ -6,6 +6,9 @@
  * 与 aft_refactor 相同：不支持 preview，写保护为路径级审批。
  */
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -13,6 +16,12 @@ import { type ToolPendant } from "../lib/pendant.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { callAftTool } from "./bridge.js";
 import { type AftToolContext, bridgeFor, buildPendantMarkdown, resolvePathArg } from "./tools.js";
+
+/** 工具使用指南，以 markdown 形式维护，读起来像文档。 */
+const IMPORT_PROMPT = readFileSync(
+  fileURLToPath(new URL("import.md", import.meta.url)),
+  "utf8",
+).trim();
 
 const IMPORT_OPS = ["add", "remove"] as const;
 const VALIDATE_LEVELS = ["syntax", "full"] as const;
@@ -82,6 +91,7 @@ export function registerImportTool(pi: ExtensionAPI, ctx: AftToolContext): void 
       "import 排序整理交给 lint（如 import/order + --fix），本工具不负责。",
     ].join("\n"),
     promptSnippet: "Language-aware import add / remove",
+    promptGuidelines: [IMPORT_PROMPT],
     parameters: ImportParams,
     async execute(_id, params, _signal, _onUpdate, extCtx) {
       if (params.module === undefined || params.module.trim() === "") {

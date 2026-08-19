@@ -427,7 +427,7 @@ describe("formatAgentListSection", () => {
       { name: "scout", description: "Fast codebase recon", systemPrompt: "", filePath: "" },
       { name: "reviewer", description: "Code review", systemPrompt: "", filePath: "" },
     ]);
-    expect(section).toContain("## Available subagents");
+    expect(section).toContain("### Available subagents");
     expect(section).toContain("`scout`: Fast codebase recon");
     expect(section).toContain("`reviewer`: Code review");
     expect(section).toContain("spawn-agent");
@@ -455,7 +455,7 @@ describe("tool registration", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "appends the agent list to the system prompt on agent start",
+    "injects the agent list via tool promptGuidelines",
     async () => {
       vi.resetModules();
       vi.doMock("../src/spawn-agent-agents.js", async (importOriginal) => {
@@ -469,22 +469,17 @@ describe("tool registration", () => {
       });
 
       const { default: spawnAgent } = await import("../src/spawn-agent.js");
-      let handler:
-        ((event: { systemPrompt: string }) => { systemPrompt: string } | undefined) | undefined;
+      let guidelines: string[] | undefined;
       spawnAgent({
-        registerTool: () => false,
-        on: (event: string, h: unknown) => {
-          if (event === "before_agent_start") handler = h as never;
+        registerTool: (def: { promptGuidelines?: string[] }) => {
+          guidelines = def.promptGuidelines;
         },
+        on: () => false,
       } as never);
 
-      expect(handler).toBeTypeOf("function");
-
-      const basePrompt = "You are pi, a coding agent.";
-      const result = handler?.({ systemPrompt: basePrompt });
-      expect(result?.systemPrompt).toContain(basePrompt);
-      expect(result?.systemPrompt).toContain("## Available subagents");
-      expect(result?.systemPrompt).toContain("`scout`: Fast recon");
+      expect(guidelines).toBeDefined();
+      expect(guidelines?.[0]).toContain("### Available subagents");
+      expect(guidelines?.[0]).toContain("`scout`: Fast recon");
       vi.resetModules();
     },
   );

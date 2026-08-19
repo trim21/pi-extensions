@@ -1,4 +1,4 @@
-# Read tool
+### Read tool
 
 Reads a file from the local filesystem. You can access any file directly by using this tool.
 
