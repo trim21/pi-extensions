@@ -535,7 +535,7 @@ export class TalkCore {
     const nameNote = agentName === undefined ? "" : ` You are visible as "${agentName}".`;
     const existing = await readGroup(this.storage, name);
     if (existing?.members.includes(self.agentId)) {
-      return `Already in group ${name} (${existing.members.length} member(s)).${nameNote}`;
+      return `Already in group ${name} (${existing.members.length} member(s)). Members: ${await this.groupMemberNames(existing.members)}.${nameNote}`;
     }
     await this.leaveCurrentGroup();
     if (existing) {
@@ -544,7 +544,12 @@ export class TalkCore {
         members: [...existing.members, self.agentId],
         updatedAt: this.now(),
       });
-      return `Joined group ${name} (${existing.members.length + 1} member(s)). You now see only co-members.${nameNote}`;
+      return `Joined group ${name} (${
+        existing.members.length + 1
+      } member(s)). Members: ${await this.groupMemberNames([
+        ...existing.members,
+        self.agentId,
+      ])}. You now see only co-members.${nameNote}`;
     }
     const now = this.now();
     await writeGroup(this.storage, {
@@ -553,7 +558,7 @@ export class TalkCore {
       createdAt: now,
       updatedAt: now,
     });
-    return `Created group ${name}.${nameNote} Other agents join it with /talk-group-join ${name}.`;
+    return `Created group ${name}. Members: ${await this.groupMemberNames([self.agentId])}.${nameNote} Other agents join it with /talk-group-join ${name}.`;
   }
 
   /**
@@ -619,6 +624,20 @@ export class TalkCore {
         return `- ${g.id} (created ${age(g.createdAt)}): ${members.join(", ")}`;
       });
     return `Groups (${groups.length}):\n${lines.join("\n")}`;
+  }
+
+  /** Human-readable member list: `name (shortId)`, self marked `← you`. */
+  private async groupMemberNames(memberIds: string[]): Promise<string> {
+    const self = this.requireSelf();
+    const records = await listRecords(this.storage);
+    const label = (agentId: string): string => {
+      const rec = records.find((r) => r.agentId === agentId);
+      const id = agentId.length > 8 ? `${agentId.slice(0, 8)}…` : agentId;
+      return rec ? `${rec.name} (${id})` : `unknown agent (${id})`;
+    };
+    return memberIds
+      .map((agentId) => (agentId === self.agentId ? `${label(agentId)} ← you` : label(agentId)))
+      .join(", ");
   }
 
   /**

@@ -148,12 +148,9 @@ export default function talk(pi: ExtensionAPI) {
     events: {
       deliver: deliverToAgent,
       notify(content) {
-        // Presence transitions are informational — queue for the next turn
-        // rather than steering into a busy agent.
-        pi.sendMessage(
-          { customType: NOTIFY_TYPE, content, display: true },
-          { deliverAs: "nextTurn" },
-        );
+        // Presence transitions are informational — show in the TUI only, never
+        // in LLM context.
+        pi.appendEntry(NOTIFY_TYPE, content);
       },
     },
   });
@@ -289,22 +286,34 @@ export default function talk(pi: ExtensionAPI) {
 
   type OkResult<TFlags extends TObject> = Extract<CommandResult<TFlags>, { kind: "ok" }>;
 
-  /** Parse a /talk command; on help/error or init failure the text is sent, otherwise run() produces the listing text. */
+  /**
+   * Parse a /talk command; on help/error or init failure the text is sent,
+   * otherwise run() produces the listing text. With `sendToContext` the result
+   * is injected into the LLM context (sendMessage); otherwise it is appended
+   * as a display-only session entry (appendEntry, never sent to the LLM).
+   */
   function handleCommand<TFlags extends TObject>(
     spec: CommandSpec<TFlags>,
     args: string,
     ctx: ExtensionCommandContext,
     run: (parsed: OkResult<TFlags>) => Promise<string> | string,
+    options?: { sendToContext?: boolean },
   ): Promise<void> {
+    const emit = (text: string): void => {
+      if (options?.sendToContext) {
+        pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
+      } else {
+        pi.appendEntry(LIST_TYPE, text);
+      }
+    };
     const parsed = parseCommand(spec, args);
     if (parsed.kind !== "ok") {
-      pi.sendMessage({ customType: LIST_TYPE, content: parsed.text, display: true });
+      emit(parsed.text);
       return Promise.resolve();
     }
     return (async () => {
       const initError = requireInit();
-      const text = initError ?? (await run(parsed));
-      pi.sendMessage({ customType: LIST_TYPE, content: text, display: true });
+      emit(initError ?? (await run(parsed)));
       // Group membership can change under any of these commands; keep the
       // footer/status-bar text in sync.
       refreshGroupStatus(ctx.ui);
@@ -412,27 +421,41 @@ export default function talk(pi: ExtensionAPI) {
   pi.registerCommand("talk-group-join", {
     description: TALK_GROUP_JOIN_SPEC.description,
     handler: (args, ctx) =>
-      handleCommand(TALK_GROUP_JOIN_SPEC, args, ctx, async (parsed) => {
-        const agentName = parsed.flags.name?.trim() || undefined;
-        if (agentName !== undefined) explicitName = agentName;
-        return core.groupJoin(parsed.args[0], agentName);
-      }),
+      handleCommand(
+        TALK_GROUP_JOIN_SPEC,
+        args,
+        ctx,
+        async (parsed) => {
+          const agentName = parsed.flags.name?.trim() || undefined;
+          if (agentName !== undefined) explicitName = agentName;
+          return core.groupJoin(parsed.args[0], agentName);
+        },
+        { sendToContext: true },
+      ),
   });
 
   pi.registerCommand("talk-group-join-last", {
     description: TALK_GROUP_JOIN_LAST_SPEC.description,
     handler: (args, ctx) =>
-      handleCommand(TALK_GROUP_JOIN_LAST_SPEC, args, ctx, async (parsed) => {
-        const agentName = parsed.flags.name?.trim() || undefined;
-        if (agentName !== undefined) explicitName = agentName;
-        return core.groupJoinLast(agentName);
-      }),
+      handleCommand(
+        TALK_GROUP_JOIN_LAST_SPEC,
+        args,
+        ctx,
+        async (parsed) => {
+          const agentName = parsed.flags.name?.trim() || undefined;
+          if (agentName !== undefined) explicitName = agentName;
+          return core.groupJoinLast(agentName);
+        },
+        { sendToContext: true },
+      ),
   });
 
   pi.registerCommand("talk-group-leave", {
     description: TALK_GROUP_LEAVE_SPEC.description,
     handler: (args, ctx) =>
-      handleCommand(TALK_GROUP_LEAVE_SPEC, args, ctx, async () => core.groupLeave()),
+      handleCommand(TALK_GROUP_LEAVE_SPEC, args, ctx, async () => core.groupLeave(), {
+        sendToContext: true,
+      }),
   });
 
   pi.registerCommand("talk-group-list", {
@@ -486,4 +509,20 @@ export default function talk(pi: ExtensionAPI) {
       invalidate: (): void => undefined,
     };
   });
+
+  // ── Display-only entries (appendEntry): shown in chat, persisted, never in LLM context ──
+
+  for (const type of [LIST_TYPE, NOTIFY_TYPE]) {
+    pi.registerEntryRenderer<string>(type, (entry, _options, theme) => {
+      const text = typeof entry.data === "string" ? entry.data : "";
+      if (!text) return;
+      return {
+        render: (width: number) =>
+          truncateToVisualLines(text, Infinity, width, 1).visualLines.map((line) =>
+            theme.bg("customMessageBg", line),
+          ),
+        invalidate: (): void => undefined,
+      };
+    });
+  }
 }

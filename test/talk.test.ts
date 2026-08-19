@@ -514,10 +514,16 @@ describe("groups", () => {
     const coreB = makeCore(storage, []);
     await coreA.start(makeSelf("aaaaaaaaaaaa"));
     await coreB.start(makeSelf("bbbbbbbbbbbb"));
-    expect(await coreA.groupJoin("abc")).toContain("Created group abc");
-    expect(await coreB.groupJoin("abc")).toContain("Joined group abc");
-    const joined = await readGroup(storage, "abc");
-    expect(joined?.members).toEqual(["agent-aaaaaaaaaaaa", "agent-bbbbbbbbbbbb"]);
+    const created = await coreA.groupJoin("abc");
+    expect(created).toContain("Created group abc");
+    expect(created).toContain("Members: agent aaaaaaaaaaaa");
+    const joined = await coreB.groupJoin("abc");
+    expect(joined).toContain("Joined group abc");
+    // join result names the members so the model does not need a list call
+    expect(joined).toContain("Members: agent aaaaaaaaaaaa");
+    expect(joined).toContain("agent bbbbbbbbbbbb");
+    const group = await readGroup(storage, "abc");
+    expect(group?.members).toEqual(["agent-aaaaaaaaaaaa", "agent-bbbbbbbbbbbb"]);
   });
 
   it("groupJoin with a name like 'qwe--asd' works as a group name", async () => {
@@ -621,10 +627,13 @@ describe("groups", () => {
       updatedAt: now - 1000,
     });
     expect(await core.groupJoinLast()).toContain("Joined group new");
+    expect(await core.groupJoinLast()).toContain("Members:");
     const myGroup = await groupForAgent(storage, "agent-aaaaaaaaaaaa");
     expect(myGroup?.id).toBe("new");
-    // already in the newest group → no-op
-    expect(await core.groupJoinLast()).toContain("Already in group");
+    // already in the newest group → no-op, still names the members
+    const again = await core.groupJoinLast();
+    expect(again).toContain("Already in group");
+    expect(again).toContain("Members:");
     // no groups at all
     await core.groupClear();
     expect(await core.groupJoinLast()).toContain("No groups");
