@@ -321,7 +321,7 @@ sqlite 文件路径按优先级取第一个可用值：
 ```
 /talk-group-join              # 无参：自动创建一个新 group（uuid 作为组名）并加入
 /talk-group-join <name>       # 加入名为 name 的 group；不存在则创建（名字允许字母/数字/-/_）
-/talk-group-join-last         # 加入最近创建的 group（方便新开 session 快速归队）
+/talk-group-join-last         # 加入最近创建的 group（方便新开 session 快速归队）；支持 --name <alias> 设置显示名
 /talk-group-leave             # 离开当前 group（组空了自动删除）
 /talk-group-list              # 列出所有 group 及其成员，最新创建的在前
 /talk-group-del <name>        # 删除指定 group（成员随之变为未入组）

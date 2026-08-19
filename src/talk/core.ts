@@ -556,12 +556,15 @@ export class TalkCore {
     return `Created group ${name}.${nameNote} Other agents join it with /talk-group-join ${name}.`;
   }
 
-  /** Join the most recently created group; no-op when already in it. */
-  async groupJoinLast(): Promise<string> {
+  /**
+   * Join the most recently created group; no-op when already in it. When
+   * `agentName` is given, the agent's display name is set to it.
+   */
+  async groupJoinLast(agentName?: string): Promise<string> {
     const groups = await listGroups(this.storage);
     if (groups.length === 0) return "No groups. Create one with /talk-group-join.";
     const latest = groups.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
-    return this.groupJoin(latest.id);
+    return this.groupJoin(latest.id, agentName);
   }
 
   /** Leave the current group; an emptied group is deleted. */

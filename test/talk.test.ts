@@ -606,6 +606,29 @@ describe("groups", () => {
     expect(await core.groupJoinLast()).toContain("No groups");
   });
 
+  it("groupJoinLast with an agent name sets the display name", async () => {
+    const { storage } = makeStorage();
+    const core = makeCore(storage, []);
+    await core.start(makeSelf("aaaaaaaaaaaa"));
+    const now = Date.now();
+    await writeGroup(storage, {
+      id: "new",
+      members: ["agent-bbbbbbbbbbbb"],
+      createdAt: now,
+      updatedAt: now,
+    });
+    const result = await core.groupJoinLast("frontend");
+    expect(result).toContain('You are visible as "frontend".');
+    const rec = await readRecord(storage, "aaaaaaaaaaaa");
+    expect(rec?.name).toBe("frontend");
+    // re-joining with a name renames the already-joined member
+    const again = await core.groupJoinLast("backend");
+    expect(again).toContain("Already in group");
+    expect(again).toContain('You are visible as "backend".');
+    const rec2 = await readRecord(storage, "aaaaaaaaaaaa");
+    expect(rec2?.name).toBe("backend");
+  });
+
   it("joining a new group leaves the old one (single group)", async () => {
     const { storage } = makeStorage();
     const coreA = makeCore(storage, []);

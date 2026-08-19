@@ -327,9 +327,13 @@ export default function talk(pi: ExtensionAPI) {
 
   const TALK_GROUP_JOIN_LAST_SPEC = {
     name: "talk-group-join-last",
-    usage: "",
-    description: "Join the most recently created agent group (no-op when already in it).",
-    flags: Type.Object({}),
+    usage: "[options]",
+    description:
+      "Join the most recently created agent group (no-op when already in it); --name <alias> additionally sets this agent's display name",
+    flags: Type.Object({
+      name: Type.Optional(Type.String({ description: "Set this agent's display name" })),
+    }),
+    flagMeta: { name: { short: "n", valuePlaceholder: "<alias>" } },
     arity: { max: 0 },
   };
 
@@ -399,7 +403,11 @@ export default function talk(pi: ExtensionAPI) {
   pi.registerCommand("talk-group-join-last", {
     description: TALK_GROUP_JOIN_LAST_SPEC.description,
     handler: (args) =>
-      handleCommand(TALK_GROUP_JOIN_LAST_SPEC, args, async () => core.groupJoinLast()),
+      handleCommand(TALK_GROUP_JOIN_LAST_SPEC, args, async (parsed) => {
+        const agentName = parsed.flags.name?.trim() || undefined;
+        if (agentName !== undefined) explicitName = agentName;
+        return core.groupJoinLast(agentName);
+      }),
   });
 
   pi.registerCommand("talk-group-leave", {
