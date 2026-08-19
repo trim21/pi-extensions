@@ -31,7 +31,8 @@ describe("resolvePathArg", () => {
 describe("formatDisplayPath", () => {
   const cwd = resolve("/work", "project");
 
-  it("uses ./… for paths inside cwd", () => {
+  // 显示路径用 path.relative 生成，Windows 上分隔符是 \，断言按 POSIX 风格写的
+  it.skipIf(process.platform === "win32")("uses ./… for paths inside cwd", () => {
     expect(formatDisplayPath(cwd, resolve(cwd, "src/app.ts"))).toBe("./src/app.ts");
   });
 
@@ -48,13 +49,13 @@ describe("formatDisplayPath", () => {
 describe("buildZoomSubtitle", () => {
   const cwd = resolve("/work", "project");
 
-  it("formats path + single symbol", () => {
+  it.skipIf(process.platform === "win32")("formats path + single symbol", () => {
     expect(buildZoomSubtitle(cwd, { path: "./src/app.ts", symbols: "main" })).toBe(
       'path="./src/app.ts" symbol="main"',
     );
   });
 
-  it("joins multiple symbols with comma", () => {
+  it.skipIf(process.platform === "win32")("joins multiple symbols with comma", () => {
     expect(buildZoomSubtitle(cwd, { path: "src/app.ts", symbols: ["a", "b"] })).toBe(
       'path="./src/app.ts" symbol="a, b"',
     );
@@ -72,7 +73,7 @@ describe("buildZoomSubtitle", () => {
     );
   });
 
-  it("omits symbol when absent", () => {
+  it.skipIf(process.platform === "win32")("omits symbol when absent", () => {
     expect(buildZoomSubtitle(cwd, { path: "./src/app.ts" })).toBe('path="./src/app.ts"');
   });
 });
