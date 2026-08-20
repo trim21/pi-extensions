@@ -1,5 +1,5 @@
-// 回归测试：pull 请求挂起（服务器无响应）时，waitForDiagnostics 应因
-// 请求超时而中断返回，而不是无限重试阻塞编辑。
+// 回归测试：pull 请求挂起（服务器无响应）时，waitForDiagnostics 不应无限
+// 重试阻塞编辑——pull 超时后放弃重试，等 push 兜底到窗口结束即返回。
 import { spawn } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,6 +23,7 @@ it("stops retrying pull after request timeout when server never responds", async
     root: directory,
     directory,
     diagnosticsRequestTimeoutMs: 500,
+    diagnosticsDocumentWaitTimeoutMs: 2_000,
   });
 
   await client.notify.open({ path: join(directory, "a.py") });
@@ -35,9 +36,10 @@ it("stops retrying pull after request timeout when server never responds", async
   });
   const elapsed = Date.now() - startedAt;
 
-  // 应在单次请求超时附近返回（中断），而不是无限重试
-  expect(elapsed).toBeGreaterThanOrEqual(400);
-  expect(elapsed).toBeLessThan(5_000);
+  // 不再重试 pull：返回时间在等待窗口内（约 2s），而不是无限阻塞。
+  // 下限取 1.5s 确保确实经过了 pull 超时 + push 等待，而非提前退出。
+  expect(elapsed).toBeGreaterThanOrEqual(1_500);
+  expect(elapsed).toBeLessThan(4_000);
 
   await client.shutdown();
 }, 30_000);

@@ -259,11 +259,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
     (params: { uri: string; version?: number; diagnostics: Diagnostic[] }) => {
       const filePath = getFilePath(params.uri);
       if (!filePath) return;
-      // 支持 pull 诊断的服务器：push 的结果可能来自旧内容（异步重算迟到），
-      // 直接忽略，只信任 pull 返回的当前文档结果，从源头避免 stale。
-      if (supportsPullDiagnostics()) return;
-      // 纯 push 服务器：服务器版本滞后于已发送版本时，该 push 对应的是旧内容
-      // （重算未完成时的迟到结果），同样忽略。
+      // 服务器版本滞后于已发送版本时，该 push 对应的是旧内容（异步重算未完成
+      // 时的迟到结果）。忽略，避免与当前版本结果混淆。
       const currentVersion = documentVersions.get(filePath);
       const isStalePush =
         typeof params.version === "number" &&
@@ -461,15 +458,6 @@ export async function create(input: CreateInput): Promise<LspClient> {
     return { handled: true, matched, byFile, timedOut };
   }
 
-  /** 是否支持文档级 pull 诊断：静态 diagnosticProvider 或动态注册的 document 诊断。 */
-  function supportsPullDiagnostics(): boolean {
-    if (hasStaticPullDiagnostics) return true;
-    for (const registration of diagnosticRegistrations.values()) {
-      if (registration.registerOptions?.workspaceDiagnostics !== true) return true;
-    }
-    return false;
-  }
-
   function documentPullState() {
     const documentRegistrations = [...diagnosticRegistrations.values()].filter(
       (registration) => registration.registerOptions?.workspaceDiagnostics !== true,
@@ -478,7 +466,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
       documentIdentifiers: [
         ...new Set(documentRegistrations.flatMap((r) => r.registerOptions?.identifier ?? [])),
       ],
-      supported: supportsPullDiagnostics(),
+      supported: hasStaticPullDiagnostics || documentRegistrations.length > 0,
     };
   }
 
@@ -634,18 +622,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
     signal?: AbortSignal;
   }): Promise<void> {
     const startedAt = request.after ?? Date.now();
-    // 支持 pull 的服务器：push 已被忽略，pull 是唯一通道。正常返回但未拿到
-    // 当前文档结果时重试；请求超时（服务器未响应）则中断，避免阻塞编辑。
-    if (supportsPullDiagnostics()) {
-      while (!connectionClosed && !request.signal?.aborted) {
-        const result = await requestDocumentDiagnostics(request.path);
-        if (result.matched) return;
-        if (result.timedOut) return;
-        await sleep(PULL_RETRY_INTERVAL_MS);
-      }
-      return;
-    }
-
+    // pull 与 push 语义相同：都是等「当前文档版本」的诊断结果，统一一个循环。
+    // 先 pull（拿到即返回）；pull 超时说明服务器未响应，不再重试 pull，只等
+    // 版本匹配的 push 兜底；版本不匹配的 push 一律忽略（防迟到旧结果）。
     const pushWait = waitForFreshPush({
       path: request.path,
       version: request.version,
@@ -653,18 +632,23 @@ export async function create(input: CreateInput): Promise<LspClient> {
       timeout: diagnosticsDocumentWaitTimeoutMs,
     });
 
-    while (Date.now() - startedAt < diagnosticsDocumentWaitTimeoutMs) {
-      const result = await requestDocumentDiagnostics(request.path);
-      if (result.matched) return;
+    while (!connectionClosed && !request.signal?.aborted) {
       const remaining = diagnosticsDocumentWaitTimeoutMs - (Date.now() - startedAt);
       if (remaining <= 0) return;
+      const result = await requestDocumentDiagnostics(request.path);
+      if (result.matched) return;
+      if (result.timedOut) {
+        await pushWait;
+        return;
+      }
       const next = await Promise.race([
-        pushWait.then((ready) => (ready ? "push" : ("timeout" as const))),
+        pushWait.then((ready) => (ready ? ("push" as const) : ("timeout" as const))),
         waitForRegistrationChange(remaining).then((changed) =>
           changed ? ("registration" as const) : ("timeout" as const),
         ),
+        sleep(Math.min(remaining, PULL_RETRY_INTERVAL_MS)).then(() => "interval" as const),
       ]);
-      if (next !== "registration") return;
+      if (next === "push") return;
     }
   }
 
@@ -675,16 +659,6 @@ export async function create(input: CreateInput): Promise<LspClient> {
     signal?: AbortSignal;
   }): Promise<void> {
     const startedAt = request.after ?? Date.now();
-    if (supportsPullDiagnostics()) {
-      while (!connectionClosed && !request.signal?.aborted) {
-        const result = await requestFullDiagnostics(request.path);
-        if (result.handled || result.matched) return;
-        if (result.timedOut) return;
-        await sleep(PULL_RETRY_INTERVAL_MS);
-      }
-      return;
-    }
-
     const pushWait = waitForFreshPush({
       path: request.path,
       version: request.version,
@@ -692,18 +666,23 @@ export async function create(input: CreateInput): Promise<LspClient> {
       timeout: diagnosticsFullWaitTimeoutMs,
     });
 
-    while (Date.now() - startedAt < diagnosticsFullWaitTimeoutMs) {
-      const result = await requestFullDiagnostics(request.path);
-      if (result.handled || result.matched) return;
+    while (!connectionClosed && !request.signal?.aborted) {
       const remaining = diagnosticsFullWaitTimeoutMs - (Date.now() - startedAt);
       if (remaining <= 0) return;
+      const result = await requestFullDiagnostics(request.path);
+      if (result.handled || result.matched) return;
+      if (result.timedOut) {
+        await pushWait;
+        return;
+      }
       const next = await Promise.race([
-        pushWait.then((ready) => (ready ? "push" : ("timeout" as const))),
+        pushWait.then((ready) => (ready ? ("push" as const) : ("timeout" as const))),
         waitForRegistrationChange(remaining).then((changed) =>
           changed ? ("registration" as const) : ("timeout" as const),
         ),
+        sleep(Math.min(remaining, PULL_RETRY_INTERVAL_MS)).then(() => "interval" as const),
       ]);
-      if (next !== "registration") return;
+      if (next === "push") return;
     }
   }
 
