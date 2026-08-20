@@ -237,7 +237,14 @@ function killChild(child: ChildProcess): void {
   }
 }
 
-export function createBwrapBashOperations(resolved: ResolvedBwrap): BashOperations {
+/**
+ * @param workspace session 工作区：writablePaths 的 "." 与 PROTECTED_DIRS 都基于它解析，
+ *   与当次命令的 cwd（仅作为进程执行目录）解耦，避免 workdir 参数漂移可写边界。
+ */
+export function createBwrapBashOperations(
+  resolved: ResolvedBwrap,
+  workspace: string,
+): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout }) {
       await fsAccess(cwd, constants.F_OK).catch(() => {
@@ -250,7 +257,7 @@ export function createBwrapBashOperations(resolved: ResolvedBwrap): BashOperatio
         "--ro-bind",
         "/",
         "/",
-        ...buildBwrapArgs(resolved, cwd),
+        ...buildBwrapArgs(resolved, workspace),
         "--dev",
         "/dev",
         "--proc",

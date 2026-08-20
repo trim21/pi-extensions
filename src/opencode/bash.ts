@@ -67,12 +67,12 @@ export default function opencodeBash(
       let result: Awaited<ReturnType<BwrapRuntime["execute"]>>;
       try {
         result = await runtime.execute({
-          ctx: { ...ctx, cwd },
+          ctx,
+          cwd,
           toolCallId: id,
           command: params.command,
           timeout: timeout / 1000,
           requestFullAccess: params.dangerouslyDisableSandbox,
-          workdir: params.workdir,
           signal,
           onUpdate,
         });

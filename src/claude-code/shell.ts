@@ -121,13 +121,13 @@ export function registerShellTools(
       let result: Awaited<ReturnType<BwrapRuntime["execute"]>>;
       try {
         result = await runtime.execute({
-          ctx: { ...ctx, cwd },
+          ctx,
+          cwd,
           toolCallId: id,
           command: params.command,
           timeout: timeout / 1000,
           requestFullAccess: params.dangerouslyDisableSandbox,
           requestFullAccessReason: params.description,
-          workdir: params.workdir,
           signal,
           onUpdate,
         });

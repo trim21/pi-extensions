@@ -87,8 +87,8 @@ export interface BwrapExecutionRequest {
   timeout?: number;
   requestFullAccess?: boolean;
   requestFullAccessReason?: string;
-  /** bash 工具显式传入的 workdir 参数；存在时审批对话框显示实际执行目录。 */
-  workdir?: string;
+  /** 解析后的实际执行目录；缺省时与 ctx.cwd 相同。ctx.cwd 始终是 session 工作区。 */
+  cwd?: string;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
   ctx: ExtensionContext;
@@ -334,6 +334,10 @@ export class BwrapRuntime {
           "Install bubblewrap and restart the session, or pass --no-bwrap to disable the sandbox explicitly.",
       );
     }
+    // workspace 恒为 session 工作区；cwd 只是本次命令的进程执行目录，
+    // 二者解耦后 workdir 参数无法把沙箱可写边界带出工作区。
+    const workspace = request.ctx.cwd;
+    const execCwd = request.cwd ?? workspace;
     // 需要人工审批：非 Windows 仅 requestFullAccess；Windows 上默认所有命令
     // （allow-all 模式是显式 opt-out，仍直接执行）。
     const needsApproval = request.requestFullAccess === true || (isWindows && runtime.bwrapEnabled);
@@ -348,14 +352,14 @@ export class BwrapRuntime {
           request.ctx,
           request.command,
           request.requestFullAccessReason,
-          request.workdir,
+          execCwd,
         );
       }
     }
     const operations =
       isWindows || needsApproval || !runtime.bwrapEnabled
         ? createLocalBashOperations()
-        : createBwrapBashOperations(runtime);
+        : createBwrapBashOperations(runtime, workspace);
     const output = new BashOutput();
     const { onUpdate } = request;
 
@@ -391,7 +395,7 @@ export class BwrapRuntime {
 
     try {
       if (onUpdate) onUpdate({ content: [], details: undefined });
-      const { exitCode } = await operations.exec(request.command, request.ctx.cwd, {
+      const { exitCode } = await operations.exec(request.command, execCwd, {
         onData: (data) => {
           output.append(data);
           scheduleUpdate();
@@ -439,11 +443,11 @@ export class BwrapRuntime {
     ctx: ExtensionContext,
     command: string,
     reason: string | undefined,
-    workdir?: string,
+    execCwd: string,
   ): Promise<void> {
     const policy = resolveEscalation({ hasUI: ctx.hasUI });
     if (policy.kind === "deny") throw new Error(policy.reason);
-    const decision = await this.approveFullAccessUI(ctx, command, reason, workdir);
+    const decision = await this.approveFullAccessUI(ctx, command, reason, execCwd);
     // 关闭对话框 = 中断并拒绝，不循环重问
     if (decision === undefined) {
       ctx.abort();
@@ -490,7 +494,7 @@ export class BwrapRuntime {
     ctx: ExtensionContext,
     command: string,
     reason: string | undefined,
-    workdir?: string,
+    execCwd: string,
   ): Promise<FullAccessUIDecision | undefined> {
     // 弹框前解析命令的持久化规则（勾选的 pattern 会写入），在弹框里以
     // checkbox 列出：`echo 1 | head` → `echo *`、`head *`，逐项决定是否
@@ -529,9 +533,9 @@ export class BwrapRuntime {
       );
     }
     lines.push(fenceCodeBlock(command));
-    // workdir 存在时展示实际执行目录（ctx.cwd 已被 bash 工具解析为绝对路径）
-    if (workdir) {
-      lines.push(`Workdir: ${escapeHtml(ctx.cwd)}`);
+    // 执行目录与工作区不同时，提示实际执行目录（execCwd 是解析后的绝对路径）
+    if (execCwd !== ctx.cwd) {
+      lines.push(`Workdir: ${escapeHtml(execCwd)}`);
     }
     const description = lines.join("\n");
 

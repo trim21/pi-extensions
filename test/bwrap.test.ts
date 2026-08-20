@@ -4,10 +4,22 @@
  *   of config (no writable paths, no network, no extra args).
  * - resolveEscalation: request_full_access is denied without UI and requires
  *   the approval dialog when UI is available.
+ * - buildBwrapArgs: writable "." resolves against the workspace argument, so
+ *   a per-command workdir can never move the sandbox write boundary.
  */
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { findBwrap, resolveBwrap, resolveHeadlessBwrap } from "../src/bwrap/core.ts";
+import {
+  buildBwrapArgs,
+  findBwrap,
+  resolveBwrap,
+  type ResolvedBwrap,
+  resolveHeadlessBwrap,
+} from "../src/bwrap/core.ts";
 import { resolveEscalation } from "../src/bwrap/runtime.ts";
 
 describe("findBwrap", () => {
@@ -94,5 +106,71 @@ describe("resolveEscalation", () => {
     const decision = resolveEscalation({ hasUI: true });
 
     expect(decision.kind).toBe("dialog");
+  });
+});
+
+describe("buildBwrapArgs", () => {
+  const base: ResolvedBwrap = {
+    mode: "workspace-write",
+    bwrapEnabled: true,
+    network: false,
+    writablePaths: [".", "/tmp"],
+    extraWritablePaths: [],
+    tmpfsPaths: [],
+    extraArgs: [],
+    approvalRules: [],
+  };
+
+  it("binds writable '.' to the workspace argument, not the exec cwd", () => {
+    const args = buildBwrapArgs(base, "/ws");
+
+    // writablePaths 的 "." 解析为 workspace（/ws）；workspace 不存在时无 .git 等保护挂载
+    expect(args).toEqual([
+      "--new-session",
+      "--die-with-parent",
+      "--unshare-user",
+      "--unshare-pid",
+      "--bind",
+      "/ws",
+      "/ws",
+      "--bind",
+      "/tmp",
+      "/tmp",
+      "--unshare-net",
+    ]);
+  });
+
+  it("keeps extra writable paths as-is", () => {
+    const args = buildBwrapArgs({ ...base, extraWritablePaths: ["/data/x"] }, "/ws");
+
+    // 顺序：writable binds → extra binds → unshare-net
+    const bindsEnd = args.indexOf("--unshare-net");
+    expect(args.slice(0, bindsEnd)).toEqual([
+      "--new-session",
+      "--die-with-parent",
+      "--unshare-user",
+      "--unshare-pid",
+      "--bind",
+      "/ws",
+      "/ws",
+      "--bind",
+      "/tmp",
+      "/tmp",
+      "--bind",
+      "/data/x",
+      "/data/x",
+    ]);
+  });
+
+  it("protects workspace-internal dot dirs instead of the exec cwd's", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-args-"));
+    mkdirSync(join(workspace, ".git"));
+    const args = buildBwrapArgs(base, workspace);
+
+    // 只保护 workspace 下实际存在的 .git；exec cwd（/outside）不在保护列表
+    const roBindTargets = args.flatMap((value, index) =>
+      value === "--ro-bind" ? [args[index + 1]] : [],
+    );
+    expect(roBindTargets).toEqual([`${workspace}/.git`]);
   });
 });
