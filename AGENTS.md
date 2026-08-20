@@ -6,7 +6,7 @@ pi-extensions 是 pi coding-agent 的自定义扩展集合，TypeScript ESM 项�
 
 - 包管理与脚本一律使用 `pnpm`（`pnpm install`、`pnpm test`、`pnpm lint`、`pnpm check`），不要使用 `npm` / `npx`。
 - 不使用 emoji，除非用户明确要求。代码、注释、UI 文案和回复中都不添加 emoji。
-- 代码风格由 Prettier 管理（双引号、分号、printWidth 100），提交前运行 `pnpm check`（`tsc --noEmit` + `prettier --check`）与 `pnpm lint`。
+- 代码风格由 Prettier 管理，提交前运行 `pnpm check`（`tsc --noEmit` + `prettier --check`）与 `pnpm lint`。
 - 测试使用 Vitest，新增功能需补充对应测试，运行 `pnpm test` 验证；测试文件放在 `test/`，命名与 `src/` 对应（如 `src/opencode/edit.ts` → `test/opencode-edit.test.ts`）。
 - 提交时 husky + lint-staged 自动运行 `eslint --fix` 与 `prettier --write`，本地仍须保证 `pnpm check` 与 `pnpm lint` 全绿。
 - TypeScript 只允许 erasable 语法（`eslint-plugin-erasable-syntax-only`）：不用 `enum`、`namespace`、参数属性等非可擦除语法。
