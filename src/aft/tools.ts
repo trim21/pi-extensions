@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -61,6 +61,16 @@ export function formatDisplayPath(cwd: string, filePath: string): string {
     return `~/${relToHome}`;
   }
   return filePath;
+}
+
+/** subtitle 中路径的最大显示长度，超过时退化为仅文件名。 */
+export const MAX_SUBTITLE_PATH_LENGTH = 20;
+
+/** subtitle 用的显示路径：优先 `./…` / `~/…` / 绝对路径，结果过长时只显示文件名。 */
+export function formatSubtitlePath(cwd: string, filePath: string): string {
+  const display = formatDisplayPath(cwd, filePath);
+  if (display.length <= MAX_SUBTITLE_PATH_LENGTH) return display;
+  return basename(filePath);
 }
 
 export interface AftToolContext {
@@ -150,6 +160,8 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
       if (filesMode) rawArgs.files = true;
       if (params.includeTests !== undefined) rawArgs.includeTests = params.includeTests;
 
+      const subtitle = buildOutlineSubtitle(extCtx.cwd, target);
+
       const { text, response } = await callAftTool(bridgeFor(ctx), "outline", rawArgs, extCtx);
       const truncated = response.truncated === true;
       return {
@@ -157,10 +169,19 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
         details: {
           truncated,
           params,
+          pendant: {
+            title: "aft_outline",
+            subtitle,
+          } satisfies ToolPendant,
         },
       };
     },
   });
+}
+
+/** 构建 aft_outline pendant 的 subtitle：`target="…"`（路径过长时只显示文件名）。 */
+export function buildOutlineSubtitle(cwd: string, target: string): string {
+  return `target="${formatSubtitlePath(cwd, resolvePathArg(cwd, target))}"`;
 }
 
 const ZoomParams = Type.Object(
