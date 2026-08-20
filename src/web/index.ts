@@ -140,9 +140,10 @@ export default function webTools(pi: ExtensionAPI) {
     name: "web_fetch",
     label: "Web Fetch",
     description:
-      "Fetch a URL and extract the main content as markdown. SSRF-protected: refuses " +
-      "private/internal addresses. Only http/https HTML pages are supported.",
-    promptSnippet: "Fetch a web page and extract its content",
+      "Fetch a URL and return its content as markdown (HTML pages) or raw text " +
+      "(JSON/XML/plain-text API responses). SSRF-protected: refuses private/internal " +
+      "addresses.",
+    promptSnippet: "Fetch a web page or API response",
     parameters: Type.Object({
       url: Type.String({ description: "The URL to fetch" }),
     }),

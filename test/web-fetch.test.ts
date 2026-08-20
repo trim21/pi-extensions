@@ -165,6 +165,39 @@ describe("fetchPage", () => {
     await expect(fetchPage("https://example.com/file.pdf")).rejects.toThrow("不支持的内容类型");
   });
 
+  it("returns JSON responses verbatim", async () => {
+    lookup.mockResolvedValue([{ address: "1.2.3.4", family: 4 }]);
+    const json = JSON.stringify({ status: "ok", count: 3, items: ["a", "b"] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(json, {
+            status: 200,
+            headers: { "content-type": "application/json; charset=utf-8; api-version=6.0" },
+          }),
+      ),
+    );
+    const page = await fetchPage("https://example.com/api/data");
+    expect(page.markdown).toBe(json);
+  });
+
+  it("returns plain text verbatim", async () => {
+    lookup.mockResolvedValue([{ address: "1.2.3.4", family: 4 }]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("hello world\nsecond line", {
+            status: 200,
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          }),
+      ),
+    );
+    const page = await fetchPage("https://example.com/status.txt");
+    expect(page.markdown).toBe("hello world\nsecond line");
+  });
+
   it("fetches HTML and extracts markdown, re-validating redirects", async () => {
     lookup
       .mockResolvedValueOnce([{ address: "1.2.3.4", family: 4 }])

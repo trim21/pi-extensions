@@ -124,7 +124,8 @@ export async function fetchPage(url: string, signal?: AbortSignal): Promise<Fetc
     throw new Error(`HTTP ${response.status} ${response.statusText}`);
   }
   const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("text/html") && !contentType.includes("text/plain")) {
+  const category = classifyContentType(contentType);
+  if (category === null) {
     throw new Error(`不支持的内容类型: ${contentType || "unknown"}`);
   }
 
@@ -133,22 +134,36 @@ export async function fetchPage(url: string, signal?: AbortSignal): Promise<Fetc
     throw new Error(`页面过大 (${declaredLength} bytes)，上限 ${MAX_BYTES}`);
   }
 
-  let html = "";
+  let body = "";
   if (response.body) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     for (;;) {
       const chunk = (await reader.read()) as { done: boolean; value: Uint8Array };
       if (chunk.done) break;
-      html += decoder.decode(chunk.value, { stream: true });
-      if (Buffer.byteLength(html, "utf8") > MAX_BYTES) {
+      body += decoder.decode(chunk.value, { stream: true });
+      if (Buffer.byteLength(body, "utf8") > MAX_BYTES) {
         throw new Error(`页面过大，上限 ${MAX_BYTES} bytes`);
       }
     }
-    html += decoder.decode();
+    body += decoder.decode();
   }
 
-  return extractMarkdown(html, response.url);
+  if (category === "html") {
+    return extractMarkdown(body, response.url);
+  }
+  // JSON / XML / text/*：原样返回
+  return { url: response.url, title: response.url, markdown: body.trim() };
+}
+
+/** 按 mime 主体分类响应；html 走 readability，其余文本类原样返回 */
+function classifyContentType(contentType: string): "html" | "text" | null {
+  const mime = contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (mime === "text/html" || mime === "application/xhtml+xml") return "html";
+  if (mime.startsWith("text/")) return "text";
+  if (mime === "application/json" || mime.endsWith("+json")) return "text";
+  if (mime === "application/xml" || mime.endsWith("+xml")) return "text";
+  return null;
 }
 
 /** 提取用到的 document 最小接口（linkedom 类型是 any，显式标注避免 unsafe） */
