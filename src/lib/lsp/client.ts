@@ -210,6 +210,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
   const diagnosticRegistrations = new Map<string, CapabilityRegistration>();
   const registrationListeners = new Set<() => void>();
   const diagnosticListeners = new Set<(input: { path: string; serverID: string }) => void>();
+  /** resolvedPath → 客户端已发送的最新文档版本（didOpen=0，didChange 递增）。 */
+  const documentVersions = new Map<string, number>();
   const mergedDiagnostics = (filePath: string): Diagnostic[] =>
     dedupeDiagnostics([
       ...(pushDiagnostics.get(filePath) ?? []),
@@ -234,6 +236,14 @@ export async function create(input: CreateInput): Promise<LspClient> {
     (params: { uri: string; version?: number; diagnostics: Diagnostic[] }) => {
       const filePath = getFilePath(params.uri);
       if (!filePath) return;
+      // 服务器版本滞后于已发送版本时，该 push 对应的是旧内容（重算未完成时的
+      // 迟到结果）。忽略它，避免与 pull 通道的当前结果合并出 stale 诊断。
+      const currentVersion = documentVersions.get(filePath);
+      const isStalePush =
+        typeof params.version === "number" &&
+        currentVersion !== undefined &&
+        params.version !== currentVersion;
+      if (isStalePush) return;
       published.set(filePath, {
         at: Date.now(),
         version: typeof params.version === "number" ? params.version : undefined,
@@ -652,6 +662,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
           const next = document.version + 1;
           files[resolvedPath] = { version: next, text };
+          documentVersions.set(resolvedPath, next);
           await connection.sendNotification("textDocument/didChange", {
             textDocument: { uri, version: next },
             contentChanges:
@@ -677,6 +688,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
           textDocument: { uri, languageId, version: 0, text },
         });
         files[resolvedPath] = { version: 0, text };
+        documentVersions.set(resolvedPath, 0);
         return 0;
       },
     },
