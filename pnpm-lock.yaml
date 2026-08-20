@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@cortexkit/aft-bridge':
-        specifier: 0.51.2
-        version: 0.51.2
+        specifier: 0.51.3
+        version: 0.51.3
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -246,8 +246,8 @@ packages:
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
     engines: {node: '>=18'}
 
-  '@cortexkit/aft-bridge@0.51.2':
-    resolution: {integrity: sha512-Qrn/UsNXRua6tJD8I4qkwzj007PW2qr2ac802sxrib6NmAmQ/sAb4ch7KrQlLYKNzqubmq/VvC31nZw5FwLW+A==}
+  '@cortexkit/aft-bridge@0.51.3':
+    resolution: {integrity: sha512-8OkBTPtFnXRMrGe79w7nNOo/qx2xo1f4a7U3WUBNUf6+tsvjTaZDedD464jy8OLy9fEQo33iPXYkeuQScCGrig==}
 
   '@cortexkit/aft-linux-x64@0.51.2':
     resolution: {integrity: sha512-mQYf8tXAyOpK4dffEH1bV1PL4t7ybLBmtMIQHp0fywo32tVAvfaxlD0jl2Gfh1U1W3bgeddBsW5xi4Usp+7a9g==}
@@ -2356,7 +2356,7 @@ snapshots:
 
   '@bcoe/v8-coverage@1.0.2': {}
 
-  '@cortexkit/aft-bridge@0.51.2':
+  '@cortexkit/aft-bridge@0.51.3':
     dependencies:
       '@cortexkit/subc-client': 0.5.0
       undici: 7.29.0
