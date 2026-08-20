@@ -348,7 +348,13 @@ export function createLspService(
         const version = await client.notify.open({ path: file });
         if (!diagnostics) return;
         await abortable(
-          client.waitForDiagnostics({ path: file, version, mode: diagnostics, after }),
+          client.waitForDiagnostics({
+            path: file,
+            version,
+            mode: diagnostics,
+            after,
+            signal: options?.signal,
+          }),
           options?.signal,
         );
       }),

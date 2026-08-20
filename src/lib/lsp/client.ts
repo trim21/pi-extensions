@@ -99,6 +99,7 @@ export interface LspClient {
     version: number;
     mode?: "document" | "full";
     after?: number;
+    signal?: AbortSignal;
   }): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -168,6 +169,11 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   }
 }
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** pull 诊断失败后的重试间隔。 */
+const PULL_RETRY_INTERVAL_MS = 100;
+
 function stopProcess(process: LspServerHandle["process"]): Promise<void> {
   if (process.exitCode !== null) return Promise.resolve();
   try {
@@ -201,6 +207,14 @@ export async function create(input: CreateInput): Promise<LspClient> {
     new StreamMessageWriter(input.server.process.stdin),
   );
   input.server.process.stderr?.resume();
+  /** 连接或服务器进程已关闭；pull 重试循环以此终止，避免无界等待。 */
+  let connectionClosed = false;
+  input.server.process.once("exit", () => {
+    connectionClosed = true;
+  });
+  connection.onDispose(() => {
+    connectionClosed = true;
+  });
 
   // ── 连接状态 ────────────────────────────────────────────────────────────────
 
@@ -589,8 +603,20 @@ export async function create(input: CreateInput): Promise<LspClient> {
     path: string;
     version: number;
     after?: number;
+    signal?: AbortSignal;
   }): Promise<void> {
     const startedAt = request.after ?? Date.now();
+    // 支持 pull 的服务器：push 已被忽略，pull 是唯一通道。无窗口截断——
+    // 一直重试直到拿到当前文档结果（matched），确保诊断不因服务器重算慢而丢失。
+    if (supportsPullDiagnostics()) {
+      while (!connectionClosed && !request.signal?.aborted) {
+        const result = await requestDocumentDiagnostics(request.path);
+        if (result.matched) return;
+        await sleep(PULL_RETRY_INTERVAL_MS);
+      }
+      return;
+    }
+
     const pushWait = waitForFreshPush({
       path: request.path,
       version: request.version,
@@ -601,9 +627,6 @@ export async function create(input: CreateInput): Promise<LspClient> {
     while (Date.now() - startedAt < diagnosticsDocumentWaitTimeoutMs) {
       const result = await requestDocumentDiagnostics(request.path);
       if (result.matched) return;
-      // 支持 pull 的服务器：pull 未匹配（失败/超时）即返回，不依赖 push 兜底
-      // （push 已被忽略）；纯 push 服务器继续走下面的 push 等待。
-      if (supportsPullDiagnostics()) return;
       const remaining = diagnosticsDocumentWaitTimeoutMs - (Date.now() - startedAt);
       if (remaining <= 0) return;
       const next = await Promise.race([
@@ -620,8 +643,18 @@ export async function create(input: CreateInput): Promise<LspClient> {
     path: string;
     version: number;
     after?: number;
+    signal?: AbortSignal;
   }): Promise<void> {
     const startedAt = request.after ?? Date.now();
+    if (supportsPullDiagnostics()) {
+      while (!connectionClosed && !request.signal?.aborted) {
+        const result = await requestFullDiagnostics(request.path);
+        if (result.handled || result.matched) return;
+        await sleep(PULL_RETRY_INTERVAL_MS);
+      }
+      return;
+    }
+
     const pushWait = waitForFreshPush({
       path: request.path,
       version: request.version,
@@ -632,7 +665,6 @@ export async function create(input: CreateInput): Promise<LspClient> {
     while (Date.now() - startedAt < diagnosticsFullWaitTimeoutMs) {
       const result = await requestFullDiagnostics(request.path);
       if (result.handled || result.matched) return;
-      if (supportsPullDiagnostics()) return;
       const remaining = diagnosticsFullWaitTimeoutMs - (Date.now() - startedAt);
       if (remaining <= 0) return;
       const next = await Promise.race([
@@ -724,6 +756,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
           path: normalizedPath,
           version: request.version,
           after: request.after,
+          signal: request.signal,
         });
         return;
       }
@@ -731,6 +764,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
         path: normalizedPath,
         version: request.version,
         after: request.after,
+        signal: request.signal,
       });
     },
     async shutdown() {
