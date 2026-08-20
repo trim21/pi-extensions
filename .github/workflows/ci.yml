@@ -34,6 +34,14 @@ jobs:
         with:
           packages: bubblewrap ripgrep
 
+      # lsp-e2e-pyright-ruff.test.ts 需要真实的 pyright / ruff LSP server
+      # （二进制缺失时该测试组自动跳过）。
+      - name: Install pyright and ruff
+        run: |
+          npm install -g pyright
+          curl -LsSf https://astral.sh/ruff/install.sh | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
       - run: pnpm test
 
   # Windows 行为：bwrap 缺失是预期状态（命令逐条人工审批）、gh-readonly 与

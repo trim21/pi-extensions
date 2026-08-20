@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { expect, it } from "vitest";
 
@@ -13,7 +14,7 @@ it("stops retrying pull after request timeout when server never responds", async
   const directory = await mkdtemp(join(tmpdir(), "pull-hang-"));
   await writeFile(join(directory, "a.py"), "x = 1\n");
 
-  const serverPath = new URL("fixtures/pull-hang-server.mjs", import.meta.url).pathname;
+  const serverPath = fileURLToPath(new URL("fixtures/pull-hang-server.mjs", import.meta.url));
   const client = await create({
     serverID: "hang",
     server: {
