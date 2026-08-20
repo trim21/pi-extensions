@@ -236,8 +236,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
     (params: { uri: string; version?: number; diagnostics: Diagnostic[] }) => {
       const filePath = getFilePath(params.uri);
       if (!filePath) return;
-      // 服务器版本滞后于已发送版本时，该 push 对应的是旧内容（重算未完成时的
-      // 迟到结果）。忽略它，避免与 pull 通道的当前结果合并出 stale 诊断。
+      // 支持 pull 诊断的服务器：push 的结果可能来自旧内容（异步重算迟到），
+      // 直接忽略，只信任 pull 返回的当前文档结果，从源头避免 stale。
+      if (supportsPullDiagnostics()) return;
+      // 纯 push 服务器：服务器版本滞后于已发送版本时，该 push 对应的是旧内容
+      // （重算未完成时的迟到结果），同样忽略。
       const currentVersion = documentVersions.get(filePath);
       const isStalePush =
         typeof params.version === "number" &&
@@ -416,6 +419,15 @@ export async function create(input: CreateInput): Promise<LspClient> {
     return { handled: true, matched, byFile };
   }
 
+  /** 是否支持文档级 pull 诊断：静态 diagnosticProvider 或动态注册的 document 诊断。 */
+  function supportsPullDiagnostics(): boolean {
+    if (hasStaticPullDiagnostics) return true;
+    for (const registration of diagnosticRegistrations.values()) {
+      if (registration.registerOptions?.workspaceDiagnostics !== true) return true;
+    }
+    return false;
+  }
+
   function documentPullState() {
     const documentRegistrations = [...diagnosticRegistrations.values()].filter(
       (registration) => registration.registerOptions?.workspaceDiagnostics !== true,
@@ -424,7 +436,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
       documentIdentifiers: [
         ...new Set(documentRegistrations.flatMap((r) => r.registerOptions?.identifier ?? [])),
       ],
-      supported: hasStaticPullDiagnostics || documentRegistrations.length > 0,
+      supported: supportsPullDiagnostics(),
     };
   }
 
@@ -589,6 +601,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
     while (Date.now() - startedAt < diagnosticsDocumentWaitTimeoutMs) {
       const result = await requestDocumentDiagnostics(request.path);
       if (result.matched) return;
+      // 支持 pull 的服务器：pull 未匹配（失败/超时）即返回，不依赖 push 兜底
+      // （push 已被忽略）；纯 push 服务器继续走下面的 push 等待。
+      if (supportsPullDiagnostics()) return;
       const remaining = diagnosticsDocumentWaitTimeoutMs - (Date.now() - startedAt);
       if (remaining <= 0) return;
       const next = await Promise.race([
@@ -617,6 +632,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
     while (Date.now() - startedAt < diagnosticsFullWaitTimeoutMs) {
       const result = await requestFullDiagnostics(request.path);
       if (result.handled || result.matched) return;
+      if (supportsPullDiagnostics()) return;
       const remaining = diagnosticsFullWaitTimeoutMs - (Date.now() - startedAt);
       if (remaining <= 0) return;
       const next = await Promise.race([
