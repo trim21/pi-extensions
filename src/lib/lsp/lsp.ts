@@ -182,7 +182,12 @@ interface LspState {
   broken: Set<string>;
   spawning: Map<string, Promise<LspClient | undefined>>;
   closing: boolean;
+  /** root+serverID → 服务器状态，用于 footer status 显示。 */
+  servers: Map<string, { serverID: string; root: string; state: "running" | "broken" }>;
 }
+
+/** 渲染 LSP status 文本的回调（传入 undefined 表示清除）。 */
+export type StatusRenderer = (text: string | undefined) => void;
 
 export interface LspRequestOptions {
   notify?: ExtensionUIContext["notify"];
@@ -212,6 +217,10 @@ export interface LspService {
   diagnostics(): Promise<Record<string, Diagnostic[]>>;
   lspDiagnosticsForFile(file: string, cwd: string, options?: LspRequestOptions): Promise<string>;
   shutdownAll(): Promise<void>;
+  /** 注入 status 渲染回调；传入 undefined 表示不再渲染。 */
+  attachStatus(render: StatusRenderer | undefined): void;
+  /** 用当前服务器状态主动刷新一次 status（agent start/end 等生命周期边界）。 */
+  refreshStatus(): void;
 }
 
 /** 文件必须在工作目录内才启用 LSP（对齐 opencode 的 containsPath）。 */
@@ -241,7 +250,28 @@ export function createLspService(
     broken: new Set(),
     spawning: new Map(),
     closing: false,
+    servers: new Map(),
   };
+
+  let renderStatus: StatusRenderer | undefined;
+
+  /** 汇总当前所有 LSP server 状态并渲染到 footer status。 */
+  function updateStatusText(): void {
+    if (!renderStatus) return;
+    if (state.servers.size === 0) {
+      renderStatus(undefined);
+      return;
+    }
+    const parts = Array.from(state.servers.values(), (server) => {
+      return `${server.serverID}${server.state === "broken" ? " (unavailable)" : ""}`;
+    });
+    renderStatus(`lsp: ${parts.toSorted().join(",")}`);
+  }
+
+  function attachStatus(render: StatusRenderer | undefined): void {
+    renderStatus = render;
+    updateStatusText();
+  }
 
   async function getClients(
     file: string,
@@ -281,6 +311,8 @@ export function createLspService(
           const handle = await adapter.spawn(root, cwd);
           if (!handle) {
             state.broken.add(key);
+            state.servers.set(key, { serverID: adapter.id, root, state: "broken" });
+            updateStatusText();
             notify?.(
               `LSP server "${adapter.id}" is not available for ${root} (binary not found)`,
               "error",
@@ -307,9 +339,13 @@ export function createLspService(
             return duplicate;
           }
           state.clients.push(client);
+          state.servers.set(key, { serverID: adapter.id, root, state: "running" });
+          updateStatusText();
           return client;
         } catch (error) {
           state.broken.add(key);
+          state.servers.set(key, { serverID: adapter.id, root, state: "broken" });
+          updateStatusText();
           notify?.(
             `LSP server "${adapter.id}" failed to start for ${root}: ${
               error instanceof Error ? error.message : String(error)
@@ -399,9 +435,18 @@ export function createLspService(
     });
     state.clients = [];
     state.broken.clear();
+    state.servers.clear();
+    updateStatusText();
   }
 
-  return { touchFile, diagnostics, lspDiagnosticsForFile, shutdownAll };
+  return {
+    touchFile,
+    diagnostics,
+    lspDiagnosticsForFile,
+    shutdownAll,
+    attachStatus,
+    refreshStatus: updateStatusText,
+  };
 }
 
 export interface LspServiceOptions {
@@ -420,6 +465,16 @@ export function registerLsp(pi: ExtensionAPI, options?: LspServiceOptions): LspS
       .catch((error: unknown) => {
         if (error instanceof Error) ctx.ui.notify?.(error.message, "error");
       });
+    // footer status 显示当前所有 LSP server 状态（无 UI 时不显示）
+    service.attachStatus(
+      ctx.ui?.setStatus
+        ? (text) => ctx.ui.setStatus("lsp", text ? ctx.ui.theme.fg("accent", text) : undefined)
+        : undefined,
+    );
   });
+  // agent 生命周期边界显式刷新 status：agent 运行中 LSP server 才被惰性
+  // spawn（首次工具调用），start/end 时保证 footer 反映当前实际状态。
+  pi.on?.("agent_start", () => service.refreshStatus());
+  pi.on?.("agent_end", () => service.refreshStatus());
   return service;
 }

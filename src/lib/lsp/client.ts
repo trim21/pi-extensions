@@ -52,6 +52,15 @@ interface DiagnosticRequestResult {
   handled: boolean;
   matched: boolean;
   byFile: Map<string, Diagnostic[]>;
+  /** 单次请求是否超时（区别于正常失败：超时意味着服务器未响应，不应重试）。 */
+  timedOut: boolean;
+}
+
+/** 一批 pull 请求的聚合结果；timedOut 表示其中至少一个请求超时。 */
+interface PullResult {
+  handled: boolean;
+  matched: boolean;
+  timedOut: boolean;
 }
 
 interface CapabilityRegistration {
@@ -350,9 +359,16 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
   // ── 诊断拉取（pull）辅助 ────────────────────────────────────────────────────
 
-  const mergeResults = (filePath: string, results: DiagnosticRequestResult[]) => {
-    if (results.every((result) => !result.handled)) return { handled: false, matched: false };
+  const mergeResults = (filePath: string, results: DiagnosticRequestResult[]): PullResult => {
+    if (results.every((result) => !result.handled)) {
+      return {
+        handled: false,
+        matched: false,
+        timedOut: results.some((result) => result.timedOut),
+      };
+    }
     const matched = results.some((result) => result.matched);
+    const timedOut = results.some((result) => result.timedOut);
 
     const merged = new Map<string, Diagnostic[]>();
     for (const result of results) {
@@ -367,21 +383,27 @@ export async function create(input: CreateInput): Promise<LspClient> {
       updatePullDiagnostics(target, dedupeDiagnostics(items));
     }
 
-    return { handled: true, matched };
+    return { handled: true, matched, timedOut };
   };
 
   async function requestDiagnosticReport(
     filePath: string,
     identifier?: string,
   ): Promise<DiagnosticRequestResult> {
+    let timedOut = false;
     const report = await withTimeout(
       connection.sendRequest<DocumentDiagnosticReport | null>("textDocument/diagnostic", {
         ...(identifier && { identifier }),
         textDocument: { uri: pathToFileURL(filePath).href },
       }),
       diagnosticsRequestTimeoutMs,
-    ).catch(() => null);
-    if (!report) return { handled: false, matched: false, byFile: new Map<string, Diagnostic[]>() };
+    ).catch((error: unknown) => {
+      if (error instanceof Error && error.message.startsWith("Timeout after")) timedOut = true;
+      return null;
+    });
+    if (!report) {
+      return { handled: false, matched: false, byFile: new Map<string, Diagnostic[]>(), timedOut };
+    }
 
     const byFile = new Map<string, Diagnostic[]>();
     const push = (target: string, items: Diagnostic[]): void => {
@@ -404,21 +426,27 @@ export async function create(input: CreateInput): Promise<LspClient> {
       matched ||= relatedPath === filePath;
     }
 
-    return { handled, matched, byFile };
+    return { handled, matched, byFile, timedOut };
   }
 
   async function requestWorkspaceDiagnosticReport(
     filePath: string,
     identifier?: string,
   ): Promise<DiagnosticRequestResult> {
+    let timedOut = false;
     const report = await withTimeout(
       connection.sendRequest<WorkspaceDiagnosticReport | null>("workspace/diagnostic", {
         ...(identifier && { identifier }),
         previousResultIds: [],
       }),
       diagnosticsRequestTimeoutMs,
-    ).catch(() => null);
-    if (!report) return { handled: false, matched: false, byFile: new Map<string, Diagnostic[]>() };
+    ).catch((error: unknown) => {
+      if (error instanceof Error && error.message.startsWith("Timeout after")) timedOut = true;
+      return null;
+    });
+    if (!report) {
+      return { handled: false, matched: false, byFile: new Map<string, Diagnostic[]>(), timedOut };
+    }
 
     const byFile = new Map<string, Diagnostic[]>();
     let matched = false;
@@ -430,7 +458,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
       matched ||= relatedPath === filePath;
     }
 
-    return { handled: true, matched, byFile };
+    return { handled: true, matched, byFile, timedOut };
   }
 
   /** 是否支持文档级 pull 诊断：静态 diagnosticProvider 或动态注册的 document 诊断。 */
@@ -470,14 +498,14 @@ export async function create(input: CreateInput): Promise<LspClient> {
     filePath: string,
     requests: Promise<DiagnosticRequestResult>[],
     done: (results: DiagnosticRequestResult[]) => boolean,
-  ): Promise<{ handled: boolean; matched: boolean }> {
-    if (requests.length === 0) return { handled: false, matched: false };
+  ): Promise<PullResult> {
+    if (requests.length === 0) return { handled: false, matched: false, timedOut: false };
 
-    return new Promise<{ handled: boolean; matched: boolean }>((resolve) => {
+    return new Promise<PullResult>((resolve) => {
       const results: DiagnosticRequestResult[] = [];
       let pending = requests.length;
       let resolved = false;
-      const finish = (merged: { handled: boolean; matched: boolean }, force = false) => {
+      const finish = (merged: PullResult, force = false) => {
         if (resolved) return;
         if (!force && !done(results)) return;
         resolved = true;
@@ -505,9 +533,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
   // 并发发起 identifier pull，一旦某批已产出当前文件诊断即可放行；
   // 慢的 pull 继续在后台合并，不按 identifier 串行。见 opencode PR #23771。
-  async function requestDocumentDiagnostics(filePath: string) {
+  async function requestDocumentDiagnostics(filePath: string): Promise<PullResult> {
     const state = documentPullState();
-    if (!state.supported) return { handled: false, matched: false };
+    if (!state.supported) return { handled: false, matched: false, timedOut: false };
     return requestDiagnostics(
       filePath,
       [
@@ -520,11 +548,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
     );
   }
 
-  async function requestFullDiagnostics(filePath: string) {
+  async function requestFullDiagnostics(filePath: string): Promise<PullResult> {
     const documentState = documentPullState();
     const workspaceState = workspacePullState();
     if (!documentState.supported && !workspaceState.supported) {
-      return { handled: false, matched: false };
+      return { handled: false, matched: false, timedOut: false };
     }
     return mergeResults(
       filePath,
@@ -606,12 +634,13 @@ export async function create(input: CreateInput): Promise<LspClient> {
     signal?: AbortSignal;
   }): Promise<void> {
     const startedAt = request.after ?? Date.now();
-    // 支持 pull 的服务器：push 已被忽略，pull 是唯一通道。无窗口截断——
-    // 一直重试直到拿到当前文档结果（matched），确保诊断不因服务器重算慢而丢失。
+    // 支持 pull 的服务器：push 已被忽略，pull 是唯一通道。正常返回但未拿到
+    // 当前文档结果时重试；请求超时（服务器未响应）则中断，避免阻塞编辑。
     if (supportsPullDiagnostics()) {
       while (!connectionClosed && !request.signal?.aborted) {
         const result = await requestDocumentDiagnostics(request.path);
         if (result.matched) return;
+        if (result.timedOut) return;
         await sleep(PULL_RETRY_INTERVAL_MS);
       }
       return;
@@ -650,6 +679,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
       while (!connectionClosed && !request.signal?.aborted) {
         const result = await requestFullDiagnostics(request.path);
         if (result.handled || result.matched) return;
+        if (result.timedOut) return;
         await sleep(PULL_RETRY_INTERVAL_MS);
       }
       return;
