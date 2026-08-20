@@ -226,7 +226,7 @@ export default function talk(pi: ExtensionAPI) {
       "Ask another pi agent a question and block until it responds (or times out). Before asking, it checks whether that agent already sent you something; if so, you are told to read and respond first instead of asking.",
     promptSnippet: "Ask another pi agent a question and wait for a response",
     parameters: Type.Object({
-      to: Type.String({ description: "Target agent (name/address/@alias)" }),
+      to: Type.String({ description: "Target agent id (from talk-list-agents)" }),
       message: Type.String({ description: "The question" }),
       timeoutMs: Type.Optional(
         Type.Number({ description: `Wait cap in ms; default ${ASK_TIMEOUT_MS}` }),
