@@ -87,7 +87,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@cortexkit/aft-bridge": "0.51.2",
+    "@cortexkit/aft-bridge": "0.51.3",
     "@mozilla/readability": "^0.6.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "jsonc-parser": "^3.3.1",
