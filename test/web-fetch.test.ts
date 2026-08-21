@@ -137,6 +137,47 @@ describe("extractMarkdown", () => {
       "没有可提取的正文",
     );
   });
+
+  it("extracts content hidden in a React streaming boundary", () => {
+    const fixture = `<!DOCTYPE html>
+<html>
+<head><title>Streamed Article</title></head>
+<body>
+<div class="page"><!--$?--><template id="B:0"></template><div><p>Loading...</p></div><!--/$--></div>
+<div hidden id="S:0">
+<article>
+<h1>Streamed Heading</h1>
+<p>This paragraph is streamed by React and hidden until hydration. It contains enough
+prose to pass the readability content threshold, so the extractor should pick it up
+after unshadowing the streaming boundary.</p>
+<p>More streamed content follows with additional sentences that give the algorithm
+more signal about where the main article body lives.</p>
+</article>
+</div>
+</body>
+</html>`;
+    const page = extractMarkdown(fixture, "https://example.com/streamed");
+    expect(page.title).toBe("Streamed Article");
+    expect(page.markdown).toContain("Streamed Heading");
+    expect(page.markdown).not.toContain("Loading");
+  });
+
+  it("leaves non-streaming hidden elements hidden", () => {
+    const fixture = `<!DOCTYPE html>
+<html><head><title>t</title></head>
+<body>
+<div hidden>sneaky hidden content that must not leak</div>
+<article>
+<h1>Real Heading</h1>
+<p>This is the visible article body with plenty of meaningful prose for the
+readability algorithm to extract as the main content of the page.</p>
+</article>
+</body></html>`;
+    const page = extractMarkdown(fixture, "https://example.com/x");
+    expect(page.title).toBe("t");
+    expect(page.markdown).toContain("Real Heading");
+    expect(page.markdown).not.toContain("sneaky");
+  });
 });
 
 describe("fetchPage", () => {

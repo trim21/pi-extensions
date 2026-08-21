@@ -170,12 +170,28 @@ function classifyContentType(contentType: string): "html" | "text" | null {
 interface ParsedDocument {
   title: string | null;
   body: { textContent: string | null } | null;
+  querySelectorAll(selector: string): readonly {
+    id: string | null;
+    removeAttribute(name: string): void;
+  }[];
+}
+
+/**
+ * React 19 流式 SSR 把尚未 hydrate 的正文放在 <div hidden id="S:N"> 里暂存，
+ * 客户端接管后才移除 hidden。静态抓取时先解除，否则 readability 会把它当
+ * 隐藏内容丢弃，只留下 Suspense fallback（如 "Loading..."）。
+ */
+function unshadowReactStreaming(document: ParsedDocument): void {
+  for (const el of document.querySelectorAll("[hidden]")) {
+    if (/^S:\d+$/.test(el.id ?? "")) el.removeAttribute("hidden");
+  }
 }
 
 /** 从 HTML 提取标题 + 正文 markdown（readability 主内容 → turndown） */
 export function extractMarkdown(html: string, sourceUrl: string): FetchedPage {
   const parsed = parseHTML(html) as { document: ParsedDocument };
   const document = parsed.document;
+  unshadowReactStreaming(document);
   // tsconfig 无 DOM lib；Readability 构造参数声明为 DOM Document，运行时只用到
   // linkedom document 的兼容方法，cast 桥接即可
   const article = new Readability(parsed.document).parse();
