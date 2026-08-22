@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@cortexkit/aft-bridge':
-        specifier: 0.51.3
-        version: 0.51.3
+        specifier: 0.52.0
+        version: 0.52.0
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -246,8 +246,8 @@ packages:
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
     engines: {node: '>=18'}
 
-  '@cortexkit/aft-bridge@0.51.3':
-    resolution: {integrity: sha512-8OkBTPtFnXRMrGe79w7nNOo/qx2xo1f4a7U3WUBNUf6+tsvjTaZDedD464jy8OLy9fEQo33iPXYkeuQScCGrig==}
+  '@cortexkit/aft-bridge@0.52.0':
+    resolution: {integrity: sha512-xJe0VhUgNFeAWD8C+KTAUZAxCGr+LPBADs0nhSl58OOPsEOA7uMJIwO2Ikew0hp6KB9+rsobXip6ePE51fXPqQ==}
 
   '@cortexkit/aft-linux-x64@0.51.3':
     resolution: {integrity: sha512-A66yRJ9laHsK7OUDi4QaPAKWimUYksvby9j4VABz3JTUkRHNqJfCxTca+MvYIoFkbeeLHrhNfy03jmaRqMsfKg==}
@@ -255,8 +255,8 @@ packages:
     os: [linux]
     hasBin: true
 
-  '@cortexkit/subc-client@0.5.0':
-    resolution: {integrity: sha512-kk+cwjngl0DuERweZSQnBiixL9y5xqhipIsjpQgfJpKjN5Tm9c38Afq471Tw0agBu9OZHXhUa0SSbElQHiudBw==}
+  '@cortexkit/subc-client@0.8.1':
+    resolution: {integrity: sha512-8U9w3AnSff0QYlLVzcKOuTULakRtVpcGJrquGHxOQQlWZGzXZdCs8nroLMeoM2xhFGwxIh8xFk832w1KG6akAA==}
     engines: {node: '>=18'}
 
   '@earendil-works/pi-agent-core@0.84.2':
@@ -2356,15 +2356,15 @@ snapshots:
 
   '@bcoe/v8-coverage@1.0.2': {}
 
-  '@cortexkit/aft-bridge@0.51.3':
+  '@cortexkit/aft-bridge@0.52.0':
     dependencies:
-      '@cortexkit/subc-client': 0.5.0
+      '@cortexkit/subc-client': 0.8.1
       undici: 7.29.0
 
   '@cortexkit/aft-linux-x64@0.51.3':
     optional: true
 
-  '@cortexkit/subc-client@0.5.0': {}
+  '@cortexkit/subc-client@0.8.1': {}
 
   '@earendil-works/pi-agent-core@0.84.2(supports-color@7.2.0)(ws@8.21.3)':
     dependencies:
