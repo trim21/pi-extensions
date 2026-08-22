@@ -5,7 +5,7 @@ import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import { type BashOperations, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { type BashOperations, getAgentDir, getShellConfig } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -245,6 +245,8 @@ export function createBwrapBashOperations(
   resolved: ResolvedBwrap,
   workspace: string,
 ): BashOperations {
+  // 沙箱内不透传 PATH，execvp 的默认路径可能找不到 bash（如 NixOS），故在父进程解析绝对路径
+  const shell = getShellConfig().shell;
   return {
     async exec(command, cwd, { onData, signal, timeout }) {
       await fsAccess(cwd, constants.F_OK).catch(() => {
@@ -272,8 +274,8 @@ export function createBwrapBashOperations(
       const child = spawn(
         findBwrap(resolved.bwrapPath),
         seccompFd === undefined
-          ? [...baseArgs, "--", "bash", "-lc", command]
-          : [...baseArgs, "--seccomp", "3", "--", "bash", "-lc", command],
+          ? [...baseArgs, "--", shell, "-lc", command]
+          : [...baseArgs, "--seccomp", "3", "--", shell, "-lc", command],
         {
           cwd,
           detached: true,
