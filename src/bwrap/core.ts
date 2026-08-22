@@ -288,6 +288,8 @@ export function createBwrapBashOperations(
             SHELL: "/bin/bash",
             TERM: "dumb",
             LANG: "C.UTF-8",
+            // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
+            PATH: "/usr/local/bin:/usr/bin:/bin",
           },
         },
       );
