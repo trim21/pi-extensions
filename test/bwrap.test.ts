@@ -171,6 +171,6 @@ describe("buildBwrapArgs", () => {
     const roBindTargets = args.flatMap((value, index) =>
       value === "--ro-bind" ? [args[index + 1]] : [],
     );
-    expect(roBindTargets).toEqual([`${workspace}/.git`]);
+    expect(roBindTargets).toEqual([join(workspace, ".git")]);
   });
 });
