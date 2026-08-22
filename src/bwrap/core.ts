@@ -252,6 +252,12 @@ export function createBwrapBashOperations(
       });
       if (signal?.aborted) throw new Error("aborted");
 
+      // 干净环境：不继承父进程 env/PATH，由 bash -lc 从 /etc/profile 与用户 profile 重建
+      const home = process.env.HOME;
+      if (home === undefined) {
+        throw new Error("HOME is not set; refusing to run bash in a clean environment");
+      }
+
       const seccompFd = resolved.network ? undefined : getSeccompFd();
       const baseArgs = [
         "--ro-bind",
@@ -266,8 +272,8 @@ export function createBwrapBashOperations(
       const child = spawn(
         findBwrap(resolved.bwrapPath),
         seccompFd === undefined
-          ? [...baseArgs, "--", "bash", "-c", command]
-          : [...baseArgs, "--seccomp", "3", "--", "bash", "-c", command],
+          ? [...baseArgs, "--", "bash", "-lc", command]
+          : [...baseArgs, "--seccomp", "3", "--", "bash", "-lc", command],
         {
           cwd,
           detached: true,
@@ -275,7 +281,12 @@ export function createBwrapBashOperations(
             seccompFd === undefined
               ? ["ignore", "pipe", "pipe"]
               : ["ignore", "pipe", "pipe", seccompFd],
-          env: process.env,
+          env: {
+            HOME: home,
+            SHELL: "/bin/bash",
+            TERM: "dumb",
+            LANG: "C.UTF-8",
+          },
         },
       );
 
