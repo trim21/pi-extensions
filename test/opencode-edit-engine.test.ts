@@ -10,6 +10,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyEdit,
+  convertToLineEnding,
   detectLineEnding,
   normalizeForEdit,
   normalizeToLF,
@@ -108,11 +110,41 @@ describe("replace()", () => {
     expect(replace(content, find, "Z")).toBe("x\nZ\ny");
   });
 
-  it("edits CRLF content after normalization and restores CRLF", () => {
-    const raw = "one\r\ntwo\r\nthree\r\n";
-    const normalized = normalizeForEdit(raw);
-    expect(normalized).toBe("one\ntwo\nthree\n");
-    const edited = replace(normalized, "two", "TWO");
-    expect(restoreLineEndings(edited, detectLineEnding(raw))).toBe("one\r\nTWO\r\nthree\r\n");
+  it("replaceAll interpolates $& the way String.prototype.replaceAll does", () => {
+    expect(replace("ab", "a", "$&x", true)).toBe("axb");
+  });
+});
+
+describe("applyEdit()", () => {
+  it("converts LF params to match a CRLF file without doubling CR", () => {
+    const applied = applyEdit("one\r\ntwo\r\nthree\r\n", "two", "TWO");
+    expect(applied.contentNew).toBe("one\r\nTWO\r\nthree\r\n");
+    expect(applied.finalContent).toBe("one\r\nTWO\r\nthree\r\n");
+  });
+
+  it("converts CRLF params to match an LF file", () => {
+    const applied = applyEdit("one\ntwo\nthree\n", "one\r\ntwo", "ONE\r\nTWO");
+    expect(applied.contentNew).toBe("ONE\nTWO\nthree\n");
+  });
+
+  it("does not turn newString CRLF into CRCRLF on a CRLF file", () => {
+    const applied = applyEdit("one\r\ntwo\r\n", "two", "TWO\r\nextra");
+    expect(applied.contentNew).toBe("one\r\nTWO\r\nextra\r\n");
+    expect(applied.contentNew).not.toContain("\r\r\n");
+  });
+
+  it("preserves an existing BOM and does not keep a BOM from the middle of newString", () => {
+    const applied = applyEdit("\uFEFFone\ntwo\n", "two", "TWO");
+    expect(applied.finalContent).toBe("\uFEFFone\nTWO\n");
+  });
+
+  it("promotes a leading BOM from the replacement when the file had none", () => {
+    const applied = applyEdit("one\ntwo\n", "one", "\uFEFFONE");
+    expect(applied.finalContent).toBe("\uFEFFONE\ntwo\n");
+  });
+
+  it("convertToLineEnding is an alias of restoreLineEndings", () => {
+    expect(convertToLineEnding("a\nb", "\r\n")).toBe("a\r\nb");
+    expect(restoreLineEndings("a\nb", "\r\n")).toBe("a\r\nb");
   });
 });

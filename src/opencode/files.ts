@@ -5,21 +5,20 @@
  * service 实例（registerLsp 创建的闭包变量），与 claude-code/files.ts 共享
  * read-snapshot state 的方式一致；不再用模块级全局缓存。
  *
- * 各工具行为对齐 opencode commit 999be62662（v1.2.25-1672-g999be62662,
- * 2026-08-12）：
- * - read：每行 `N: ` 行号前缀、单行 2000 字符截断、1 起始 offset、目录
- *   排序；读取后后台 LSP warm-up（fire-and-forget）。
- * - edit：opencode 匹配引擎（9 个 replacer、0.65 相似度阈值、0.25 行差）；
- *   写后等待文档诊断，ERROR 级追加到输出。
+ * 对齐官方 v1（packages/opencode/src/tool/{read,edit,write}.ts）：
+ * - read：流式分行（LF / CRLF / CR）、每行 `N: ` 行号前缀、单行 2000
+ *   字符截断、1 起始 offset、目录排序；读取后后台 LSP warm-up。
+ *   不接 PDF、不接 <system-reminder>；图片 magic 检测保留。
+ * - edit：匹配引擎 + 把 old/new 转到文件换行后再替换；写后等待文档诊断。
  * - write：BOM 保留（source.bom || next.bom）；写后同 edit 的诊断输出。
  *
- * 匹配引擎（replacers + replace()）在 edit-engine.ts，也被 lib/write-guard
- * 复用。spawn-agent 子代理按工具名加载本文件（`--tools` allowlist 过滤）。
+ * 匹配引擎在 edit-engine.ts，也被 lib/write-guard 复用。
  */
 
-import { constants } from "node:fs";
+import { constants, createReadStream } from "node:fs";
 import { access, mkdir, open, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, resolve as resolvePath, sep } from "node:path";
+import { createInterface } from "node:readline";
 
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -32,13 +31,7 @@ import { Type } from "typebox";
 
 import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
-import {
-  detectLineEnding,
-  normalizeToLF,
-  replace,
-  restoreLineEndings,
-  stripBom,
-} from "./edit-engine.js";
+import { applyEdit, normalizeToLF, stripBom } from "./edit-engine.js";
 
 // ── read 工具 ────────────────────────────────────────────────────────────────
 
@@ -138,19 +131,23 @@ function startsWith(buffer: Uint8Array, bytes: Uint8Array): boolean {
   return bytes.every((b, i) => buffer[i] === b);
 }
 
-async function detectImageMimeTypeFromFile(filePath: string): Promise<string | null> {
+async function readSample(filePath: string): Promise<Uint8Array> {
   try {
     const fileHandle = await open(filePath, "r");
     try {
       const buf = Buffer.alloc(SAMPLE_BYTES);
       const { bytesRead } = await fileHandle.read(buf, 0, SAMPLE_BYTES, 0);
-      return detectImageMimeType(buf.subarray(0, bytesRead));
+      return buf.subarray(0, bytesRead);
     } finally {
       await fileHandle.close();
     }
   } catch {
-    return null;
+    return new Uint8Array();
   }
+}
+
+async function detectImageMimeTypeFromFile(filePath: string): Promise<string | null> {
+  return detectImageMimeType(await readSample(filePath));
 }
 
 function isBinaryExtension(filePath: string): boolean {
@@ -172,68 +169,79 @@ export interface TruncationResult {
   truncated: boolean;
   truncatedBy: "lines" | "bytes" | null;
   totalLines: number;
-  totalBytes: number;
   outputLines: number;
   outputBytes: number;
-  maxLines: number;
-  maxBytes: number;
+  offset: number;
+}
+
+export interface LinePage {
+  raw: string[];
+  count: number;
+  cut: boolean;
+  more: boolean;
+  offset: number;
 }
 
 /**
- * Truncate the head of `content` the way opencode's ReadTool.lines does:
- * - per-line truncation to MAX_LINE_LENGTH chars (with MAX_LINE_SUFFIX)
- * - line cap via maxLines (more)
- * - byte cap via maxBytes, computed on the truncated lines (cut)
+ * Stream a text file the way opencode v1 ReadTool.lines does:
+ * - readline with crlfDelay: Infinity (LF / CRLF / CR as one break)
+ * - per-line truncation to MAX_LINE_LENGTH
+ * - line cap via maxLines (more): keep scanning so count is the file total
+ * - byte cap via maxBytes (cut): stop immediately
  */
-export function truncateHead(
-  content: string,
-  maxLines: number = DEFAULT_MAX_LINES,
-  maxBytes: number = DEFAULT_MAX_BYTES,
-): TruncationResult {
-  const lines = content ? content.split("\n") : [];
-  if (content.endsWith("\n")) lines.pop();
-  const totalLines = lines.length;
-  const totalBytes = Buffer.byteLength(content, "utf8");
+export async function readLines(
+  filePath: string,
+  opts: { offset: number; limit: number; maxBytes?: number },
+): Promise<LinePage> {
+  const start = opts.offset - 1;
+  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+  const raw: string[] = [];
+  let count = 0;
+  let bytes = 0;
+  let cut = false;
+  let more = false;
 
-  const outputLinesArr: string[] = [];
-  let outputBytesCount = 0;
-  let truncated = false;
-  let truncatedBy: "lines" | "bytes" | null = null;
+  const stream = createReadStream(filePath, { encoding: "utf8" });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const text of rl) {
+      count += 1;
+      if (count <= start) continue;
 
-  for (const rawLine of lines) {
-    // opencode: 行数到达 limit 即截断（more）
-    if (outputLinesArr.length >= maxLines) {
-      truncated = true;
-      truncatedBy = "lines";
-      break;
+      if (raw.length >= opts.limit) {
+        more = true;
+        continue;
+      }
+
+      const line =
+        text.length > MAX_LINE_LENGTH ? text.slice(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : text;
+      const size = Buffer.byteLength(line, "utf8") + (raw.length > 0 ? 1 : 0);
+      if (bytes + size > maxBytes) {
+        cut = true;
+        more = true;
+        break;
+      }
+      raw.push(line);
+      bytes += size;
     }
-    // opencode: 单行超过 MAX_LINE_LENGTH 截断并追加提示
-    const line =
-      rawLine.length > MAX_LINE_LENGTH
-        ? rawLine.slice(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX
-        : rawLine;
-    const lineBytes = Buffer.byteLength(line, "utf8") + (outputLinesArr.length > 0 ? 1 : 0);
-    // opencode: 累计字节超 MAX_BYTES 即截断（cut，优先于 more）
-    if (outputBytesCount + lineBytes > maxBytes) {
-      truncated = true;
-      truncatedBy = "bytes";
-      break;
-    }
-    outputLinesArr.push(line);
-    outputBytesCount += lineBytes;
+  } finally {
+    rl.close();
+    stream.destroy();
   }
 
-  const outputContent = outputLinesArr.join("\n");
+  return { raw, count, cut, more, offset: opts.offset };
+}
+
+function truncationFromPage(page: LinePage): TruncationResult {
+  const content = page.raw.join("\n");
   return {
-    content: outputContent,
-    truncated,
-    truncatedBy,
-    totalLines,
-    totalBytes,
-    outputLines: outputLinesArr.length,
-    outputBytes: Buffer.byteLength(outputContent, "utf8"),
-    maxLines,
-    maxBytes,
+    content,
+    truncated: page.more || page.cut,
+    truncatedBy: page.cut ? "bytes" : page.more ? "lines" : null,
+    totalLines: page.count,
+    outputLines: page.raw.length,
+    outputBytes: Buffer.byteLength(content, "utf8"),
+    offset: page.offset,
   };
 }
 
@@ -379,65 +387,41 @@ function registerReadTool(pi: ExtensionAPI, service: LspService): void {
         return { content, details: undefined };
       }
 
-      // Read text content
-      const buffer = await readFile(absolutePath);
-      const sample = buffer.subarray(0, SAMPLE_BYTES);
-
-      // Binary file detection
-      if (isBinaryExtension(absolutePath) || isBinaryFileBySample(sample)) {
+      if (isBinaryExtension(absolutePath) || isBinaryFileBySample(await readSample(absolutePath))) {
         return {
           content: [{ type: "text", text: `Cannot read binary file: ${absolutePath}` }],
           details: undefined,
         };
       }
 
-      const textContent = buffer.toString("utf8");
-      // opencode 用 Stream.splitLines，不含末尾换行产生的空行
-      const allLines = textContent.split("\n");
-      if (textContent.endsWith("\n")) allLines.pop();
-      const totalFileLines = allLines.length;
-
-      // opencode: offset 1 起始，offset=0 视为 1（params.offset || 1）
       const effectiveOffset = offset || 1;
-      const startLine = Math.max(0, effectiveOffset - 1);
+      const page = await readLines(absolutePath, {
+        offset: effectiveOffset,
+        limit: limit ?? DEFAULT_MAX_LINES,
+      });
 
-      // opencode: 越界报错（空文件 + offset=1 除外）
-      if (totalFileLines < effectiveOffset && !(totalFileLines === 0 && effectiveOffset === 1)) {
+      if (page.count < page.offset && !(page.count === 0 && page.offset === 1)) {
         throw new Error(
-          `Offset ${effectiveOffset} is out of range for this file (${totalFileLines} lines)`,
+          `Offset ${page.offset} is out of range for this file (${page.count} lines)`,
         );
       }
 
-      const startLineDisplay = startLine + 1;
-
-      // opencode: limit 即行数上限（默认 2000）
-      const selectedContent = allLines.slice(startLine).join("\n");
-      const truncation = truncateHead(selectedContent, limit ?? DEFAULT_MAX_LINES);
-      let outputText: string;
-
-      const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
+      const last = page.offset + page.raw.length - 1;
+      const next = last + 1;
+      const numbered = page.raw.map((line, i) => `${i + page.offset}: ${line}`).join("\n");
       const header = `<path>${absolutePath}</path>\n<type>file</type>\n<content>\n`;
       const footer = "\n</content>";
-      // opencode: 每行 `${i + offset}: ${line}` 行号前缀
-      const numbered =
-        truncation.content === ""
-          ? ""
-          : truncation.content
-              .split("\n")
-              .map((line, i) => `${startLineDisplay + i}: ${line}`)
-              .join("\n");
 
+      let outputText: string;
       let details: { truncation?: TruncationResult } | undefined;
-      if (truncation.truncated) {
-        const nextOffset = endLineDisplay + 1;
-        if (truncation.truncatedBy === "bytes") {
-          outputText = `${header}${numbered}\n\n(Output capped at ${MAX_BYTES_LABEL}. Showing lines ${startLineDisplay}-${endLineDisplay}. Use offset=${nextOffset} to continue.)${footer}`;
-        } else {
-          outputText = `${header}${numbered}\n\n(Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.)${footer}`;
-        }
-        details = { truncation };
+      if (page.cut) {
+        outputText = `${header}${numbered}\n\n(Output capped at ${MAX_BYTES_LABEL}. Showing lines ${page.offset}-${last}. Use offset=${next} to continue.)${footer}`;
+        details = { truncation: truncationFromPage(page) };
+      } else if (page.more) {
+        outputText = `${header}${numbered}\n\n(Showing lines ${page.offset}-${last} of ${page.count}. Use offset=${next} to continue.)${footer}`;
+        details = { truncation: truncationFromPage(page) };
       } else {
-        outputText = `${header}${numbered}\n\n(End of file - total ${totalFileLines} lines)${footer}`;
+        outputText = `${header}${numbered}\n\n(End of file - total ${page.count} lines)${footer}`;
       }
 
       content = [{ type: "text", text: outputText }];
@@ -535,6 +519,15 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
             ] as const;
           }
 
+          let fileStat: Awaited<ReturnType<typeof stat>>;
+          try {
+            fileStat = await stat(absolutePath);
+          } catch {
+            throw new Error(`File ${absolutePath} not found`);
+          }
+          if (fileStat.isDirectory()) {
+            throw new Error(`Path is a directory, not a file: ${absolutePath}`);
+          }
           try {
             await access(absolutePath, constants.R_OK | constants.W_OK);
           } catch (error: unknown) {
@@ -545,23 +538,15 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
             throw new Error(`Could not edit file: ${filePath}. ${msg}.`, { cause: error });
           }
 
-          const buffer = await readFile(absolutePath);
-          const rawContent = buffer.toString("utf8");
-
-          // Strip BOM then normalize line endings to LF.
-          // The opencode replacers split on \n and expect only LF.
-          const { bom, text: content } = stripBom(rawContent);
-          const originalEnding = detectLineEnding(content);
-          const normalizedContent = normalizeToLF(content);
-
-          const newContent = replace(normalizedContent, oldString, newString, replaceAll);
+          const rawContent = await readFile(absolutePath, "utf8");
+          const applied = applyEdit(rawContent, oldString, newString, replaceAll);
           signal?.throwIfAborted();
+          await writeFile(absolutePath, applied.finalContent, "utf8");
 
-          const finalContent = bom + restoreLineEndings(newContent, originalEnding);
-          await writeFile(absolutePath, finalContent, "utf8");
-
-          const diffResult = generateDiffString(normalizedContent, newContent);
-          const patch = generateUnifiedPatch(filePath, normalizedContent, newContent);
+          const diffOld = normalizeToLF(applied.contentOld);
+          const diffNew = normalizeToLF(applied.contentNew);
+          const diffResult = generateDiffString(diffOld, diffNew);
+          const patch = generateUnifiedPatch(filePath, diffOld, diffNew);
           const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, {
             signal,
           });

@@ -21,6 +21,8 @@ import opencodeTodo from "./todo.js";
 
 export { default as opencodeBash } from "./bash.js";
 export {
+  applyEdit,
+  convertToLineEnding,
   detectLineEnding,
   normalizeForEdit,
   normalizeToLF,
@@ -30,8 +32,8 @@ export {
 } from "./edit-engine.js";
 export {
   default as opencodeFileTools,
+  readLines,
   resolveBom,
-  truncateHead,
   type TruncationResult,
 } from "./files.js";
 export { default as opencodeQuestion } from "./question.js";
