@@ -19,7 +19,11 @@ import {
   findSimilarFile,
   suggestPathUnderCwd,
 } from "../src/claude-code/common.js";
-import claudeCodeFileTools, { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
+import claudeCodeFileTools, {
+  exactReplace,
+  FILE_UNCHANGED_STUB,
+  formatReadOutput,
+} from "../src/claude-code/files.js";
 import claudeCodeGlobTool, { globFiles } from "../src/claude-code/glob.js";
 import claudeCodeGrepTool, {
   sortFilesByMtime,
@@ -534,6 +538,70 @@ describe("Read, Edit, and Write", () => {
       /File does not exist\. Note: your current working directory is .*Did you mean note\.js\?/,
     );
   });
+
+  it("reports EISDIR when reading a directory (Claude Code wording)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-read-dir-"));
+    const tools = loadTools();
+    await expect(
+      call(tools.get("Read")!, { file_path: directory }, context(directory)),
+    ).rejects.toThrow(`EISDIR: illegal operation on a directory, read '${directory}'`);
+  });
+
+  it("accepts offset 0 and numbers lines from 0 (Claude Code semantics)", async () => {
+    expect(formatReadOutput("one\ntwo\n", 0)).toEqual({
+      text: "0\tone\n1\ttwo\n2\t",
+      totalLines: 3,
+    });
+    const directory = await mkdtemp(join(tmpdir(), "cc-read-offset0-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "one\ntwo\n", "utf8");
+    const tools = loadTools();
+    const result = await call(
+      tools.get("Read")!,
+      { file_path: filePath, offset: 0 },
+      context(directory),
+    );
+    expect(result.content[0].text).toBe("0\tone\n1\ttwo\n2\t");
+  });
+
+  it("dedupes repeated reads of the same range while the file is unchanged", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-read-dedup-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "one\ntwo\nthree\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+
+    const first = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(first.content[0].text).toContain("1\tone");
+    // 同范围重复读 → stub
+    const second = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(second.content[0].text).toBe(FILE_UNCHANGED_STUB);
+    // 不同范围不 dedup
+    const partial = await call(tools.get("Read")!, { file_path: filePath, limit: 2 }, ctx);
+    expect(partial.content[0].text).toContain("1\tone");
+    // 文件被外部修改 → 不 dedup，返回新内容
+    await writeFile(filePath, "changed\n", "utf8");
+    const third = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(third.content[0].text).toContain("1\tchanged");
+  });
+
+  it("re-reads after Edit instead of deduping", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-read-dedup-edit-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "one\ntwo\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+
+    await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    await call(
+      tools.get("Edit")!,
+      { file_path: filePath, old_string: "one", new_string: "ONE" },
+      ctx,
+    );
+    // Edit 覆盖了 reads 记录（无 offset/limit）→ 同范围 Read 不 dedup，返回新内容
+    const result = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(result.content[0].text).toContain("1\tONE");
+  });
 });
 
 describe("did-you-mean suggestions", () => {
@@ -615,6 +683,20 @@ describe("reads state restore on session_start", () => {
     expect(deserializeReads(null)).toEqual(new Map());
     expect(deserializeReads([{ digest: "x", textEditable: true }])).toEqual(new Map());
     expect(deserializeReads(undefined)).toEqual(new Map());
+  });
+
+  it("accepts snapshots carrying Read dedup range fields", () => {
+    expect(
+      deserializeReads({
+        "/a.txt": { digest: "abc", textEditable: true, offset: 1, limit: 10 },
+        "/b.txt": { digest: "def", textEditable: true, offset: 0 },
+      }),
+    ).toEqual(
+      new Map([
+        ["/a.txt", { digest: "abc", textEditable: true, offset: 1, limit: 10 }],
+        ["/b.txt", { digest: "def", textEditable: true, offset: 0 }],
+      ]),
+    );
   });
 
   it("lets Edit proceed after restoring a prior Read from session history", async () => {
