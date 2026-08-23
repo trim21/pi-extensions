@@ -110,8 +110,8 @@ importers:
         version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0))
     optionalDependencies:
       '@cortexkit/aft-linux-x64':
-        specifier: 0.52.0
-        version: 0.52.0
+        specifier: 0.52.1
+        version: 0.52.1
 
 packages:
 
@@ -249,8 +249,8 @@ packages:
   '@cortexkit/aft-bridge@0.52.1':
     resolution: {integrity: sha512-0iQP1+MeNcxoRXUCFgDQaKplgbUhtMQxSdSb7tcz61KC+GziuCkCptgTs0A4plx5YQWhYGQkkcUZyOM9DonbnA==}
 
-  '@cortexkit/aft-linux-x64@0.52.0':
-    resolution: {integrity: sha512-hqgqXiO4Ndyn3tZfqL9ZZDd+BhQtQnKf5elr2zOJ9HGy4sPKs69t9169zLPDSQvBta1fwOj0mEIcgCwA5YXsdQ==}
+  '@cortexkit/aft-linux-x64@0.52.1':
+    resolution: {integrity: sha512-u7IxBF+j1wkCbcVIWHs+Q4DkGeLavRKUw36c4LdJ6ts0YIQuA3s9LRS9fu7CX4rw2c4RBcHEypGTp9X1niJqXg==}
     cpu: [x64]
     os: [linux]
     hasBin: true
@@ -2367,7 +2367,7 @@ snapshots:
       '@cortexkit/subc-client': 0.8.1
       undici: 7.29.0
 
-  '@cortexkit/aft-linux-x64@0.52.0':
+  '@cortexkit/aft-linux-x64@0.52.1':
     optional: true
 
   '@cortexkit/subc-client@0.8.1': {}
