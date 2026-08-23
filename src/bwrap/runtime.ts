@@ -16,6 +16,7 @@ import {
 import { type TObject, Type } from "typebox";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
+import { formatDisplayPath } from "../lib/path.js";
 import {
   type CheckboxAction,
   type SelectAction,
@@ -533,9 +534,10 @@ export class BwrapRuntime {
       );
     }
     lines.push(fenceCodeBlock(command));
-    // 执行目录与工作区不同时，提示实际执行目录（execCwd 是解析后的绝对路径）
+    // 执行目录与工作区不同时，提示实际执行目录（execCwd 是解析后的绝对路径，
+    // 显示用 pretty path 风格：home 内 `~/…`，否则绝对路径）
     if (execCwd !== ctx.cwd) {
-      lines.push(`Workdir: ${escapeHtml(execCwd)}`);
+      lines.push(`Workdir: ${escapeHtml(formatDisplayPath(ctx.cwd, execCwd))}`);
     }
     const description = lines.join("\n");
 

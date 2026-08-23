@@ -1,9 +1,9 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { expandHome, resolveHomePath } from "../src/lib/path.js";
+import { expandHome, formatDisplayPath, resolveHomePath } from "../src/lib/path.js";
 
 describe("expandHome", () => {
   it("expands ~ and ~/ to the home directory", () => {
@@ -36,5 +36,23 @@ describe("resolveHomePath", () => {
 
   it("expands ~ before resolving", () => {
     expect(resolveHomePath("~/talk.db", "/base")).toBe(join(homedir(), "talk.db"));
+  });
+});
+
+describe("formatDisplayPath", () => {
+  const cwd = resolve("/work", "project");
+
+  // 显示路径用 path.relative 生成，Windows 上分隔符是 \，断言按 POSIX 风格写的
+  it.skipIf(process.platform === "win32")("uses ./… for paths inside cwd", () => {
+    expect(formatDisplayPath(cwd, resolve(cwd, "src/app.ts"))).toBe("./src/app.ts");
+  });
+
+  it("uses ~/… for paths inside home but outside cwd", () => {
+    const homePath = join(homedir(), "config", "app.json");
+    expect(formatDisplayPath(cwd, homePath)).toBe(`~/${join("config", "app.json")}`);
+  });
+
+  it("keeps absolute paths outside cwd and home", () => {
+    expect(formatDisplayPath(cwd, "/etc/passwd")).toBe("/etc/passwd");
   });
 });

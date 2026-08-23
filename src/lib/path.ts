@@ -4,7 +4,7 @@
 
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 /**
  * Expand a leading `~` to the user's home directory.
@@ -45,4 +45,17 @@ export async function resolveWorkdir(workdir: string, baseDir: string): Promise<
     throw new Error(`Working directory is not a directory: ${target}`);
   }
   return target;
+}
+
+/** 人类可读的显示路径：cwd 内用 `./…`，home 内用 `~/…`，否则原样绝对路径。 */
+export function formatDisplayPath(cwd: string, filePath: string): string {
+  const relToCwd = relative(cwd, filePath);
+  if (relToCwd !== "" && !relToCwd.startsWith("..") && !isAbsolute(relToCwd)) {
+    return `./${relToCwd}`;
+  }
+  const relToHome = relative(homedir(), filePath);
+  if (relToHome !== "" && !relToHome.startsWith("..") && !isAbsolute(relToHome)) {
+    return `~/${relToHome}`;
+  }
+  return filePath;
 }
