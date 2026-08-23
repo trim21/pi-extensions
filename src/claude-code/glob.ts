@@ -88,9 +88,13 @@ export async function globFiles(
     stdout = result.stdout;
   } catch (error) {
     if (signal?.aborted) throwIfAborted(signal);
-    throw new Error(`ripgrep failed: ${error instanceof Error ? error.message : String(error)}`, {
-      cause: error,
-    });
+    // rg exit code 1 = 搜索完成但无匹配，对齐 Claude Code 的 ripGrep（正常空结果）
+    const code = (error as { code?: unknown }).code;
+    if (code === 1) return { files: [], truncated: false };
+    const detail =
+      (error as { stderr?: string }).stderr?.trim() ||
+      (error instanceof Error ? error.message : String(error));
+    throw new Error(`ripgrep failed: ${detail}`, { cause: error });
   }
   // rg 输出相对 searchDir 的路径，转成绝对路径
   const lines = stdout ? stdout.replace(/\n$/, "").split("\n") : [];

@@ -840,6 +840,19 @@ describe("Glob and Grep", () => {
     expect(absolute.files).toEqual(files);
   });
 
+  it("treats a glob with no matches as an empty result, not an error", async () => {
+    // rg exit code 1 = no matches，应对齐 Claude Code 返回空结果而非 ripgrep failed
+    const directory = await mkdtemp(join(tmpdir(), "cc-glob-empty-"));
+    await expect(globFiles("*.txt", directory)).resolves.toEqual({
+      files: [],
+      truncated: false,
+    });
+
+    const tools = loadTools();
+    const result = await call(tools.get("Glob")!, { pattern: "*.txt" }, context(directory));
+    expect(result.content[0].text).toBe("No files found");
+  });
+
   it("sorts and paginates Grep file matches with the default head limit", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-grep-exec-"));
     const a = join(directory, "a.txt");
