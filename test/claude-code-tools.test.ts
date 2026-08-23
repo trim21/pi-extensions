@@ -363,6 +363,46 @@ describe("Read, Edit, and Write", () => {
     expect(await readFile(filePath, "utf8")).toBe("x b x\n");
   });
 
+  it("deletes a whole line without leaving a blank line (Claude Code applyEditToFile semantics)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-edit-delete-line-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "a\nb\nc\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+    await call(tools.get("Read")!, { file_path: filePath }, ctx);
+
+    // old_string 不带换行但文件里是 "b\n"：连换行一起删，不留空行
+    await call(tools.get("Edit")!, { file_path: filePath, old_string: "b", new_string: "" }, ctx);
+    expect(await readFile(filePath, "utf8")).toBe("a\nc\n");
+
+    // old_string 本身带换行：直接删，不叠加行尾删除
+    await call(tools.get("Edit")!, { file_path: filePath, old_string: "a\n", new_string: "" }, ctx);
+    expect(await readFile(filePath, "utf8")).toBe("c\n");
+  });
+
+  it("keeps tabs on disk but renders leading tabs as spaces in the displayed patch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-edit-tab-display-"));
+    const filePath = join(directory, "main.go");
+    await writeFile(filePath, "package main\n\nfunc main() {\n\tprintln(1)\n}\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+    await call(tools.get("Read")!, { file_path: filePath }, ctx);
+
+    const result = await call(
+      tools.get("Edit")!,
+      { file_path: filePath, old_string: "\tprintln(1)", new_string: "\tprintln(2)" },
+      ctx,
+    );
+    // 写盘保留 tab 缩进
+    expect(await readFile(filePath, "utf8")).toBe(
+      "package main\n\nfunc main() {\n\tprintln(2)\n}\n",
+    );
+    // 显示的 patch/diff 里前导 tab 转成 2 空格
+    expect(result.details.patch).toContain("  println(2)");
+    expect(result.details.patch).not.toContain("\tprintln(2)");
+    expect(result.details.diff).not.toContain("\tprintln(2)");
+  });
+
   it("creates and fills files with an empty old_string edit", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-edit-create-"));
     const newFile = join(directory, "nested", "created.txt");

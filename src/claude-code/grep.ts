@@ -284,7 +284,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
 
       if (mode === "files_with_matches") {
         if (stdout === "") {
-          return { content: [{ type: "text", text: "No files found" }] };
+          return { content: [{ type: "text", text: "No files found" }], details: undefined };
         }
         const sorted = await sortFilesByMtime(stdout);
         const { lines, appliedLimit, appliedOffset } = pageGrepOutput(sorted, offset, headLimit);
@@ -295,6 +295,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
         );
         return {
           content: [{ type: "text", text }],
+          details: undefined,
         };
       }
 
@@ -307,6 +308,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
                 text: "No matches found\n\nFound 0 total occurrences across 0 files.",
               },
             ],
+            details: undefined,
           };
         }
         const { lines, appliedLimit, appliedOffset } = pageGrepOutput(stdout, offset, headLimit);
@@ -323,12 +325,13 @@ export function registerGrepTool(pi: ExtensionAPI): void {
               ),
             },
           ],
+          details: undefined,
         };
       }
 
       // content mode
       if (stdout === "") {
-        return { content: [{ type: "text", text: "No matches found" }] };
+        return { content: [{ type: "text", text: "No matches found" }], details: undefined };
       }
       const { lines, appliedLimit, appliedOffset } = pageGrepOutput(stdout, offset, headLimit);
       const relativized = lines.map((line) => relativizeContentLine(line, ctx.cwd)).join("\n");
@@ -338,7 +341,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
           ? `${relativized}\n\n[Showing results with pagination = ${limitInfo}]`
           : relativized,
       );
-      return { content: [{ type: "text", text }] };
+      return { content: [{ type: "text", text }], details: undefined };
     },
   });
 }

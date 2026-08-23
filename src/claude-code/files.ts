@@ -26,7 +26,7 @@ import {
   snapshotsEqual,
   throwIfAborted,
 } from "./common.js";
-import { findActualString, preserveQuoteStyle } from "./edit-utils.js";
+import { convertLeadingTabsToSpaces, findActualString, preserveQuoteStyle } from "./edit-utils.js";
 
 const SAMPLE_BYTES = 4096;
 
@@ -388,7 +388,7 @@ export function registerFileTools(
           const snapshot = snapshotOf(newString);
           const key = await readStateKey(filePath);
           state.reads.set(key, snapshot);
-          const diff = generateDiffString("", newString);
+          const diff = generateDiffString("", convertLeadingTabsToSpaces(newString));
           throwIfAborted(signal);
           const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
             notify: (message, level) => ctx.ui.notify(message, level),
@@ -398,7 +398,7 @@ export function registerFileTools(
             `The file ${filePath} has been updated successfully.`,
             {
               diff: diff.diff,
-              patch: generateUnifiedPatch(filePath, "", newString),
+              patch: generateUnifiedPatch(filePath, "", convertLeadingTabsToSpaces(newString)),
               firstChangedLine: diff.firstChangedLine,
               reads: { [key]: snapshot },
             },
@@ -459,15 +459,30 @@ export function registerFileTools(
           );
         }
         const actualNewString = preserveQuoteStyle(oldString, actualOldString, newString);
+        // 删除场景（new_string 为空）：old_string 不以换行结尾且文件里是
+        // "old_string\n" 时连换行一起删，避免留下空行（对齐 Claude Code
+        // applyEditToFile 的 stripTrailingNewline 语义）
+        let searchString = actualOldString;
+        if (
+          actualNewString === "" &&
+          !actualOldString.endsWith("\n") &&
+          normalized.includes(actualOldString + "\n")
+        ) {
+          searchString = actualOldString + "\n";
+        }
         // split/join 与函数替换：replacement 含 $ 时不会触发 $& 等特殊语义
         const updated = replaceAll
-          ? normalized.split(actualOldString).join(actualNewString)
-          : normalized.replace(actualOldString, () => actualNewString);
+          ? normalized.split(searchString).join(actualNewString)
+          : normalized.replace(searchString, () => actualNewString);
         const restored = lineEnding === "\r\n" ? updated.replaceAll("\n", "\r\n") : updated;
         await writeFile(filePath, restored, "utf8");
         const snapshot = snapshotOf(restored);
         state.reads.set(key, snapshot);
-        const diff = generateDiffString(original, restored);
+        // patch/diff 仅供显示：前导 tab 转空格，避免 UI 渲染错位（对齐 Claude Code）
+        const diff = generateDiffString(
+          convertLeadingTabsToSpaces(original),
+          convertLeadingTabsToSpaces(restored),
+        );
         const text = replaceAll
           ? `The file ${filePath} has been updated. All occurrences were successfully replaced.`
           : `The file ${filePath} has been updated successfully.`;
@@ -479,7 +494,11 @@ export function registerFileTools(
           text,
           {
             diff: diff.diff,
-            patch: generateUnifiedPatch(filePath, original, restored),
+            patch: generateUnifiedPatch(
+              filePath,
+              convertLeadingTabsToSpaces(original),
+              convertLeadingTabsToSpaces(restored),
+            ),
             firstChangedLine: diff.firstChangedLine,
             reads: { [key]: snapshot },
           },
