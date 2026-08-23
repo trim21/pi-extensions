@@ -284,7 +284,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
 
       if (mode === "files_with_matches") {
         if (stdout === "") {
-          return { content: [{ type: "text", text: "No files found" }], details: { matches: 0 } };
+          return { content: [{ type: "text", text: "No files found" }] };
         }
         const sorted = await sortFilesByMtime(stdout);
         const { lines, appliedLimit, appliedOffset } = pageGrepOutput(sorted, offset, headLimit);
@@ -293,7 +293,9 @@ export function registerGrepTool(pi: ExtensionAPI): void {
         const text = truncateOutput(
           `Found ${filenames.length} ${filenames.length === 1 ? "file" : "files"}${limitInfo ? ` ${limitInfo}` : ""}\n${filenames.join("\n")}`,
         );
-        return { content: [{ type: "text", text }], details: { matches: filenames.length } };
+        return {
+          content: [{ type: "text", text }],
+        };
       }
 
       if (mode === "count") {
@@ -305,7 +307,6 @@ export function registerGrepTool(pi: ExtensionAPI): void {
                 text: "No matches found\n\nFound 0 total occurrences across 0 files.",
               },
             ],
-            details: undefined,
           };
         }
         const { lines, appliedLimit, appliedOffset } = pageGrepOutput(stdout, offset, headLimit);
@@ -322,13 +323,12 @@ export function registerGrepTool(pi: ExtensionAPI): void {
               ),
             },
           ],
-          details: undefined,
         };
       }
 
       // content mode
       if (stdout === "") {
-        return { content: [{ type: "text", text: "No matches found" }], details: undefined };
+        return { content: [{ type: "text", text: "No matches found" }] };
       }
       const { lines, appliedLimit, appliedOffset } = pageGrepOutput(stdout, offset, headLimit);
       const relativized = lines.map((line) => relativizeContentLine(line, ctx.cwd)).join("\n");
@@ -338,7 +338,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
           ? `${relativized}\n\n[Showing results with pagination = ${limitInfo}]`
           : relativized,
       );
-      return { content: [{ type: "text", text }], details: undefined };
+      return { content: [{ type: "text", text }] };
     },
   });
 }

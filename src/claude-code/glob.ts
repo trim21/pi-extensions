@@ -153,7 +153,7 @@ export function registerGlobTool(pi: ExtensionAPI): void {
         : filenames;
       return {
         content: [{ type: "text", text: lines.length > 0 ? lines.join("\n") : "No files found" }],
-        details: { count: filenames.length },
+        details: undefined,
       };
     },
   });
