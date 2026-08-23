@@ -27,6 +27,7 @@ pull_request_rules:
             - "head*=renovate/lockfile-maintenance-*"
             - "created-at>24h ago"
       - check-success=check
+      - check-success=windows
     actions:
       queue:
         name: default
