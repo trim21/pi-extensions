@@ -25,6 +25,7 @@ src/
 ├── opencode/     # opencode 风格工具集（index.ts 为扩展入口）
 ├── lib/          # 跨扩展共享工具（cli、path、pendant、ui、write-guard）
 ├── talk/         # agent 间通信（SQLite 邮箱）
+├── openai-cost/  # OpenAI Chat Completions，费用取自 usage.cost
 └── *.ts          # 单文件扩展（gh-readonly、session-name、spawn-agent、vision-agent）
 test/             # Vitest 测试，文件与 src 对应
 bin/              # 辅助脚本（如 gen_seccomp.py，经 pixi 运行）
