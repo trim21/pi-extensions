@@ -6,10 +6,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildOutlineSubtitle,
   buildZoomSubtitle,
-  formatDisplayPath,
   formatSubtitlePath,
   resolvePathArg,
 } from "../src/aft/tools.js";
+import { formatDisplayPath } from "../src/lib/path.js";
 
 describe("resolvePathArg", () => {
   const cwd = resolve("/work", "project");
@@ -31,24 +31,6 @@ describe("resolvePathArg", () => {
 
   it("keeps URLs unchanged", () => {
     expect(resolvePathArg(cwd, "https://example.com/a.md")).toBe("https://example.com/a.md");
-  });
-});
-
-describe("formatDisplayPath", () => {
-  const cwd = resolve("/work", "project");
-
-  // 显示路径用 path.relative 生成，Windows 上分隔符是 \，断言按 POSIX 风格写的
-  it.skipIf(process.platform === "win32")("uses ./… for paths inside cwd", () => {
-    expect(formatDisplayPath(cwd, resolve(cwd, "src/app.ts"))).toBe("./src/app.ts");
-  });
-
-  it("uses ~/… for paths inside home but outside cwd", () => {
-    const homePath = join(homedir(), "config", "app.json");
-    expect(formatDisplayPath(cwd, homePath)).toBe(`~/${join("config", "app.json")}`);
-  });
-
-  it("keeps absolute paths outside cwd and home", () => {
-    expect(formatDisplayPath(cwd, "/etc/passwd")).toBe("/etc/passwd");
   });
 });
 

@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -23,6 +23,7 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { formatDisplayPath } from "../lib/path.js";
 import { type ToolPendant } from "../lib/pendant.js";
 import { callAftTool, SEMANTIC_INDEX_WAIT_TIMEOUT_MS } from "./bridge.js";
 
@@ -48,19 +49,6 @@ export function resolvePathArg(cwd: string, input: string): string {
   }
   if (input.startsWith("http://") || input.startsWith("https://")) return input;
   return isAbsolute(input) ? input : resolve(cwd, input);
-}
-
-/** 人类可读的显示路径：cwd 内用 `./…`，home 内用 `~/…`，否则原样绝对路径。 */
-export function formatDisplayPath(cwd: string, filePath: string): string {
-  const relToCwd = relative(cwd, filePath);
-  if (relToCwd !== "" && !relToCwd.startsWith("..") && !isAbsolute(relToCwd)) {
-    return `./${relToCwd}`;
-  }
-  const relToHome = relative(homedir(), filePath);
-  if (relToHome !== "" && !relToHome.startsWith("..") && !isAbsolute(relToHome)) {
-    return `~/${relToHome}`;
-  }
-  return filePath;
 }
 
 /** subtitle 中路径的最大显示长度，超过时退化为仅文件名。 */

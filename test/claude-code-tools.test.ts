@@ -19,7 +19,11 @@ import {
   findSimilarFile,
   suggestPathUnderCwd,
 } from "../src/claude-code/common.js";
-import claudeCodeFileTools, { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
+import claudeCodeFileTools, {
+  exactReplace,
+  FILE_UNCHANGED_STUB,
+  formatReadOutput,
+} from "../src/claude-code/files.js";
 import claudeCodeGlobTool, { globFiles } from "../src/claude-code/glob.js";
 import claudeCodeGrepTool, {
   sortFilesByMtime,
@@ -363,6 +367,46 @@ describe("Read, Edit, and Write", () => {
     expect(await readFile(filePath, "utf8")).toBe("x b x\n");
   });
 
+  it("deletes a whole line without leaving a blank line (Claude Code applyEditToFile semantics)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-edit-delete-line-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "a\nb\nc\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+    await call(tools.get("Read")!, { file_path: filePath }, ctx);
+
+    // old_string 不带换行但文件里是 "b\n"：连换行一起删，不留空行
+    await call(tools.get("Edit")!, { file_path: filePath, old_string: "b", new_string: "" }, ctx);
+    expect(await readFile(filePath, "utf8")).toBe("a\nc\n");
+
+    // old_string 本身带换行：直接删，不叠加行尾删除
+    await call(tools.get("Edit")!, { file_path: filePath, old_string: "a\n", new_string: "" }, ctx);
+    expect(await readFile(filePath, "utf8")).toBe("c\n");
+  });
+
+  it("keeps tabs on disk but renders leading tabs as spaces in the displayed patch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-edit-tab-display-"));
+    const filePath = join(directory, "main.go");
+    await writeFile(filePath, "package main\n\nfunc main() {\n\tprintln(1)\n}\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+    await call(tools.get("Read")!, { file_path: filePath }, ctx);
+
+    const result = await call(
+      tools.get("Edit")!,
+      { file_path: filePath, old_string: "\tprintln(1)", new_string: "\tprintln(2)" },
+      ctx,
+    );
+    // 写盘保留 tab 缩进
+    expect(await readFile(filePath, "utf8")).toBe(
+      "package main\n\nfunc main() {\n\tprintln(2)\n}\n",
+    );
+    // 显示的 patch/diff 里前导 tab 转成 2 空格
+    expect(result.details.patch).toContain("  println(2)");
+    expect(result.details.patch).not.toContain("\tprintln(2)");
+    expect(result.details.diff).not.toContain("\tprintln(2)");
+  });
+
   it("creates and fills files with an empty old_string edit", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-edit-create-"));
     const newFile = join(directory, "nested", "created.txt");
@@ -494,6 +538,70 @@ describe("Read, Edit, and Write", () => {
       /File does not exist\. Note: your current working directory is .*Did you mean note\.js\?/,
     );
   });
+
+  it("reports EISDIR when reading a directory (Claude Code wording)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-read-dir-"));
+    const tools = loadTools();
+    await expect(
+      call(tools.get("Read")!, { file_path: directory }, context(directory)),
+    ).rejects.toThrow(`EISDIR: illegal operation on a directory, read '${directory}'`);
+  });
+
+  it("accepts offset 0 and numbers lines from 0 (Claude Code semantics)", async () => {
+    expect(formatReadOutput("one\ntwo\n", 0)).toEqual({
+      text: "0\tone\n1\ttwo\n2\t",
+      totalLines: 3,
+    });
+    const directory = await mkdtemp(join(tmpdir(), "cc-read-offset0-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "one\ntwo\n", "utf8");
+    const tools = loadTools();
+    const result = await call(
+      tools.get("Read")!,
+      { file_path: filePath, offset: 0 },
+      context(directory),
+    );
+    expect(result.content[0].text).toBe("0\tone\n1\ttwo\n2\t");
+  });
+
+  it("dedupes repeated reads of the same range while the file is unchanged", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-read-dedup-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "one\ntwo\nthree\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+
+    const first = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(first.content[0].text).toContain("1\tone");
+    // 同范围重复读 → stub
+    const second = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(second.content[0].text).toBe(FILE_UNCHANGED_STUB);
+    // 不同范围不 dedup
+    const partial = await call(tools.get("Read")!, { file_path: filePath, limit: 2 }, ctx);
+    expect(partial.content[0].text).toContain("1\tone");
+    // 文件被外部修改 → 不 dedup，返回新内容
+    await writeFile(filePath, "changed\n", "utf8");
+    const third = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(third.content[0].text).toContain("1\tchanged");
+  });
+
+  it("re-reads after Edit instead of deduping", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-read-dedup-edit-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "one\ntwo\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+
+    await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    await call(
+      tools.get("Edit")!,
+      { file_path: filePath, old_string: "one", new_string: "ONE" },
+      ctx,
+    );
+    // Edit 覆盖了 reads 记录（无 offset/limit）→ 同范围 Read 不 dedup，返回新内容
+    const result = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(result.content[0].text).toContain("1\tONE");
+  });
 });
 
 describe("did-you-mean suggestions", () => {
@@ -575,6 +683,20 @@ describe("reads state restore on session_start", () => {
     expect(deserializeReads(null)).toEqual(new Map());
     expect(deserializeReads([{ digest: "x", textEditable: true }])).toEqual(new Map());
     expect(deserializeReads(undefined)).toEqual(new Map());
+  });
+
+  it("accepts snapshots carrying Read dedup range fields", () => {
+    expect(
+      deserializeReads({
+        "/a.txt": { digest: "abc", textEditable: true, offset: 1, limit: 10 },
+        "/b.txt": { digest: "def", textEditable: true, offset: 0 },
+      }),
+    ).toEqual(
+      new Map([
+        ["/a.txt", { digest: "abc", textEditable: true, offset: 1, limit: 10 }],
+        ["/b.txt", { digest: "def", textEditable: true, offset: 0 }],
+      ]),
+    );
   });
 
   it("lets Edit proceed after restoring a prior Read from session history", async () => {
@@ -838,6 +960,19 @@ describe("Glob and Grep", () => {
     // --hidden 包含隐藏文件，绝对 pattern 提取 baseDir 后同样生效
     const absolute = await globFiles(join(directory, "*.txt"), directory);
     expect(absolute.files).toEqual(files);
+  });
+
+  it("treats a glob with no matches as an empty result, not an error", async () => {
+    // rg exit code 1 = no matches，应对齐 Claude Code 返回空结果而非 ripgrep failed
+    const directory = await mkdtemp(join(tmpdir(), "cc-glob-empty-"));
+    await expect(globFiles("*.txt", directory)).resolves.toEqual({
+      files: [],
+      truncated: false,
+    });
+
+    const tools = loadTools();
+    const result = await call(tools.get("Glob")!, { pattern: "*.txt" }, context(directory));
+    expect(result.content[0].text).toBe("No files found");
   });
 
   it("sorts and paginates Grep file matches with the default head limit", async () => {
