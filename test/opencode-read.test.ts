@@ -1,7 +1,7 @@
 /**
  * Tests for the opencode-aligned read extension:
- * - truncateHead: line cap, byte cap, single-line 2000-char truncation,
- *   trailing-newline handling, no-truncation fast path
+ * - readLines: line/byte caps, single-line 2000-char truncation, CRLF/CR,
+ *   empty files, trailing-newline handling
  * - execute: text files with line numbers/offset/limit, directory listing,
  *   did-you-mean suggestions, image detection, binary rejection
  */
@@ -11,67 +11,92 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import opencodeFileTools, { truncateHead } from "../src/opencode/files.js";
+import opencodeFileTools, { readLines } from "../src/opencode/files.js";
 
 const MAX_LINE_LENGTH = 2000;
 const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`;
 
-describe("truncateHead", () => {
-  it("returns content unchanged when within limits", () => {
-    const result = truncateHead("a\nb\nc", 2000, 50 * 1024);
-    expect(result).toMatchObject({
-      content: "a\nb\nc",
-      truncated: false,
-      truncatedBy: null,
-      totalLines: 3,
-      outputLines: 3,
+describe("readLines", () => {
+  let dir: string;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "opencode-readlines-"));
+  });
+
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function write(name: string, content: string | Buffer): Promise<string> {
+    const path = join(dir, name);
+    await writeFile(path, content);
+    return path;
+  }
+
+  it("returns all lines when within limits", async () => {
+    const path = await write("small.txt", "a\nb\nc");
+    const page = await readLines(path, { offset: 1, limit: 2000 });
+    expect(page).toMatchObject({ raw: ["a", "b", "c"], count: 3, cut: false, more: false });
+  });
+
+  it("does not truncate when line count exactly equals the limit", async () => {
+    const path = await write("exact.txt", "a\nb");
+    const page = await readLines(path, { offset: 1, limit: 2 });
+    expect(page).toMatchObject({ raw: ["a", "b"], count: 2, more: false });
+  });
+
+  it("keeps scanning after a line cap so count is the file total", async () => {
+    const path = await write("more.txt", "1\n2\n3\n4\n5");
+    const page = await readLines(path, { offset: 1, limit: 2 });
+    expect(page).toMatchObject({
+      raw: ["1", "2"],
+      count: 5,
+      cut: false,
+      more: true,
     });
   });
 
-  it("does not truncate when line count exactly equals maxLines", () => {
-    const result = truncateHead("a\nb", 2, 50 * 1024);
-    expect(result.truncated).toBe(false);
-    expect(result.outputLines).toBe(2);
-  });
-
-  it("truncates by lines when exceeding maxLines", () => {
-    const result = truncateHead("1\n2\n3\n4\n5", 2, 50 * 1024);
-    expect(result).toMatchObject({
-      content: "1\n2",
-      truncated: true,
-      truncatedBy: "lines",
-      totalLines: 5,
-      outputLines: 2,
+  it("stops immediately when the byte cap is hit", async () => {
+    const path = await write("bytes.txt", "aaaaaa\nbbbbbb");
+    const page = await readLines(path, { offset: 1, limit: 2000, maxBytes: 10 });
+    expect(page).toMatchObject({
+      raw: ["aaaaaa"],
+      cut: true,
+      more: true,
     });
+    expect(page.count).toBe(2);
   });
 
-  it("truncates by bytes before the offending line", () => {
-    // 每行 6 字节 + 换行 1 字节；maxBytes=10 → 第二行累计 13 > 10
-    const result = truncateHead("aaaaaa\nbbbbbb", 2000, 10);
-    expect(result).toMatchObject({
-      content: "aaaaaa",
-      truncated: true,
-      truncatedBy: "bytes",
-      outputLines: 1,
-    });
+  it("truncates a single over-long line to MAX_LINE_LENGTH with a suffix", async () => {
+    const path = await write("long.txt", "x".repeat(MAX_LINE_LENGTH + 10));
+    const page = await readLines(path, { offset: 1, limit: 2000 });
+    expect(page.raw).toEqual(["x".repeat(MAX_LINE_LENGTH) + MAX_LINE_SUFFIX]);
+    expect(page.more).toBe(false);
+    expect(page.count).toBe(1);
   });
 
-  it("truncates a single over-long line to MAX_LINE_LENGTH with a suffix", () => {
-    const longLine = "x".repeat(MAX_LINE_LENGTH + 10);
-    const result = truncateHead(longLine, 2000, 50 * 1024);
-    expect(result.content).toBe("x".repeat(MAX_LINE_LENGTH) + MAX_LINE_SUFFIX);
-    expect(result.truncated).toBe(false); // 单行截断不算整体截断
-    expect(result.outputLines).toBe(1);
+  it("does not count a trailing newline as an extra line", async () => {
+    const path = await write("trail.txt", "a\nb\n");
+    const page = await readLines(path, { offset: 1, limit: 2000 });
+    expect(page).toMatchObject({ raw: ["a", "b"], count: 2, more: false });
   });
 
-  it("counts lines without the trailing empty line from a final newline", () => {
-    const result = truncateHead("a\nb\n", 2000, 50 * 1024);
-    expect(result).toMatchObject({ totalLines: 2, outputLines: 2, truncated: false });
+  it("treats an empty file as 0 lines", async () => {
+    const path = await write("empty.txt", "");
+    const page = await readLines(path, { offset: 1, limit: 2000 });
+    expect(page).toMatchObject({ raw: [], count: 0, more: false, cut: false });
   });
 
-  it("handles empty content", () => {
-    const result = truncateHead("", 2000, 50 * 1024);
-    expect(result).toMatchObject({ content: "", truncated: false, outputLines: 0 });
+  it("strips CRLF so line contents have no trailing CR", async () => {
+    const path = await write("crlf.txt", "one\r\ntwo\r\n");
+    const page = await readLines(path, { offset: 1, limit: 2000 });
+    expect(page.raw).toEqual(["one", "two"]);
+  });
+
+  it("splits on lone CR the same way as LF", async () => {
+    const path = await write("cr.txt", "one\rtwo\r");
+    const page = await readLines(path, { offset: 1, limit: 2000 });
+    expect(page.raw).toEqual(["one", "two"]);
   });
 });
 
@@ -183,12 +208,33 @@ describe("opencode read execute", () => {
     ).rejects.toThrow(/Offset 99 is out of range/);
   });
 
-  it("reads an empty file with default offset", async () => {
+  it("reads an empty file as 0 lines", async () => {
     const empty = join(dir, "empty.txt");
     await writeFile(empty, "", "utf8");
     const tool = loadTool();
     const result = await tool.execute("id", { filePath: empty }, undefined, undefined, ctx);
-    expect(result.content[0].text).toContain("(End of file - total 1 lines)");
+    expect(result.content[0].text).toContain("(End of file - total 0 lines)");
+  });
+
+  it("throws when offset > 1 for an empty file", async () => {
+    const empty = join(dir, "empty-offset.txt");
+    await writeFile(empty, "", "utf8");
+    const tool = loadTool();
+    await expect(
+      tool.execute("id", { filePath: empty, offset: 2 }, undefined, undefined, ctx),
+    ).rejects.toThrow(/Offset 2 is out of range for this file \(0 lines\)/);
+  });
+
+  it("strips CRLF from line contents in the numbered output", async () => {
+    const crlf = join(dir, "crlf.txt");
+    await writeFile(crlf, "one\r\ntwo\r\n", "utf8");
+    const tool = loadTool();
+    const result = await tool.execute("id", { filePath: crlf }, undefined, undefined, ctx);
+    const text = result.content[0].text;
+    expect(text).toContain("1: one\n");
+    expect(text).toContain("2: two\n");
+    expect(text).not.toContain("\r");
+    expect(text).toContain("(End of file - total 2 lines)");
   });
 
   it("lists directory entries with a / suffix, sorted", async () => {

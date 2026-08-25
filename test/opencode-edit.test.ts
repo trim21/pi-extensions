@@ -172,6 +172,60 @@ describe("opencode edit execute", () => {
     expect(await readFile(target, "utf8")).toBe("one\r\nTWO\r\nthree\r\n");
   });
 
+  it("accepts CRLF oldString against an LF file", async () => {
+    await writeFile(target, "one\ntwo\nthree\n", "utf8");
+    const tool = loadTool();
+    await tool.execute(
+      "id",
+      { filePath: target, oldString: "one\r\ntwo", newString: "ONE\r\nTWO" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(await readFile(target, "utf8")).toBe("ONE\nTWO\nthree\n");
+  });
+
+  it("does not double CR when newString already uses CRLF on a CRLF file", async () => {
+    await writeFile(target, "one\r\ntwo\r\n", "utf8");
+    const tool = loadTool();
+    await tool.execute(
+      "id",
+      { filePath: target, oldString: "two", newString: "TWO\r\nextra" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const written = await readFile(target, "utf8");
+    expect(written).toBe("one\r\nTWO\r\nextra\r\n");
+    expect(written).not.toContain("\r\r\n");
+  });
+
+  it("throws File not found when the path is missing", async () => {
+    const tool = loadTool();
+    await expect(
+      tool.execute(
+        "id",
+        { filePath: join(dir, "missing.txt"), oldString: "a", newString: "b" },
+        undefined,
+        undefined,
+        ctx,
+      ),
+    ).rejects.toThrow(/File .*missing\.txt not found/);
+  });
+
+  it("throws when the path is a directory", async () => {
+    const tool = loadTool();
+    await expect(
+      tool.execute(
+        "id",
+        { filePath: dir, oldString: "a", newString: "b" },
+        undefined,
+        undefined,
+        ctx,
+      ),
+    ).rejects.toThrow(/Path is a directory, not a file/);
+  });
+
   it("aborts before touching the file", async () => {
     await writeFile(target, "content\n", "utf8");
     const controller = new AbortController();

@@ -1,14 +1,11 @@
 /**
- * Opencode edit matching engine.
+ * Opencode v1 edit matching engine.
  *
- * The core replacers and replace() function are copied directly from opencode
- * commit 999be62662 (v1.2.25-1672-g999be62662, 2026-08-12):
- *   https://github.com/anomalyco/opencode/blob/999be62662/packages/opencode/src/tool/edit.ts
- * and wrapped in a pi extension so the behaviour is identical to opencode.
+ * Replacers and replace() follow packages/opencode/src/tool/edit.ts.
+ * applyEdit() matches the official preprocessing: convert oldString/newString
+ * to the file's line endings, then replace on the original file content.
  *
- * Shared by:
- *   - opencode-edit.ts — the edit tool implementation
- *   - lib/write-guard.ts — the diff preview shown in the approval dialog
+ * Shared by the edit tool and lib/write-guard.ts (approval-dialog preview).
  */
 
 // ── BOM & line ending helpers ─────────────────────────────────────────────────
@@ -27,14 +24,50 @@ export function normalizeToLF(text: string): string {
   return text.replaceAll("\r\n", "\n");
 }
 
-export function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string {
-  return ending === "\r\n" ? text.replaceAll("\n", "\r\n") : text;
+/** Convert LF text to the file's line ending. Input must already be LF. */
+export function convertToLineEnding(text: string, ending: "\r\n" | "\n"): string {
+  if (ending === "\n") return text;
+  return text.replaceAll("\n", "\r\n");
 }
 
-/** Strip BOM and normalize line endings to LF (what the replacers expect). */
+export const restoreLineEndings = convertToLineEnding;
+
+/** Strip BOM and normalize line endings to LF. */
 export function normalizeForEdit(content: string): string {
   const { text } = stripBom(content);
   return normalizeToLF(text);
+}
+
+export interface AppliedEdit {
+  /** File text without BOM, original line endings. */
+  contentOld: string;
+  /** Replaced text without BOM, original line endings. */
+  contentNew: string;
+  /** Bytes to write: desiredBom + contentNew. */
+  finalContent: string;
+}
+
+/**
+ * Official v1 edit path: strip BOM, convert params to the file's line endings,
+ * replace on the original content, then desiredBom = source.bom || next.bom.
+ */
+export function applyEdit(
+  rawContent: string,
+  oldString: string,
+  newString: string,
+  replaceAll = false,
+): AppliedEdit {
+  const { bom: sourceBom, text: contentOld } = stripBom(rawContent);
+  const ending = detectLineEnding(contentOld);
+  const old = convertToLineEnding(normalizeToLF(oldString), ending);
+  const replacement = convertToLineEnding(normalizeToLF(newString), ending);
+  const replaced = replace(contentOld, old, replacement, replaceAll);
+  const { bom: nextBom, text: contentNew } = stripBom(replaced);
+  return {
+    contentOld,
+    contentNew,
+    finalContent: (sourceBom || nextBom) + contentNew,
+  };
 }
 
 // ── copied from opencode ──────────────────────────────────────────────────────
@@ -417,9 +450,9 @@ function isDisproportionateMatch(search: string, oldString: string) {
 }
 
 /**
- * Replace `oldString` with `newString` in `content`, using opencode's matching
- * engine. Expects LF-normalized content (see `normalizeForEdit`).
- * Throws when oldString cannot be matched or the match is ambiguous.
+ * Replace `oldString` with `newString` in `content`.
+ * `oldString`/`newString` must already use the same line endings as `content`
+ * (see `applyEdit`). Throws when the match is missing or ambiguous.
  */
 export function replace(
   content: string,
@@ -459,7 +492,8 @@ export function replace(
         );
       }
       if (replaceAll) {
-        return content.replaceAll(search, () => newString);
+        // eslint-disable-next-line unicorn/no-unsafe-string-replacement -- match opencode v1 $& / $$ interpolation
+        return content.replaceAll(search, newString);
       }
       const lastIndex = content.lastIndexOf(search);
       if (index !== lastIndex) continue;

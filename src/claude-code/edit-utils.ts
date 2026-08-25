@@ -114,3 +114,12 @@ export function preserveQuoteStyle(
   if (hasSingleQuotes) result = applyCurlySingleQuotes(result);
   return result;
 }
+
+/**
+ * patch 显示用：把行首 tab 转成 2 空格（对齐 Claude Code 的
+ * convertLeadingTabsToSpaces）。仅用于 details 里展示的 diff，不影响写盘内容。
+ */
+export function convertLeadingTabsToSpaces(content: string): string {
+  if (!content.includes("\t")) return content;
+  return content.replaceAll(/^\t+/gm, (tabs) => "  ".repeat(tabs.length));
+}

@@ -18,7 +18,7 @@ import { basename, isAbsolute, relative, sep } from "node:path";
 
 import { generateUnifiedPatch } from "@earendil-works/pi-coding-agent";
 
-import { normalizeForEdit, replace } from "../opencode/edit-engine.js";
+import { applyEdit, normalizeToLF } from "../opencode/edit-engine.js";
 
 const ALWAYS_ALLOW = ["/tmp"];
 const MAX_PREVIEW_LINES = 100;
@@ -82,11 +82,15 @@ export async function buildDiffPreview(
   // line-numbered patch when it matches. Fall back to a parameter diff when the
   // edit cannot be applied (oldText not found, ambiguous, or no file).
   try {
-    const normalized = normalizeForEdit(oldContent);
-    const newContent = replace(normalized, change.oldText, change.newText, change.replaceAll);
-    // The full path is shown in the dialog title, so the patch header only
-    // carries the file name.
-    return wrapDiff(generateUnifiedPatch(basename(resolvedPath), normalized, newContent, 2));
+    const applied = applyEdit(oldContent, change.oldText, change.newText, change.replaceAll);
+    return wrapDiff(
+      generateUnifiedPatch(
+        basename(resolvedPath),
+        normalizeToLF(applied.contentOld),
+        normalizeToLF(applied.contentNew),
+        2,
+      ),
+    );
   } catch {
     const removed = change.oldText.split("\n").map((line) => `-${line}`);
     const added = change.newText.split("\n").map((line) => `+${line}`);

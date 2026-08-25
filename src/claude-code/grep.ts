@@ -284,7 +284,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
 
       if (mode === "files_with_matches") {
         if (stdout === "") {
-          return { content: [{ type: "text", text: "No files found" }], details: { matches: 0 } };
+          return { content: [{ type: "text", text: "No files found" }], details: undefined };
         }
         const sorted = await sortFilesByMtime(stdout);
         const { lines, appliedLimit, appliedOffset } = pageGrepOutput(sorted, offset, headLimit);
@@ -293,7 +293,10 @@ export function registerGrepTool(pi: ExtensionAPI): void {
         const text = truncateOutput(
           `Found ${filenames.length} ${filenames.length === 1 ? "file" : "files"}${limitInfo ? ` ${limitInfo}` : ""}\n${filenames.join("\n")}`,
         );
-        return { content: [{ type: "text", text }], details: { matches: filenames.length } };
+        return {
+          content: [{ type: "text", text }],
+          details: undefined,
+        };
       }
 
       if (mode === "count") {

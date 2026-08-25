@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, readFileSync } from "node:fs";
+import { constants, readFileSync, type Stats } from "node:fs";
 import { access, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname, extname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,9 +26,13 @@ import {
   snapshotsEqual,
   throwIfAborted,
 } from "./common.js";
-import { findActualString, preserveQuoteStyle } from "./edit-utils.js";
+import { convertLeadingTabsToSpaces, findActualString, preserveQuoteStyle } from "./edit-utils.js";
 
 const SAMPLE_BYTES = 4096;
+
+/** 同范围重复读取、文件未变时返回的 stub（对齐 Claude Code 的 file_unchanged）。 */
+export const FILE_UNCHANGED_STUB =
+  "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.";
 
 /** Read 全读时的文件大小上限（对齐 Claude Code 的 256KB）。 */
 const MAX_READ_SIZE_BYTES = 0.25 * 1024 * 1024;
@@ -75,8 +79,11 @@ function snapshotOf(content: Uint8Array | string, textEditable = true): FileSnap
   return { digest: createHash("sha256").update(content).digest("hex"), textEditable };
 }
 
-async function assertReadableFile(filePath: string): Promise<Awaited<ReturnType<typeof stat>>> {
+async function assertReadableFile(filePath: string): Promise<Stats> {
   const value = await stat(filePath);
+  if (value.isDirectory()) {
+    throw new Error(`EISDIR: illegal operation on a directory, read '${filePath}'`);
+  }
   if (!value.isFile()) throw new Error(`File not found: ${filePath}`);
   await access(filePath, constants.R_OK);
   return value;
@@ -130,8 +137,10 @@ export function formatReadOutput(
       totalLines,
     };
   }
+  // offset=0 时从第一行开始、行号从 0 起（对齐 Claude Code 的 lineOffset 语义）
+  const startIndex = offset === 0 ? 0 : offset - 1;
   const selected =
-    limit === undefined ? lines.slice(offset - 1) : lines.slice(offset - 1, offset - 1 + limit);
+    limit === undefined ? lines.slice(startIndex) : lines.slice(startIndex, startIndex + limit);
   const text = selected.map((line, index) => `${offset + index}\t${line}`).join("\n");
   return { text, totalLines };
 }
@@ -247,9 +256,9 @@ export function registerFileTools(
       const filePath = requireAbsolutePath(params.file_path);
       if (
         params.offset !== undefined &&
-        (!Number.isSafeInteger(params.offset) || params.offset < 1)
+        (!Number.isSafeInteger(params.offset) || params.offset < 0)
       ) {
-        throw new Error("offset must be a positive integer");
+        throw new Error("offset must be a non-negative integer");
       }
       if (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit < 1)) {
         throw new Error("limit must be a positive integer");
@@ -289,7 +298,23 @@ export function registerFileTools(
         return { content, details: { reads: { [key]: snapshot } } };
       }
 
+      const offset = params.offset ?? 1;
+      const limit = params.limit;
+      const key = await readStateKey(filePath);
       const buffer = await readFile(filePath);
+
+      // 同范围 + checksum 未变 → 返回 stub 而非重发内容（对齐 CC readFileState；
+      // 复用 reads 里的 sha256，比 mtime 可靠，无时间片粒度问题）
+      const previous = state.reads.get(key);
+      if (
+        previous !== undefined &&
+        previous.offset !== undefined &&
+        previous.offset === offset &&
+        previous.limit === limit &&
+        snapshotsEqual(previous, snapshotOf(buffer))
+      ) {
+        return { content: [{ type: "text", text: FILE_UNCHANGED_STUB }], details: {} };
+      }
       if (isBinary(buffer.subarray(0, SAMPLE_BYTES)))
         throw new Error(`Cannot read binary file: ${filePath}`);
       // 全读（limit 未传）时受字节上限约束（对齐 Claude Code）
@@ -299,7 +324,7 @@ export function registerFileTools(
         );
       }
       const text = buffer.toString("utf8");
-      const formatted = formatReadOutput(text, params.offset ?? 1, params.limit);
+      const formatted = formatReadOutput(text, offset, limit);
       // 输出 token 粗估上限（无 tokenizer，4 字符/token），对读取范围生效
       const estimatedTokens = Math.ceil(formatted.text.length / 4);
       if (estimatedTokens > MAX_READ_TOKENS) {
@@ -307,8 +332,7 @@ export function registerFileTools(
           `File content (${estimatedTokens} tokens) exceeds maximum allowed tokens (${MAX_READ_TOKENS}). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file.`,
         );
       }
-      const snapshot = snapshotOf(buffer);
-      const key = await readStateKey(filePath);
+      const snapshot = { ...snapshotOf(buffer), offset, limit };
       state.reads.set(key, snapshot);
       // LSP warm-up 是后台任务，失败不影响读取
       void service.touchFile(filePath, ctx.cwd).catch(() => {
@@ -388,7 +412,7 @@ export function registerFileTools(
           const snapshot = snapshotOf(newString);
           const key = await readStateKey(filePath);
           state.reads.set(key, snapshot);
-          const diff = generateDiffString("", newString);
+          const diff = generateDiffString("", convertLeadingTabsToSpaces(newString));
           throwIfAborted(signal);
           const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
             notify: (message, level) => ctx.ui.notify(message, level),
@@ -398,7 +422,7 @@ export function registerFileTools(
             `The file ${filePath} has been updated successfully.`,
             {
               diff: diff.diff,
-              patch: generateUnifiedPatch(filePath, "", newString),
+              patch: generateUnifiedPatch(filePath, "", convertLeadingTabsToSpaces(newString)),
               firstChangedLine: diff.firstChangedLine,
               reads: { [key]: snapshot },
             },
@@ -459,15 +483,30 @@ export function registerFileTools(
           );
         }
         const actualNewString = preserveQuoteStyle(oldString, actualOldString, newString);
+        // 删除场景（new_string 为空）：old_string 不以换行结尾且文件里是
+        // "old_string\n" 时连换行一起删，避免留下空行（对齐 Claude Code
+        // applyEditToFile 的 stripTrailingNewline 语义）
+        let searchString = actualOldString;
+        if (
+          actualNewString === "" &&
+          !actualOldString.endsWith("\n") &&
+          normalized.includes(actualOldString + "\n")
+        ) {
+          searchString = actualOldString + "\n";
+        }
         // split/join 与函数替换：replacement 含 $ 时不会触发 $& 等特殊语义
         const updated = replaceAll
-          ? normalized.split(actualOldString).join(actualNewString)
-          : normalized.replace(actualOldString, () => actualNewString);
+          ? normalized.split(searchString).join(actualNewString)
+          : normalized.replace(searchString, () => actualNewString);
         const restored = lineEnding === "\r\n" ? updated.replaceAll("\n", "\r\n") : updated;
         await writeFile(filePath, restored, "utf8");
         const snapshot = snapshotOf(restored);
         state.reads.set(key, snapshot);
-        const diff = generateDiffString(original, restored);
+        // patch/diff 仅供显示：前导 tab 转空格，避免 UI 渲染错位（对齐 Claude Code）
+        const diff = generateDiffString(
+          convertLeadingTabsToSpaces(original),
+          convertLeadingTabsToSpaces(restored),
+        );
         const text = replaceAll
           ? `The file ${filePath} has been updated. All occurrences were successfully replaced.`
           : `The file ${filePath} has been updated successfully.`;
@@ -479,7 +518,11 @@ export function registerFileTools(
           text,
           {
             diff: diff.diff,
-            patch: generateUnifiedPatch(filePath, original, restored),
+            patch: generateUnifiedPatch(
+              filePath,
+              convertLeadingTabsToSpaces(original),
+              convertLeadingTabsToSpaces(restored),
+            ),
             firstChangedLine: diff.firstChangedLine,
             reads: { [key]: snapshot },
           },

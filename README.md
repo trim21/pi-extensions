@@ -16,6 +16,7 @@
 | [todowrite](#todowrite)         | opencode 风格的任务列表工具，完整列表替换语义           |
 | [question](#question)           | opencode 风格的提问工具，阻塞式询问用户选择             |
 | [talk](#talk)                   | session 间消息传递，SQLite 邮箱 + 双向 ask 时间戳仲裁   |
+| [openai-cost](#openai-cost)     | OpenAI Chat Completions，费用取自响应 `usage.cost`      |
 
 > **两套工具风格，按预期只启用其中一套**：本包同时提供 opencode 风格
 > （小写 `read`/`edit`/`write`/`bash`/`todowrite`/`question`）与 Claude Code
@@ -384,6 +385,35 @@ read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级�
 内置默认服务器（typescript / pyright / ruff / clangd）始终存在；`servers` 以 key 为服务器 id 与默认合并——同 key 整体覆盖（整个配置替换默认）、新 key 新增、`"enabled": false` 移除（如 `"clangd": { "enabled": false }`）。executable 的发现逻辑（如 tsserver 路径、venv 里的 python）不内置，需要时用 `bin` / `args` / `settings` 自行表达。
 
 旧的 `enabled`（白名单）/ `disabled`（排除）与全局超时字段（`initializeTimeoutMs` 等）继续可用。
+
+---
+
+## openai-cost
+
+OpenAI Chat Completions 兼容 provider。流式协议复用 pi 内置 `openai-completions`，费用不按模型单价估算，而是读取响应 `usage.cost`（number 或 `{ total }`，也认 Moonshot 的 `choice.usage`）写入 `message.usage.cost.total`。未上报 `usage.cost` 时保留默认 `calculateCost`。
+
+配置文件：`~/.pi/agent/openai-cost.json`。文件缺失或校验失败时扩展不注册 provider。
+
+```jsonc
+{
+  "id": "openai-cost", // 可选，默认 openai-cost
+  "name": "OpenAI Cost", // 可选
+  "baseUrl": "https://api.example.com/v1",
+  "apiKeyEnv": "OPENAI_COST_API_KEY", // 可选；也支持 /login
+  "models": [
+    {
+      "id": "my-model",
+      "name": "My Model", // 可选，默认用 id
+      "reasoning": false,
+      "input": ["text"],
+      "contextWindow": 128000,
+      "maxTokens": 8192,
+    },
+  ],
+}
+```
+
+省略 `models` 时启动后会请求 `GET {baseUrl}/models`，默认 `reasoning: false`、`input: ["text"]`、contextWindow 128000、maxTokens 8192。需要视觉 / reasoning / 准确窗口时把模型写进配置。API key 优先 stored credential，否则读 `apiKeyEnv`。
 
 ---
 
