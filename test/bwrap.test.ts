@@ -7,7 +7,7 @@
  * - buildBwrapArgs: writable "." resolves against the workspace argument, so
  *   a per-command workdir can never move the sandbox write boundary.
  */
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildBwrapArgs,
   findBwrap,
+  findGitDirs,
   resolveBwrap,
   type ResolvedBwrap,
   resolveHeadlessBwrap,
@@ -121,27 +122,34 @@ describe("buildBwrapArgs", () => {
     approvalRules: [],
   };
 
-  it("binds writable '.' to the workspace argument, not the exec cwd", () => {
-    const args = buildBwrapArgs(base, "/ws");
+  it("binds writable '.' to the workspace argument, not the exec cwd", async () => {
+    const args = await buildBwrapArgs(base, "/ws");
 
-    // writablePaths 的 "." 解析为 workspace（/ws）；workspace 不存在时无 .git 等保护挂载
+    // writablePaths 的 "." 解析为 workspace（/ws）；workspace 不存在时无 .git 等保护挂载。
+    // --bind-try / --ro-bind-try：配置路径不存在时忽略，而不是让整条命令失败。
     expect(args).toEqual([
       "--new-session",
       "--die-with-parent",
       "--unshare-user",
       "--unshare-pid",
-      "--bind",
+      "--bind-try",
       "/ws",
       "/ws",
-      "--bind",
+      "--bind-try",
       "/tmp",
       "/tmp",
       "--unshare-net",
+      "--ro-bind-try",
+      "/ws/.pi",
+      "/ws/.pi",
+      "--ro-bind-try",
+      "/ws/.agent",
+      "/ws/.agent",
     ]);
   });
 
-  it("keeps extra writable paths as-is", () => {
-    const args = buildBwrapArgs({ ...base, extraWritablePaths: ["/data/x"] }, "/ws");
+  it("keeps extra writable paths as-is", async () => {
+    const args = await buildBwrapArgs({ ...base, extraWritablePaths: ["/data/x"] }, "/ws");
 
     // 顺序：writable binds → extra binds → unshare-net
     const bindsEnd = args.indexOf("--unshare-net");
@@ -150,27 +158,90 @@ describe("buildBwrapArgs", () => {
       "--die-with-parent",
       "--unshare-user",
       "--unshare-pid",
-      "--bind",
+      "--bind-try",
       "/ws",
       "/ws",
-      "--bind",
+      "--bind-try",
       "/tmp",
       "/tmp",
-      "--bind",
+      "--bind-try",
       "/data/x",
       "/data/x",
     ]);
   });
 
-  it("protects workspace-internal dot dirs instead of the exec cwd's", () => {
+  it("protects workspace-internal dot dirs instead of the exec cwd's", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-args-"));
     mkdirSync(join(workspace, ".git"));
-    const args = buildBwrapArgs(base, workspace);
+    const args = await buildBwrapArgs(base, workspace);
 
-    // 只保护 workspace 下实际存在的 .git；exec cwd（/outside）不在保护列表
+    // 只保护 workspace 下的 dot dirs；exec cwd（/outside）不在保护列表
     const roBindTargets = args.flatMap((value, index) =>
-      value === "--ro-bind" ? [args[index + 1]] : [],
+      value === "--ro-bind-try" ? [args[index + 1]] : [],
     );
-    expect(roBindTargets).toEqual([join(workspace, ".git")]);
+    expect(roBindTargets).toEqual([
+      join(workspace, ".pi"),
+      join(workspace, ".agent"),
+      join(workspace, ".git"),
+    ]);
+  });
+
+  it("protects only the root .git when the workspace is a git repo", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-git-"));
+    mkdirSync(join(workspace, ".git"));
+    mkdirSync(join(workspace, "sub", ".git"), { recursive: true });
+    const args = await buildBwrapArgs(base, workspace);
+
+    // 根 .git 存在：不递归扫描，嵌套仓库不在保护列表
+    const gitTargets = args
+      .flatMap((value, index) => (value === "--ro-bind-try" ? [args[index + 1]] : []))
+      .filter((path) => path.endsWith(".git"));
+    expect(gitTargets).toEqual([join(workspace, ".git")]);
+  });
+
+  it("scans for nested .git when the workspace root is not a git repo", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-nested-"));
+    mkdirSync(join(workspace, "sub", ".git"), { recursive: true });
+    const args = await buildBwrapArgs(base, workspace);
+
+    const gitTargets = args
+      .flatMap((value, index) => (value === "--ro-bind-try" ? [args[index + 1]] : []))
+      .filter((path) => path.endsWith(".git"));
+    expect(gitTargets).toEqual([join(workspace, "sub", ".git")]);
+  });
+});
+
+describe("findGitDirs", () => {
+  it("collects nested .git directories", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-gitdirs-"));
+    mkdirSync(join(root, ".git"));
+    mkdirSync(join(root, "packages", "a", ".git"), { recursive: true });
+    mkdirSync(join(root, "packages", "b", ".git"), { recursive: true });
+
+    const dirs = await findGitDirs(root);
+    expect(dirs.toSorted()).toEqual(
+      [
+        join(root, ".git"),
+        join(root, "packages", "a", ".git"),
+        join(root, "packages", "b", ".git"),
+      ].toSorted(),
+    );
+  });
+
+  it("skips package directories", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-gitdirs-skip-"));
+    mkdirSync(join(root, "node_modules", "pkg", ".git"), { recursive: true });
+    mkdirSync(join(root, ".venv", "proj", ".git"), { recursive: true });
+    mkdirSync(join(root, "real", ".git"), { recursive: true });
+
+    expect(await findGitDirs(root)).toEqual([join(root, "real", ".git")]);
+  });
+
+  it("does not follow symlinked directories", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-gitdirs-link-"));
+    mkdirSync(join(root, "real", ".git"), { recursive: true });
+    symlinkSync(join(root, "real"), join(root, "loop"));
+
+    expect(await findGitDirs(root)).toEqual([join(root, "real", ".git")]);
   });
 });

@@ -52,7 +52,9 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
 
 ### 保护目录
 
-`.git`、`.pi`、`.agent` 即使在 `workspace-write` 模式下也始终只读。
+`.pi`、`.agent` 即使在 `workspace-write` 模式下也始终只读；`.git` 同样只读：工作区根是 git 仓库时保护根 `.git`，根不是 git 仓库时才递归扫描嵌套仓库（monorepo 子仓库，跳过 `node_modules`、`.venv` 等包目录）。
+
+可写与保护路径均使用 bwrap 的 `--*-bind-try` 变体：路径不存在时自动忽略该项，而不是让整条命令失败。
 
 ### 运行时命令
 

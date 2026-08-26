@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, constants, existsSync, openSync, readFileSync } from "node:fs";
-import { access as fsAccess } from "node:fs/promises";
+import { closeSync, constants, type Dirent, existsSync, openSync, readFileSync } from "node:fs";
+import { access as fsAccess, readdir, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,7 +12,7 @@ import { Value } from "typebox/value";
 import { expandHome } from "../lib/path.js";
 import { type ApprovalRule } from "./approval-rules.js";
 
-const PROTECTED_DIRS = [".git", ".pi", ".agent"];
+const PROTECTED_DIRS = [".pi", ".agent"];
 
 export const BWRAP_MODES = ["allow-all", "workspace-write", "allow-net", "readonly"] as const;
 
@@ -190,23 +190,96 @@ export function findBwrap(override?: string): string {
   return findDefaultBwrap();
 }
 
-export function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): string[] {
+/** 扫描 .git 时跳过的目录：包/依赖/构建产物，嵌套 git 仓库几乎不会出现在这里。 */
+const GIT_DIR_SCAN_SKIP = new Set([
+  "node_modules",
+  ".venv",
+  "venv",
+  ".venvs",
+  "dist",
+  "build",
+  "target",
+  "__pycache__",
+  ".next",
+  ".cache",
+  ".turbo",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".hg",
+  ".svn",
+]);
+
+/** 最多收集的 .git 数量与扫描深度，防止异常大的工作区拖慢每条命令。 */
+const MAX_GIT_DIRS = 64;
+const MAX_GIT_SCAN_DEPTH = 24;
+
+class ScanLimitError extends Error {}
+
+/**
+ * 递归扫描工作区，收集所有 `.git` 目录的绝对路径（monorepo / 嵌套仓库）。
+ * 达到数量上限立即停止整棵遍历；跳过 symlink（防循环）与无法读取的目录。
+ */
+export async function findGitDirs(root: string): Promise<string[]> {
+  const found: string[] = [];
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (depth > MAX_GIT_SCAN_DEPTH) return;
+    let entries: Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (found.length >= MAX_GIT_DIRS) throw new ScanLimitError();
+      if (entry.name === ".git" && entry.isDirectory()) {
+        found.push(join(dir, ".git"));
+        continue;
+      }
+      if (!entry.isDirectory() || GIT_DIR_SCAN_SKIP.has(entry.name)) continue;
+      await walk(join(dir, entry.name), depth + 1);
+    }
+  };
+  try {
+    await walk(root, 0);
+  } catch (error) {
+    if (!(error instanceof ScanLimitError)) throw error;
+  }
+  return found;
+}
+
+export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Promise<string[]> {
   const args = ["--new-session", "--die-with-parent", "--unshare-user", "--unshare-pid"];
+  // --*-bind-try：配置的路径不存在时忽略该项而不是让整条命令失败
   for (const path of resolved.writablePaths) {
     const absolutePath = resolveBwrapPath(path, cwd);
-    args.push("--bind", absolutePath, absolutePath);
+    args.push("--bind-try", absolutePath, absolutePath);
   }
   for (const path of resolved.extraWritablePaths) {
     const absolutePath = resolveBwrapPath(path, cwd);
-    args.push("--bind", absolutePath, absolutePath);
+    args.push("--bind-try", absolutePath, absolutePath);
   }
   for (const path of resolved.tmpfsPaths) {
     args.push("--tmpfs", resolveBwrapPath(path, cwd));
   }
   if (!resolved.network) args.push("--unshare-net");
+  // --ro-bind-try：目录不存在（或已被删除）时自动忽略
   for (const name of PROTECTED_DIRS) {
     const absolutePath = join(cwd, name);
-    if (existsSync(absolutePath)) args.push("--ro-bind", absolutePath, absolutePath);
+    args.push("--ro-bind-try", absolutePath, absolutePath);
+  }
+  // 工作区下所有 .git 一律只读：可写 bind 之上的覆盖绑定，防止命令篡改仓库元数据。
+  // 根目录本身是 git 仓库时只保护根 .git（递归扫描有成本，绝大多数情况根即唯一仓库）；
+  // 根不是 git 仓库时才递归扫描嵌套仓库（如 monorepo 子仓库）。
+  const rootGit = join(cwd, ".git");
+  let gitDirs: string[];
+  try {
+    await stat(rootGit);
+    gitDirs = [rootGit];
+  } catch {
+    gitDirs = await findGitDirs(cwd);
+  }
+  for (const gitDir of gitDirs) {
+    args.push("--ro-bind-try", gitDir, gitDir);
   }
   args.push(...resolved.extraArgs);
   return args;
@@ -265,7 +338,7 @@ export function createBwrapBashOperations(
         "--ro-bind",
         "/",
         "/",
-        ...buildBwrapArgs(resolved, workspace),
+        ...(await buildBwrapArgs(resolved, workspace)),
         "--dev",
         "/dev",
         "--proc",
