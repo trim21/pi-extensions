@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -9,6 +12,9 @@ const MAX_TIMEOUT_MS = 600_000;
 
 /** 对齐上游 opencode 的截断提示文案（tools/BashTool/bash.ts）。 */
 const CAPTURE_TRUNCATED_NOTICE = "[output capture truncated at the in-memory safety limit]";
+
+/** Bash tool guidance, kept in markdown so it reads like documentation. */
+const BASH_PROMPT = readFileSync(fileURLToPath(new URL("bash.md", import.meta.url)), "utf8").trim();
 
 /**
  * 对齐上游 opencode（packages/core/src/tool/bash.ts）：
@@ -32,6 +38,7 @@ export default function opencodeBash(
       "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
     ].join("\n"),
     promptSnippet: "execute bash command",
+    promptGuidelines: [BASH_PROMPT],
     parameters: Type.Object(
       {
         command: Type.String({ description: "The command to execute" }),

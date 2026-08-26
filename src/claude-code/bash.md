@@ -6,6 +6,8 @@ The working directory persists between commands, but shell state does not. The s
 
 Commands run in a sandbox: no write access outside the workspace and no network access. Use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.
 
+Long command output is automatically truncated and the full output is saved to a file. Avoid piping commands through `tail` to limit output unless you have a specific reason.
+
 IMPORTANT: Avoid using this tool to run `find`, `grep`, `cat`, `head`, `tail`, `sed`, `awk`, or `echo` commands, unless explicitly instructed or after you have verified that a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool as this will provide a much better experience for the user:
 
 - File search: Use Glob (NOT find or ls)
