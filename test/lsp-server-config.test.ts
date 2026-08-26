@@ -1,7 +1,7 @@
 /**
  * 配置驱动 LSP 服务器测试（server-config.ts）：
  * - serverConfigSchema 解析（含 enabled:false 简写）
- * - mergeServerConfigs 覆盖 / 新增 / 禁用
+ * - mergeServerRecords 覆盖 / 新增 / 保留
  * - ConfigAdapter.findRoot：include glob（相对 root/cwd）、rootMarkers 查找
  * - ConfigAdapter.spawn：bin 解析（绝对路径 / 项目工作区 / PATH）、cwd 模板、
  *   initialization / settings / languageIds 分离
@@ -21,8 +21,7 @@ import { create } from "../src/lib/lsp/client.js";
 import { createLspService } from "../src/lib/lsp/lsp.js";
 import {
   ConfigAdapter,
-  defaultServers,
-  mergeServerConfigs,
+  mergeServerRecords,
   serverConfigSchema,
 } from "../src/lib/lsp/server-config.js";
 
@@ -74,35 +73,22 @@ describe("serverConfigSchema", () => {
   });
 });
 
-describe("mergeServerConfigs", () => {
-  it("无用户配置时保留默认", () => {
-    expect(Object.keys(mergeServerConfigs(defaultServers, undefined))).toEqual([
-      "typescript",
-      "pyright",
-      "ruff",
-      "clangd",
-    ]);
+describe("mergeServerRecords", () => {
+  it("无任何 record 时返回 undefined", () => {
+    expect(mergeServerRecords()).toBeUndefined();
+    expect(mergeServerRecords(undefined, undefined)).toBeUndefined();
   });
 
-  it("同 id 覆盖、新 id 追加", () => {
-    const user = { pyright: parse({ bin: "custom-pyright", include: [] }) };
-    const merged = mergeServerConfigs(defaultServers, user);
-    expect(merged.pyright?.bin).toBe("custom-pyright");
-    expect(Object.keys(merged)).toHaveLength(Object.keys(defaultServers).length);
-  });
-
-  it("同 id 整体替换，未配置的字段不保留默认", () => {
-    const merged = mergeServerConfigs(defaultServers, {
-      pyright: parse({ bin: "custom-pyright" }),
+  it("同 id 整体覆盖、新 id 追加、未提及的 id 保留", () => {
+    const merged = mergeServerRecords(
+      { a: parse({ bin: "/global/a", args: ["--x"] }), b: parse({ bin: "/global/b" }) },
+      { a: parse({ bin: "/local/a" }), c: parse({ bin: "/local/c" }) },
+    );
+    expect(merged).toEqual({
+      a: parse({ bin: "/local/a" }),
+      b: parse({ bin: "/global/b" }),
+      c: parse({ bin: "/local/c" }),
     });
-    expect(merged.pyright).toEqual(parse({ bin: "custom-pyright" }));
-    expect(merged.pyright?.include).toBeUndefined();
-  });
-
-  it("enabled:false 移除对应 id（包括默认服务器）", () => {
-    const merged = mergeServerConfigs(defaultServers, { clangd: parse({ enabled: false }) });
-    expect(Object.keys(merged)).not.toContain("clangd");
-    expect(Object.keys(merged)).toContain("typescript");
   });
 });
 
@@ -247,8 +233,8 @@ describe("ConfigAdapter.spawn", () => {
   });
 });
 
-// 禁用内置默认服务器，隔离出只跑配置里 mock 服务器的场景（避免本机安装的
-// pyright/ruff 等真实服务器干扰断言与拖慢测试）。
+// 没有内置默认服务器：只写入本次 mock servers，并用空的全局配置路径
+// 隔离本机 ~/.pi/agent/lsp.json。
 async function withConfig(
   dir: string,
   servers: Record<string, unknown>,
@@ -259,7 +245,6 @@ async function withConfig(
     JSON.stringify({
       version: 1,
       servers,
-      disabled: Object.keys(defaultServers),
     }),
   );
   return createLspService(undefined, join(dir, "no-global.json"));
