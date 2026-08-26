@@ -236,7 +236,7 @@ describe("guardWriteAccess", () => {
       const select = vi.fn(async () => "Block");
       await expect(
         guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), writeOptions(OUTSIDE)),
-      ).rejects.toThrow("Write outside workspace denied by user.");
+      ).rejects.toThrow("user deny write: blocked");
     },
   );
 
@@ -245,7 +245,7 @@ describe("guardWriteAccess", () => {
     const input = vi.fn(async () => "not allowed");
     await expect(
       guardWriteAccess(ctxWith({ ui: { select, input } }), writeOptions(OUTSIDE)),
-    ).rejects.toThrow("Write outside workspace denied: not allowed");
+    ).rejects.toThrow("user deny write: not allowed");
   });
 
   it.skipIf(process.platform === "win32")(
@@ -258,7 +258,7 @@ describe("guardWriteAccess", () => {
       const input = vi.fn(async () => undefined as string | undefined);
       await expect(
         guardWriteAccess(ctxWith({ ui: { select, input } }), writeOptions(OUTSIDE)),
-      ).rejects.toThrow("Write outside workspace denied by user.");
+      ).rejects.toThrow("user deny write: blocked");
       expect(select).toHaveBeenCalledTimes(2);
     },
   );
@@ -270,10 +270,20 @@ describe("guardWriteAccess", () => {
       const select = vi.fn(async () => undefined as string | undefined);
       await expect(
         guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() }, abort }), writeOptions(OUTSIDE)),
-      ).rejects.toThrow("Write outside workspace cancelled by user.");
+      ).rejects.toThrow("user deny write: cancelled");
       expect(abort).toHaveBeenCalled();
     },
   );
+
+  it.skipIf(process.platform === "win32")("uses the calling tool's name in the error", async () => {
+    const select = vi.fn(async () => "Block");
+    await expect(
+      guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), {
+        toolName: "aft_refactor",
+        absolutePath: OUTSIDE,
+      }),
+    ).rejects.toThrow("user deny aft_refactor: blocked");
+  });
 
   it.skipIf(process.platform === "win32")("shows a diff preview for an outside edit", async () => {
     const select = vi.fn(async (title: string) => {

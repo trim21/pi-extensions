@@ -1,13 +1,14 @@
 /**
- * spawn_agent tool — delegate a task to a subagent running in a separate pi
- * process with an isolated context window.
+ * spawn_agent tool — delegate a task to a subagent with an isolated context
+ * window, running in-process via the pi SDK (createAgentSession) instead of a
+ * separate process speaking stdio RPC.
  *
  * The subagent definition comes from `~/.pi/agent/agents/*.md` (markdown with
  * YAML frontmatter, see spawn-agent-agents.ts). The extension discovers the
  * available subagent types once at startup and injects the list via the tool's
  * `promptGuidelines`, so the model always knows which `agent` names it can
  * pass to the tool. Execution
- * is blocking: the tool awaits the subagent process until it exits and
+ * is blocking: the tool awaits the subagent session until the turn settles and
  * returns its final output to the parent model. Progress is streamed through
  * `onUpdate`, the same channel the built-in bash tool uses for live output.
  * Progress is a rolling log: `tool: <name>` lines for tool calls and
@@ -22,24 +23,26 @@
  * subagent only gets read-only tools (read/grep/find/ls) — no bash/write/edit.
  */
 
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
+  type AgentSession,
   type AgentSessionEvent,
+  type AgentSessionEventListener,
+  createAgentSession,
+  DefaultResourceLoader,
   type ExtensionAPI,
   type ExtensionUIContext,
   getAgentDir,
-  type RpcExtensionUIRequest,
-  type RpcExtensionUIResponse,
+  ModelRuntime,
+  type PromptOptions,
+  SessionManager,
+  SettingsManager,
   truncateTail,
   truncateToVisualLines,
-  withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -62,8 +65,6 @@ const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
 const MAX_PROGRESS_LINES = 5;
 /** Progress line content (without the `tool:` / `text:` prefix) is capped at 21 chars; longer text is folded to the first/last 9 chars joined by ` … `. */
 const MAX_PROGRESS_CHARS_PER_LINE = 21;
-/** stderr 采集上限：防止子代理崩溃循环输出撑爆内存；保留尾部（错误信息通常在尾部）。 */
-const MAX_STDERR_CAPTURE_BYTES = 64 * 1024;
 /** 错误消息里 stderr 的展示上限。 */
 const MAX_STDERR_ERROR_BYTES = 4 * 1024;
 /** 全局默认配置：~/.pi/agent/spawn-agent.json，字段可被 frontmatter 覆盖。 */
@@ -72,8 +73,9 @@ const SETTINGS_PATH = join(getAgentDir(), "settings.json");
 
 /**
  * Tool → extension override map: when a subagent's frontmatter enables a
- * built-in tool, the matching opencode extension is loaded via `-e` so the
- * subagent uses the enhanced implementation instead of the built-in one.
+ * built-in tool, the matching opencode extension is loaded via the SDK's
+ * `additionalExtensionPaths` so the subagent uses the enhanced implementation
+ * instead of the built-in one.
  *
  * The bash override also carries the bwrap sandbox: opencode/bash.ts creates
  * its own bwrap runtime instance and runs commands through runtime.execute(),
@@ -84,7 +86,7 @@ const SETTINGS_PATH = join(getAgentDir(), "settings.json");
  * Claude Code style tools (capitalized names) map to their claude-code
  * files, so a subagent can enable exactly the tools it declares — e.g. `Grep`
  * without `Glob`. The stateful file tools (`Read`/`Edit`/`Write`) share one
- * implementation file (they share a read-snapshot state); the `--tools`
+ * implementation file (they share a read-snapshot state); the `tools`
  * allowlist still exposes only the declared subset. The opencode file tools
  * (read/edit/write) likewise share opencode/files.ts (they share the LSP
  * service instance).
@@ -201,27 +203,11 @@ function formatPendantMarkdown(task: string, response: string): string {
 }
 
 /**
- * Resolve how to spawn the subagent process. Running through the current
- * entry script (when available) keeps model/tool/extension config identical
- * to the parent; otherwise fall back to the `pi` binary on PATH.
- */
-function getPiInvocation(args: string[]): { command: string; args: string[] } {
-  const currentScript = process.argv[1];
-  const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-  if (currentScript && !isBunVirtualScript && existsSync(currentScript)) {
-    return { command: process.execPath, args: [currentScript, ...args] };
-  }
-  const execName = basename(process.execPath).toLowerCase();
-  const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
-  if (!isGenericRuntime) return { command: process.execPath, args };
-  return { command: "pi", args };
-}
-
-/**
  * Resolve a sibling extension file (relative to this module) to an absolute
- * path, so `-e` works both when running from the source tree and from an
- * installed pi package (node_modules). A missing extension is fatal: silently
- * skipping a guard (e.g. bwrap) would leave the subagent unprotected.
+ * path, so `additionalExtensionPaths` works both when running from the source
+ * tree and from an installed pi package (node_modules). A missing extension is
+ * fatal: silently skipping a guard (e.g. bwrap) would leave the subagent
+ * unprotected.
  */
 function extensionPath(fileName: string): string {
   const abs = fileURLToPath(new URL(fileName, import.meta.url));
@@ -231,133 +217,108 @@ function extensionPath(fileName: string): string {
   return abs;
 }
 
-async function writePromptToTempFile(agentName: string, prompt: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "pi-spawn-agent-"));
-  const safeName = agentName.replaceAll(/[^\w.-]+/g, "_");
-  const filePath = join(dir, `prompt-${safeName}.md`);
-  await withFileMutationQueue(filePath, async () => {
-    await writeFile(filePath, prompt, { encoding: "utf8", mode: 0o600 });
-  });
-  return filePath;
-}
-
-export function buildSubagentArgs(
-  agent: AgentConfig,
-  _task: string,
-  systemPromptPath: string | undefined,
-): string[] {
-  // RPC mode emits agent and extension UI events as JSON lines and accepts
-  // dialog responses over stdin. --no-session keeps the child ephemeral.
-  // --no-extensions disables
-  // extension discovery; only the extensions explicitly loaded below (the
-  // per-tool overrides) run inside the subagent.
-  const args: string[] = ["--mode", "rpc", "--no-session", "--no-extensions"];
-
-  // provider/model/thinkingLevel 已由 applyAgentDefaults 合并进 agent。
-  // --provider 只在 model 不含 "/" 前缀时传：带前缀的 model（如
-  // "openai/gpt-4o"）由 pi 自己解析 provider，显式传 provider 会冲突。
-  if (agent.model && !agent.model.includes("/") && agent.provider) {
-    args.push("--provider", agent.provider);
-  }
-  if (agent.model) args.push("--model", agent.model);
-  // --thinking 独立传参；pi 支持 "off" 显式关闭思考。
-  if (agent.thinkingLevel) args.push("--thinking", agent.thinkingLevel);
-  // Read-only default unless the agent explicitly declares a toolset.
-  const tools = agent.tools ?? DEFAULT_TOOLS;
-  // Load the opencode override for each built-in tool the agent declares
-  // (read/edit/write), so the subagent uses the enhanced implementation
-  // instead of the built-in one. Several tool names can map to the same
-  // implementation file (e.g. cc Read/Edit/Write → claude-code/files.ts);
-  // loading a file twice would run its extension factory twice and create
-  // separate closure states, so each file is loaded at most once.
-  const loadedOverrideFiles = new Set<string>();
+/**
+ * Load the override extension for each declared tool (read/edit/write → opencode
+ * files.ts, bash → opencode bash.ts, ...), so the subagent uses the enhanced
+ * implementation instead of the built-in one. Several tool names can map to
+ * the same implementation file (e.g. cc Read/Edit/Write → claude-code/files.ts);
+ * loading a file twice would run its extension factory twice and create
+ * separate closure states, so each file is loaded at most once.
+ */
+export function overrideExtensionPaths(tools: string[]): string[] {
+  const loaded = new Set<string>();
+  const paths: string[] = [];
   for (const tool of tools) {
     const ext = TOOL_EXTENSION_OVERRIDES[tool];
-    if (ext && !loadedOverrideFiles.has(ext)) {
-      loadedOverrideFiles.add(ext);
-      args.push("-e", extensionPath(ext));
+    if (ext && !loaded.has(ext)) {
+      loaded.add(ext);
+      paths.push(extensionPath(ext));
     }
   }
-  args.push("--tools", tools.join(","));
-  if (systemPromptPath) args.push("--append-system-prompt", systemPromptPath);
-  return args;
+  return paths;
+}
+
+/**
+ * Resolve the frontmatter model to a runtime Model. A "provider/model" string
+ * carries its own provider; a bare model id uses the declared provider, then
+ * the settings default provider (the CLI's implicit resolution when no
+ * --provider was passed). Returns undefined when no model is configured, which
+ * lets createAgentSession fall back to the settings default.
+ */
+export function resolveModel(
+  modelRuntime: ModelRuntime,
+  agent: AgentConfig,
+  settingsManager: SettingsManager,
+): ReturnType<ModelRuntime["getModel"]> {
+  if (!agent.model) return undefined;
+  const slash = agent.model.indexOf("/");
+  if (slash > 0) {
+    return modelRuntime.getModel(agent.model.slice(0, slash), agent.model.slice(slash + 1));
+  }
+  if (agent.provider) return modelRuntime.getModel(agent.provider, agent.model);
+  const defaultProvider = settingsManager.getDefaultProvider();
+  return defaultProvider ? modelRuntime.getModel(defaultProvider, agent.model) : undefined;
 }
 
 // ── subagent runner ──────────────────────────────────────────────────────────
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
-function dialogOptions(signal: AbortSignal | undefined, timeout: number | undefined) {
-  return {
-    ...(signal && { signal }),
-    ...(timeout !== undefined && { timeout }),
-  };
+function toolSegment(name: string, count: number): string {
+  return count > 1 ? `${name} x ${count}` : name;
 }
 
-/** Forward one RPC extension UI request to the parent session. */
-export async function forwardSubagentUIRequest(
-  request: RpcExtensionUIRequest,
-  ui: ExtensionUIContext,
-  signal?: AbortSignal,
-): Promise<RpcExtensionUIResponse | undefined> {
-  switch (request.method) {
-    case "select": {
-      const value = await ui.select(
-        request.title,
-        request.options,
-        dialogOptions(signal, request.timeout),
-      );
-      return value === undefined
-        ? { type: "extension_ui_response", id: request.id, cancelled: true }
-        : { type: "extension_ui_response", id: request.id, value };
-    }
-    case "confirm": {
-      const confirmed = await ui.confirm(
-        request.title,
-        request.message,
-        dialogOptions(signal, request.timeout),
-      );
-      return { type: "extension_ui_response", id: request.id, confirmed };
-    }
-    case "input": {
-      const value = await ui.input(
-        request.title,
-        request.placeholder,
-        dialogOptions(signal, request.timeout),
-      );
-      return value === undefined
-        ? { type: "extension_ui_response", id: request.id, cancelled: true }
-        : { type: "extension_ui_response", id: request.id, value };
-    }
-    case "editor": {
-      const value = await ui.editor(request.title, request.prefill);
-      return value === undefined
-        ? { type: "extension_ui_response", id: request.id, cancelled: true }
-        : { type: "extension_ui_response", id: request.id, value };
-    }
-    case "notify": {
-      ui.notify(request.message, request.notifyType);
-      return undefined;
-    }
-    case "setStatus": {
-      ui.setStatus(request.statusKey, request.statusText);
-      return undefined;
-    }
-    case "setWidget": {
-      ui.setWidget(request.widgetKey, request.widgetLines, {
-        placement: request.widgetPlacement,
-      });
-      return undefined;
-    }
-    case "setTitle": {
-      ui.setTitle(request.title);
-      return undefined;
-    }
-    case "set_editor_text": {
-      ui.setEditorText(request.text);
-      return undefined;
-    }
-  }
+/** The subset of AgentSession runAgent relies on (injectable for tests). */
+export interface SubagentSession {
+  agent: { state: { messages: AgentMessage[] } };
+  subscribe(listener: AgentSessionEventListener): () => void;
+  prompt(text: string, options?: PromptOptions): Promise<void>;
+  abort(): Promise<void>;
+  dispose(): void;
+}
+
+export type SessionFactory = (
+  agent: AgentConfig,
+  cwd: string,
+  parentUI: ExtensionUIContext | undefined,
+) => Promise<SubagentSession>;
+
+/**
+ * Create the subagent session via the pi SDK: an in-memory session (no disk
+ * session recovery or persistence, same as the old --no-session child), a
+ * resource loader that discovers only the per-tool override extensions
+ * (equivalent to --no-extensions + -e), and the parent UI bound directly so
+ * subagent extensions show their dialogs in the parent without RPC.
+ */
+export async function createSubagentSession(
+  agent: AgentConfig,
+  cwd: string,
+  parentUI: ExtensionUIContext | undefined,
+): Promise<AgentSession> {
+  const settingsManager = SettingsManager.create(cwd, getAgentDir());
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir: getAgentDir(),
+    settingsManager,
+    noExtensions: true,
+    additionalExtensionPaths: overrideExtensionPaths(agent.tools ?? DEFAULT_TOOLS),
+    appendSystemPrompt: agent.systemPrompt ? [agent.systemPrompt] : undefined,
+  });
+  await loader.reload();
+
+  const modelRuntime = await ModelRuntime.create();
+  const { session } = await createAgentSession({
+    cwd,
+    model: resolveModel(modelRuntime, agent, settingsManager),
+    thinkingLevel: agent.thinkingLevel,
+    tools: agent.tools ?? DEFAULT_TOOLS,
+    sessionManager: SessionManager.inMemory(cwd),
+    settingsManager,
+    resourceLoader: loader,
+    modelRuntime,
+  });
+  await session.bindExtensions({ uiContext: parentUI, mode: "rpc" });
+  return session;
 }
 
 export async function runAgent(
@@ -367,6 +328,7 @@ export async function runAgent(
   signal: AbortSignal | undefined,
   onUpdate: OnUpdateCallback | undefined,
   parentUI?: ExtensionUIContext,
+  createSession: SessionFactory = createSubagentSession,
 ): Promise<SubagentDetails> {
   const result: SubagentDetails = {
     agent: agent.name,
@@ -382,240 +344,131 @@ export async function runAgent(
     model: agent.model,
   };
 
-  let tmpPromptPath: string | null = null;
+  let session: SubagentSession;
   try {
-    if (agent.systemPrompt.trim()) {
-      tmpPromptPath = await writePromptToTempFile(agent.name, agent.systemPrompt);
+    session = await createSession(agent, cwd, parentUI);
+  } catch (error) {
+    result.errorMessage = error instanceof Error ? error.message : String(error);
+    result.stopReason = "error";
+    result.exitCode = 1;
+    return result;
+  }
+
+  let logLines: string[] = [];
+  // 工具调用行合并:连续的 tool_execution_start 事件合并在同一 `tool:` 行
+  // (如 `tool: read x 2, glob`),相同工具名连续出现时计为 `name x N`,
+  // 不同名按调用顺序罗列;任何非工具行都会打断合并。
+  let toolLineSegments: string[] = [];
+  let toolLine: { name: string; count: number } | undefined;
+
+  const pushLogLine = (line: string) => {
+    logLines.push(line);
+    if (logLines.length > MAX_PROGRESS_LINES) {
+      logLines = logLines.slice(-MAX_PROGRESS_LINES);
     }
-    const args = buildSubagentArgs(agent, task, tmpPromptPath ?? undefined);
-    const invocation = getPiInvocation(args);
-    const proc = spawn(invocation.command, invocation.args, {
-      cwd,
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env },
-    });
+    // 任何非工具行都会打断工具调用合并,下一批调用另起一行。
+    toolLine = undefined;
+  };
 
-    let logLines: string[] = [];
-    // 工具调用行合并:连续的 tool_execution_start 事件合并在同一 `tool:` 行
-    // (如 `tool: read x 2, glob`),相同工具名连续出现时计为 `name x N`,
-    // 不同名按调用顺序罗列;任何非工具行都会打断合并。
-    let toolLineSegments: string[] = [];
-    let toolLine: { name: string; count: number } | undefined;
-
-    const toolSegment = (name: string, count: number) => (count > 1 ? `${name} x ${count}` : name);
-
-    const pushLogLine = (line: string) => {
+  const appendToolLine = (name: string) => {
+    const firstInBatch = toolLine === undefined;
+    if (toolLine === undefined) {
+      toolLineSegments = [];
+      toolLine = { name, count: 1 };
+    } else if (toolLine.name === name) {
+      toolLine.count++;
+    } else {
+      toolLineSegments.push(toolSegment(toolLine.name, toolLine.count));
+      toolLine = { name, count: 1 };
+    }
+    const parts = [...toolLineSegments, toolSegment(toolLine.name, toolLine.count)].join(", ");
+    const line = `tool: ${foldProgressLine(parts)}`;
+    if (firstInBatch) {
       logLines.push(line);
       if (logLines.length > MAX_PROGRESS_LINES) {
         logLines = logLines.slice(-MAX_PROGRESS_LINES);
       }
-      // 任何非工具行都会打断工具调用合并,下一批调用另起一行。
-      toolLine = undefined;
-    };
-
-    const appendToolLine = (name: string) => {
-      const firstInBatch = toolLine === undefined;
-      if (toolLine === undefined) {
-        toolLineSegments = [];
-        toolLine = { name, count: 1 };
-      } else if (toolLine.name === name) {
-        toolLine.count++;
-      } else {
-        toolLineSegments.push(toolSegment(toolLine.name, toolLine.count));
-        toolLine = { name, count: 1 };
-      }
-      const parts = [...toolLineSegments, toolSegment(toolLine.name, toolLine.count)].join(", ");
-      const line = `tool: ${foldProgressLine(parts)}`;
-      if (firstInBatch) {
-        logLines.push(line);
-        if (logLines.length > MAX_PROGRESS_LINES) {
-          logLines = logLines.slice(-MAX_PROGRESS_LINES);
-        }
-      } else {
-        logLines[logLines.length - 1] = line;
-      }
-      emitUpdate();
-    };
-
-    const emitUpdate = () => {
-      // Usage line rides on the last row so the TUI always shows live token
-      // cost; it lives outside the rolling window so it is never trimmed.
-      const usageLine = formatUsageStats(result.usage, result.model);
-      const lines = usageLine ? [...logLines, usageLine] : logLines;
-      onUpdate?.({
-        content: [{ type: "text", text: lines.join("\n") || "(running...)" }],
-        details: { ...result },
-      });
-    };
-
-    let buffer = "";
-
-    const sendRpc = (message: object) => {
-      proc.stdin.write(`${JSON.stringify(message)}\n`);
-    };
-
-    let requestedShutdown = false;
-    const requestShutdown = () => {
-      if (requestedShutdown) return;
-      requestedShutdown = true;
-      proc.stdin.end();
-    };
-
-    const processLine = (line: string) => {
-      if (!line.trim()) return;
-      const record = parseJsonRecord(line);
-      if (!record) return;
-
-      if (record.type === "extension_ui_request") {
-        const request = record as RpcExtensionUIRequest;
-        if (!parentUI) {
-          if (
-            request.method === "select" ||
-            request.method === "confirm" ||
-            request.method === "input" ||
-            request.method === "editor"
-          ) {
-            sendRpc({ type: "extension_ui_response", id: request.id, cancelled: true });
-          }
-          return;
-        }
-        void forwardSubagentUIRequest(request, parentUI, signal)
-          .then((response) => {
-            if (response) sendRpc(response);
-            return;
-          })
-          .catch(() => {
-            sendRpc({ type: "extension_ui_response", id: request.id, cancelled: true });
-          });
-        return;
-      }
-
-      if (record.type === "response") {
-        if (record.command === "prompt" && record.success === false) {
-          result.errorMessage =
-            typeof record.error === "string" ? record.error : "Subagent prompt was rejected";
-          result.stopReason = "error";
-          requestShutdown();
-        }
-        return;
-      }
-
-      const event = record as AgentSessionEvent;
-
-      switch (event.type) {
-        case "message_update": {
-          // A completed text block (text_end carries the full content) becomes a
-          // `text:` log line. Deltas/thinking are intentionally not logged.
-          const delta = event.assistantMessageEvent;
-          if (delta.type === "text_end") {
-            pushLogLine(`text: ${foldProgressLine(delta.content)}`);
-            emitUpdate();
-          }
-
-          break;
-        }
-        case "tool_execution_start": {
-          appendToolLine(event.toolName);
-          break;
-        }
-        case "message_end": {
-          const msg = event.message;
-          result.messages.push(msg);
-          if (msg.role === "assistant") {
-            result.usage.turns++;
-            result.usage.cost += msg.usage.cost.total;
-            result.usage.contextTokens = msg.usage.totalTokens;
-            if (!result.model) result.model = msg.model;
-            result.stopReason = msg.stopReason;
-            if (msg.errorMessage) result.errorMessage = msg.errorMessage;
-          }
-          emitUpdate();
-
-          break;
-        }
-        case "agent_settled": {
-          requestShutdown();
-          break;
-        }
-        // No default
-      }
-    };
-
-    proc.stdout.on("data", (data: Buffer) => {
-      buffer += data.toString();
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) processLine(line);
-    });
-
-    proc.stderr.on("data", (data: Buffer) => {
-      result.stderr = (result.stderr + data.toString()).slice(-MAX_STDERR_CAPTURE_BYTES);
-    });
-
-    proc.stdin.on("error", (error) => {
-      if (!requestedShutdown) result.stderr += error.message;
-    });
-
-    sendRpc({ type: "prompt", message: `Task: ${task}` });
-
-    const exitCode = await new Promise<number>((resolve) => {
-      proc.on("close", (code, childSignal) => {
-        if (buffer.trim()) processLine(buffer);
-        // 被信号终止时 code 为 null，不能算 0——否则中断会被误判为成功
-        resolve(code ?? (childSignal ? 1 : 0));
-      });
-      proc.on("error", (error) => {
-        // spawn 失败（如 pi 命令不存在）时 error 先于 close 触发；
-        // 记录真实错误，而不是只留一个 exit code。
-        result.errorMessage = error.message;
-        result.stopReason ??= "error";
-        resolve(1);
-      });
-
-      const kill = () => {
-        // abort 可能发生在子代理产生任何结果之前；标记 aborted 让上层
-        // 识别中断（已有 stopReason 则保留，避免误报）。
-        result.stopReason ??= "aborted";
-        proc.kill("SIGTERM");
-        setTimeout(() => {
-          if (!proc.killed) proc.kill("SIGKILL");
-        }, 5000);
-      };
-      if (signal) {
-        if (signal.aborted) kill();
-        else signal.addEventListener("abort", kill, { once: true });
-      }
-    });
-
-    result.exitCode = exitCode;
-    return result;
-  } finally {
-    if (tmpPromptPath) {
-      try {
-        await rm(tmpPromptPath, { force: true });
-        await rm(dirname(tmpPromptPath), { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup
-      }
+    } else {
+      logLines[logLines.length - 1] = line;
     }
-  }
-}
+    emitUpdate();
+  };
 
-/**
- * Parse one line of the subagent's RPC stream into a JSON object. Non-JSON
- * lines and records without a type discriminator are rejected.
- */
-function parseJsonRecord(line: string): Record<string, unknown> | null {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(line);
-  } catch {
-    return null;
+  const emitUpdate = () => {
+    // Usage line rides on the last row so the TUI always shows live token
+    // cost; it lives outside the rolling window so it is never trimmed.
+    const usageLine = formatUsageStats(result.usage, result.model);
+    const lines = usageLine ? [...logLines, usageLine] : logLines;
+    onUpdate?.({
+      content: [{ type: "text", text: lines.join("\n") || "(running...)" }],
+      details: { ...result },
+    });
+  };
+
+  const handleEvent = (event: AgentSessionEvent) => {
+    switch (event.type) {
+      case "message_update": {
+        // A completed text block (text_end carries the full content) becomes a
+        // `text:` log line. Deltas/thinking are intentionally not logged.
+        const delta = event.assistantMessageEvent;
+        if (delta.type === "text_end") {
+          pushLogLine(`text: ${foldProgressLine(delta.content)}`);
+          emitUpdate();
+        }
+
+        break;
+      }
+      case "tool_execution_start": {
+        appendToolLine(event.toolName);
+        break;
+      }
+      case "message_end": {
+        const msg = event.message;
+        result.messages.push(msg);
+        if (msg.role === "assistant") {
+          result.usage.turns++;
+          result.usage.cost += msg.usage.cost.total;
+          result.usage.contextTokens = msg.usage.totalTokens;
+          if (!result.model) result.model = msg.model;
+          result.stopReason = msg.stopReason;
+          if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+        }
+        emitUpdate();
+
+        break;
+      }
+      // agent_settled 等事件无需处理：prompt() resolve 即本轮结束。
+      // No default
+    }
+  };
+
+  const unsubscribe = session.subscribe(handleEvent);
+  const onAbort = () => {
+    // abort 可能发生在子代理产生任何结果之前；标记 aborted 让上层
+    // 识别中断（已有 stopReason 则保留，避免误报）。
+    result.stopReason ??= "aborted";
+    void session.abort();
+  };
+  if (signal) {
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
   }
-  if (typeof raw !== "object" || raw === null) return null;
-  if (typeof (raw as Record<string, unknown>).type !== "string") return null;
-  return raw as Record<string, unknown>;
+
+  try {
+    await session.prompt(`Task: ${task}`, { source: "rpc" });
+  } catch (error) {
+    if (result.stopReason !== "aborted") {
+      result.errorMessage = error instanceof Error ? error.message : String(error);
+      result.stopReason = "error";
+    }
+  } finally {
+    unsubscribe();
+    session.dispose();
+  }
+
+  // abort/error 没有退出码可依，由 stopReason 推导（语义同子进程退出码）。
+  result.exitCode = result.stopReason === "error" || result.stopReason === "aborted" ? 1 : 0;
+  return result;
 }
 
 /** Session entry customType used to mark the injected subagent list. */
@@ -633,9 +486,8 @@ export function formatAgentListSection(agents: AgentConfig[]): string {
 // ── extension ────────────────────────────────────────────────────────────────
 
 export default function spawnAgent(pi: ExtensionAPI) {
-  // Windows 上禁用：子代理进程的派生（node/bun 运行时下回退到 `pi` 命令，
-  // 而 npm 安装的 pi 是 .cmd shim，spawn 无法直接启动）与信号管理都是
-  // POSIX 假设，不做 Windows 适配。
+  // Windows 上禁用：子代理的工具集依赖 POSIX 设施（opencode bash 的
+  // bwrap 沙箱、信号处理），不做 Windows 适配。
   if (process.platform === "win32") {
     pi.on("session_start", (_event, ctx) => {
       ctx.ui.notify("spawn-agent is disabled on Windows.", "warning");

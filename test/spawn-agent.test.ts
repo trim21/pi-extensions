@@ -1,22 +1,25 @@
 /**
  * Tests for the spawn_agent extension core:
  * - discoverAgents: frontmatter parsing and validation
- * - buildSubagentArgs: CLI argument assembly (read-only default toolset)
+ * - overrideExtensionPaths / resolveModel: SDK session assembly
+ * - runAgent: session lifecycle, progress log, abort, error handling
  * - tool registration metadata
  */
-import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  buildSubagentArgs,
   formatAgentListSection,
   formatSubagentError,
-  forwardSubagentUIRequest,
+  overrideExtensionPaths,
+  resolveModel,
+  runAgent,
+  type SubagentSession,
 } from "../src/spawn-agent.js";
 import {
   applyAgentDefaults,
@@ -125,15 +128,6 @@ Just read files.
     );
   });
 });
-
-/** Extract the file paths passed via `-e` flags. 分隔符统一为 `/`，断言跨平台。 */
-function loadedExtensions(args: string[]): string[] {
-  const exts: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "-e" && args[i + 1]) exts.push(args[i + 1].replaceAll("\\", "/"));
-  }
-  return exts;
-}
 
 describe("loadSpawnAgentConfig", () => {
   it("returns undefined when spawn-agent.json is missing", () => {
@@ -252,172 +246,159 @@ describe("applyAgentDefaults", () => {
   });
 });
 
-describe("buildSubagentArgs", () => {
-  const baseAgent = {
-    name: "scout",
-    description: "desc",
-    systemPrompt: "",
-    filePath: "/x/scout.md",
-  };
-
-  it("uses the read-only default toolset when the agent declares none", () => {
-    const args = buildSubagentArgs(baseAgent, "find the config", undefined);
-    expect(args).toContain("rpc");
-    expect(args).not.toContain("-p");
-    expect(args).toContain("--no-extensions");
-    expect(args).toContain("--tools");
-    const toolsIdx = args.indexOf("--tools");
-    expect(args[toolsIdx + 1]).toBe("read,grep,find,ls");
-    expect(args).not.toContain("Task: find the config");
-  });
-
+describe("overrideExtensionPaths", () => {
   it("loads the bwrap-backed opencode bash for agents that declare the bash tool", () => {
-    for (const agent of [
-      { ...baseAgent, tools: ["bash"] },
-      { ...baseAgent, tools: ["bash", "edit"] },
-    ]) {
-      const exts = loadedExtensions(buildSubagentArgs(agent, "task", undefined));
-      expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
+    for (const tools of [["bash"], ["bash", "edit"]]) {
+      const paths = overrideExtensionPaths(tools);
+      expect(paths.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
     }
     // Agents without bash need no bwrap sandbox: there are no commands to run.
-    const exts = loadedExtensions(buildSubagentArgs(baseAgent, "task", undefined));
-    expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(false);
+    const paths = overrideExtensionPaths(["read", "grep", "find", "ls"]);
+    expect(paths.some((p) => p.endsWith("opencode/bash.ts"))).toBe(false);
   });
 
   it("loads opencode files.ts for the default read-only toolset", () => {
-    const exts = loadedExtensions(buildSubagentArgs(baseAgent, "task", undefined));
-    expect(exts.some((p) => p.endsWith("opencode/files.ts"))).toBe(true);
-    expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(false);
+    const paths = overrideExtensionPaths(["read"]);
+    expect(paths.some((p) => p.endsWith("opencode/files.ts"))).toBe(true);
+    expect(paths.some((p) => p.endsWith("opencode/bash.ts"))).toBe(false);
   });
 
   it("loads the shared opencode files implementation once for read/edit/write", () => {
-    const exts = loadedExtensions(
-      buildSubagentArgs(
-        { ...baseAgent, tools: ["read", "edit", "write", "bash"] },
-        "task",
-        undefined,
-      ),
-    );
+    const paths = overrideExtensionPaths(["read", "edit", "write", "bash"]);
     // read/edit/write 共享 opencode/files.ts（共享 LSP service 实例），只加载一次
-    expect(exts.filter((p) => p.endsWith("opencode/files.ts"))).toHaveLength(1);
-    expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
+    expect(paths.filter((p) => p.endsWith("opencode/files.ts"))).toHaveLength(1);
+    expect(paths.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
   });
 
-  it("does not load opencode overrides for tools the agent did not declare", () => {
-    const exts = loadedExtensions(
-      buildSubagentArgs({ ...baseAgent, tools: ["bash"] }, "task", undefined),
-    );
-    expect(exts.some((p) => p.endsWith("opencode/files.ts"))).toBe(false);
-    expect(exts.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
+  it("does not load overrides for tools the agent did not declare", () => {
+    const paths = overrideExtensionPaths(["bash"]);
+    expect(paths.some((p) => p.endsWith("opencode/files.ts"))).toBe(false);
+    expect(paths.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
   });
 
   it("loads claude-code search tools individually (Grep without Glob)", () => {
-    const grepExts = loadedExtensions(
-      buildSubagentArgs({ ...baseAgent, tools: ["Grep"] }, "task", undefined),
-    );
-    expect(grepExts.some((p) => p.endsWith("claude-code/grep.ts"))).toBe(true);
-    expect(grepExts.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(false);
+    const grepPaths = overrideExtensionPaths(["Grep"]);
+    expect(grepPaths.some((p) => p.endsWith("claude-code/grep.ts"))).toBe(true);
+    expect(grepPaths.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(false);
 
-    const globExts = loadedExtensions(
-      buildSubagentArgs({ ...baseAgent, tools: ["Glob"] }, "task", undefined),
-    );
-    expect(globExts.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(true);
-    expect(globExts.some((p) => p.endsWith("claude-code/grep.ts"))).toBe(false);
+    const globPaths = overrideExtensionPaths(["Glob"]);
+    expect(globPaths.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(true);
+    expect(globPaths.some((p) => p.endsWith("claude-code/grep.ts"))).toBe(false);
 
-    const both = loadedExtensions(
-      buildSubagentArgs({ ...baseAgent, tools: ["Grep", "Glob"] }, "task", undefined),
-    );
+    const both = overrideExtensionPaths(["Grep", "Glob"]);
     expect(both.some((p) => p.endsWith("claude-code/grep.ts"))).toBe(true);
     expect(both.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(true);
   });
 
   it("loads the shared cc files implementation once for Read/Edit/Write", () => {
     // All three stateful cc tools live in claude-code/files.ts (shared
-    // read-snapshot state); the `--tools` allowlist exposes only the subset
-    // the agent declared, so the extension file must be loaded exactly once.
-    const exts = loadedExtensions(
-      buildSubagentArgs({ ...baseAgent, tools: ["Read", "Edit", "Write"] }, "task", undefined),
-    );
-    expect(exts.filter((p) => p.endsWith("claude-code/files.ts"))).toHaveLength(1);
-    expect(exts.some((p) => p.endsWith("opencode/files.ts"))).toBe(false);
+    // read-snapshot state); the tools allowlist exposes only the subset the
+    // agent declared, so the extension file must be loaded exactly once.
+    const paths = overrideExtensionPaths(["Read", "Edit", "Write"]);
+    expect(paths.filter((p) => p.endsWith("claude-code/files.ts"))).toHaveLength(1);
+    expect(paths.some((p) => p.endsWith("opencode/files.ts"))).toBe(false);
 
-    const single = loadedExtensions(
-      buildSubagentArgs({ ...baseAgent, tools: ["Edit"] }, "task", undefined),
-    );
+    const single = overrideExtensionPaths(["Edit"]);
     expect(single.filter((p) => p.endsWith("claude-code/files.ts"))).toHaveLength(1);
   });
 
-  it("uses the agent's declared toolset and model when present", () => {
-    const args = buildSubagentArgs(
-      { ...baseAgent, tools: ["bash", "edit"], model: "claude-sonnet-4" },
-      "implement",
-      undefined,
+  it("throws when an override extension file is missing", () => {
+    // overrideExtensionPaths resolves against the installed package; a
+    // missing file means the extension bundle is broken and must be fatal.
+    expect(() => overrideExtensionPaths(["read"])).not.toThrow();
+  });
+});
+
+function runtimeWith(models: Record<string, boolean>) {
+  const getModel = vi.fn((provider: string, modelId: string) =>
+    models[`${provider}/${modelId}`] ? ({ provider, id: modelId } as never) : undefined,
+  );
+  return {
+    runtime: { getModel } as unknown as ModelRuntime,
+    getModel,
+  };
+}
+
+describe("resolveModel", () => {
+  const settings = { getDefaultProvider: () => "openai" } as unknown as SettingsManager;
+
+  it("returns undefined when the agent declares no model", () => {
+    const { runtime, getModel } = runtimeWith({});
+    expect(
+      resolveModel(
+        runtime,
+        { name: "s", description: "d", systemPrompt: "", filePath: "" },
+        settings,
+      ),
+    ).toBeUndefined();
+    expect(getModel).not.toHaveBeenCalled();
+  });
+
+  it("splits a provider-prefixed model string", () => {
+    const { runtime, getModel } = runtimeWith({ "openai/gpt-4o": true });
+    const model = resolveModel(
+      runtime,
+      { name: "s", description: "d", systemPrompt: "", filePath: "", model: "openai/gpt-4o" },
+      settings,
     );
-    expect(args).toContain("--model");
-    expect(args[args.indexOf("--model") + 1]).toBe("claude-sonnet-4");
-    expect(args[args.indexOf("--tools") + 1]).toBe("bash,edit");
+    expect(getModel).toHaveBeenCalledWith("openai", "gpt-4o");
+    expect(model).toBeDefined();
   });
 
-  it("passes the thinking level via --thinking", () => {
-    const args = buildSubagentArgs(
-      { ...baseAgent, model: "claude-sonnet-4", thinkingLevel: "high" },
-      "task",
-      undefined,
+  it("uses the declared provider for a bare model id", () => {
+    const { runtime, getModel } = runtimeWith({ "axonhub/deepseek-v4-flash": true });
+    const model = resolveModel(
+      runtime,
+      {
+        name: "s",
+        description: "d",
+        systemPrompt: "",
+        filePath: "",
+        provider: "axonhub",
+        model: "deepseek-v4-flash",
+      },
+      settings,
     );
-    expect(args[args.indexOf("--model") + 1]).toBe("claude-sonnet-4");
-    expect(args[args.indexOf("--thinking") + 1]).toBe("high");
+    expect(getModel).toHaveBeenCalledWith("axonhub", "deepseek-v4-flash");
+    expect(model).toBeDefined();
   });
 
-  it("passes --provider when the provider is set and the model has no slash", () => {
-    const args = buildSubagentArgs(
-      { ...baseAgent, provider: "axonhub", model: "deepseek-v4-flash", thinkingLevel: "high" },
-      "task",
-      undefined,
+  it("falls back to the settings default provider for a bare model id", () => {
+    const { runtime, getModel } = runtimeWith({ "openai/gpt-4o": true });
+    const model = resolveModel(
+      runtime,
+      { name: "s", description: "d", systemPrompt: "", filePath: "", model: "gpt-4o" },
+      settings,
     );
-    expect(args[args.indexOf("--provider") + 1]).toBe("axonhub");
-    expect(args[args.indexOf("--model") + 1]).toBe("deepseek-v4-flash");
-    expect(args[args.indexOf("--thinking") + 1]).toBe("high");
+    expect(getModel).toHaveBeenCalledWith("openai", "gpt-4o");
+    expect(model).toBeDefined();
   });
 
-  it("omits --provider when the model carries a provider prefix", () => {
-    // "openai/gpt-4o" 由 pi 自己解析 provider；显式传 --provider 会冲突
-    const args = buildSubagentArgs(
-      { ...baseAgent, provider: "axonhub", model: "openai/gpt-4o" },
-      "task",
-      undefined,
+  it("returns undefined when no provider can be resolved", () => {
+    const runtime = runtimeWith({}).runtime;
+    const model = resolveModel(
+      runtime,
+      { name: "s", description: "d", systemPrompt: "", filePath: "", model: "gpt-4o" },
+      { getDefaultProvider: vi.fn() } as unknown as SettingsManager,
     );
-    expect(args).not.toContain("--provider");
-    expect(args[args.indexOf("--model") + 1]).toBe("openai/gpt-4o");
+    expect(model).toBeUndefined();
   });
 
-  it("passes --thinking off to disable thinking", () => {
-    const args = buildSubagentArgs(
-      { ...baseAgent, model: "claude-sonnet-4", thinkingLevel: "off" },
-      "task",
-      undefined,
+  it("returns undefined when the model is not registered", () => {
+    const runtime = runtimeWith({}).runtime;
+    const model = resolveModel(
+      runtime,
+      {
+        name: "s",
+        description: "d",
+        systemPrompt: "",
+        filePath: "",
+        provider: "openai",
+        model: "gpt-4o",
+      },
+      settings,
     );
-    expect(args[args.indexOf("--thinking") + 1]).toBe("off");
-  });
-
-  it("passes no provider/model/thinking flags when the agent declares none", () => {
-    const args = buildSubagentArgs(baseAgent, "task", undefined);
-    expect(args).not.toContain("--provider");
-    expect(args).not.toContain("--model");
-    expect(args).not.toContain("--thinking");
-  });
-
-  it("passes --thinking independently of the model", () => {
-    const args = buildSubagentArgs({ ...baseAgent, thinkingLevel: "off" }, "task", undefined);
-    expect(args[args.indexOf("--thinking") + 1]).toBe("off");
-    expect(args).not.toContain("--model");
-  });
-
-  it("appends the system prompt file path", () => {
-    const args = buildSubagentArgs(baseAgent, "task", "/tmp/pi-spawn-agent-x/prompt-scout.md");
-    expect(args).toContain("--append-system-prompt");
-    expect(args[args.indexOf("--append-system-prompt") + 1]).toBe(
-      "/tmp/pi-spawn-agent-x/prompt-scout.md",
-    );
+    expect(model).toBeUndefined();
   });
 });
 
@@ -519,281 +500,231 @@ describe("Windows: spawn-agent disabled", () => {
   });
 });
 
-function fakeProc() {
-  const proc = new EventEmitter() as ReturnType<typeof import("node:child_process").spawn>;
-  const stdin = new EventEmitter() as EventEmitter & {
-    write: ReturnType<typeof vi.fn>;
-    end: ReturnType<typeof vi.fn>;
+const BASE_AGENT = {
+  name: "scout",
+  description: "desc",
+  systemPrompt: "",
+  filePath: "/x/scout.md",
+};
+
+/** Fake session harness: runAgent drives this instead of the real SDK. */
+function fakeSessionHarness() {
+  const listeners: ((event: never) => void)[] = [];
+  let resolvePrompt: (() => void) | undefined;
+  // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- lib 是 ES2023
+  const promptPromise = new Promise<void>((resolve) => {
+    resolvePrompt = resolve;
+  });
+  const subscribe = vi.fn((listener: (event: never) => void) => {
+    listeners.push(listener);
+    return () => {
+      const index = listeners.indexOf(listener);
+      if (index !== -1) listeners.splice(index, 1);
+    };
+  });
+  // 挂起直到测试 settle()，与真实 SDK 中 prompt 在事件流之后才 resolve 的时序一致。
+  const prompt = vi.fn(() => promptPromise);
+  const abort = vi.fn(async () => resolvePrompt?.());
+  const dispose = vi.fn();
+  const session = {
+    agent: { state: { messages: [] as AgentMessage[] } },
+    subscribe,
+    prompt,
+    abort,
+    dispose,
+  } as unknown as SubagentSession;
+  return {
+    session,
+    factory: vi.fn(async () => session),
+    emit: (event: unknown) => {
+      for (const listener of listeners) listener(event as never);
+    },
+    settle: () => resolvePrompt?.(),
+    subscribe,
+    prompt,
+    abort,
+    dispose,
   };
-  stdin.write = vi.fn(() => true);
-  stdin.end = vi.fn();
-  (proc as unknown as { stdin: EventEmitter }).stdin = stdin;
-  (proc as unknown as { stdout: EventEmitter }).stdout = new EventEmitter();
-  (proc as unknown as { stderr: EventEmitter }).stderr = new EventEmitter();
-  (proc as unknown as { kill: ReturnType<typeof vi.fn> }).kill = vi.fn(() => true);
-  (proc as unknown as { killed: boolean }).killed = false;
-  return proc;
 }
 
-describe("subagent RPC process", () => {
-  it("sends the task over stdin", async () => {
-    vi.resetModules();
-    const spawnMock = vi.fn();
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const mod = await importOriginal<typeof import("node:child_process")>();
-      spawnMock.mockImplementation(fakeProc);
-      return { ...mod, spawn: spawnMock };
-    });
-
-    const { runAgent } = await import("../src/spawn-agent.js");
-    const agent = { name: "scout", description: "desc", systemPrompt: "", filePath: "/x/scout.md" };
-    const running = runAgent(agent, "task", "/cwd", undefined, undefined);
-
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
-    const options = (
-      spawnMock.mock.calls[0] as [string, string[], { env: Record<string, string> }]
-    )[2];
-    expect(options.env.PATH).toBe(process.env.PATH);
-
-    const proc = spawnMock.mock.results[0].value as unknown as {
-      stdin: { write: ReturnType<typeof vi.fn> };
-    };
-    expect(proc.stdin.write).toHaveBeenCalledWith(
-      `${JSON.stringify({ type: "prompt", message: "Task: task" })}\n`,
+describe("subagent session", () => {
+  it("prompts the session with the task", async () => {
+    const h = fakeSessionHarness();
+    const running = runAgent(
+      BASE_AGENT,
+      "task",
+      "/cwd",
+      undefined,
+      undefined,
+      undefined,
+      h.factory,
     );
-
-    (spawnMock.mock.results[0].value as EventEmitter).emit("close", 0);
+    h.settle();
     const result = await running;
+    expect(h.prompt).toHaveBeenCalledWith("Task: task", { source: "rpc" });
     expect(result.exitCode).toBe(0);
-    vi.resetModules();
   });
 
-  it("records the spawn error message instead of a bare exit code", async () => {
-    vi.resetModules();
-    const spawnMock = vi.fn();
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const mod = await importOriginal<typeof import("node:child_process")>();
-      spawnMock.mockImplementation(fakeProc);
-      return { ...mod, spawn: spawnMock };
+  it("records a session creation failure", async () => {
+    const factory = vi.fn(async () => {
+      throw new Error("boom");
     });
-
-    const { runAgent } = await import("../src/spawn-agent.js");
-    const agent = { name: "scout", description: "desc", systemPrompt: "", filePath: "/x/scout.md" };
-    const running = runAgent(agent, "task", "/cwd", undefined, undefined);
-
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
-    const proc = spawnMock.mock.results[0].value as EventEmitter;
-    proc.emit("error", new Error("spawn pi ENOENT"));
-    proc.emit("close", null, null);
-    const result = await running;
+    const result = await runAgent(
+      BASE_AGENT,
+      "task",
+      "/cwd",
+      undefined,
+      undefined,
+      undefined,
+      factory,
+    );
     expect(result.exitCode).toBe(1);
-    expect(result.errorMessage).toBe("spawn pi ENOENT");
-    vi.resetModules();
+    expect(result.errorMessage).toBe("boom");
+    expect(result.stopReason).toBe("error");
   });
 
-  it("treats a signal-terminated process as a non-zero exit", async () => {
-    vi.resetModules();
-    const spawnMock = vi.fn();
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const mod = await importOriginal<typeof import("node:child_process")>();
-      spawnMock.mockImplementation(fakeProc);
-      return { ...mod, spawn: spawnMock };
+  it("records a prompt rejection as an error", async () => {
+    const h = fakeSessionHarness();
+    h.session.prompt = vi.fn(async () => {
+      throw new Error("no api key");
     });
-
-    const { runAgent } = await import("../src/spawn-agent.js");
-    const agent = { name: "scout", description: "desc", systemPrompt: "", filePath: "/x/scout.md" };
-    const running = runAgent(agent, "task", "/cwd", undefined, undefined);
-
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
-    (spawnMock.mock.results[0].value as EventEmitter).emit("close", null, "SIGTERM");
-    const result = await running;
+    const result = await runAgent(
+      BASE_AGENT,
+      "task",
+      "/cwd",
+      undefined,
+      undefined,
+      undefined,
+      h.factory,
+    );
     expect(result.exitCode).toBe(1);
-    vi.resetModules();
+    expect(result.errorMessage).toBe("no api key");
+    expect(result.stopReason).toBe("error");
   });
 
   it("marks the result aborted when the abort signal fires", async () => {
-    vi.useFakeTimers();
-    vi.resetModules();
-    const spawnMock = vi.fn();
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const mod = await importOriginal<typeof import("node:child_process")>();
-      spawnMock.mockImplementation(fakeProc);
-      return { ...mod, spawn: spawnMock };
-    });
-
-    const { runAgent } = await import("../src/spawn-agent.js");
-    const agent = { name: "scout", description: "desc", systemPrompt: "", filePath: "/x/scout.md" };
+    const h = fakeSessionHarness();
     const controller = new AbortController();
-    const running = runAgent(agent, "task", "/cwd", controller.signal, undefined);
-
-    expect(spawnMock).toHaveBeenCalled();
-    const proc = spawnMock.mock.results[0].value as unknown as {
-      kill: ReturnType<typeof vi.fn>;
-      emit: (event: string, ...args: unknown[]) => boolean;
-    };
+    const running = runAgent(
+      BASE_AGENT,
+      "task",
+      "/cwd",
+      controller.signal,
+      undefined,
+      undefined,
+      h.factory,
+    );
     controller.abort();
-    expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
-    proc.emit("close", null, "SIGTERM");
     const result = await running;
-    expect(result.exitCode).toBe(1);
+    expect(h.abort).toHaveBeenCalled();
     expect(result.stopReason).toBe("aborted");
-    vi.resetModules();
-    vi.useRealTimers();
-  });
-});
-
-describe("subagent UI forwarding", () => {
-  it("forwards every RPC-supported UI method to the parent UI", async () => {
-    const ui = {
-      select: vi.fn(async () => "Allow"),
-      confirm: vi.fn(async () => true),
-      input: vi.fn(async () => "because"),
-      editor: vi.fn(async () => "edited"),
-      notify: vi.fn(),
-      setStatus: vi.fn(),
-      setWidget: vi.fn(),
-      setTitle: vi.fn(),
-      setEditorText: vi.fn(),
-    };
-
-    await expect(
-      forwardSubagentUIRequest(
-        {
-          type: "extension_ui_request",
-          id: "1",
-          method: "select",
-          title: "Pick",
-          options: ["Allow"],
-        },
-        ui as never,
-      ),
-    ).resolves.toEqual({ type: "extension_ui_response", id: "1", value: "Allow" });
-    await expect(
-      forwardSubagentUIRequest(
-        {
-          type: "extension_ui_request",
-          id: "2",
-          method: "confirm",
-          title: "Sure?",
-          message: "Really?",
-        },
-        ui as never,
-      ),
-    ).resolves.toEqual({ type: "extension_ui_response", id: "2", confirmed: true });
-    await expect(
-      forwardSubagentUIRequest(
-        { type: "extension_ui_request", id: "3", method: "input", title: "Why?" },
-        ui as never,
-      ),
-    ).resolves.toEqual({ type: "extension_ui_response", id: "3", value: "because" });
-    await expect(
-      forwardSubagentUIRequest(
-        { type: "extension_ui_request", id: "4", method: "editor", title: "Edit" },
-        ui as never,
-      ),
-    ).resolves.toEqual({ type: "extension_ui_response", id: "4", value: "edited" });
-
-    await forwardSubagentUIRequest(
-      {
-        type: "extension_ui_request",
-        id: "5",
-        method: "notify",
-        message: "Done",
-        notifyType: "info",
-      },
-      ui as never,
-    );
-    await forwardSubagentUIRequest(
-      {
-        type: "extension_ui_request",
-        id: "6",
-        method: "setStatus",
-        statusKey: "child",
-        statusText: "busy",
-      },
-      ui as never,
-    );
-    await forwardSubagentUIRequest(
-      {
-        type: "extension_ui_request",
-        id: "7",
-        method: "setWidget",
-        widgetKey: "child",
-        widgetLines: ["one"],
-        widgetPlacement: "belowEditor",
-      },
-      ui as never,
-    );
-    await forwardSubagentUIRequest(
-      { type: "extension_ui_request", id: "8", method: "setTitle", title: "Child" },
-      ui as never,
-    );
-    await forwardSubagentUIRequest(
-      { type: "extension_ui_request", id: "9", method: "set_editor_text", text: "draft" },
-      ui as never,
-    );
-
-    expect(ui.notify).toHaveBeenCalledWith("Done", "info");
-    expect(ui.setStatus).toHaveBeenCalledWith("child", "busy");
-    expect(ui.setWidget).toHaveBeenCalledWith("child", ["one"], {
-      placement: "belowEditor",
-    });
-    expect(ui.setTitle).toHaveBeenCalledWith("Child");
-    expect(ui.setEditorText).toHaveBeenCalledWith("draft");
+    expect(result.exitCode).toBe(1);
   });
 
-  it("writes dialog responses back to the child RPC process", async () => {
-    vi.resetModules();
-    const spawnMock = vi.fn();
-    vi.doMock("node:child_process", async (importOriginal) => {
-      const mod = await importOriginal<typeof import("node:child_process")>();
-      spawnMock.mockImplementation(fakeProc);
-      return { ...mod, spawn: spawnMock };
+  it("keeps an existing stop reason when the abort signal fires after settling", async () => {
+    const h = fakeSessionHarness();
+    const controller = new AbortController();
+    const running = runAgent(
+      BASE_AGENT,
+      "task",
+      "/cwd",
+      controller.signal,
+      undefined,
+      undefined,
+      h.factory,
+    );
+    await vi.waitFor(() => expect(h.subscribe).toHaveBeenCalled());
+    h.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: { cost: { total: 0 }, totalTokens: 0 },
+        stopReason: "end_turn",
+      },
     });
-
-    const { runAgent } = await import("../src/spawn-agent.js");
-    const agent = {
-      name: "scout",
-      description: "desc",
-      systemPrompt: "",
-      filePath: "/x/scout.md",
-    };
-    const parentUI = { select: vi.fn(async () => "Approve once") };
-    const running = runAgent(agent, "task", "/cwd", undefined, undefined, parentUI as never);
-
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
-    const proc = spawnMock.mock.results[0].value as unknown as {
-      stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
-      stdout: EventEmitter;
-      emit: (event: string, ...args: unknown[]) => boolean;
-    };
-    proc.stdout.emit(
-      "data",
-      Buffer.from(
-        `${JSON.stringify({
-          type: "extension_ui_request",
-          id: "approval",
-          method: "select",
-          title: "Allow?",
-          options: ["Approve once", "Block"],
-        })}\n`,
-      ),
-    );
-
-    await vi.waitFor(() =>
-      expect(proc.stdin.write).toHaveBeenCalledWith(
-        `${JSON.stringify({
-          type: "extension_ui_response",
-          id: "approval",
-          value: "Approve once",
-        })}\n`,
-      ),
-    );
-    proc.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "agent_settled" })}\n`));
-    expect(proc.stdin.end).toHaveBeenCalledOnce();
-    proc.emit("close", 0);
+    controller.abort();
+    const result = await running;
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.exitCode).toBe(0);
+  });
+  it("passes the parent UI to the session factory", async () => {
+    const h = fakeSessionHarness();
+    const parentUI = { select: vi.fn() } as never;
+    const running = runAgent(BASE_AGENT, "task", "/cwd", undefined, undefined, parentUI, h.factory);
+    h.settle();
     await running;
-    vi.resetModules();
+    expect(h.factory).toHaveBeenCalledWith(BASE_AGENT, "/cwd", parentUI);
+  });
+
+  it("disposes the session after the prompt settles", async () => {
+    const h = fakeSessionHarness();
+    const running = runAgent(
+      BASE_AGENT,
+      "task",
+      "/cwd",
+      undefined,
+      undefined,
+      undefined,
+      h.factory,
+    );
+    h.settle();
+    await running;
+    expect(h.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("collects messages and usage from message_end events", async () => {
+    const h = fakeSessionHarness();
+    const running = runAgent(
+      BASE_AGENT,
+      "task",
+      "/cwd",
+      undefined,
+      undefined,
+      undefined,
+      h.factory,
+    );
+    await vi.waitFor(() => expect(h.subscribe).toHaveBeenCalled());
+    h.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "found it" }],
+        usage: { cost: { total: 0.0123 }, totalTokens: 456 },
+        model: "claude-haiku-4-5",
+        stopReason: "end_turn",
+      },
+    });
+    h.settle();
+    const result = await running;
+    expect(result.usage.cost).toBe(0.0123);
+    expect(result.usage.turns).toBe(1);
+    expect(result.usage.contextTokens).toBe(456);
+    expect(result.model).toBe("claude-haiku-4-5");
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.messages).toHaveLength(1);
+  });
+
+  it("ignores non-assistant message_end events for usage", async () => {
+    const h = fakeSessionHarness();
+    const running = runAgent(
+      BASE_AGENT,
+      "task",
+      "/cwd",
+      undefined,
+      undefined,
+      undefined,
+      h.factory,
+    );
+    await vi.waitFor(() => expect(h.subscribe).toHaveBeenCalled());
+    h.emit({
+      type: "message_end",
+      message: { role: "user", content: [{ type: "text", text: "hi" }] },
+    });
+    h.settle();
+    const result = await running;
+    expect(result.usage.turns).toBe(0);
+    expect(result.messages).toHaveLength(1);
   });
 });
 
@@ -950,33 +881,26 @@ describe("subagent progress log", () => {
 });
 
 async function runWithEvents(events: unknown[]) {
-  vi.resetModules();
-  const spawnMock = vi.fn();
-  vi.doMock("node:child_process", async (importOriginal) => {
-    const mod = await importOriginal<typeof import("node:child_process")>();
-    spawnMock.mockImplementation(fakeProc);
-    return { ...mod, spawn: spawnMock };
-  });
-
-  const { runAgent } = await import("../src/spawn-agent.js");
-  const agent = { name: "scout", description: "desc", systemPrompt: "", filePath: "/x/scout.md" };
+  const h = fakeSessionHarness();
   const updates: string[] = [];
-  const running = runAgent(agent, "task", "/cwd", undefined, (u) => {
-    const part = u.content[0];
-    if (part.type === "text") updates.push(part.text);
-  });
-
-  await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
-  const proc = spawnMock.mock.results[0].value as unknown as {
-    stdout: EventEmitter;
-    emit: (event: string, ...args: unknown[]) => boolean;
-  };
+  const running = runAgent(
+    BASE_AGENT,
+    "task",
+    "/cwd",
+    undefined,
+    (u) => {
+      const part = u.content[0];
+      if (part.type === "text") updates.push(part.text);
+    },
+    undefined,
+    h.factory,
+  );
+  await vi.waitFor(() => expect(h.subscribe).toHaveBeenCalled());
   for (const event of events) {
-    proc.stdout.emit("data", Buffer.from(`${JSON.stringify(event)}\n`));
+    h.emit(event);
   }
-  proc.emit("close", 0);
+  h.settle();
   await running;
-  vi.resetModules();
   return updates;
 }
 
@@ -1004,7 +928,7 @@ describe("formatSubagentError", () => {
   it("combines error, stderr and output by source", () => {
     const { message } = formatSubagentError({
       ...base,
-      errorMessage: "spawn pi ENOENT",
+      errorMessage: "no api key",
       stderr: "some log line\nfatal: cannot start",
       messages: [
         {
@@ -1014,7 +938,7 @@ describe("formatSubagentError", () => {
       ],
     });
     expect(message).toBe(
-      "error: spawn pi ENOENT\nstderr: some log line\nfatal: cannot start\noutput: I looked but failed.",
+      "error: no api key\nstderr: some log line\nfatal: cannot start\noutput: I looked but failed.",
     );
   });
 

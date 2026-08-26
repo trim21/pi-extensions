@@ -156,16 +156,14 @@ export async function guardWriteAccess(
     const choice = await ctx.ui.select(title, ["Approve once", "Block", "Block with reason"]);
     if (choice === undefined) {
       ctx.abort?.();
-      throw new Error("Write outside workspace cancelled by user.");
+      throw new Error(`user deny ${opts.toolName}: cancelled`);
     }
     if (choice === "Approve once") return;
-    if (choice === "Block") throw new Error("Write outside workspace denied by user.");
+    if (choice === "Block") throw new Error(`user deny ${opts.toolName}: blocked`);
     const feedback = await ctx.ui.input("Why was this write denied?");
     if (feedback === undefined) continue;
     throw new Error(
-      feedback
-        ? `Write outside workspace denied: ${feedback}`
-        : "Write outside workspace denied by user.",
+      feedback ? `user deny ${opts.toolName}: ${feedback}` : `user deny ${opts.toolName}: blocked`,
     );
   }
 }
