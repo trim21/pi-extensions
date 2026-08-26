@@ -48,69 +48,6 @@ export const serverConfigSchema = Type.Object({
 
 export type ServerConfig = Static<typeof serverConfigSchema>;
 
-/** 内置默认服务器（id → 配置，可被用户配置按 id 覆盖，全量字段均可配置化表达）。 */
-export const defaultServers: Record<string, ServerConfig> = {
-  typescript: {
-    include: ["**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"],
-    rootMarkers: ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"],
-    bin: "typescript-language-server",
-    args: ["--stdio"],
-    cwd: "{root}",
-    languageIdByExtension: {
-      ".ts": "typescript",
-      ".tsx": "typescriptreact",
-      ".js": "javascript",
-      ".jsx": "javascriptreact",
-      ".mjs": "javascript",
-      ".cjs": "javascript",
-      ".mts": "typescript",
-      ".cts": "typescript",
-    },
-  },
-  pyright: {
-    include: ["**/*.py", "**/*.pyi"],
-    rootMarkers: [
-      "pyproject.toml",
-      "setup.py",
-      "setup.cfg",
-      "requirements.txt",
-      "Pipfile",
-      "pyrightconfig.json",
-    ],
-    bin: "pyright-langserver",
-    args: ["--stdio"],
-    cwd: "{root}",
-    languageIdByExtension: { ".py": "python", ".pyi": "python" },
-  },
-  ruff: {
-    include: ["**/*.py", "**/*.pyi"],
-    rootMarkers: ["pyproject.toml", "ruff.toml", ".ruff.toml"],
-    bin: "ruff",
-    args: ["server"],
-    cwd: "{root}",
-    languageIdByExtension: { ".py": "python", ".pyi": "python" },
-  },
-  clangd: {
-    include: ["**/*.{c,h,cpp,hpp,cc,cxx,c++,hh,hxx,h++}"],
-    rootMarkers: ["compile_commands.json", "compile_flags.txt", ".clangd"],
-    bin: "clangd",
-    args: ["--background-index", "--clang-tidy"],
-    cwd: "{root}",
-    languageIdByExtension: {
-      ".c": "c",
-      ".h": "c",
-      ".cpp": "cpp",
-      ".hpp": "cpp",
-      ".cc": "cpp",
-      ".cxx": "cpp",
-      ".c++": "cpp",
-      ".hh": "cpp",
-      ".hxx": "cpp",
-      ".h++": "cpp",
-    },
-  },
-};
-
 /** 按 id 合并 servers record：同名 id 整体覆盖（不做逐字段 merge），其余保留；返回 undefined 表示没有任何 servers 定义。 */
 export function mergeServerRecords(
   ...records: (Readonly<Record<string, ServerConfig>> | undefined)[]
@@ -123,21 +60,11 @@ export function mergeServerRecords(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-/** 用户 servers（id → 配置）与默认配置合并：同名 id 整体覆盖、新增 id、enabled:false 移除。 */
-export function mergeServerConfigs(
-  defaults: Readonly<Record<string, ServerConfig>>,
-  user: Readonly<Record<string, ServerConfig>> | undefined,
-): Record<string, ServerConfig> {
-  if (!user) return { ...defaults };
-  const merged = { ...defaults };
-  for (const [id, server] of Object.entries(user)) {
-    if (server.enabled === false) {
-      delete merged[id];
-      continue;
-    }
-    merged[id] = server;
-  }
-  return merged;
+/** 组装启用的服务器列表：全部来自用户配置 servers（id → 配置），无内置默认。 */
+export function createAdapters(
+  userServers?: Readonly<Record<string, ServerConfig>>,
+): LspServerAdapter[] {
+  return Object.entries(userServers ?? {}).map(([id, config]) => new ConfigAdapter(id, config));
 }
 
 /** {root} / {cwd} 模板替换（bin / cwd 字段均支持）。 */
@@ -219,13 +146,4 @@ export class ConfigAdapter implements LspServerAdapter {
       languageIds: this.config.languageIdByExtension,
     };
   }
-}
-
-/** 组装启用的服务器列表：默认配置 + 用户 servers（id → 配置）合并。 */
-export function createAdapters(
-  userServers?: Readonly<Record<string, ServerConfig>>,
-): LspServerAdapter[] {
-  return Object.entries(mergeServerConfigs(defaultServers, userServers)).map(
-    ([id, config]) => new ConfigAdapter(id, config),
-  );
 }

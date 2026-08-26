@@ -6,6 +6,7 @@
  * - 配置来源：全局 `~/.pi/agent/lsp.json` + 本地 `<cwd>/.pi/lsp.json`
  *   （本地覆盖全局）：`servers` 按 id 合并（同名 id 整体覆盖、新增 id，全局
  *   其余服务器保留），`enabled`/`disabled` 白名单与各超时参数继续生效；
+ *   没有内置默认服务器，所有服务器均须在配置里定义；
  *   配置在每个工具的调用 cwd 下惰性读取；enabled/disabled 引用不存在的
  *   服务器 id 是配置错误：全局配置在扩展加载（createLspService）时抛错，
  *   本地配置在 session 开始预加载时通知，工具调用时校验抛错兜底；
@@ -26,13 +27,7 @@ import { Value } from "typebox/value";
 import { type LspServerAdapter } from "./adapter.js";
 import { create, type CreateInput, type Diagnostic, type Info as LspClient } from "./client.js";
 import { report } from "./diagnostic.js";
-import {
-  createAdapters,
-  defaultServers,
-  mergeServerConfigs,
-  mergeServerRecords,
-  serverConfigSchema,
-} from "./server-config.js";
+import { createAdapters, mergeServerRecords, serverConfigSchema } from "./server-config.js";
 
 /** 超时值：number（毫秒，>=1）或字符串（"500"、"5s"、"1m"），Parse 后由 toMs 统一换算。 */
 const timeoutValue = Type.Union([Type.Number({ minimum: 1 }), Type.String()]);
@@ -41,7 +36,7 @@ const timeoutValue = Type.Union([Type.Number({ minimum: 1 }), Type.String()]);
 const lspConfigSchema = Type.Object({
   /** 配置文件版本（当前 1）；未知版本会被 typebox 严格校验拒绝并回退空配置。 */
   version: Type.Optional(Type.Number()),
-  /** 配置驱动的语言服务器定义（id → 配置）；按 id 与内置默认服务器合并（覆盖/enabled:false 禁用）。 */
+  /** 配置驱动的语言服务器定义（id → 配置）；无内置默认，全部在此定义。 */
   servers: Type.Optional(Type.Record(Type.String(), serverConfigSchema)),
   /** 只启用列出的服务器 id（缺省 = 全部启用）。 */
   enabled: Type.Optional(Type.Array(Type.String())),
@@ -124,9 +119,7 @@ function readConfigFileSync(filePath: string): LspConfig {
  */
 function validateConfig(config: LspConfig, adapters?: LspServerAdapter[]): void {
   const available = new Set(
-    adapters
-      ? adapters.map((adapter) => adapter.id)
-      : Object.keys(mergeServerConfigs(defaultServers, config.servers)),
+    adapters ? adapters.map((adapter) => adapter.id) : Object.keys(config.servers ?? {}),
   );
   const unknown = [...(config.enabled ?? []), ...(config.disabled ?? [])].filter(
     (id) => !available.has(id),
