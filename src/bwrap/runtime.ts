@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, type WriteStream } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
@@ -141,7 +141,7 @@ function countNewlines(data: Buffer): number {
 
 /**
  * 合并 stdout/stderr 的流式输出累积器：输出在运行时就直接写入
- * agent-dir/tmp/{uuid}.txt（完整内容），内存只保留尾部缓冲。
+ * agent-dir/tmp/{sessionId}/{uuid}.txt（完整内容），内存只保留尾部缓冲。
  * 大输出不会撑爆内存；最终结果只返回截断后的文本。
  */
 class BashOutput {
@@ -151,13 +151,18 @@ class BashOutput {
   private tailBytes = 0;
   private totalBytes = 0;
   private totalLines = 0;
+  private readonly sessionId: string;
   filePath: string | undefined;
+
+  constructor(sessionId: string) {
+    this.sessionId = sessionId;
+  }
 
   append(data: Buffer): void {
     this.totalBytes += data.length;
     this.totalLines += countNewlines(data);
     if (!this.stream) {
-      const dir = join(getAgentDir(), "tmp");
+      const dir = join(getAgentDir(), "tmp", this.sessionId);
       mkdirSync(dir, { recursive: true });
       this.filePath = join(dir, `${randomUUID()}.txt`);
       this.stream = createWriteStream(this.filePath, { flags: "w" });
@@ -361,7 +366,7 @@ export class BwrapRuntime {
       isWindows || needsApproval || !runtime.bwrapEnabled
         ? createLocalBashOperations()
         : createBwrapBashOperations(runtime, workspace);
-    const output = new BashOutput();
+    const output = new BashOutput(request.ctx.sessionManager.getSessionId());
     const { onUpdate } = request;
 
     // 流式进度：节流推送尾部快照（对齐 pi 内置 bash 的实时输出体验）
@@ -406,6 +411,16 @@ export class BwrapRuntime {
       });
       await output.close();
       const truncation = truncateTail(output.tailText());
+      // 未截断：完整输出已直接返回给模型，临时文件没有用途，删掉避免
+      // agent-dir/tmp 堆积无主文件（删除失败只残留文件，不影响命令结果）
+      if (!truncation.truncated && output.filePath) {
+        try {
+          await unlink(output.filePath);
+        } catch {
+          // 删除失败（如沙箱只读）：best-effort，命令结果不受影响
+        }
+        output.filePath = undefined;
+      }
       return {
         exitCode,
         output: truncation.content,

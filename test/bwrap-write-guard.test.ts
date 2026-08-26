@@ -47,7 +47,11 @@ describe.skipIf(!bwrapWorks)("bwrap write guard (workspace is ctx.cwd, not workd
     const result = await runtime.execute({
       toolCallId: "t1",
       command: "touch inside.txt && ls inside.txt",
-      ctx: { cwd: workspace, hasUI: true } as never,
+      ctx: {
+        cwd: workspace,
+        hasUI: true,
+        sessionManager: { getSessionId: () => "test-session" },
+      } as never,
     });
     expect(result.exitCode).toBe(0);
     expect(result.output).toContain("inside.txt");
@@ -60,7 +64,11 @@ describe.skipIf(!bwrapWorks)("bwrap write guard (workspace is ctx.cwd, not workd
       toolCallId: "t2",
       command: "touch block.txt",
       cwd: OUTSIDE,
-      ctx: { cwd: workspace, hasUI: true } as never,
+      ctx: {
+        cwd: workspace,
+        hasUI: true,
+        sessionManager: { getSessionId: () => "test-session" },
+      } as never,
     });
     expect(result.exitCode).not.toBe(0);
     expect(result.output).toMatch(/Read-only file system|Permission denied/);
@@ -74,7 +82,11 @@ describe.skipIf(!bwrapWorks)("bwrap write guard (workspace is ctx.cwd, not workd
       toolCallId: "t3",
       command: "pwd",
       cwd: OUTSIDE,
-      ctx: { cwd: workspace, hasUI: true } as never,
+      ctx: {
+        cwd: workspace,
+        hasUI: true,
+        sessionManager: { getSessionId: () => "test-session" },
+      } as never,
     });
     expect(result.exitCode).toBe(0);
     expect(result.output.trim()).toBe(OUTSIDE);

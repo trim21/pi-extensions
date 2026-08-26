@@ -69,7 +69,14 @@ function setupRuntime() {
 }
 
 function fullAccessContext(ui: unknown, abort: () => void = vi.fn(), cwd = process.cwd()) {
-  return { cwd, hasUI: true, signal: undefined, abort, ui } as never;
+  return {
+    cwd,
+    hasUI: true,
+    sessionManager: { getSessionId: () => "test-session" },
+    signal: undefined,
+    abort,
+    ui,
+  } as never;
 }
 
 function startSession(runtime: BwrapRuntime, pi: { on: ReturnType<typeof vi.fn> }) {
@@ -112,7 +119,11 @@ describe("BwrapRuntime", () => {
           runtime.execute({
             toolCallId: "test",
             command: "echo should-not-run",
-            ctx: { cwd: process.cwd(), hasUI: true } as never,
+            ctx: {
+              cwd: process.cwd(),
+              hasUI: true,
+              sessionManager: { getSessionId: () => "test-session" },
+            } as never,
           }),
         ).rejects.toThrow(/refusing to execute commands without sandboxing/);
       },
@@ -125,7 +136,11 @@ describe("BwrapRuntime", () => {
       const result = await runtime.execute({
         toolCallId: "test",
         command: "printf runtime",
-        ctx: { cwd: process.cwd(), hasUI: true } as never,
+        ctx: {
+          cwd: process.cwd(),
+          hasUI: true,
+          sessionManager: { getSessionId: () => "test-session" },
+        } as never,
       });
       expect(result).toMatchObject({ exitCode: 0, output: "runtime" });
     });
@@ -137,7 +152,11 @@ describe("BwrapRuntime", () => {
     const result = await runtime.execute({
       toolCallId: "test",
       command: "printf runtime",
-      ctx: { cwd: process.cwd(), hasUI: true } as never,
+      ctx: {
+        cwd: process.cwd(),
+        hasUI: true,
+        sessionManager: { getSessionId: () => "test-session" },
+      } as never,
     });
     expect(result).toMatchObject({ exitCode: 0, output: "runtime" });
   });
@@ -148,7 +167,11 @@ describe("BwrapRuntime", () => {
     const result = await runtime.execute({
       toolCallId: "test",
       command: "sh -c 'printf oops; exit 3'",
-      ctx: { cwd: process.cwd(), hasUI: true } as never,
+      ctx: {
+        cwd: process.cwd(),
+        hasUI: true,
+        sessionManager: { getSessionId: () => "test-session" },
+      } as never,
     });
     expect(result).toMatchObject({ exitCode: 3, output: "oops" });
   });

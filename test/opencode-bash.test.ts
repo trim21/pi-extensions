@@ -1,7 +1,9 @@
 import { mkdtempSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { type BwrapRuntime, createBwrapRuntime } from "../src/bwrap/runtime.js";
@@ -13,8 +15,10 @@ interface RegisteredTool {
   execute: (...args: any[]) => Promise<any>;
 }
 
+const SESSION_ID = "test-session";
+
 beforeAll(() => {
-  // Bash 输出运行时落盘到 agent-dir/tmp：测试环境指向可写的临时目录
+  // Bash 输出运行时落盘到 agent-dir/tmp/{session-id}：测试环境指向可写的临时目录
   process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "cc-opencode-bash-"));
 });
 
@@ -46,6 +50,7 @@ function context(cwd: string) {
       select: vi.fn(),
       input: vi.fn(),
     },
+    sessionManager: { getSessionId: () => SESSION_ID },
     signal: undefined,
     abort: vi.fn(),
   } as never;
@@ -120,5 +125,35 @@ describe("opencode bash", () => {
       "timeout",
       "dangerouslyDisableSandbox",
     ]);
+  });
+
+  it("deletes the temp file when output is not truncated", async () => {
+    const { tool } = loadBashTool();
+    const result = await tool.execute(
+      "id",
+      { command: "printf small", timeout: 5_000 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+    expect(result.details.truncated).toBe(false);
+    expect(result.details.fullOutputPath).toBeUndefined();
+    expect(await readdir(join(getAgentDir(), "tmp", SESSION_ID))).toEqual([]);
+  });
+
+  it("keeps the truncated output under the session dir", async () => {
+    const { tool } = loadBashTool();
+    const result = await tool.execute(
+      "id",
+      { command: "seq 1 10000", timeout: 5_000 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+    expect(result.details.truncated).toBe(true);
+    expect(result.details.fullOutputPath).toBe(
+      join(getAgentDir(), "tmp", SESSION_ID, basename(result.details.fullOutputPath as string)),
+    );
+    expect(await readdir(join(getAgentDir(), "tmp", SESSION_ID))).toHaveLength(1);
   });
 });

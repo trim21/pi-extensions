@@ -103,6 +103,7 @@ function context(cwd: string, overrides: Record<string, unknown> = {}) {
       select: vi.fn(),
       input: vi.fn(),
     },
+    sessionManager: { getSessionId: () => "test-session" },
     ...overrides,
   };
 }
