@@ -3,7 +3,8 @@
  * 用 tree-sitter 解析命令（含嵌套 `$(...)`），按 BashArity 生成命令模式
  * （`git checkout main` → `git checkout *`），再用通配匹配对 allow/deny
  * 规则求值。接入 bwrap 的 `dangerouslyDisableSandbox` 审批：命中规则自动
- * 放行/拒绝，未命中才弹审批对话框。
+ * 放行/拒绝，未命中才弹审批对话框。文件输出重定向（`>` / `>>` / `&>`
+ * 等）不会因命令规则自动放行，避免 `echo *` 把 `echo '' > file` 带过。
  *
  * 参考实现：
  * - opencode packages/opencode/src/permission/arity.ts（BashArity 表）
@@ -27,6 +28,8 @@ export interface ParsedBash {
   commands: BashCommand[];
   /** 语法错误时的提示（解析失败不抛错，退化为无法匹配）。 */
   error?: string;
+  /** 含写入文件的重定向（`>` / `>>` / `&>` / `<>` 等）；fd 复制与纯输入除外。 */
+  hasFileOutputRedirect: boolean;
 }
 
 export type ApprovalAction = "allow" | "deny";
@@ -108,6 +111,27 @@ function extractParts(node: Node): { name: string; args: string[] } {
   return { name: name.join(" "), args };
 }
 
+/** 会打开/截断/追加文件的重定向算子；`>&` / `<&` 是 fd 复制，不算。 */
+const FILE_OUTPUT_REDIRECT_OPS = new Set([">", ">>", ">|", "&>", "&>>"]);
+
+function fileRedirectWritesToFile(node: Node): boolean {
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child) continue;
+    if (FILE_OUTPUT_REDIRECT_OPS.has(child.type)) return true;
+    // `<>` 被解析成 `<` + 含 `>` 的 ERROR
+    if (child.type === "ERROR" && child.text.includes(">")) return true;
+  }
+  return false;
+}
+
+function treeHasFileOutputRedirect(root: Node): boolean {
+  for (const node of root.descendantsOfType("file_redirect")) {
+    if (fileRedirectWritesToFile(node)) return true;
+  }
+  return false;
+}
+
 function collectCommand(node: Node, all: Node[]): BashCommand | undefined {
   const { name, args } = extractParts(node);
   if (!name) return undefined;
@@ -139,10 +163,11 @@ export async function parseBashCommands(command: string): Promise<ParsedBash> {
       const parsed = collectCommand(node, all);
       if (parsed) commands.push(parsed);
     }
-    return { commands };
+    return { commands, hasFileOutputRedirect: treeHasFileOutputRedirect(tree.rootNode) };
   } catch (error) {
     return {
       commands: [],
+      hasFileOutputRedirect: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -197,20 +222,25 @@ export function matchRule(input: string, pattern: string): boolean {
  * 命令（含所有嵌套命令）的权限模式列表（命令替换里的命令也展开）。
  * 供规则求值与"allow forever"写规则复用。
  */
-export async function commandPatternsFor(command: string): Promise<string[]> {
-  const parsed = await parseBashCommands(command);
+function patternsFromCommands(commands: BashCommand[]): string[] {
   const flat: string[] = [];
   const visit = (cmd: BashCommand) => {
     flat.push(commandPattern(cmd));
     for (const nested of cmd.nested) visit(nested);
   };
-  for (const cmd of parsed.commands) visit(cmd);
+  for (const cmd of commands) visit(cmd);
   return flat;
+}
+
+export async function commandPatternsFor(command: string): Promise<string[]> {
+  const parsed = await parseBashCommands(command);
+  return patternsFromCommands(parsed.commands);
 }
 
 /**
  * 对命令（含所有嵌套命令）求值：
  * - deny 优先：任一命令命中 deny 规则即整体拒绝
+ * - 文件输出重定向不自动放行：即使命令规则全匹配，也返回 undefined 交人审
  * - allow 需全量：所有命令都命中 allow 规则才整体放行，否则返回
  *   undefined（有命令未命中规则，交给人审），避免未允许的命令被同链放行带过。
  * 规则内后写优先（findLast，对齐 opencode PermissionV2）。
@@ -219,7 +249,8 @@ export async function evaluateBashApproval(
   command: string,
   rules: readonly ApprovalRule[],
 ): Promise<ApprovalAction | undefined> {
-  const patterns = await commandPatternsFor(command);
+  const parsed = await parseBashCommands(command);
+  const patterns = patternsFromCommands(parsed.commands);
   if (patterns.length === 0) return;
   let allowed = 0;
   for (const pattern of patterns) {
@@ -227,5 +258,6 @@ export async function evaluateBashApproval(
     if (rule?.action === "deny") return "deny";
     if (rule?.action === "allow") allowed++;
   }
+  if (parsed.hasFileOutputRedirect) return;
   return allowed === patterns.length ? "allow" : undefined;
 }

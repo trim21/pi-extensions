@@ -247,6 +247,28 @@ describe("BwrapRuntime", () => {
       expect(result).toMatchObject({ exitCode: 0 });
     });
 
+    it("does not auto-allow a file redirect under an echo * rule", async () => {
+      writeFileSync(
+        join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+        JSON.stringify({
+          approvalRules: [{ action: "allow", pattern: "echo *" }],
+        }),
+      );
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async () => DENY);
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "echo '' > file",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input: vi.fn() }),
+        }),
+      ).rejects.toThrow(/User denied unsandboxed execution/);
+      expect(select).toHaveBeenCalled();
+      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
+    });
+
     it("shows only unallowed patterns as checkboxes when part of a chain is pre-approved", async () => {
       // 覆盖全局规则：`echo *` 已 allow，`head *` 未允许
       writeFileSync(

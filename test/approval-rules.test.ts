@@ -40,6 +40,13 @@ describe("parseBashCommands", () => {
     const parsed = await parseBashCommands('echo "hello world" > /tmp/out');
     const echo = parsed.commands.find((c) => c.name === "echo")!;
     expect(echo.args).toEqual(['"hello world"']);
+    expect(parsed.hasFileOutputRedirect).toBe(true);
+  });
+
+  it("does not treat pipelines or fd copies as file output redirects", async () => {
+    expect((await parseBashCommands("echo hi | tail -n 5")).hasFileOutputRedirect).toBe(false);
+    expect((await parseBashCommands("echo hi 2>&1")).hasFileOutputRedirect).toBe(false);
+    expect((await parseBashCommands("echo hi < /etc/passwd")).hasFileOutputRedirect).toBe(false);
   });
 });
 
@@ -139,6 +146,38 @@ describe("evaluateBashApproval", () => {
         { action: "allow", pattern: "echo *" },
       ]),
     ).toBeUndefined();
+  });
+
+  it("does not allow echo with an output redirection under an echo * rule", async () => {
+    const echoAllow = [{ action: "allow" as const, pattern: "echo *" }];
+    expect(await evaluateBashApproval("echo '' > file", echoAllow)).toBeUndefined();
+    expect(await evaluateBashApproval("echo hi >> file", echoAllow)).toBeUndefined();
+    expect(await evaluateBashApproval("{ echo hi; } > file", echoAllow)).toBeUndefined();
+    expect(await evaluateBashApproval("( echo hi ) > file", echoAllow)).toBeUndefined();
+  });
+
+  it("still allows pipelines when every command matches an allow rule", async () => {
+    expect(
+      await evaluateBashApproval("echo '' | tail -n 5", [
+        { action: "allow", pattern: "echo *" },
+        { action: "allow", pattern: "tail *" },
+      ]),
+    ).toBe("allow");
+  });
+
+  it("still allows fd copies and input redirects under an echo * rule", async () => {
+    expect(
+      await evaluateBashApproval("echo hi 2>&1", [{ action: "allow", pattern: "echo *" }]),
+    ).toBe("allow");
+    expect(
+      await evaluateBashApproval("echo hi < /etc/passwd", [{ action: "allow", pattern: "echo *" }]),
+    ).toBe("allow");
+  });
+
+  it("still denies a redirected command that matches a deny rule", async () => {
+    expect(
+      await evaluateBashApproval("echo hi > file", [{ action: "deny", pattern: "echo *" }]),
+    ).toBe("deny");
   });
 
   it("last matching rule wins (later rules take precedence)", async () => {

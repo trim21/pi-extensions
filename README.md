@@ -94,7 +94,7 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
 }
 ```
 
-`dangerouslyDisableSandbox: true` 的审批流程：先按 `approvalRules` 匹配（含嵌套 `$(...)` 内的命令，规则后写优先），命中 allow/deny 直接放行/拒绝，未命中才弹确认框。
+`dangerouslyDisableSandbox: true` 的审批流程：先按 `approvalRules` 匹配（含嵌套 `$(...)` 内的命令，规则后写优先），命中 allow/deny 直接放行/拒绝，未命中才弹确认框。含文件输出重定向（`>` / `>>` / `&>` 等）的命令即使命令规则全匹配也不会自动放行，避免 `echo *` 把 `echo '' > file` 带过；管道（`echo | tail`）和 fd 复制（`2>&1`）不受影响。
 
 ### 使用
 

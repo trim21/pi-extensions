@@ -190,6 +190,7 @@ export default defineConfig(
       "@typescript-eslint/no-unsafe-return": "off",
       "@typescript-eslint/no-explicit-any": "off",
       "unicorn/prefer-event-target": "off",
+      "unicorn/no-await-expression-member": "off",
       "unicorn/no-top-level-assignment-in-function": "off",
       ...sortImport,
     },
