@@ -211,7 +211,7 @@ describe("BwrapRuntime", () => {
         toolCallId: "test",
         command: "git status",
         requestFullAccess: true,
-        requestFullAccessReason: "test",
+        description: "test",
         ctx: fullAccessContext({ select, input: vi.fn() }),
       });
       expect(result).toMatchObject({ exitCode: 0 });

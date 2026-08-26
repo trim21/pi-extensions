@@ -127,7 +127,7 @@ export function registerShellTools(
           command: params.command,
           timeout: timeout / 1000,
           requestFullAccess: params.dangerouslyDisableSandbox,
-          requestFullAccessReason: params.description,
+          description: params.description,
           signal,
           onUpdate,
         });

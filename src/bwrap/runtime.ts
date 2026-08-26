@@ -87,7 +87,7 @@ export interface BwrapExecutionRequest {
   command: string;
   timeout?: number;
   requestFullAccess?: boolean;
-  requestFullAccessReason?: string;
+  description?: string;
   /** 解析后的实际执行目录；缺省时与 ctx.cwd 相同。ctx.cwd 始终是 session 工作区。 */
   cwd?: string;
   signal?: AbortSignal;
@@ -354,12 +354,7 @@ export class BwrapRuntime {
         throw new Error(`Command denied by bwrap approval rule: ${request.command}`);
       }
       if (decision === undefined) {
-        await this.approveFullAccess(
-          request.ctx,
-          request.command,
-          request.requestFullAccessReason,
-          execCwd,
-        );
+        await this.approveFullAccess(request.ctx, request.command, request.description, execCwd);
       }
     }
     const operations =

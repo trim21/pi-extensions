@@ -42,6 +42,9 @@ export default function opencodeBash(
     parameters: Type.Object(
       {
         command: Type.String({ description: "The command to execute" }),
+        description: Type.Optional(
+          Type.String({ description: "Clear, concise description of the command" }),
+        ),
         workdir: Type.Optional(
           Type.String({
             description:
@@ -80,6 +83,7 @@ export default function opencodeBash(
           command: params.command,
           timeout: timeout / 1000,
           requestFullAccess: params.dangerouslyDisableSandbox,
+          description: params.description,
           signal,
           onUpdate,
         });

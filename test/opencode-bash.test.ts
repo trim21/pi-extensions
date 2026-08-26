@@ -121,6 +121,7 @@ describe("opencode bash", () => {
     const { tool } = loadBashTool();
     expect(Object.keys(tool.parameters.properties!)).toEqual([
       "command",
+      "description",
       "workdir",
       "timeout",
       "dangerouslyDisableSandbox",
