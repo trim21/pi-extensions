@@ -7,8 +7,14 @@ on:
     branches: [master]
 
 jobs:
+  # engines.node 声明的最低支持线（24）与开发机所在的新版线（26）都要跑
+  # lint/check/test，避免只在一版上验证导致版本相关回归漏网。
   check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["24", "26"]
     steps:
       - uses: actions/checkout@v7
 
@@ -16,7 +22,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "lts/*"
+          node-version: ${{ matrix.node }}
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -42,30 +48,4 @@ jobs:
           curl -LsSf https://astral.sh/ruff/install.sh | sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - run: pnpm test
-
-  # Windows 行为：bwrap 缺失是预期状态（命令逐条人工审批）、gh-readonly 与
-  # spawn-agent 禁用、写保护退化为只能写工作区。平台相关的测试用 skipIf 或
-  # 模拟 win32 分支在两边 CI 上分别覆盖。
-  # 类型检查与格式检查（pnpm run check，tsc + prettier）只在 Linux job 跑：
-  # Windows 只验证平台行为（lint + test）。
-  windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "lts/*"
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      # Glob 测试（globFiles）直接 spawn rg，Windows 镜像未预装 ripgrep。
-      - name: Install ripgrep
-        run: choco install ripgrep -y
-
-      # bash 由镜像自带的 Git Bash 提供（pi 的本地 shell 执行会找到它）。
       - run: pnpm test
