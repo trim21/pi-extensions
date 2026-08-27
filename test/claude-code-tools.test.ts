@@ -168,14 +168,14 @@ describe("Claude Code tool registration", () => {
 });
 
 describe("Read, Edit, and Write", () => {
-  it("formats Read output with tab-prefixed line numbers and no partial notice", () => {
+  it("formats Read output with colon-prefixed line numbers and no partial notice", () => {
     expect(formatReadOutput("one\ntwo\nthree\n", 2, 1)).toEqual({
-      text: "2\ttwo",
+      text: "2: two",
       totalLines: 4,
     });
     // limit 未指定时读取全部
     expect(formatReadOutput("one\ntwo\nthree\n", 2)).toEqual({
-      text: "2\ttwo\n3\tthree\n4\t",
+      text: "2: two\n3: three\n4: ",
       totalLines: 4,
     });
   });
@@ -183,23 +183,31 @@ describe("Read, Edit, and Write", () => {
   it("matches Claude Code line handling: BOM, CRLF, trailing empty line", () => {
     // 尾随换行产生一个尾随空行（totalLines 比编辑器行数多 1）
     expect(formatReadOutput("one\ntwo\n")).toEqual({
-      text: "1\tone\n2\ttwo\n3\t",
+      text: "1: one\n2: two\n3: ",
       totalLines: 3,
     });
     // 无尾随换行同样补一个尾随空行（对齐 readFileInRange 的尾部 fragment）
     expect(formatReadOutput("one\ntwo")).toEqual({
-      text: "1\tone\n2\ttwo\n3\t",
+      text: "1: one\n2: two\n3: ",
       totalLines: 3,
     });
     // CRLF 剥离 \r
     expect(formatReadOutput("one\r\ntwo\r\n")).toEqual({
-      text: "1\tone\n2\ttwo\n3\t",
+      text: "1: one\n2: two\n3: ",
       totalLines: 3,
     });
     // UTF-8 BOM 剥离
     expect(formatReadOutput("\uFEFFone\ntwo\n")).toEqual({
-      text: "1\tone\n2\ttwo\n3\t",
+      text: "1: one\n2: two\n3: ",
       totalLines: 3,
+    });
+  });
+
+  it("keeps tab indentation distinct from the line number prefix (Go)", () => {
+    const go = "package main\n\nfunc main() {\n\tprintln(1)\n}\n";
+    expect(formatReadOutput(go)).toEqual({
+      text: "1: package main\n2: \n3: func main() {\n4: \tprintln(1)\n5: }\n6: ",
+      totalLines: 6,
     });
   });
 
@@ -517,7 +525,7 @@ describe("Read, Edit, and Write", () => {
       /exceeds maximum allowed size/,
     );
     const partial = await call(tools.get("Read")!, { file_path: filePath, limit: 10 }, ctx);
-    expect(partial.content[0].text).toContain("1\tline-0-");
+    expect(partial.content[0].text).toContain("1: line-0-");
   });
 
   it("rejects reads exceeding the token estimate", async () => {
@@ -552,7 +560,7 @@ describe("Read, Edit, and Write", () => {
 
   it("accepts offset 0 and numbers lines from 0 (Claude Code semantics)", async () => {
     expect(formatReadOutput("one\ntwo\n", 0)).toEqual({
-      text: "0\tone\n1\ttwo\n2\t",
+      text: "0: one\n1: two\n2: ",
       totalLines: 3,
     });
     const directory = await mkdtemp(join(tmpdir(), "cc-read-offset0-"));
@@ -564,7 +572,7 @@ describe("Read, Edit, and Write", () => {
       { file_path: filePath, offset: 0 },
       context(directory),
     );
-    expect(result.content[0].text).toBe("0\tone\n1\ttwo\n2\t");
+    expect(result.content[0].text).toBe("0: one\n1: two\n2: ");
   });
 
   it("dedupes repeated reads of the same range while the file is unchanged", async () => {
@@ -575,17 +583,17 @@ describe("Read, Edit, and Write", () => {
     const ctx = context(directory);
 
     const first = await call(tools.get("Read")!, { file_path: filePath }, ctx);
-    expect(first.content[0].text).toContain("1\tone");
+    expect(first.content[0].text).toContain("1: one");
     // 同范围重复读 → stub
     const second = await call(tools.get("Read")!, { file_path: filePath }, ctx);
     expect(second.content[0].text).toBe(FILE_UNCHANGED_STUB);
     // 不同范围不 dedup
     const partial = await call(tools.get("Read")!, { file_path: filePath, limit: 2 }, ctx);
-    expect(partial.content[0].text).toContain("1\tone");
+    expect(partial.content[0].text).toContain("1: one");
     // 文件被外部修改 → 不 dedup，返回新内容
     await writeFile(filePath, "changed\n", "utf8");
     const third = await call(tools.get("Read")!, { file_path: filePath }, ctx);
-    expect(third.content[0].text).toContain("1\tchanged");
+    expect(third.content[0].text).toContain("1: changed");
   });
 
   it("re-reads after Edit instead of deduping", async () => {
@@ -603,7 +611,7 @@ describe("Read, Edit, and Write", () => {
     );
     // Edit 覆盖了 reads 记录（无 offset/limit）→ 同范围 Read 不 dedup，返回新内容
     const result = await call(tools.get("Read")!, { file_path: filePath }, ctx);
-    expect(result.content[0].text).toContain("1\tONE");
+    expect(result.content[0].text).toContain("1: ONE");
   });
 });
 

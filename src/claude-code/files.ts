@@ -116,9 +116,10 @@ function splitFileLines(content: string): string[] {
 }
 
 /**
- * 格式化读取输出（对齐 Claude Code 的 addLineNumbers）：行号无 padding，
- * limit 未指定时读取全部。无 PARTIAL 提示、无单行截断（由 execute 层的
- * 字节/token 上限兜底）。
+ * 格式化读取输出：行号前缀用 `N: `（对齐 opencode Read）。弃用 Claude Code
+ * 的 `N\t` 前缀——tab 分隔符在 Go 等 tab 缩进语言里会与内容缩进连排，模型
+ * 易误判多一层缩进。limit 未指定时读取全部。无 PARTIAL 提示、无单行截断
+ * （由 execute 层的字节/token 上限兜底）。
  */
 export function formatReadOutput(
   content: string,
@@ -143,7 +144,7 @@ export function formatReadOutput(
   const startIndex = offset === 0 ? 0 : offset - 1;
   const selected =
     limit === undefined ? lines.slice(startIndex) : lines.slice(startIndex, startIndex + limit);
-  const text = selected.map((line, index) => `${offset + index}\t${line}`).join("\n");
+  const text = selected.map((line, index) => `${offset + index}: ${line}`).join("\n");
   return { text, totalLines };
 }
 
