@@ -67,11 +67,13 @@ describe("buildOutlineSubtitle", () => {
     expect(buildOutlineSubtitle(cwd, "./src/app.ts")).toBe('target="./src/app.ts"');
   });
 
-  it.skipIf(process.platform === "win32")("falls back to basename for long targets", () => {
+  it.skipIf(process.platform === "win32")("falls back to parent/basename for long targets", () => {
     const longPath = resolve(
       cwd,
       "src/components/very-long-directory-name-here/deeper/another-long-name/App.module.spec.test.ts",
     );
-    expect(buildOutlineSubtitle(cwd, longPath)).toBe('target="App.module.spec.test.ts"');
+    expect(buildOutlineSubtitle(cwd, longPath)).toBe(
+      'target="another-long-name/App.module.spec.test.ts"',
+    );
   });
 });

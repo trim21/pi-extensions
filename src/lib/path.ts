@@ -4,7 +4,7 @@
 
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /**
  * Expand a leading `~` to the user's home directory.
@@ -60,13 +60,33 @@ export function formatDisplayPath(cwd: string, filePath: string): string {
   return filePath;
 }
 
-/** subtitle 中路径的最大显示长度，超过时退化为仅文件名。 */
+/** subtitle 中路径的最大显示长度，超过时退化为 `parent/basename`。 */
 export const MAX_SUBTITLE_PATH_LENGTH = 20;
 
-/** subtitle 用的显示路径：优先 `./…` / `~/…` / 绝对路径，结果过长时只显示文件名。 */
-export function formatSubtitlePath(cwd: string, filePath: string, errorCount?: number): string {
-  const display = formatDisplayPath(cwd, filePath);
-  const base = display.length <= MAX_SUBTITLE_PATH_LENGTH ? display : basename(filePath);
-  if (errorCount === undefined || errorCount === 0) return base;
-  return `${base} (ⓧ ${errorCount})`;
+function shortenSubtitlePath(filePath: string, display: string): string {
+  if (display.length <= MAX_SUBTITLE_PATH_LENGTH) return display;
+  const name = basename(filePath);
+  const parentDir = dirname(filePath);
+  const parentName = basename(parentDir);
+  if (parentName === "" || parentName === "." || parentDir === parentName) return name;
+  return join(parentName, name);
+}
+
+function formatSubtitleCounts(errorCount?: number, warningCount?: number): string {
+  const parts: string[] = [];
+  if (errorCount) parts.push(`ⓧ ${errorCount}`);
+  if (warningCount) parts.push(`⚠ ${warningCount}`);
+  return parts.join(" ");
+}
+
+/** subtitle 用的显示路径：优先 `./…` / `~/…` / 绝对路径，过长时显示上一级目录加文件名。 */
+export function formatSubtitlePath(
+  cwd: string,
+  filePath: string,
+  errorCount?: number,
+  warningCount?: number,
+): string {
+  const pathText = shortenSubtitlePath(filePath, formatDisplayPath(cwd, filePath));
+  const counts = formatSubtitleCounts(errorCount, warningCount);
+  return counts ? `${pathText} (${counts})` : pathText;
 }

@@ -29,6 +29,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { appendLspDiagnosticText } from "../lib/lsp/diagnostic.js";
 import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
@@ -492,9 +493,8 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
         change: { oldText: oldString, newText: newString, replaceAll },
       });
 
-      const [message, details, diagnosticText, errorCount] = await withFileMutationQueue(
-        absolutePath,
-        async () => {
+      const [message, details, diagnosticText, errorCount, warningCount] =
+        await withFileMutationQueue(absolutePath, async () => {
           signal?.throwIfAborted();
 
           // opencode: 前置校验，先于空 oldString 分支
@@ -519,16 +519,17 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
             await mkdir(dirname(absolutePath), { recursive: true });
             signal?.throwIfAborted();
             await writeFile(absolutePath, newString, "utf8");
-            const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
-              absolutePath,
-              ctx.cwd,
-              { signal },
-            );
+            const {
+              text: diagnosticText,
+              errorCount,
+              warningCount,
+            } = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
             return [
               "Edit applied successfully.",
               { diff: "", patch: "", firstChangedLine: 0 },
               diagnosticText,
               errorCount,
+              warningCount,
             ] as const;
           }
 
@@ -560,28 +561,28 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
           const diffNew = normalizeToLF(applied.contentNew);
           const diffResult = generateDiffString(diffOld, diffNew);
           const patch = generateUnifiedPatch(filePath, diffOld, diffNew);
-          const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
-            absolutePath,
-            ctx.cwd,
-            { signal },
-          );
+          const {
+            text: diagnosticText,
+            errorCount,
+            warningCount,
+          } = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
           return [
             "Edit applied successfully.",
             { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
             diagnosticText,
             errorCount,
+            warningCount,
           ] as const;
-        },
-      );
+        });
 
-      const text = diagnosticText
-        ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
-        : message;
+      const text = appendLspDiagnosticText(message, diagnosticText, errorCount);
       return {
         content: [{ type: "text" as const, text }],
         details: {
           ...details,
-          pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath, errorCount) },
+          pendant: {
+            subtitle: formatSubtitlePath(ctx.cwd, absolutePath, errorCount, warningCount),
+          },
         },
       };
     },
@@ -636,9 +637,8 @@ function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
       });
       const dir = dirname(absolutePath);
 
-      const [message, details, diagnosticText, errorCount] = await withFileMutationQueue(
-        absolutePath,
-        async () => {
+      const [message, details, diagnosticText, errorCount, warningCount] =
+        await withFileMutationQueue(absolutePath, async () => {
           signal?.throwIfAborted();
 
           // opencode: desiredBom = source.bom || next.bom —— 保留原文件 BOM，
@@ -661,24 +661,29 @@ function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
           await mkdir(dir, { recursive: true });
           signal?.throwIfAborted();
           await writeFile(absolutePath, desiredBom + nextText, "utf8");
-          const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
-            absolutePath,
-            ctx.cwd,
-            { signal },
-          );
+          const {
+            text: diagnosticText,
+            errorCount,
+            warningCount,
+          } = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
 
-          return ["Wrote file successfully.", {}, diagnosticText, errorCount] as const;
-        },
-      );
+          return [
+            "Wrote file successfully.",
+            {},
+            diagnosticText,
+            errorCount,
+            warningCount,
+          ] as const;
+        });
 
-      const text = diagnosticText
-        ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
-        : message;
+      const text = appendLspDiagnosticText(message, diagnosticText, errorCount);
       return {
         content: [{ type: "text" as const, text }],
         details: {
           ...details,
-          pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath, errorCount) },
+          pendant: {
+            subtitle: formatSubtitlePath(ctx.cwd, absolutePath, errorCount, warningCount),
+          },
         },
       };
     },

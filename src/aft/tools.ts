@@ -157,7 +157,7 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
   });
 }
 
-/** 构建 aft_outline pendant 的 subtitle：`target="…"`（路径过长时只显示文件名）。 */
+/** 构建 aft_outline pendant 的 subtitle：`target="…"`（路径过长时显示上一级目录加文件名）。 */
 export function buildOutlineSubtitle(cwd: string, target: string): string {
   return `target="${formatSubtitlePath(cwd, resolvePathArg(cwd, target))}"`;
 }

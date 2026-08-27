@@ -78,22 +78,35 @@ describe("formatSubtitlePath", () => {
     expect(formatSubtitlePath(cwd, "/etc/passwd")).toBe("/etc/passwd");
   });
 
-  it("falls back to basename when the display path is too long", () => {
+  it("falls back to parent/basename when the display path is too long", () => {
     const longPath = resolve(
       cwd,
       "src/components/very-long-directory-name-here/deeper/another-long-name/App.module.spec.test.ts",
     );
     expect(formatDisplayPath(cwd, longPath).length).toBeGreaterThan(60);
-    expect(formatSubtitlePath(cwd, longPath)).toBe("App.module.spec.test.ts");
+    expect(formatSubtitlePath(cwd, longPath)).toBe(
+      join("another-long-name", "App.module.spec.test.ts"),
+    );
   });
 
-  it("appends LSP error count when provided", () => {
+  it("falls back to basename when there is no parent directory", () => {
+    expect(formatSubtitlePath("/work/project", "/very-long-filename-that-exceeds-limit.ts")).toBe(
+      "very-long-filename-that-exceeds-limit.ts",
+    );
+  });
+
+  it("appends LSP error and warning counts when provided", () => {
     expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 3)).toBe("./src/app.ts (ⓧ 3)");
     expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 1)).toBe("./src/app.ts (ⓧ 1)");
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0, 2)).toBe("./src/app.ts (⚠ 2)");
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 3, 2)).toBe(
+      "./src/app.ts (ⓧ 3 ⚠ 2)",
+    );
   });
 
-  it("omits the error count when zero or absent", () => {
+  it("omits counts when zero or absent", () => {
     expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0)).toBe("./src/app.ts");
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0, 0)).toBe("./src/app.ts");
     expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"))).toBe("./src/app.ts");
   });
 });

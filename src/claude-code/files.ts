@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { appendLspDiagnosticText } from "../lib/lsp/diagnostic.js";
 import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
@@ -394,173 +395,177 @@ export function registerFileTools(
           replaceAll: params.replace_all,
         },
       });
-      const [message, details, diagnosticText, errorCount] = await withFileMutationQueue<
-        [string, FileToolDetails, string, number]
-      >(filePath, async () => {
-        const oldString = params.old_string;
-        const newString = params.new_string;
-        if (oldString === newString) {
-          throw new Error("No changes to make: old_string and new_string are exactly the same.");
-        }
-        // 空 old_string：创建新文件或填充空文件（不需要先 Read，对齐 Claude Code）
-        if (oldString === "") {
-          let exists = true;
-          try {
-            const value = await stat(filePath);
-            if (value.isFile()) {
-              const content = await readFile(filePath, "utf8");
-              if (content.trim() !== "") {
-                throw new Error("Cannot create new file - file already exists.");
+      const [message, details, diagnosticText, errorCount, warningCount] =
+        await withFileMutationQueue<[string, FileToolDetails, string, number, number]>(
+          filePath,
+          async () => {
+            const oldString = params.old_string;
+            const newString = params.new_string;
+            if (oldString === newString) {
+              throw new Error(
+                "No changes to make: old_string and new_string are exactly the same.",
+              );
+            }
+            // 空 old_string：创建新文件或填充空文件（不需要先 Read，对齐 Claude Code）
+            if (oldString === "") {
+              let exists = true;
+              try {
+                const value = await stat(filePath);
+                if (value.isFile()) {
+                  const content = await readFile(filePath, "utf8");
+                  if (content.trim() !== "") {
+                    throw new Error("Cannot create new file - file already exists.");
+                  }
+                }
+              } catch (error) {
+                if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+                  exists = false;
+                } else {
+                  throw error;
+                }
+              }
+              if (!exists) await mkdir(dirname(filePath), { recursive: true });
+              await writeFile(filePath, newString, "utf8");
+              const snapshot = snapshotOf(newString);
+              const key = await readStateKey(filePath);
+              state.reads.set(key, snapshot);
+              const diff = generateDiffString("", convertLeadingTabsToSpaces(newString));
+              throwIfAborted(signal);
+              const {
+                text: diagnosticText,
+                errorCount,
+                warningCount,
+              } = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+                notify: (message, level) => ctx.ui.notify(message, level),
+                signal,
+              });
+              return [
+                `The file ${filePath} has been updated successfully.`,
+                {
+                  diff: diff.diff,
+                  patch: generateUnifiedPatch(filePath, "", convertLeadingTabsToSpaces(newString)),
+                  firstChangedLine: diff.firstChangedLine,
+                  reads: { [key]: snapshot },
+                },
+                diagnosticText,
+                errorCount,
+                warningCount,
+              ];
+            }
+            const replaceAll = params.replace_all ?? false;
+            // 防止 OOM 的大文件检查（对齐 Claude Code）
+            try {
+              const { size } = await stat(filePath);
+              if (size > MAX_EDIT_FILE_SIZE) {
+                throw new Error(
+                  `File is too large to edit (${formatFileSize(size)}). Maximum editable file size is ${formatFileSize(MAX_EDIT_FILE_SIZE)}.`,
+                );
+              }
+            } catch (error) {
+              if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
+                throw error;
               }
             }
-          } catch (error) {
-            if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-              exists = false;
-            } else {
+            let content: Buffer;
+            try {
+              content = await readFile(filePath);
+            } catch (error) {
+              if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+                const suggestion = await didYouMean(filePath, ctx.cwd);
+                throw new Error(
+                  `File does not exist. Note: your current working directory is ${ctx.cwd}.${suggestion ? ` Did you mean ${suggestion}?` : ""}`,
+                  { cause: error },
+                );
+              }
               throw error;
             }
-          }
-          if (!exists) await mkdir(dirname(filePath), { recursive: true });
-          await writeFile(filePath, newString, "utf8");
-          const snapshot = snapshotOf(newString);
-          const key = await readStateKey(filePath);
-          state.reads.set(key, snapshot);
-          const diff = generateDiffString("", convertLeadingTabsToSpaces(newString));
-          throwIfAborted(signal);
-          const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
-            filePath,
-            ctx.cwd,
-            {
-              notify: (message, level) => ctx.ui.notify(message, level),
-              signal,
-            },
-          );
-          return [
-            `The file ${filePath} has been updated successfully.`,
-            {
-              diff: diff.diff,
-              patch: generateUnifiedPatch(filePath, "", convertLeadingTabsToSpaces(newString)),
-              firstChangedLine: diff.firstChangedLine,
-              reads: { [key]: snapshot },
-            },
-            diagnosticText,
-            errorCount,
-          ];
-        }
-        const replaceAll = params.replace_all ?? false;
-        // 防止 OOM 的大文件检查（对齐 Claude Code）
-        try {
-          const { size } = await stat(filePath);
-          if (size > MAX_EDIT_FILE_SIZE) {
-            throw new Error(
-              `File is too large to edit (${formatFileSize(size)}). Maximum editable file size is ${formatFileSize(MAX_EDIT_FILE_SIZE)}.`,
-            );
-          }
-        } catch (error) {
-          if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
-            throw error;
-          }
-        }
-        let content: Buffer;
-        try {
-          content = await readFile(filePath);
-        } catch (error) {
-          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-            const suggestion = await didYouMean(filePath, ctx.cwd);
-            throw new Error(
-              `File does not exist. Note: your current working directory is ${ctx.cwd}.${suggestion ? ` Did you mean ${suggestion}?` : ""}`,
-              { cause: error },
-            );
-          }
-          throw error;
-        }
-        if (extname(filePath).toLowerCase() === ".ipynb") {
-          throw new Error(
-            "File is a Jupyter Notebook. Use the NotebookEditTool to edit this file.",
-          );
-        }
-        const key = await readStateKey(filePath);
-        requireCurrentRead(state, key, filePath, content);
-        await access(filePath, constants.R_OK | constants.W_OK);
-        throwIfAborted(signal);
-        const original = content.toString("utf8");
+            if (extname(filePath).toLowerCase() === ".ipynb") {
+              throw new Error(
+                "File is a Jupyter Notebook. Use the NotebookEditTool to edit this file.",
+              );
+            }
+            const key = await readStateKey(filePath);
+            requireCurrentRead(state, key, filePath, content);
+            await access(filePath, constants.R_OK | constants.W_OK);
+            throwIfAborted(signal);
+            const original = content.toString("utf8");
 
-        // CRLF 规范化后匹配（old_string 不需要带 \r），写回时恢复原行尾
-        const crlfCount = (original.match(/\r\n/g) ?? []).length;
-        const lfCount = (original.match(/(?<!\r)\n/g) ?? []).length;
-        const lineEnding = crlfCount > lfCount ? "\r\n" : "\n";
-        const normalized = original.replaceAll("\r\n", "\n");
-        const actualOldString = findActualString(normalized, oldString) ?? oldString;
-        const matches = normalized.split(actualOldString).length - 1;
-        if (matches === 0) {
-          throw new Error(`String to replace not found in file.\nString: ${oldString}`);
-        }
-        if (!replaceAll && matches > 1) {
-          throw new Error(
-            `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${oldString}`,
-          );
-        }
-        const actualNewString = preserveQuoteStyle(oldString, actualOldString, newString);
-        // 删除场景（new_string 为空）：old_string 不以换行结尾且文件里是
-        // "old_string\n" 时连换行一起删，避免留下空行（对齐 Claude Code
-        // applyEditToFile 的 stripTrailingNewline 语义）
-        let searchString = actualOldString;
-        if (
-          actualNewString === "" &&
-          !actualOldString.endsWith("\n") &&
-          normalized.includes(actualOldString + "\n")
-        ) {
-          searchString = actualOldString + "\n";
-        }
-        // split/join 与函数替换：replacement 含 $ 时不会触发 $& 等特殊语义
-        const updated = replaceAll
-          ? normalized.split(searchString).join(actualNewString)
-          : normalized.replace(searchString, () => actualNewString);
-        const restored = lineEnding === "\r\n" ? updated.replaceAll("\n", "\r\n") : updated;
-        await writeFile(filePath, restored, "utf8");
-        const snapshot = snapshotOf(restored);
-        state.reads.set(key, snapshot);
-        // patch/diff 仅供显示：前导 tab 转空格，避免 UI 渲染错位（对齐 Claude Code）
-        const diff = generateDiffString(
-          convertLeadingTabsToSpaces(original),
-          convertLeadingTabsToSpaces(restored),
-        );
-        const text = replaceAll
-          ? `The file ${filePath} has been updated. All occurrences were successfully replaced.`
-          : `The file ${filePath} has been updated successfully.`;
-        throwIfAborted(signal);
-        const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
-          filePath,
-          ctx.cwd,
-          {
-            notify: (message, level) => ctx.ui.notify(message, level),
-          },
-        );
-        return [
-          text,
-          {
-            diff: diff.diff,
-            patch: generateUnifiedPatch(
-              filePath,
+            // CRLF 规范化后匹配（old_string 不需要带 \r），写回时恢复原行尾
+            const crlfCount = (original.match(/\r\n/g) ?? []).length;
+            const lfCount = (original.match(/(?<!\r)\n/g) ?? []).length;
+            const lineEnding = crlfCount > lfCount ? "\r\n" : "\n";
+            const normalized = original.replaceAll("\r\n", "\n");
+            const actualOldString = findActualString(normalized, oldString) ?? oldString;
+            const matches = normalized.split(actualOldString).length - 1;
+            if (matches === 0) {
+              throw new Error(`String to replace not found in file.\nString: ${oldString}`);
+            }
+            if (!replaceAll && matches > 1) {
+              throw new Error(
+                `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${oldString}`,
+              );
+            }
+            const actualNewString = preserveQuoteStyle(oldString, actualOldString, newString);
+            // 删除场景（new_string 为空）：old_string 不以换行结尾且文件里是
+            // "old_string\n" 时连换行一起删，避免留下空行（对齐 Claude Code
+            // applyEditToFile 的 stripTrailingNewline 语义）
+            let searchString = actualOldString;
+            if (
+              actualNewString === "" &&
+              !actualOldString.endsWith("\n") &&
+              normalized.includes(actualOldString + "\n")
+            ) {
+              searchString = actualOldString + "\n";
+            }
+            // split/join 与函数替换：replacement 含 $ 时不会触发 $& 等特殊语义
+            const updated = replaceAll
+              ? normalized.split(searchString).join(actualNewString)
+              : normalized.replace(searchString, () => actualNewString);
+            const restored = lineEnding === "\r\n" ? updated.replaceAll("\n", "\r\n") : updated;
+            await writeFile(filePath, restored, "utf8");
+            const snapshot = snapshotOf(restored);
+            state.reads.set(key, snapshot);
+            // patch/diff 仅供显示：前导 tab 转空格，避免 UI 渲染错位（对齐 Claude Code）
+            const diff = generateDiffString(
               convertLeadingTabsToSpaces(original),
               convertLeadingTabsToSpaces(restored),
-            ),
-            firstChangedLine: diff.firstChangedLine,
-            reads: { [key]: snapshot },
+            );
+            const text = replaceAll
+              ? `The file ${filePath} has been updated. All occurrences were successfully replaced.`
+              : `The file ${filePath} has been updated successfully.`;
+            throwIfAborted(signal);
+            const {
+              text: diagnosticText,
+              errorCount,
+              warningCount,
+            } = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+              notify: (message, level) => ctx.ui.notify(message, level),
+            });
+            return [
+              text,
+              {
+                diff: diff.diff,
+                patch: generateUnifiedPatch(
+                  filePath,
+                  convertLeadingTabsToSpaces(original),
+                  convertLeadingTabsToSpaces(restored),
+                ),
+                firstChangedLine: diff.firstChangedLine,
+                reads: { [key]: snapshot },
+              },
+              diagnosticText,
+              errorCount,
+              warningCount,
+            ];
           },
-          diagnosticText,
-          errorCount,
-        ];
-      });
+        );
 
-      const text = diagnosticText
-        ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
-        : message;
+      const text = appendLspDiagnosticText(message, diagnosticText, errorCount);
       return {
         content: [{ type: "text" as const, text }],
         details: {
           ...details,
-          pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath, errorCount) },
+          pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath, errorCount, warningCount) },
         },
       };
     },
@@ -593,65 +598,66 @@ export function registerFileTools(
         absolutePath: filePath,
         change: { oldText: "", newText: params.content },
       });
-      const [message, details, diagnosticText, errorCount] = await withFileMutationQueue<
-        [string, FileToolDetails, string, number]
-      >(filePath, async () => {
-        let original: string | undefined;
-        let key: string | undefined;
-        try {
-          const value = await stat(filePath);
-          if (value.isFile()) {
-            const content = await readFile(filePath);
-            key = await readStateKey(filePath);
-            requireCurrentRead(state, key, filePath, content);
-            original = content.toString("utf8");
-          }
-        } catch (error) {
-          if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
-            throw error;
-          }
-        }
-        throwIfAborted(signal);
-        await mkdir(dirname(filePath), { recursive: true });
-        await writeFile(filePath, params.content, "utf8");
-        const snapshot = snapshotOf(params.content);
-        // 新建文件：writeFile 之后 realpath 才能解析；覆盖写则复用上面的 key
-        const resolvedKey = key ?? (await readStateKey(filePath));
-        state.reads.set(resolvedKey, snapshot);
-        const diff = generateDiffString(original ?? "", params.content);
-        const text =
-          original === undefined
-            ? `File created successfully at: ${filePath}`
-            : `The file ${filePath} has been updated successfully.`;
-        throwIfAborted(signal);
-        const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
+      const [message, details, diagnosticText, errorCount, warningCount] =
+        await withFileMutationQueue<[string, FileToolDetails, string, number, number]>(
           filePath,
-          ctx.cwd,
-          {
-            notify: (message, level) => ctx.ui.notify(message, level),
+          async () => {
+            let original: string | undefined;
+            let key: string | undefined;
+            try {
+              const value = await stat(filePath);
+              if (value.isFile()) {
+                const content = await readFile(filePath);
+                key = await readStateKey(filePath);
+                requireCurrentRead(state, key, filePath, content);
+                original = content.toString("utf8");
+              }
+            } catch (error) {
+              if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
+                throw error;
+              }
+            }
+            throwIfAborted(signal);
+            await mkdir(dirname(filePath), { recursive: true });
+            await writeFile(filePath, params.content, "utf8");
+            const snapshot = snapshotOf(params.content);
+            // 新建文件：writeFile 之后 realpath 才能解析；覆盖写则复用上面的 key
+            const resolvedKey = key ?? (await readStateKey(filePath));
+            state.reads.set(resolvedKey, snapshot);
+            const diff = generateDiffString(original ?? "", params.content);
+            const text =
+              original === undefined
+                ? `File created successfully at: ${filePath}`
+                : `The file ${filePath} has been updated successfully.`;
+            throwIfAborted(signal);
+            const {
+              text: diagnosticText,
+              errorCount,
+              warningCount,
+            } = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+              notify: (message, level) => ctx.ui.notify(message, level),
+            });
+            return [
+              text,
+              {
+                diff: diff.diff,
+                patch: generateUnifiedPatch(filePath, original ?? "", params.content),
+                firstChangedLine: diff.firstChangedLine,
+                reads: { [resolvedKey]: snapshot },
+              },
+              diagnosticText,
+              errorCount,
+              warningCount,
+            ];
           },
         );
-        return [
-          text,
-          {
-            diff: diff.diff,
-            patch: generateUnifiedPatch(filePath, original ?? "", params.content),
-            firstChangedLine: diff.firstChangedLine,
-            reads: { [resolvedKey]: snapshot },
-          },
-          diagnosticText,
-          errorCount,
-        ];
-      });
 
-      const text = diagnosticText
-        ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
-        : message;
+      const text = appendLspDiagnosticText(message, diagnosticText, errorCount);
       return {
         content: [{ type: "text" as const, text }],
         details: {
           ...details,
-          pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath, errorCount) },
+          pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath, errorCount, warningCount) },
         },
       };
     },

@@ -212,7 +212,7 @@ export interface LspService {
     file: string,
     cwd: string,
     options?: LspRequestOptions,
-  ): Promise<{ text: string; errorCount: number }>;
+  ): Promise<{ text: string; errorCount: number; warningCount: number }>;
   shutdownAll(): Promise<void>;
   /** 注入 status 渲染回调；传入 undefined 表示不再渲染。 */
   attachStatus(render: StatusRenderer | undefined): void;
@@ -408,21 +408,22 @@ export function createLspService(
   }
 
   /**
-   * edit/write 用：等待文档诊断并返回该文件的 ERROR 报告（text 空串表示无错误）
-   * 与 ERROR 数量。内部所有 LSP 失败都会被吞掉，不干扰写操作本身。
+   * edit/write 用：等待文档诊断并返回该文件的 ERROR / WARN 报告（text 空串表示无此类诊断）
+   * 与数量。内部所有 LSP 失败都会被吞掉，不干扰写操作本身。
    */
   async function lspDiagnosticsForFile(
     file: string,
     cwd: string,
     options?: LspRequestOptions,
-  ): Promise<{ text: string; errorCount: number }> {
-    if (options?.signal?.aborted) return { text: "", errorCount: 0 };
+  ): Promise<{ text: string; errorCount: number; warningCount: number }> {
+    if (options?.signal?.aborted) return { text: "", errorCount: 0, warningCount: 0 };
     await touchFile(file, cwd, "document", options);
     const all = await diagnostics();
     const normalized = normalize(file);
     const issues = all[normalized] ?? [];
-    const errorCount = issues.filter((item) => item.severity === 1).length;
-    return { text: report(normalized, issues), errorCount };
+    const errorCount = issues.filter((item) => (item.severity ?? 1) === 1).length;
+    const warningCount = issues.filter((item) => item.severity === 2).length;
+    return { text: report(normalized, issues), errorCount, warningCount };
   }
 
   /** 终止全部服务器进程（session_shutdown 时调用）。 */
