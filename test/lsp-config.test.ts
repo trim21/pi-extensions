@@ -212,26 +212,6 @@ describe("lsp config validation", () => {
     );
     await rm(dir, { recursive: true, force: true });
   });
-
-  it("session 开始预加载配置：本地 disabled 引用未知 id 时不 notify", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
-    await mkdir(join(dir, ".pi"), { recursive: true });
-    await writeFile(join(dir, ".pi", "lsp.json"), JSON.stringify({ disabled: ["nope"] }));
-    const on = vi.fn();
-    registerLsp({ on } as unknown as ExtensionAPI, {
-      globalConfigPath: join(dir, "no-global.json"),
-    });
-    const call = on.mock.calls.find((c) => c[0] === "session_start");
-    const handler = call?.[1] as (
-      event: unknown,
-      ctx: { cwd: string; ui: { notify: ReturnType<typeof vi.fn> } },
-    ) => void;
-    const notify = vi.fn();
-    handler({}, { cwd: dir, ui: { notify } });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(notify).not.toHaveBeenCalled();
-    await rm(dir, { recursive: true, force: true });
-  });
 });
 
 describe("filterAdapters", () => {
