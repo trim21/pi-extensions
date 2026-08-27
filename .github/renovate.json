@@ -7,6 +7,11 @@
     {
       "matchPackageNames": ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "typebox"],
       "enabled": false
+    },
+    {
+      "matchPackageNames": ["@cortexkit/aft-bridge", "@cortexkit/aft-linux-x64"],
+      "groupName": "@cortexkit/aft",
+      "groupSlug": "cortexkit-aft"
     }
   ]
 }
