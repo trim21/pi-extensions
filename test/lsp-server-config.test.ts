@@ -267,7 +267,8 @@ describe("config servers integration", () => {
     });
     try {
       const report = await service.lspDiagnosticsForFile(file, dir);
-      expect(report).toContain("mock error message");
+      expect(report.text).toContain("mock error message");
+      expect(report.errorCount).toBe(1);
     } finally {
       await service.shutdownAll();
       await rm(dir, { recursive: true, force: true });

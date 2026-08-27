@@ -15,6 +15,7 @@ import {
 import { Type } from "typebox";
 
 import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
+import { formatSubtitlePath } from "../lib/path.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import {
   type ClaudeCodeState,
@@ -295,7 +296,13 @@ export function registerFileTools(
         const snapshot = snapshotOf(image, false);
         const key = await readStateKey(filePath);
         state.reads.set(key, snapshot);
-        return { content, details: { reads: { [key]: snapshot } } };
+        return {
+          content,
+          details: {
+            reads: { [key]: snapshot },
+            pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath) },
+          },
+        };
       }
 
       const offset = params.offset ?? 1;
@@ -313,7 +320,10 @@ export function registerFileTools(
         previous.limit === limit &&
         snapshotsEqual(previous, snapshotOf(buffer))
       ) {
-        return { content: [{ type: "text", text: FILE_UNCHANGED_STUB }], details: {} };
+        return {
+          content: [{ type: "text", text: FILE_UNCHANGED_STUB }],
+          details: { pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath) } },
+        };
       }
       if (isBinary(buffer.subarray(0, SAMPLE_BYTES)))
         throw new Error(`Cannot read binary file: ${filePath}`);
@@ -340,7 +350,10 @@ export function registerFileTools(
       });
       return {
         content: [{ type: "text", text: formatted.text }],
-        details: { reads: { [key]: snapshot } },
+        details: {
+          reads: { [key]: snapshot },
+          pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath) },
+        },
       };
     },
   });
@@ -381,8 +394,8 @@ export function registerFileTools(
           replaceAll: params.replace_all,
         },
       });
-      const [message, details, diagnosticText] = await withFileMutationQueue<
-        [string, FileToolDetails, string]
+      const [message, details, diagnosticText, errorCount] = await withFileMutationQueue<
+        [string, FileToolDetails, string, number]
       >(filePath, async () => {
         const oldString = params.old_string;
         const newString = params.new_string;
@@ -414,10 +427,14 @@ export function registerFileTools(
           state.reads.set(key, snapshot);
           const diff = generateDiffString("", convertLeadingTabsToSpaces(newString));
           throwIfAborted(signal);
-          const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
-            notify: (message, level) => ctx.ui.notify(message, level),
-            signal,
-          });
+          const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
+            filePath,
+            ctx.cwd,
+            {
+              notify: (message, level) => ctx.ui.notify(message, level),
+              signal,
+            },
+          );
           return [
             `The file ${filePath} has been updated successfully.`,
             {
@@ -427,6 +444,7 @@ export function registerFileTools(
               reads: { [key]: snapshot },
             },
             diagnosticText,
+            errorCount,
           ];
         }
         const replaceAll = params.replace_all ?? false;
@@ -511,9 +529,13 @@ export function registerFileTools(
           ? `The file ${filePath} has been updated. All occurrences were successfully replaced.`
           : `The file ${filePath} has been updated successfully.`;
         throwIfAborted(signal);
-        const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
-          notify: (message, level) => ctx.ui.notify(message, level),
-        });
+        const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
+          filePath,
+          ctx.cwd,
+          {
+            notify: (message, level) => ctx.ui.notify(message, level),
+          },
+        );
         return [
           text,
           {
@@ -527,13 +549,20 @@ export function registerFileTools(
             reads: { [key]: snapshot },
           },
           diagnosticText,
+          errorCount,
         ];
       });
 
       const text = diagnosticText
         ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
         : message;
-      return { content: [{ type: "text" as const, text }], details };
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          ...details,
+          pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath, errorCount) },
+        },
+      };
     },
   });
 
@@ -564,8 +593,8 @@ export function registerFileTools(
         absolutePath: filePath,
         change: { oldText: "", newText: params.content },
       });
-      const [message, details, diagnosticText] = await withFileMutationQueue<
-        [string, FileToolDetails, string]
+      const [message, details, diagnosticText, errorCount] = await withFileMutationQueue<
+        [string, FileToolDetails, string, number]
       >(filePath, async () => {
         let original: string | undefined;
         let key: string | undefined;
@@ -595,9 +624,13 @@ export function registerFileTools(
             ? `File created successfully at: ${filePath}`
             : `The file ${filePath} has been updated successfully.`;
         throwIfAborted(signal);
-        const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
-          notify: (message, level) => ctx.ui.notify(message, level),
-        });
+        const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
+          filePath,
+          ctx.cwd,
+          {
+            notify: (message, level) => ctx.ui.notify(message, level),
+          },
+        );
         return [
           text,
           {
@@ -607,13 +640,20 @@ export function registerFileTools(
             reads: { [resolvedKey]: snapshot },
           },
           diagnosticText,
+          errorCount,
         ];
       });
 
       const text = diagnosticText
         ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
         : message;
-      return { content: [{ type: "text" as const, text }], details };
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          ...details,
+          pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath, errorCount) },
+        },
+      };
     },
   });
 }

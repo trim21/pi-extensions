@@ -4,7 +4,7 @@
 
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 /**
  * Expand a leading `~` to the user's home directory.
@@ -58,4 +58,15 @@ export function formatDisplayPath(cwd: string, filePath: string): string {
     return `~/${relToHome}`;
   }
   return filePath;
+}
+
+/** subtitle 中路径的最大显示长度，超过时退化为仅文件名。 */
+export const MAX_SUBTITLE_PATH_LENGTH = 20;
+
+/** subtitle 用的显示路径：优先 `./…` / `~/…` / 绝对路径，结果过长时只显示文件名。 */
+export function formatSubtitlePath(cwd: string, filePath: string, errorCount?: number): string {
+  const display = formatDisplayPath(cwd, filePath);
+  const base = display.length <= MAX_SUBTITLE_PATH_LENGTH ? display : basename(filePath);
+  if (errorCount === undefined || errorCount === 0) return base;
+  return `${base} (ⓧ ${errorCount})`;
 }

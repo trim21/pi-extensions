@@ -103,6 +103,7 @@ describe("opencode write execute", () => {
       ctx,
     );
     expect(result.content[0].text).toBe("Wrote file successfully.");
+    expect(result.details).toMatchObject({ pendant: { subtitle: "./a/b/c.txt" } });
     expect(await readFile(deep, "utf8")).toBe("hello\n");
   });
 

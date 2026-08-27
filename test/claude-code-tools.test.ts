@@ -236,12 +236,14 @@ describe("Read, Edit, and Write", () => {
       ),
     ).rejects.toThrow(/not been read/);
 
-    await call(tools.get("Read")!, { file_path: filePath }, ctx);
-    await call(
+    const readResult = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(readResult.details).toMatchObject({ pendant: { subtitle: "./note.txt" } });
+    const editResult = await call(
       tools.get("Edit")!,
       { file_path: filePath, old_string: "world", new_string: "there" },
       ctx,
     );
+    expect(editResult.details).toMatchObject({ pendant: { subtitle: "./note.txt" } });
     expect(await readFile(filePath, "utf8")).toBe("hello there\n");
   });
 

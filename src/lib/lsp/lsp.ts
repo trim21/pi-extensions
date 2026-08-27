@@ -208,7 +208,11 @@ export interface LspService {
     options?: LspRequestOptions,
   ): Promise<void>;
   diagnostics(): Promise<Record<string, Diagnostic[]>>;
-  lspDiagnosticsForFile(file: string, cwd: string, options?: LspRequestOptions): Promise<string>;
+  lspDiagnosticsForFile(
+    file: string,
+    cwd: string,
+    options?: LspRequestOptions,
+  ): Promise<{ text: string; errorCount: number }>;
   shutdownAll(): Promise<void>;
   /** 注入 status 渲染回调；传入 undefined 表示不再渲染。 */
   attachStatus(render: StatusRenderer | undefined): void;
@@ -404,19 +408,21 @@ export function createLspService(
   }
 
   /**
-   * edit/write 用：等待文档诊断并返回该文件的 ERROR 报告（空串表示无错误）。
-   * 内部所有 LSP 失败都会被吞掉，不干扰写操作本身。
+   * edit/write 用：等待文档诊断并返回该文件的 ERROR 报告（text 空串表示无错误）
+   * 与 ERROR 数量。内部所有 LSP 失败都会被吞掉，不干扰写操作本身。
    */
   async function lspDiagnosticsForFile(
     file: string,
     cwd: string,
     options?: LspRequestOptions,
-  ): Promise<string> {
-    if (options?.signal?.aborted) return "";
+  ): Promise<{ text: string; errorCount: number }> {
+    if (options?.signal?.aborted) return { text: "", errorCount: 0 };
     await touchFile(file, cwd, "document", options);
     const all = await diagnostics();
     const normalized = normalize(file);
-    return report(normalized, all[normalized] ?? []);
+    const issues = all[normalized] ?? [];
+    const errorCount = issues.filter((item) => item.severity === 1).length;
+    return { text: report(normalized, issues), errorCount };
   }
 
   /** 终止全部服务器进程（session_shutdown 时调用）。 */

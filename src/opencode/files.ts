@@ -30,6 +30,7 @@ import {
 import { Type } from "typebox";
 
 import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
+import { formatSubtitlePath } from "../lib/path.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { applyEdit, normalizeToLF, stripBom } from "./edit-engine.js";
 
@@ -356,7 +357,7 @@ function registerReadTool(pi: ExtensionAPI, service: LspService): void {
 
         return {
           content: [{ type: "text", text: output }],
-          details: undefined,
+          details: { pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath) } },
         };
       }
 
@@ -384,7 +385,10 @@ function registerReadTool(pi: ExtensionAPI, service: LspService): void {
           { type: "text", text: "Image read successfully" },
           { type: "image", data: base64, mimeType },
         ];
-        return { content, details: undefined };
+        return {
+          content,
+          details: { pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath) } },
+        };
       }
 
       if (isBinaryExtension(absolutePath) || isBinaryFileBySample(await readSample(absolutePath))) {
@@ -431,7 +435,13 @@ function registerReadTool(pi: ExtensionAPI, service: LspService): void {
         // 后台 warm-up 失败不影响读取
       });
 
-      return { content, details };
+      return {
+        content,
+        details: {
+          ...details,
+          pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath) },
+        },
+      };
     },
   });
 }
@@ -482,7 +492,7 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
         change: { oldText: oldString, newText: newString, replaceAll },
       });
 
-      const [message, details, diagnosticText] = await withFileMutationQueue(
+      const [message, details, diagnosticText, errorCount] = await withFileMutationQueue(
         absolutePath,
         async () => {
           signal?.throwIfAborted();
@@ -509,13 +519,16 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
             await mkdir(dirname(absolutePath), { recursive: true });
             signal?.throwIfAborted();
             await writeFile(absolutePath, newString, "utf8");
-            const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, {
-              signal,
-            });
+            const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
+              absolutePath,
+              ctx.cwd,
+              { signal },
+            );
             return [
               "Edit applied successfully.",
               { diff: "", patch: "", firstChangedLine: 0 },
               diagnosticText,
+              errorCount,
             ] as const;
           }
 
@@ -547,13 +560,16 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
           const diffNew = normalizeToLF(applied.contentNew);
           const diffResult = generateDiffString(diffOld, diffNew);
           const patch = generateUnifiedPatch(filePath, diffOld, diffNew);
-          const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, {
-            signal,
-          });
+          const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
+            absolutePath,
+            ctx.cwd,
+            { signal },
+          );
           return [
             "Edit applied successfully.",
             { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
             diagnosticText,
+            errorCount,
           ] as const;
         },
       );
@@ -561,7 +577,13 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
       const text = diagnosticText
         ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
         : message;
-      return { content: [{ type: "text" as const, text }], details };
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          ...details,
+          pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath, errorCount) },
+        },
+      };
     },
   });
 }
@@ -614,7 +636,7 @@ function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
       });
       const dir = dirname(absolutePath);
 
-      const [message, details, diagnosticText] = await withFileMutationQueue(
+      const [message, details, diagnosticText, errorCount] = await withFileMutationQueue(
         absolutePath,
         async () => {
           signal?.throwIfAborted();
@@ -639,18 +661,26 @@ function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
           await mkdir(dir, { recursive: true });
           signal?.throwIfAborted();
           await writeFile(absolutePath, desiredBom + nextText, "utf8");
-          const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, {
-            signal,
-          });
+          const { text: diagnosticText, errorCount } = await service.lspDiagnosticsForFile(
+            absolutePath,
+            ctx.cwd,
+            { signal },
+          );
 
-          return ["Wrote file successfully.", undefined, diagnosticText] as const;
+          return ["Wrote file successfully.", {}, diagnosticText, errorCount] as const;
         },
       );
 
       const text = diagnosticText
         ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
         : message;
-      return { content: [{ type: "text" as const, text }], details };
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          ...details,
+          pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath, errorCount) },
+        },
+      };
     },
   });
 }

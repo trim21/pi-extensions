@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -23,7 +23,7 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { formatDisplayPath } from "../lib/path.js";
+import { formatDisplayPath, formatSubtitlePath } from "../lib/path.js";
 import { type ToolPendant } from "../lib/pendant.js";
 import { callAftTool, SEMANTIC_INDEX_WAIT_TIMEOUT_MS } from "./bridge.js";
 
@@ -49,16 +49,6 @@ export function resolvePathArg(cwd: string, input: string): string {
   }
   if (input.startsWith("http://") || input.startsWith("https://")) return input;
   return isAbsolute(input) ? input : resolve(cwd, input);
-}
-
-/** subtitle 中路径的最大显示长度，超过时退化为仅文件名。 */
-export const MAX_SUBTITLE_PATH_LENGTH = 20;
-
-/** subtitle 用的显示路径：优先 `./…` / `~/…` / 绝对路径，结果过长时只显示文件名。 */
-export function formatSubtitlePath(cwd: string, filePath: string): string {
-  const display = formatDisplayPath(cwd, filePath);
-  if (display.length <= MAX_SUBTITLE_PATH_LENGTH) return display;
-  return basename(filePath);
 }
 
 export interface AftToolContext {

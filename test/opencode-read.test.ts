@@ -145,12 +145,18 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-const ctx = { cwd: dir! };
+// dir 在 beforeAll 中赋值，用 getter 让 ctx.cwd 始终反映当前值
+const ctx = {
+  get cwd(): string {
+    return dir;
+  },
+};
 
 describe("opencode read execute", () => {
   it("reads a text file with line-number prefixes", async () => {
     const tool = loadTool();
     const result = await tool.execute("id", { filePath: textFile }, undefined, undefined, ctx);
+    expect(result.details).toMatchObject({ pendant: { subtitle: "./sample.txt" } });
     const text = result.content[0].text;
     expect(text).toContain("<type>file</type>");
     expect(text).toContain("1: one");

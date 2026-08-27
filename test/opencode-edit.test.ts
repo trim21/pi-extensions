@@ -72,6 +72,7 @@ describe("opencode edit execute", () => {
     );
     expect(result.content[0].text).toBe("Edit applied successfully.");
     expect(result.details.diff).toBe("");
+    expect(result.details).toMatchObject({ pendant: { subtitle: "./sub/file.txt" } });
     expect(await readFile(target, "utf8")).toBe("hello\n");
   });
 
