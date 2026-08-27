@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@cortexkit/aft-bridge':
-        specifier: 0.52.1
-        version: 0.52.1
+        specifier: 0.53.0
+        version: 0.53.0
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -110,8 +110,8 @@ importers:
         version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0))
     optionalDependencies:
       '@cortexkit/aft-linux-x64':
-        specifier: 0.52.1
-        version: 0.52.1
+        specifier: 0.53.0
+        version: 0.53.0
 
 packages:
 
@@ -246,11 +246,11 @@ packages:
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
     engines: {node: '>=18'}
 
-  '@cortexkit/aft-bridge@0.52.1':
-    resolution: {integrity: sha512-0iQP1+MeNcxoRXUCFgDQaKplgbUhtMQxSdSb7tcz61KC+GziuCkCptgTs0A4plx5YQWhYGQkkcUZyOM9DonbnA==}
+  '@cortexkit/aft-bridge@0.53.0':
+    resolution: {integrity: sha512-M9pF7k3fwTH0yACbCLp+VjCZAXttlPfX1HlSkhBlP6i3iAo2ePWx7eZf6FD8tGrohO8THh/ZbGtJXFEM6jkOSg==}
 
-  '@cortexkit/aft-linux-x64@0.52.1':
-    resolution: {integrity: sha512-u7IxBF+j1wkCbcVIWHs+Q4DkGeLavRKUw36c4LdJ6ts0YIQuA3s9LRS9fu7CX4rw2c4RBcHEypGTp9X1niJqXg==}
+  '@cortexkit/aft-linux-x64@0.53.0':
+    resolution: {integrity: sha512-X0EbZiFBCxWcBEB/U0JL8/8JUKtCZuu8oaLvvoXSGx6tQehsRjKitzY9rCSthWvh/nyactBAj5/RI4TpSbncBA==}
     cpu: [x64]
     os: [linux]
     hasBin: true
@@ -2412,12 +2412,12 @@ snapshots:
 
   '@bcoe/v8-coverage@1.0.2': {}
 
-  '@cortexkit/aft-bridge@0.52.1':
+  '@cortexkit/aft-bridge@0.53.0':
     dependencies:
       '@cortexkit/subc-client': 0.8.1
       undici: 7.29.0
 
-  '@cortexkit/aft-linux-x64@0.52.1':
+  '@cortexkit/aft-linux-x64@0.53.0':
     optional: true
 
   '@cortexkit/subc-client@0.8.1': {}
@@ -3480,9 +3480,9 @@ snapshots:
 
   fast-levenshtein@2.0.6: {}
 
-  fdir@6.5.0(picomatch@4.0.5):
+  fdir@6.5.0(picomatch@4.0.7):
     optionalDependencies:
-      picomatch: 4.0.5
+      picomatch: 4.0.7
 
   fetch-blob@3.2.0:
     dependencies:
@@ -3988,8 +3988,8 @@ snapshots:
 
   tinyglobby@0.2.17:
     dependencies:
-      fdir: 6.5.0(picomatch@4.0.5)
-      picomatch: 4.0.5
+      fdir: 6.5.0(picomatch@4.0.7)
+      picomatch: 4.0.7
 
   tinyrainbow@3.1.1: {}
 
@@ -4099,7 +4099,7 @@ snapshots:
   vite@8.2.2(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0):
     dependencies:
       lightningcss: 1.33.0
-      picomatch: 4.0.5
+      picomatch: 4.0.7
       postcss: 8.5.26
       rolldown: 1.2.5
       tinyglobby: 0.2.17
