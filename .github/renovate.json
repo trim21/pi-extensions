@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>trim21/renovate-config"],
+  "extends": ["local>trim21/renovate-config", "local>trim21/renovate-config:monthly"],
   "labels": ["dependencies", "ci:auto-merge"],
   "rebaseWhen": "conflicted",
   "packageRules": [
