@@ -140,11 +140,11 @@ describe("buildBwrapArgs", () => {
       "/tmp",
       "--unshare-net",
       "--ro-bind-try",
-      "/ws/.pi",
-      "/ws/.pi",
+      join("/ws", ".pi"),
+      join("/ws", ".pi"),
       "--ro-bind-try",
-      "/ws/.agent",
-      "/ws/.agent",
+      join("/ws", ".agent"),
+      join("/ws", ".agent"),
     ]);
   });
 

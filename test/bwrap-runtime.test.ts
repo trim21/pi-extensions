@@ -482,7 +482,7 @@ describe("BwrapRuntime", () => {
           requestFullAccess: true,
           ctx: fullAccessContext({ select, input }),
         }),
-      ).rejects.toThrow(/User denied unsandboxed execution\.$/);
+      ).rejects.toThrow(/User denied command execution\.$/);
       // 无循环：单选 1 次，input 取消后直接拒绝
       expect(select).toHaveBeenCalledTimes(1);
       expect(input).toHaveBeenCalledTimes(1);
@@ -500,7 +500,7 @@ describe("BwrapRuntime", () => {
           requestFullAccess: true,
           ctx: fullAccessContext({ select, input }),
         }),
-      ).rejects.toThrow(/User denied unsandboxed execution\.$/);
+      ).rejects.toThrow(/User denied command execution\.$/);
     });
 
     it("allow forever persists only the checked rules and auto-approves next time", async () => {

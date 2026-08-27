@@ -64,6 +64,8 @@ describe("formatDisplayPath", () => {
 
 describe("formatSubtitlePath", () => {
   const cwd = resolve("/work", "project");
+  // 相对部分由 path.relative 生成，Windows 上是 `\`；`./` 前缀是字面量。
+  const insideCwd = `./${join("src", "app.ts")}`;
 
   it.skipIf(process.platform === "win32")("uses ./… for short paths inside cwd", () => {
     expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"))).toBe("./src/app.ts");
@@ -96,17 +98,17 @@ describe("formatSubtitlePath", () => {
   });
 
   it("appends LSP error and warning counts when provided", () => {
-    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 3)).toBe("./src/app.ts (ⓧ 3)");
-    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 1)).toBe("./src/app.ts (ⓧ 1)");
-    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0, 2)).toBe("./src/app.ts (⚠ 2)");
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 3)).toBe(`${insideCwd} (ⓧ 3)`);
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 1)).toBe(`${insideCwd} (ⓧ 1)`);
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0, 2)).toBe(`${insideCwd} (⚠ 2)`);
     expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 3, 2)).toBe(
-      "./src/app.ts (ⓧ 3 ⚠ 2)",
+      `${insideCwd} (ⓧ 3 ⚠ 2)`,
     );
   });
 
   it("omits counts when zero or absent", () => {
-    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0)).toBe("./src/app.ts");
-    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0, 0)).toBe("./src/app.ts");
-    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"))).toBe("./src/app.ts");
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0)).toBe(insideCwd);
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0, 0)).toBe(insideCwd);
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"))).toBe(insideCwd);
   });
 });

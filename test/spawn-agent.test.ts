@@ -250,44 +250,44 @@ describe("overrideExtensionPaths", () => {
   it("loads the bwrap-backed opencode bash for agents that declare the bash tool", () => {
     for (const tools of [["bash"], ["bash", "edit"]]) {
       const paths = overrideExtensionPaths(tools);
-      expect(paths.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
+      expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(true);
     }
     // Agents without bash need no bwrap sandbox: there are no commands to run.
     const paths = overrideExtensionPaths(["read", "grep", "find", "ls"]);
-    expect(paths.some((p) => p.endsWith("opencode/bash.ts"))).toBe(false);
+    expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(false);
   });
 
   it("loads opencode files.ts for the default read-only toolset", () => {
     const paths = overrideExtensionPaths(["read"]);
-    expect(paths.some((p) => p.endsWith("opencode/files.ts"))).toBe(true);
-    expect(paths.some((p) => p.endsWith("opencode/bash.ts"))).toBe(false);
+    expect(paths.some((p) => p.endsWith(join("opencode", "files.ts")))).toBe(true);
+    expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(false);
   });
 
   it("loads the shared opencode files implementation once for read/edit/write", () => {
     const paths = overrideExtensionPaths(["read", "edit", "write", "bash"]);
     // read/edit/write 共享 opencode/files.ts（共享 LSP service 实例），只加载一次
-    expect(paths.filter((p) => p.endsWith("opencode/files.ts"))).toHaveLength(1);
-    expect(paths.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
+    expect(paths.filter((p) => p.endsWith(join("opencode", "files.ts")))).toHaveLength(1);
+    expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(true);
   });
 
   it("does not load overrides for tools the agent did not declare", () => {
     const paths = overrideExtensionPaths(["bash"]);
-    expect(paths.some((p) => p.endsWith("opencode/files.ts"))).toBe(false);
-    expect(paths.some((p) => p.endsWith("opencode/bash.ts"))).toBe(true);
+    expect(paths.some((p) => p.endsWith(join("opencode", "files.ts")))).toBe(false);
+    expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(true);
   });
 
   it("loads claude-code search tools individually (Grep without Glob)", () => {
     const grepPaths = overrideExtensionPaths(["Grep"]);
-    expect(grepPaths.some((p) => p.endsWith("claude-code/grep.ts"))).toBe(true);
-    expect(grepPaths.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(false);
+    expect(grepPaths.some((p) => p.endsWith(join("claude-code", "grep.ts")))).toBe(true);
+    expect(grepPaths.some((p) => p.endsWith(join("claude-code", "glob.ts")))).toBe(false);
 
     const globPaths = overrideExtensionPaths(["Glob"]);
-    expect(globPaths.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(true);
-    expect(globPaths.some((p) => p.endsWith("claude-code/grep.ts"))).toBe(false);
+    expect(globPaths.some((p) => p.endsWith(join("claude-code", "glob.ts")))).toBe(true);
+    expect(globPaths.some((p) => p.endsWith(join("claude-code", "grep.ts")))).toBe(false);
 
     const both = overrideExtensionPaths(["Grep", "Glob"]);
-    expect(both.some((p) => p.endsWith("claude-code/grep.ts"))).toBe(true);
-    expect(both.some((p) => p.endsWith("claude-code/glob.ts"))).toBe(true);
+    expect(both.some((p) => p.endsWith(join("claude-code", "grep.ts")))).toBe(true);
+    expect(both.some((p) => p.endsWith(join("claude-code", "glob.ts")))).toBe(true);
   });
 
   it("loads the shared cc files implementation once for Read/Edit/Write", () => {
@@ -295,11 +295,11 @@ describe("overrideExtensionPaths", () => {
     // read-snapshot state); the tools allowlist exposes only the subset the
     // agent declared, so the extension file must be loaded exactly once.
     const paths = overrideExtensionPaths(["Read", "Edit", "Write"]);
-    expect(paths.filter((p) => p.endsWith("claude-code/files.ts"))).toHaveLength(1);
-    expect(paths.some((p) => p.endsWith("opencode/files.ts"))).toBe(false);
+    expect(paths.filter((p) => p.endsWith(join("claude-code", "files.ts")))).toHaveLength(1);
+    expect(paths.some((p) => p.endsWith(join("opencode", "files.ts")))).toBe(false);
 
     const single = overrideExtensionPaths(["Edit"]);
-    expect(single.filter((p) => p.endsWith("claude-code/files.ts"))).toHaveLength(1);
+    expect(single.filter((p) => p.endsWith(join("claude-code", "files.ts")))).toHaveLength(1);
   });
 
   it("throws when an override extension file is missing", () => {

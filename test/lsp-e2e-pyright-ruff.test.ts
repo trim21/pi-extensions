@@ -2,6 +2,8 @@
 // 消除的错误能否通过 LSP 诊断正确反映在工具返回文本中。
 // 需要 pyright-langserver 与 ruff 在 PATH（CI 的 check job 安装了它们）；
 // 二进制缺失时整组跳过（本地无工具时测试仍可运行）。
+// 服务器定义写进临时项目的 .pi/lsp.json，不依赖全局 ~/.pi/agent/lsp.json：
+// 生效的 servers 只来自用户配置，缺 servers 时 adapter 为空、拿不到任何诊断。
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,6 +61,25 @@ async function call(
   return tool.execute("call-id", params, undefined, undefined, ctx);
 }
 
+const SERVERS = {
+  pyright: {
+    include: ["**/*.py", "**/*.pyi"],
+    rootMarkers: ["pyproject.toml", "pyrightconfig.json"],
+    bin: "pyright-langserver",
+    args: ["--stdio"],
+    cwd: "{root}",
+    languageIdByExtension: { ".py": "python", ".pyi": "python" },
+  },
+  ruff: {
+    include: ["**/*.py", "**/*.pyi"],
+    rootMarkers: ["pyproject.toml", "ruff.toml", ".ruff.toml"],
+    bin: "ruff",
+    args: ["server"],
+    cwd: "{root}",
+    languageIdByExtension: { ".py": "python", ".pyi": "python" },
+  },
+};
+
 async function setupProject(disabled: string[] = []) {
   const directory = await mkdtemp(join(tmpdir(), "cc-lsp-e2e-"));
   // pyright 与 ruff 的 root marker；放宽诊断等待时间避免首次启动超时
@@ -68,6 +89,7 @@ async function setupProject(disabled: string[] = []) {
     join(directory, ".pi", "lsp.json"),
     JSON.stringify({
       diagnosticsDocumentWaitTimeoutMs: "20s",
+      servers: SERVERS,
       ...(disabled.length > 0 && { disabled }),
     }),
   );
