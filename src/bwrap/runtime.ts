@@ -489,8 +489,8 @@ export class BwrapRuntime {
         const feedback = decision.reason?.trim() ?? "";
         throw new Error(
           feedback
-            ? `User denied unsandboxed execution: ${feedback}`
-            : "User denied unsandboxed execution.",
+            ? `User denied command execution with reason: ${feedback}`
+            : "User denied command execution.",
         );
       }
     }

@@ -465,7 +465,7 @@ describe("BwrapRuntime", () => {
           requestFullAccess: true,
           ctx: fullAccessContext({ select, input }),
         }),
-      ).rejects.toThrow(/User denied unsandboxed execution: too risky/);
+      ).rejects.toThrow(/User denied command execution with reason: too risky/);
       expect(select).toHaveBeenCalledTimes(1);
       expect(input).toHaveBeenCalledTimes(1);
     });
@@ -640,7 +640,7 @@ describe("BwrapRuntime", () => {
           requestFullAccess: true,
           ctx: fullAccessContext({ select, input }, undefined, directory),
         }),
-      ).rejects.toThrow(/User denied unsandboxed execution: risky args/);
+      ).rejects.toThrow(/User denied command execution with reason: risky args/);
       const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
         approvalRules: { action: string; pattern: string }[];
       };
