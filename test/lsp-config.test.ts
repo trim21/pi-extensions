@@ -175,7 +175,7 @@ describe("loadLspConfig", () => {
 });
 
 describe("lsp config validation", () => {
-  it("全局配置 enabled/disabled 引用不存在的服务器 id 时创建 service 即报错", async () => {
+  it("全局配置 enabled 引用不存在的服务器 id 时创建 service 即报错", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
     const globalFile = join(dir, "global.json");
     await writeFile(globalFile, JSON.stringify({ enabled: ["nope"] }));
@@ -183,10 +183,19 @@ describe("lsp config validation", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("session 开始预加载配置：本地配置错误时 notify", async () => {
+  it("全局配置 disabled 引用不存在的服务器 id 时创建 service 不报错", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const globalFile = join(dir, "global.json");
+    await writeFile(globalFile, JSON.stringify({ disabled: ["nope"] }));
+    const service = createLspService(undefined, globalFile);
+    await service.shutdownAll();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("session 开始预加载配置：本地 enabled 引用未知 id 时 notify", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
     await mkdir(join(dir, ".pi"), { recursive: true });
-    await writeFile(join(dir, ".pi", "lsp.json"), JSON.stringify({ disabled: ["nope"] }));
+    await writeFile(join(dir, ".pi", "lsp.json"), JSON.stringify({ enabled: ["nope"] }));
     const on = vi.fn();
     registerLsp({ on } as unknown as ExtensionAPI, {
       globalConfigPath: join(dir, "no-global.json"),
@@ -201,6 +210,26 @@ describe("lsp config validation", () => {
     await vi.waitFor(() =>
       expect(notify).toHaveBeenCalledWith(expect.stringContaining("nope"), "error"),
     );
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("session 开始预加载配置：本地 disabled 引用未知 id 时不 notify", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(join(dir, ".pi", "lsp.json"), JSON.stringify({ disabled: ["nope"] }));
+    const on = vi.fn();
+    registerLsp({ on } as unknown as ExtensionAPI, {
+      globalConfigPath: join(dir, "no-global.json"),
+    });
+    const call = on.mock.calls.find((c) => c[0] === "session_start");
+    const handler = call?.[1] as (
+      event: unknown,
+      ctx: { cwd: string; ui: { notify: ReturnType<typeof vi.fn> } },
+    ) => void;
+    const notify = vi.fn();
+    handler({}, { cwd: dir, ui: { notify } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(notify).not.toHaveBeenCalled();
     await rm(dir, { recursive: true, force: true });
   });
 });
@@ -226,9 +255,15 @@ describe("filterAdapters", () => {
     ).toEqual(["a", "c"]);
   });
 
-  it("enabled/disabled 引用不存在的服务器 id 时抛错", () => {
+  it("enabled 引用不存在的服务器 id 时抛错", () => {
     expect(() => filterAdapters(adapters, { enabled: ["a", "nope"] })).toThrow(/nope/);
-    expect(() => filterAdapters(adapters, { disabled: ["nope"] })).toThrow(/nope/);
+  });
+
+  it("disabled 引用不存在的服务器 id 时忽略", () => {
+    expect(filterAdapters(adapters, { disabled: ["nope", "c"] }).map((a) => a.id)).toEqual([
+      "a",
+      "b",
+    ]);
   });
 });
 

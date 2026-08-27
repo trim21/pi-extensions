@@ -7,9 +7,10 @@
  *   （本地覆盖全局）：`servers` 按 id 合并（同名 id 整体覆盖、新增 id，全局
  *   其余服务器保留），`enabled`/`disabled` 白名单与各超时参数继续生效；
  *   没有内置默认服务器，所有服务器均须在配置里定义；
- *   配置在每个工具的调用 cwd 下惰性读取；enabled/disabled 引用不存在的
- *   服务器 id 是配置错误：全局配置在扩展加载（createLspService）时抛错，
- *   本地配置在 session 开始预加载时通知，工具调用时校验抛错兜底；
+ *   配置在每个工具的调用 cwd 下惰性读取；enabled 引用不存在的服务器 id
+ *   是配置错误：全局配置在扩展加载（createLspService）时抛错，本地配置在
+ *   session 开始预加载时通知，工具调用时校验抛错兜底。disabled 中未注册
+ *   的 id 直接忽略；
  * - client 按 (root, serverID) 缓存，并发 spawn 去重，启动失败记入 broken
  *   集合（服务实例生命周期内不再重试）；
  * - 工具只与 touchFile / diagnostics / lspDiagnosticsForFile 三个方法打交道；通知回调按请求传入。
@@ -114,20 +115,19 @@ function readConfigFileSync(filePath: string): LspConfig {
 }
 
 /**
- * enabled/disabled 引用的 id 必须存在于实际生效的服务器集合（注入的 adapters
- * 或默认 + 配置 servers），否则抛配置错误（避免静默失效）。
+ * enabled 引用的 id 必须存在于实际生效的服务器集合（注入的 adapters 或配置
+ * servers），否则抛配置错误（避免白名单静默失效）。disabled 中未注册的 id
+ * 直接忽略。
  */
 function validateConfig(config: LspConfig, adapters?: LspServerAdapter[]): void {
   const available = new Set(
     adapters ? adapters.map((adapter) => adapter.id) : Object.keys(config.servers ?? {}),
   );
-  const unknown = [...(config.enabled ?? []), ...(config.disabled ?? [])].filter(
-    (id) => !available.has(id),
-  );
+  const unknown = (config.enabled ?? []).filter((id) => !available.has(id));
   if (unknown.length > 0) {
     const list = [...available].toSorted().join(", ") || "none";
     throw new Error(
-      `lsp.json: unknown server id in enabled/disabled: ${unknown.join(", ")} (available: ${list})`,
+      `lsp.json: unknown server id in enabled: ${unknown.join(", ")} (available: ${list})`,
     );
   }
 }
@@ -155,8 +155,8 @@ export async function loadLspConfig(
 }
 
 /**
- * 按配置过滤 adapter 列表。enabled/disabled 引用了实际生效集合中不存在的
- * 服务器 id 时抛错（配置错误，避免静默失效）。
+ * 按配置过滤 adapter 列表。enabled 引用了实际生效集合中不存在的服务器 id
+ * 时抛错（配置错误，避免白名单静默失效）；disabled 中未注册的 id 忽略。
  */
 export function filterAdapters(
   adapters: LspServerAdapter[],
