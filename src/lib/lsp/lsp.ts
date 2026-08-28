@@ -175,6 +175,8 @@ interface LspState {
   broken: Set<string>;
   spawning: Map<string, Promise<LspClient | undefined>>;
   closing: boolean;
+  /** /lsp-stop 置 true：所有工具调用不再 spawn 服务器，直到 start/reload。 */
+  disabled: boolean;
   /** root+serverID → 服务器状态，用于 footer status 显示。 */
   servers: Map<string, { serverID: string; root: string; state: "running" | "broken" }>;
 }
@@ -214,6 +216,17 @@ export interface LspService {
     options?: LspRequestOptions,
   ): Promise<{ text: string; errorCount: number; warningCount: number }>;
   shutdownAll(): Promise<void>;
+  /** 停止全部服务器并禁用 LSP：之后工具调用不再 spawn，直到 start/reload。 */
+  stop(): Promise<void>;
+  /** 解除禁用并清空 broken 缓存；服务器在下次工具调用时惰性启动。 */
+  start(): void;
+  /**
+   * 重启指定服务器：关闭其全部 client、清除对应 broken 记录并解除禁用；
+   * 其余服务器不受影响。配置在下次工具调用时重新读取。
+   */
+  reload(serverID: string): Promise<void>;
+  /** 已知服务器 id（running 或 broken 的去重集合），供命令补全与提示。 */
+  serverIDs(): string[];
   /** 注入 status 渲染回调；传入 undefined 表示不再渲染。 */
   attachStatus(render: StatusRenderer | undefined): void;
   /** 用当前服务器状态主动刷新一次 status（agent start/end 等生命周期边界）。 */
@@ -247,6 +260,7 @@ export function createLspService(
     broken: new Set(),
     spawning: new Map(),
     closing: false,
+    disabled: false,
     servers: new Map(),
   };
 
@@ -255,6 +269,10 @@ export function createLspService(
   /** 汇总当前所有 LSP server 状态并渲染到 footer status。 */
   function updateStatusText(): void {
     if (!renderStatus) return;
+    if (state.disabled) {
+      renderStatus("lsp: disabled");
+      return;
+    }
     if (state.servers.size === 0) {
       renderStatus(undefined);
       return;
@@ -275,7 +293,7 @@ export function createLspService(
     cwd: string,
     notify?: ExtensionUIContext["notify"],
   ): Promise<LspClient[]> {
-    if (state.closing) return [];
+    if (state.closing || state.disabled) return [];
     if (!containsPath(file, cwd)) return [];
     const config = await loadLspConfig(cwd, globalConfigPath);
     const timeout = timeoutOptions(config);
@@ -326,7 +344,7 @@ export function createLspService(
             diagnosticsDocumentWaitTimeoutMs:
               adapter.diagnosticsWaitMs ?? timeout.diagnosticsDocumentWaitTimeoutMs,
           });
-          if (state.closing) {
+          if (state.closing || state.disabled) {
             await client.shutdown();
             return;
           }
@@ -426,9 +444,8 @@ export function createLspService(
     return { text: report(normalized, issues), errorCount, warningCount };
   }
 
-  /** 终止全部服务器进程（session_shutdown 时调用）。 */
-  async function shutdownAll(): Promise<void> {
-    if (state.closing) return;
+  /** 关闭全部 client 并清空缓存；closing 置 true 让 in-flight spawn 自行退出。 */
+  async function closeAll(): Promise<void> {
     state.closing = true;
     await Promise.all(state.clients.map((client) => client.shutdown())).catch(() => {
       // 个别进程退出失败不阻止清理流程
@@ -439,11 +456,55 @@ export function createLspService(
     updateStatusText();
   }
 
+  /** 终止全部服务器进程（session_shutdown 时调用，终态）。 */
+  async function shutdownAll(): Promise<void> {
+    await closeAll();
+  }
+
+  async function stop(): Promise<void> {
+    await closeAll();
+    state.closing = false;
+    state.disabled = true;
+    updateStatusText();
+  }
+
+  function start(): void {
+    state.closing = false;
+    state.disabled = false;
+    state.broken.clear();
+    updateStatusText();
+  }
+
+  async function reload(serverID: string): Promise<void> {
+    state.closing = true;
+    const targets = state.clients.filter((client) => client.serverID === serverID);
+    await Promise.all(targets.map((client) => client.shutdown())).catch(() => {
+      // 个别进程退出失败不阻止清理流程
+    });
+    state.clients = state.clients.filter((client) => client.serverID !== serverID);
+    for (const [key, server] of state.servers) {
+      if (server.serverID !== serverID) continue;
+      state.broken.delete(key);
+      state.servers.delete(key);
+    }
+    state.closing = false;
+    state.disabled = false;
+    updateStatusText();
+  }
+
+  function serverIDs(): string[] {
+    return [...new Set([...state.servers.values()].map((server) => server.serverID))];
+  }
+
   return {
     touchFile,
     diagnostics,
     lspDiagnosticsForFile,
     shutdownAll,
+    stop,
+    start,
+    reload,
+    serverIDs,
     attachStatus,
     refreshStatus: updateStatusText,
   };
@@ -476,5 +537,49 @@ export function registerLsp(pi: ExtensionAPI, options?: LspServiceOptions): LspS
   // spawn（首次工具调用），start/end 时保证 footer 反映当前实际状态。
   pi.on?.("agent_start", () => service.refreshStatus());
   pi.on?.("agent_end", () => service.refreshStatus());
+
+  pi.registerCommand?.("lsp-stop", {
+    description: "Stop all LSP servers and disable LSP until /lsp-start or /lsp-reload",
+    handler: async (_args, ctx) => {
+      await service.stop();
+      ctx.ui.notify?.("LSP disabled: all servers stopped", "info");
+    },
+  });
+
+  pi.registerCommand?.("lsp-start", {
+    description: "Re-enable LSP; servers start on the next tool call",
+    handler: (_args, ctx) => {
+      service.start();
+      ctx.ui.notify?.("LSP enabled: servers will start on the next tool call", "info");
+      return Promise.resolve();
+    },
+  });
+
+  pi.registerCommand?.("lsp-reload", {
+    description: "Restart a specific LSP server: /lsp-reload <server-id>",
+    getArgumentCompletions: (prefix) =>
+      service
+        .serverIDs()
+        .toSorted()
+        .filter((id) => id.startsWith(prefix))
+        .map((id) => ({ value: id, label: id })),
+    handler: async (args, ctx) => {
+      const serverID = args.trim();
+      const known = service.serverIDs().toSorted();
+      if (!serverID) {
+        ctx.ui.notify?.(
+          `usage: /lsp-reload <server-id>${known.length > 0 ? ` (known: ${known.join(", ")})` : ""}`,
+          "warning",
+        );
+        return;
+      }
+      await service.reload(serverID);
+      ctx.ui.notify?.(
+        `LSP server "${serverID}" reloaded: will restart on the next tool call`,
+        "info",
+      );
+    },
+  });
+
   return service;
 }
