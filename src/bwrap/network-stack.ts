@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { generateSingboxConfig } from "./singbox-config.js";
 
 export interface NetworkStackOptions {
-  /** 允许直连的域名列表（session 启动时固定，reload 才会重新加载）。 */
+  /** 允许直连的域名 / IP:port 列表（session 启动时固定，reload 才会重新加载）。 */
   readonly allowlist: readonly string[];
   /** 真实 DNS 服务器列表，按顺序 fallback。 */
   readonly dnsServers: readonly string[];

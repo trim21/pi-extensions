@@ -24,6 +24,8 @@ interface ParsedConfig {
       action?: string;
       protocol?: string;
       domain?: string[];
+      ip_cidr?: string[];
+      port?: number[];
       outbound?: string;
     }[];
   };
@@ -86,6 +88,128 @@ describe("generateSingboxConfig", () => {
 
     expect(config.outbounds).toContainEqual({ type: "direct", tag: "direct" });
     expect(config.route.default_interface).toBe("tap0");
+  });
+
+  it("routes plain IP and CIDR entries via ip_cidr", () => {
+    const config = parse(
+      generateSingboxConfig({
+        allowlist: ["192.168.2.18", "10.0.0.0/8"],
+        dnsServers: ["192.168.2.1"],
+      }),
+    );
+
+    expect(config.route.final).toBe("block");
+    expect(config.route.rules).toContainEqual({
+      ip_cidr: ["192.168.2.18/32", "10.0.0.0/8"],
+      outbound: "direct",
+    });
+  });
+
+  it("routes ip:port entries via ip_cidr plus port", () => {
+    const config = parse(
+      generateSingboxConfig({
+        allowlist: ["192.168.2.18:8848"],
+        dnsServers: ["192.168.2.1"],
+      }),
+    );
+
+    expect(config.route.rules).toContainEqual({
+      ip_cidr: ["192.168.2.18/32"],
+      port: [8848],
+      outbound: "direct",
+    });
+  });
+
+  it("routes domain:port entries via domain plus port", () => {
+    const config = parse(
+      generateSingboxConfig({
+        allowlist: ["example.com:443"],
+        dnsServers: ["192.168.2.1"],
+      }),
+    );
+
+    expect(config.route.rules).toContainEqual({
+      domain: ["example.com"],
+      port: [443],
+      outbound: "direct",
+    });
+  });
+
+  it("groups same-port hosts into one rule", () => {
+    const config = parse(
+      generateSingboxConfig({
+        allowlist: ["example.com:443", "192.168.2.18:443"],
+        dnsServers: ["192.168.2.1"],
+      }),
+    );
+
+    expect(config.route.rules).toContainEqual({
+      domain: ["example.com"],
+      ip_cidr: ["192.168.2.18/32"],
+      port: [443],
+      outbound: "direct",
+    });
+  });
+
+  it("supports bracketed IPv6 with port", () => {
+    const config = parse(
+      generateSingboxConfig({
+        allowlist: ["[::1]:80", "[0:2:3]:1234"],
+        dnsServers: ["192.168.2.1"],
+      }),
+    );
+
+    expect(config.route.rules).toContainEqual({
+      ip_cidr: ["::1/128"],
+      port: [80],
+      outbound: "direct",
+    });
+    expect(config.route.rules).toContainEqual({
+      ip_cidr: ["0:2:3/128"],
+      port: [1234],
+      outbound: "direct",
+    });
+  });
+
+  it("mixes domain and ip rules in one config", () => {
+    const config = parse(
+      generateSingboxConfig({
+        allowlist: ["pypi.org", "192.168.2.18:8848"],
+        dnsServers: ["192.168.2.1"],
+      }),
+    );
+
+    expect(config.route.rules).toContainEqual({
+      domain: ["pypi.org"],
+      outbound: "direct",
+    });
+    expect(config.route.rules).toContainEqual({
+      ip_cidr: ["192.168.2.18/32"],
+      port: [8848],
+      outbound: "direct",
+    });
+  });
+
+  it("rejects invalid allowlist entries", () => {
+    expect(() =>
+      generateSingboxConfig({ allowlist: ["example.com:abc"], dnsServers: ["192.168.2.1"] }),
+    ).toThrow(/example\.com:abc/);
+    expect(() =>
+      generateSingboxConfig({ allowlist: ["example.com:70000"], dnsServers: ["192.168.2.1"] }),
+    ).toThrow(/Invalid port/);
+    expect(() =>
+      generateSingboxConfig({ allowlist: ["", "pypi.org"], dnsServers: ["192.168.2.1"] }),
+    ).toThrow(/Invalid allowlist entry/);
+    expect(() =>
+      generateSingboxConfig({ allowlist: [":80"], dnsServers: ["192.168.2.1"] }),
+    ).toThrow(/Invalid allowlist entry/);
+    // 裸 IPv6（无方括号）报错并提示用 [] 包裹
+    expect(() =>
+      generateSingboxConfig({ allowlist: ["::1"], dnsServers: ["192.168.2.1"] }),
+    ).toThrow(/wrapped in brackets/);
+    expect(() =>
+      generateSingboxConfig({ allowlist: ["2001:db8::1"], dnsServers: ["192.168.2.1"] }),
+    ).toThrow(/wrapped in brackets/);
   });
 
   it("rejects an empty nameserver list", () => {

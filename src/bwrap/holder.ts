@@ -55,8 +55,7 @@ async function main(): Promise<void> {
     process.exit(0);
   });
 
-  // tun0 设备在 sing-box 启动早期就创建，但 gvisor 栈初始化仍需时间；
-  // 以 "sing-box started" 日志作为进程就绪标志，再等待栈初始化完成
+  // 以 "sing-box started" 日志作为就绪标志（TUN 与 gvisor 数据面此时已可用）
   await waitFor(200, 100, async () => {
     try {
       const log = await readFile(logPath, "utf8");
@@ -65,7 +64,6 @@ async function main(): Promise<void> {
       return false;
     }
   });
-  await sleep(4000);
   await writeFile(readyFile, "");
 
   await new Promise<void>((resolve) => singbox.once("exit", () => resolve()));

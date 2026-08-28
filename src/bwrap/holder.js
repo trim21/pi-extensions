@@ -49,7 +49,6 @@ async function main() {
       return false;
     }
   });
-  await sleep(4e3);
   await writeFile(readyFile, "");
   await new Promise((resolve) => singbox.once("exit", () => resolve()));
 }

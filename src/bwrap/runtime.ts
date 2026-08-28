@@ -232,7 +232,7 @@ function notifyMode(
     "allow-all": "allow-all: sandbox off, network on",
     "workspace-write": "workspace-write: sandbox on, network off",
     "allow-net": "allow-net: sandbox on, network on, workspace writable",
-    "net-allowlist": "net-allowlist: sandbox on, network filtered by domain allowlist",
+    "net-allowlist": "net-allowlist: sandbox on, network filtered by allowlist",
     readonly: "readonly: sandbox on, network off, read-only fs",
   };
   ctx.ui.notify(labels[mode], "info");
@@ -672,7 +672,7 @@ export class BwrapRuntime {
       "bwrap-net-allowlist": {
         name: "bwrap-net-allowlist",
         usage: "",
-        description: "Sandbox on, network filtered by domain allowlist, workspace writable",
+        description: "Sandbox on, network filtered by allowlist, workspace writable",
         flags: Type.Object({}),
       },
       "bwrap-readonly": {

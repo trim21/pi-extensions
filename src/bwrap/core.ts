@@ -33,7 +33,9 @@ const bwrapConfigProperties = {
   extraWritablePaths: Type.Array(Type.String()),
   tmpfsPaths: Type.Array(Type.String()),
   extraArgs: Type.Array(Type.String()),
-  networkAllowlist: Type.Array(Type.String()),
+  networkAllowlist: Type.Array(
+    Type.String({ description: "允许直连的域名 / IP / CIDR，可带 :port" }),
+  ),
   singBoxPath: Type.Optional(Type.String()),
   slirp4netnsPath: Type.Optional(Type.String()),
   approvalRules: Type.Optional(
@@ -71,7 +73,7 @@ export interface ResolvedBwrap {
   extraWritablePaths: string[];
   tmpfsPaths: string[];
   extraArgs: string[];
-  /** per-domain 过滤的允许域名（非空 = 启用 sing-box 网络过滤）。 */
+  /** 允许直连的域名 / IP / IP:port 白名单（非空 = 启用 sing-box 网络过滤）。 */
   networkAllowlist: string[];
   singBoxPath?: string;
   slirp4netnsPath?: string;
