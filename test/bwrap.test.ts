@@ -39,7 +39,7 @@ describe("resolveBwrap", () => {
       mode: "allow-net",
       writablePaths: [".", "/tmp"],
       extraWritablePaths: [],
-      tmpfsPaths: [],
+      denyPaths: [],
       extraArgs: [],
       networkAllowlist: [],
     });
@@ -55,7 +55,7 @@ describe("resolveBwrap", () => {
       mode: "workspace-write",
       writablePaths: [".", "/tmp"],
       extraWritablePaths: [],
-      tmpfsPaths: [],
+      denyPaths: [],
       extraArgs: [],
       networkAllowlist: [],
     });
@@ -71,7 +71,7 @@ describe("resolveHeadlessBwrap", () => {
       mode: "allow-all",
       writablePaths: [".", "/tmp"],
       extraWritablePaths: [],
-      tmpfsPaths: [],
+      denyPaths: [],
       extraArgs: [],
       networkAllowlist: [],
     });
@@ -87,7 +87,7 @@ describe("resolveHeadlessBwrap", () => {
       mode: "workspace-write",
       writablePaths: [".", "/tmp"],
       extraWritablePaths: ["~/.cache", "~/go/pkg"],
-      tmpfsPaths: ["/tmp/scratch"],
+      denyPaths: ["/tmp/scratch"],
       extraArgs: ["--bind", "/x", "/x"],
       networkAllowlist: [],
     });
@@ -95,7 +95,7 @@ describe("resolveHeadlessBwrap", () => {
     expect(resolved.mode).toBe("readonly");
     expect(resolved.writablePaths).toEqual([]);
     expect(resolved.extraWritablePaths).toEqual([]);
-    expect(resolved.tmpfsPaths).toEqual([]);
+    expect(resolved.denyPaths).toEqual([]);
     expect(resolved.extraArgs).toEqual([]);
   });
 });
@@ -121,7 +121,7 @@ describe("buildBwrapArgs", () => {
     network: false,
     writablePaths: [".", "/tmp"],
     extraWritablePaths: [],
-    tmpfsPaths: [],
+    denyPaths: [],
     extraArgs: [],
     networkAllowlist: [],
     approvalRules: [],
@@ -173,6 +173,26 @@ describe("buildBwrapArgs", () => {
       "/data/x",
       "/data/x",
     ]);
+  });
+
+  it("deny paths: trailing slash means dir, otherwise file", async () => {
+    const args = await buildBwrapArgs(
+      { ...base, denyPaths: ["/etc/secret/", "/home/user/.git-credentials"] },
+      "/ws",
+    );
+
+    // 目录条目 → --tmpfs 挂空；文件条目 → --ro-bind-try /dev/null 覆盖
+    const tmpfsTargets = args
+      .flatMap((value, index) => (value === "--tmpfs" ? [args[index + 1]] : []))
+      .filter((path): path is string => path !== undefined);
+    expect(tmpfsTargets).toEqual(["/etc/secret/"]);
+
+    const devNullTargets = args
+      .flatMap((value, index) =>
+        value === "--ro-bind-try" && args[index + 1] === "/dev/null" ? [args[index + 2]] : [],
+      )
+      .filter((path): path is string => path !== undefined);
+    expect(devNullTargets).toEqual(["/home/user/.git-credentials"]);
   });
 
   it("protects workspace-internal dot dirs instead of the exec cwd's", async () => {

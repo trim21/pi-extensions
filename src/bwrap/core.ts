@@ -31,7 +31,12 @@ const bwrapConfigProperties = {
   bwrapPath: Type.Optional(Type.String()),
   writablePaths: Type.Array(Type.String()),
   extraWritablePaths: Type.Array(Type.String()),
-  tmpfsPaths: Type.Array(Type.String()),
+  denyPaths: Type.Array(
+    Type.String({
+      description:
+        "沙箱内隐藏的路径：以 / 结尾为目录（挂空 tmpfs），否则为文件（--ro-bind-try /dev/null）",
+    }),
+  ),
   extraArgs: Type.Array(Type.String()),
   networkAllowlist: Type.Array(
     Type.String({ description: "允许直连的域名 / IP / CIDR，可带 :port" }),
@@ -71,7 +76,8 @@ export interface ResolvedBwrap {
   bwrapPath?: string;
   writablePaths: string[];
   extraWritablePaths: string[];
-  tmpfsPaths: string[];
+  /** 沙箱内隐藏的路径：以 / 结尾为目录（挂空 tmpfs），否则为文件（--ro-bind-try /dev/null）。 */
+  denyPaths: string[];
   extraArgs: string[];
   /** 允许直连的域名 / IP / IP:port 白名单（非空 = 启用 sing-box 网络过滤）。 */
   networkAllowlist: string[];
@@ -85,7 +91,7 @@ const DEFAULT_CONFIG: BwrapConfig = {
   mode: "workspace-write",
   writablePaths: [".", "/tmp"],
   extraWritablePaths: [],
-  tmpfsPaths: [],
+  denyPaths: [],
   extraArgs: [],
   networkAllowlist: [],
 };
@@ -96,7 +102,7 @@ export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
     bwrapPath: config.bwrapPath,
     writablePaths: config.writablePaths ?? [".", "/tmp"],
     extraWritablePaths: config.extraWritablePaths,
-    tmpfsPaths: config.tmpfsPaths ?? [],
+    denyPaths: config.denyPaths ?? [],
     extraArgs: config.extraArgs ?? [],
     networkAllowlist: config.networkAllowlist ?? [],
     singBoxPath: config.singBoxPath,
@@ -128,7 +134,7 @@ export function resolveHeadlessBwrap(config: BwrapConfig): ResolvedBwrap {
     mode: "readonly",
     writablePaths: [],
     extraWritablePaths: [],
-    tmpfsPaths: [],
+    denyPaths: [],
     extraArgs: [],
   });
 }
@@ -139,7 +145,7 @@ function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapCon
     bwrapPath: overrides.bwrapPath ?? base.bwrapPath,
     writablePaths: overrides.writablePaths ?? base.writablePaths,
     extraWritablePaths: [...base.extraWritablePaths, ...(overrides.extraWritablePaths ?? [])],
-    tmpfsPaths: overrides.tmpfsPaths ?? base.tmpfsPaths,
+    denyPaths: overrides.denyPaths ?? base.denyPaths,
     extraArgs: overrides.extraArgs ?? base.extraArgs,
     networkAllowlist: overrides.networkAllowlist ?? base.networkAllowlist,
     singBoxPath: overrides.singBoxPath ?? base.singBoxPath,
@@ -323,8 +329,14 @@ export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Prom
     const absolutePath = resolveBwrapPath(path, cwd);
     args.push("--bind-try", absolutePath, absolutePath);
   }
-  for (const path of resolved.tmpfsPaths) {
-    args.push("--tmpfs", resolveBwrapPath(path, cwd));
+  // denyPaths：以 / 结尾的条目视为目录（挂空 tmpfs），否则视为文件（--ro-bind-try /dev/null 覆盖）
+  for (const path of resolved.denyPaths) {
+    const target = resolveBwrapPath(path, cwd);
+    if (path.endsWith("/")) {
+      args.push("--tmpfs", target);
+    } else {
+      args.push("--ro-bind-try", "/dev/null", target);
+    }
   }
   if (!resolved.network) args.push("--unshare-net");
   // --ro-bind-try：目录不存在（或已被删除）时自动忽略

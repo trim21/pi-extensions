@@ -80,8 +80,8 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
   "writablePaths": [".", "/tmp", "~/my-projects"],
   // 额外可写路径，与默认值合并（ro-bind）
   "extraWritablePaths": ["~/.config"],
-  // tmpfs 挂载路径（避免写入磁盘）
-  "tmpfsPaths": [],
+  // 沙箱内隐藏的路径：以 / 结尾的视为目录（挂空 tmpfs），否则按文件处理（--ro-bind-try /dev/null）
+  "denyPaths": [],
   // 额外 bwrap 参数
   "extraArgs": ["--die-with-parent"],
   // 全权限执行的自动审批规则：命中规则的命令不弹确认框

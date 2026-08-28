@@ -708,9 +708,9 @@ export class BwrapRuntime {
           const writable = runtime.writablePaths.map((path) =>
             resolveBwrapPath(path, commandCtx.cwd),
           );
-          const tmpfs = runtime.tmpfsPaths.map((path) => resolveBwrapPath(path, commandCtx.cwd));
+          const deny = runtime.denyPaths.map((path) => resolveBwrapPath(path, commandCtx.cwd));
           commandCtx.ui.notify(
-            `bwrap ${runtime.mode} ${runtime.network ? "net" : "no-net"} write:[${writable.join(", ")}] tmpfs:[${tmpfs.join(", ") || "-"}]`,
+            `bwrap ${runtime.mode} ${runtime.network ? "net" : "no-net"} write:[${writable.join(", ")}] deny:[${deny.join(", ") || "-"}]`,
             "info",
           );
         }),
