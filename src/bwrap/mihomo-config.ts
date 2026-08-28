@@ -27,6 +27,8 @@ export interface MihomoConfig {
     nameserver: string[];
     "default-nameserver": string[];
     "fake-ip-filter"?: string[];
+    /** 域名级 DNS 规则（mihomo >= 1.18）：allowlist 域名 DIRECT，其余 REJECT。 */
+    rules: string[];
   };
   tun: {
     enable: true;
@@ -111,6 +113,8 @@ function ipRule(host: string): string {
 interface BuiltRules {
   rules: string[];
   fakeIpFilter: string[];
+  /** DNS 层规则：allowlist 域名正常解析，未允许域名直接拒绝（解析失败而非 fake-ip 后连接失败）。 */
+  dnsRules: string[];
 }
 
 /**
@@ -119,14 +123,20 @@ interface BuiltRules {
  *   拿到 fakeip 再进 TUN 形成环（loopback detector 会拒绝）；
  * - 无端口条目直接匹配；带端口条目用 AND 组合（域名/IP + DST-PORT）精确放行；
  * - 最后以 MATCH,REJECT 兜底实现 deny-by-default。
+ * dns.rules 同步构建：allowlist 域名 DIRECT，其余 MATCH,REJECT——未允许域名
+ * 在 DNS 层即被拒绝（curl 报 Could not resolve host），而不是先拿 fake-ip、
+ * 到连接层才断（报 TLS decode error，容易误判为网络故障）。
  */
 function buildRules(allowlist: readonly string[]): BuiltRules {
   const rules: string[] = [];
   const fakeIpFilter: string[] = [];
+  const dnsRules: string[] = [];
   for (const entry of allowlist) {
     const { host, port } = parseAllowlistEntry(entry);
     if (!isIp(host)) {
       fakeIpFilter.push(`+.${host}`);
+      // DNS 层按域名放行（端口无关）；连接层规则保留端口语义
+      dnsRules.push(`DOMAIN-SUFFIX,${host},DIRECT`);
       if (port === undefined) {
         rules.push(`DOMAIN-SUFFIX,${host},DIRECT`);
       } else {
@@ -139,7 +149,8 @@ function buildRules(allowlist: readonly string[]): BuiltRules {
     }
   }
   rules.push("MATCH,REJECT");
-  return { rules, fakeIpFilter };
+  dnsRules.push("MATCH,REJECT");
+  return { rules, fakeIpFilter, dnsRules };
 }
 
 /**
@@ -154,7 +165,7 @@ export function generateMihomoConfig(options: MihomoConfigOptions): MihomoConfig
   if (dnsServers.length === 0) {
     throw new Error("At least one DNS server is required");
   }
-  const { rules, fakeIpFilter } = buildRules(allowlist);
+  const { rules, fakeIpFilter, dnsRules } = buildRules(allowlist);
   return {
     "mixed-port": 0,
     mode: "rule",
@@ -168,6 +179,7 @@ export function generateMihomoConfig(options: MihomoConfigOptions): MihomoConfig
       nameserver: [...dnsServers],
       "default-nameserver": [...dnsServers],
       ...(fakeIpFilter.length > 0 && { "fake-ip-filter": fakeIpFilter }),
+      rules: dnsRules,
     },
     tun: {
       enable: true,

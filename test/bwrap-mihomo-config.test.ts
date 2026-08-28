@@ -31,6 +31,22 @@ describe("generateMihomoConfig", () => {
     expect(result.rules.at(-1)).toBe("MATCH,REJECT");
   });
 
+  it("rejects non-allowlist domains at the DNS layer instead of via fake-ip", () => {
+    const result = config({
+      allowlist: ["pypi.org", "192.168.2.18"],
+      dnsServers: ["192.168.2.1"],
+    });
+
+    // allowlist 域名正常解析；IP 条目不参与 DNS 规则（按域名匹配）
+    expect(result.dns.rules).toEqual(["DOMAIN-SUFFIX,pypi.org,DIRECT", "MATCH,REJECT"]);
+  });
+
+  it("matches allowlist domain:port entries at the DNS layer by domain only", () => {
+    const result = config({ allowlist: ["example.com:443"], dnsServers: ["192.168.2.1"] });
+
+    expect(result.dns.rules).toEqual(["DOMAIN-SUFFIX,example.com,DIRECT", "MATCH,REJECT"]);
+  });
+
   it("puts allowlist domains into fake-ip-filter for real resolution", () => {
     const result = config({
       allowlist: ["pypi.org", "192.168.2.18:8848"],
@@ -45,6 +61,8 @@ describe("generateMihomoConfig", () => {
 
     expect(result.rules).toEqual(["MATCH,REJECT"]);
     expect(result.dns["fake-ip-filter"]).toBeUndefined();
+    // deny-by-default 同样作用于 DNS 层
+    expect(result.dns.rules).toEqual(["MATCH,REJECT"]);
   });
 
   it("routes plain IP and CIDR entries via IP-CIDR with no-resolve", () => {
