@@ -1,8 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, constants, type Dirent, existsSync, openSync, readFileSync } from "node:fs";
+import { constants, type Dirent, existsSync, readFileSync } from "node:fs";
 import { access as fsAccess, readdir, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type BashOperations, getAgentDir, getShellConfig } from "@earendil-works/pi-coding-agent";
@@ -362,22 +361,6 @@ export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Prom
   return args;
 }
 
-const SECCOMP_BPF_FILE = (() => {
-  const directory = fileURLToPath(new URL(".", import.meta.url));
-  if (process.arch === "x64") return join(directory, "seccomp-x86_64.bpf");
-  if (process.arch === "arm64") return join(directory, "seccomp-aarch64.bpf");
-  return "";
-})();
-
-function getSeccompFd(): number | undefined {
-  if (!SECCOMP_BPF_FILE) return undefined;
-  try {
-    return openSync(SECCOMP_BPF_FILE, "r");
-  } catch {
-    return undefined;
-  }
-}
-
 function killChild(child: ChildProcess): void {
   if (!child.pid) return;
   try {
@@ -460,19 +443,13 @@ export function createBwrapBashOperations(
         });
       }
 
-      const seccompFd = resolved.network ? undefined : getSeccompFd();
       const child = spawn(
         findBwrap(resolved.bwrapPath),
-        seccompFd === undefined
-          ? [...baseArgs, "--", shell, "-lc", command]
-          : [...baseArgs, "--seccomp", "3", "--", shell, "-lc", command],
+        [...baseArgs, "--", shell, "-lc", command],
         {
           cwd,
           detached: true,
-          stdio:
-            seccompFd === undefined
-              ? ["ignore", "pipe", "pipe"]
-              : ["ignore", "pipe", "pipe", seccompFd],
+          stdio: ["ignore", "pipe", "pipe"],
           env,
         },
       );
@@ -493,7 +470,6 @@ export function createBwrapBashOperations(
         child.once("close", (exitCode) => {
           if (timeoutHandle) clearTimeout(timeoutHandle);
           signal?.removeEventListener("abort", onAbort);
-          if (seccompFd !== undefined) closeSync(seccompFd);
           if (signal?.aborted) reject(new Error("aborted"));
           else if (timedOut) reject(new Error(`timeout:${timeout}`));
           else resolve({ exitCode });

@@ -28,7 +28,6 @@ src/
 ├── openai-cost/  # OpenAI Chat Completions，费用取自 usage.cost
 └── *.ts          # 单文件扩展（gh-readonly、session-name、spawn-agent、vision-agent）
 test/             # Vitest 测试，文件与 src 对应
-bin/              # 辅助脚本（如 gen_seccomp.py，经 pixi 运行）
 ```
 
 - `claude-code` 与 `opencode` 是两套平行的工具集，由用户在 pi 配置里选择**启用其中一个**，不会同时启用；两者在行为、命名上的差异与冲突是符合预期的，不要试图统一。
@@ -39,7 +38,3 @@ bin/              # 辅助脚本（如 gen_seccomp.py，经 pixi 运行）
 - 工具 `execute` 返回的 `details.pendant` 是本仓库 UI 约定（非 pi 官方 schema），可折叠 markdown 面板，类型定义在 `src/lib/pendant.ts`，统一从 `./lib/pendant.js` 导入，禁止内联字面量。`expanded: true` 用于需立即看到的结果，`false` 用于常驻信息。
 - 修改扩展后需重启 pi agent 才能生效。
 - 开发 pi 扩展遇到 API / SDK 问题，参考 pi 主仓库 `/srv/ssd-1/projects/github/earendil-works/pi`（`AGENTS.md`、`packages/coding-agent/src/`、`extensions/`）。
-
-## 其他工具
-
-- `pixi` 环境用于生成 seccomp BPF：`pixi run gen` 执行 `bin/gen_seccomp.py`，产物为 `src/bwrap/seccomp-*.bpf`。

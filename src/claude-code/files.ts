@@ -17,6 +17,7 @@ import { Type } from "typebox";
 import { appendLspDiagnosticText } from "../lib/lsp/diagnostic.js";
 import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
 import { formatSubtitlePath } from "../lib/path.js";
+import type { ToolPendant } from "../lib/pendant.ts";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import {
   type ClaudeCodeState,
@@ -302,7 +303,10 @@ export function registerFileTools(
           content,
           details: {
             reads: { [key]: snapshot },
-            pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath) },
+            pendant: {
+              subtitle: formatSubtitlePath(ctx.cwd, filePath),
+              title: "Read",
+            } satisfies ToolPendant,
           },
         };
       }
@@ -354,7 +358,10 @@ export function registerFileTools(
         content: [{ type: "text", text: formatted.text }],
         details: {
           reads: { [key]: snapshot },
-          pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath) },
+          pendant: {
+            subtitle: formatSubtitlePath(ctx.cwd, filePath),
+            title: "Read",
+          } satisfies ToolPendant,
         },
       };
     },
@@ -566,7 +573,10 @@ export function registerFileTools(
         content: [{ type: "text" as const, text }],
         details: {
           ...details,
-          pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath, errorCount, warningCount) },
+          pendant: {
+            subtitle: formatSubtitlePath(ctx.cwd, filePath, errorCount, warningCount),
+            title: "Edit",
+          } satisfies ToolPendant,
         },
       };
     },
