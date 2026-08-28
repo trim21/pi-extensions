@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
+import { dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 const args = process.argv.slice(2);
 const configPath = args[0];
-const singBoxPath = args[1];
-if (!configPath || !singBoxPath) {
+const mihomoPath = args[1];
+if (!configPath || !mihomoPath) {
   process.exit(2);
 }
 function tap0Exists() {
@@ -22,12 +23,11 @@ async function waitFor(attempts, delayMs, predicate) {
 }
 async function main() {
   await waitFor(100, 100, tap0Exists);
-  const singbox = spawn(singBoxPath, ["run", "-c", configPath], {
-    env: { ...process.env, ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER: "true" },
+  const mihomo = spawn(mihomoPath, ["-d", dirname(configPath), "-f", configPath], {
     stdio: ["ignore", "inherit", "inherit"]
   });
   const stop = () => {
-    singbox.kill("SIGTERM");
+    mihomo.kill("SIGTERM");
   };
   process.on("SIGTERM", () => {
     stop();
@@ -37,7 +37,7 @@ async function main() {
     stop();
     process.exit(0);
   });
-  await new Promise((resolve) => singbox.once("exit", () => resolve()));
+  await new Promise((resolve) => mihomo.once("exit", () => resolve()));
 }
 try {
   await main();

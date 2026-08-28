@@ -1,12 +1,13 @@
 /* eslint-disable no-console, unicorn/no-process-exit -- 独立 CLI 脚本，由 unshare 直接执行 */
 import { spawn } from "node:child_process";
+import { dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-// 用法：unshare -Urn node holder.ts <config> <singbox>
+// 用法：unshare -Urn node holder.ts <config> <mihomo>
 const args = process.argv.slice(2);
 const configPath = args[0];
-const singBoxPath = args[1];
-if (!configPath || !singBoxPath) {
+const mihomoPath = args[1];
+if (!configPath || !mihomoPath) {
   process.exit(2);
 }
 
@@ -34,14 +35,13 @@ async function main(): Promise<void> {
   // slirp4netns 由宿主侧 spawn，这里等它建好 tap0
   await waitFor(100, 100, tap0Exists);
 
-  // sing-box 日志透传到 holder 的 stdout/stderr，宿主侧监听 "sing-box started" 判定就绪
-  const singbox = spawn(singBoxPath, ["run", "-c", configPath], {
-    env: { ...process.env, ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER: "true" },
+  // mihomo 日志透传到 holder 的 stdout/stderr，宿主侧监听 "Tun adapter listening" 判定就绪
+  const mihomo = spawn(mihomoPath, ["-d", dirname(configPath), "-f", configPath], {
     stdio: ["ignore", "inherit", "inherit"],
   });
 
   const stop = (): void => {
-    singbox.kill("SIGTERM");
+    mihomo.kill("SIGTERM");
   };
   process.on("SIGTERM", () => {
     stop();
@@ -52,7 +52,7 @@ async function main(): Promise<void> {
     process.exit(0);
   });
 
-  await new Promise<void>((resolve) => singbox.once("exit", () => resolve()));
+  await new Promise<void>((resolve) => mihomo.once("exit", () => resolve()));
 }
 
 try {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { findBwrap, findSingBox, findSlirp4netns } from "../src/bwrap/core.js";
+import { findBwrap, findMihomo, findSlirp4netns } from "../src/bwrap/core.js";
 import { resolveDnsServers, startNetworkStack } from "../src/bwrap/network-stack.js";
 
 const bwrapArgs = [
@@ -22,7 +22,7 @@ const env = {
   PATH: "/usr/local/bin:/usr/bin:/bin",
 };
 
-// 需要真实 sing-box/slirp4netns/unshare 与可出网的 DNS，常规 CI 不满足；
+// 需要真实 mihomo/slirp4netns/unshare 与可出网的 DNS，常规 CI 不满足；
 // 手动用 RUN_NETSTACK_INTEGRATION=1 运行。某些环境的系统 DNS 走 slirp4netns
 // 出站不可达时，可用 NETSTACK_DNS 指定一个可通的 DNS（如 NETSTACK_DNS=223.5.5.5）。
 describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack integration", () => {
@@ -33,7 +33,7 @@ describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack inte
     const stack = await startNetworkStack({
       allowlist: ["pypi.org", "files.pythonhosted.org"],
       dnsServers,
-      singBoxPath: findSingBox(),
+      mihomoPath: findMihomo(),
       slirp4netnsPath: findSlirp4netns(),
     });
     try {

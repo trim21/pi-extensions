@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { generateSingboxConfig } from "./singbox-config.js";
+import { generateMihomoConfig } from "./mihomo-config.js";
 
 export interface NetworkStackOptions {
   /** 允许直连的域名 / IP:port 列表（每次命令从配置重新读取）。 */
   readonly allowlist: readonly string[];
   /** 真实 DNS 服务器列表，按顺序 fallback。 */
   readonly dnsServers: readonly string[];
-  readonly singBoxPath: string;
+  readonly mihomoPath: string;
   readonly slirp4netnsPath: string;
 }
 
@@ -72,18 +72,18 @@ async function waitForNewUserns(pid: number, timeoutMs = 5000): Promise<void> {
   throw new Error("Timed out waiting for sandbox network namespace");
 }
 
-/** 监听 holder 的 stdout/stderr（sing-box 日志透传），以 "sing-box started" 作为就绪标志。 */
-function waitForSingboxStarted(holder: ChildProcess, timeoutMs = 20000): Promise<void> {
+/** 监听 holder 的 stdout/stderr（mihomo 日志透传），以 "Tun adapter listening" 作为就绪标志。 */
+function waitForMihomoStarted(holder: ChildProcess, timeoutMs = 20000): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      reject(new Error("Timed out waiting for sing-box to start"));
+      reject(new Error("Timed out waiting for mihomo to start"));
     }, timeoutMs);
     const onData = (data: Buffer): void => {
       if (settled) return;
-      if (data.toString().includes("sing-box started")) {
+      if (data.toString().includes("Tun adapter listening")) {
         settled = true;
         clearTimeout(timer);
         resolve();
@@ -95,7 +95,7 @@ function waitForSingboxStarted(holder: ChildProcess, timeoutMs = 20000): Promise
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      reject(new Error(`Sandbox holder exited before sing-box started (code ${code})`));
+      reject(new Error(`Sandbox holder exited before mihomo started (code ${code})`));
     });
   });
 }
@@ -132,22 +132,23 @@ const stackFinalizer = new FinalizationRegistry<NetworkStackState>((state) => {
 });
 
 /**
- * 启动网络栈：holder 进程持有 netns（内部跑 sing-box 的
+ * 启动网络栈：holder 进程持有 netns（内部跑 mihomo 的
  * TUN + fakeip + deny-by-default），slirp4netns 提供 egress。返回前
- * netns/sing-box/slirp4netns 均已就绪，命令通过 nsenter 进入该 netns 执行。
+ * netns/mihomo/slirp4netns 均已就绪，命令通过 nsenter 进入该 netns 执行。
  */
 export async function startNetworkStack(options: NetworkStackOptions): Promise<NetworkStack> {
-  const { allowlist, dnsServers, singBoxPath, slirp4netnsPath } = options;
+  const { allowlist, dnsServers, mihomoPath, slirp4netnsPath } = options;
   const directory = await mkdtemp(join(tmpdir(), "pi-netns-"));
-  const configPath = join(directory, "singbox.json");
-  await writeFile(configPath, generateSingboxConfig({ allowlist, dnsServers }));
+  const configPath = join(directory, "mihomo.json");
+  const config = generateMihomoConfig({ allowlist, dnsServers });
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
-  const holder = spawn("unshare", ["-Urn", "--", "node", HOLDER_PATH, configPath, singBoxPath], {
+  const holder = spawn("unshare", ["-Urn", "--", "node", HOLDER_PATH, configPath, mihomoPath], {
     env: {
       HOME: process.env.HOME ?? "",
       PATH: `${process.env.PATH ?? ""}:${SBIN_PATH_SUFFIX}`,
     },
-    // sing-box 日志经 holder 透传到这里的 stdout/stderr，用于判定就绪
+    // mihomo 日志经 holder 透传到这里的 stdout/stderr，用于判定就绪
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (holder.pid === undefined) {
@@ -168,7 +169,7 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
     { stdio: "ignore" },
   );
   const slirpPid = slirp.pid;
-  await waitForSingboxStarted(holder);
+  await waitForMihomoStarted(holder);
 
   const state: NetworkStackState = { holderPid, slirpPid, directory };
   const stack: NetworkStack = {

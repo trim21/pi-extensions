@@ -40,7 +40,7 @@ const bwrapConfigProperties = {
   networkAllowlist: Type.Array(
     Type.String({ description: "允许直连的域名 / IP / CIDR，可带 :port" }),
   ),
-  singBoxPath: Type.Optional(Type.String()),
+  mihomoPath: Type.Optional(Type.String()),
   slirp4netnsPath: Type.Optional(Type.String()),
   approvalRules: Type.Optional(
     Type.Array(
@@ -78,9 +78,9 @@ export interface ResolvedBwrap {
   /** 沙箱内隐藏的路径：以 / 结尾为目录（挂空 tmpfs），否则为文件（--ro-bind-try /dev/null）。 */
   denyPaths: string[];
   extraArgs: string[];
-  /** 允许直连的域名 / IP / IP:port 白名单（非空 = 启用 sing-box 网络过滤）。 */
+  /** 允许直连的域名 / IP / IP:port 白名单（非空 = 启用 mihomo 网络过滤）。 */
   networkAllowlist: string[];
-  singBoxPath?: string;
+  mihomoPath?: string;
   slirp4netnsPath?: string;
   /** 全权限执行的自动审批规则（allow/deny 命令模式）。 */
   approvalRules: ApprovalRule[];
@@ -104,7 +104,7 @@ export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
     denyPaths: config.denyPaths ?? [],
     extraArgs: config.extraArgs ?? [],
     networkAllowlist: config.networkAllowlist ?? [],
-    singBoxPath: config.singBoxPath,
+    mihomoPath: config.mihomoPath,
     slirp4netnsPath: config.slirp4netnsPath,
     approvalRules: config.approvalRules ?? [],
   };
@@ -147,7 +147,7 @@ function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapCon
     denyPaths: overrides.denyPaths ?? base.denyPaths,
     extraArgs: overrides.extraArgs ?? base.extraArgs,
     networkAllowlist: overrides.networkAllowlist ?? base.networkAllowlist,
-    singBoxPath: overrides.singBoxPath ?? base.singBoxPath,
+    mihomoPath: overrides.mihomoPath ?? base.mihomoPath,
     slirp4netnsPath: overrides.slirp4netnsPath ?? base.slirp4netnsPath,
     approvalRules: [...(base.approvalRules ?? []), ...(overrides.approvalRules ?? [])],
   };
@@ -234,16 +234,16 @@ function findCommandInPath(name: string, hint: string): string {
   throw new Error(hint);
 }
 
-export function findSingBox(override?: string): string {
+export function findMihomo(override?: string): string {
   if (override) {
     if (!existsSync(override)) {
-      throw new Error(`sing-box not found at configured path: ${override}`);
+      throw new Error(`mihomo not found at configured path: ${override}`);
     }
     return override;
   }
   return findCommandInPath(
-    "sing-box",
-    "sing-box not found in PATH. Install it from https://sing-box.sagernet.org/",
+    "mihomo",
+    "mihomo not found in PATH. Install it from https://github.com/MetaCubeX/mihomo",
   );
 }
 
@@ -378,7 +378,7 @@ export async function createNetworkStack(
   return startNetworkStack({
     allowlist: resolved.networkAllowlist,
     dnsServers: await resolveDnsServers(),
-    singBoxPath: findSingBox(resolved.singBoxPath),
+    mihomoPath: findMihomo(resolved.mihomoPath),
     slirp4netnsPath: findSlirp4netns(resolved.slirp4netnsPath),
   });
 }
