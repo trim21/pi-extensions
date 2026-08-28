@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, TruncationResult } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
+import { BashInterruptedError, type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -15,6 +15,18 @@ const CAPTURE_TRUNCATED_NOTICE = "[output capture truncated at the in-memory saf
 
 /** Bash tool guidance, kept in markdown so it reads like documentation. */
 const BASH_PROMPT = readFileSync(fileURLToPath(new URL("bash.md", import.meta.url)), "utf8").trim();
+
+/** opencode 风格截断提示（成功、超时、中断路径共用）。 */
+function appendTruncationNotice(
+  text: string,
+  truncation: TruncationResult,
+  fullOutputPath: string | undefined,
+): string {
+  if (!truncation.truncated) return text;
+  let out = `${text}\n\n${CAPTURE_TRUNCATED_NOTICE}`;
+  if (fullOutputPath) out += `\nFull output: ${fullOutputPath}`;
+  return out;
+}
 
 /**
  * 对齐上游 opencode（packages/core/src/tool/bash.ts）：
@@ -89,17 +101,21 @@ export default function opencodeBash(
         });
       } catch (error) {
         if (!(error instanceof Error)) throw error;
-        // 对齐上游 opencode：超时不抛错，返回提示文本（丢弃部分输出）
-        if (/Command timed out after [\d.]+ seconds/.test(error.message)) {
+        if (error instanceof BashInterruptedError) {
+          const text = appendTruncationNotice(
+            error.partial.output || "",
+            error.partial.truncation,
+            error.partial.fullOutputPath,
+          );
+          const status =
+            error.kind === "timeout"
+              ? `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`
+              : "Command aborted";
+          const full = text ? `${text}\n\n${status}` : status;
+          // 对齐上游 opencode：超时与中断都不抛错，输出与状态文本一起返回
           return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
-              },
-              { type: "text" as const, text: "Command timed out before completion." },
-            ],
-            details: { timeout: true },
+            content: [{ type: "text" as const, text: full }],
+            details: error.kind === "timeout" ? { timeout: true } : {},
           };
         }
         throw error;
@@ -107,10 +123,7 @@ export default function opencodeBash(
 
       // 命令失败（非 0 退出码）不抛错：输出与状态文本一起返回
       let text = result.output || "(no output)";
-      if (result.truncation.truncated) {
-        text += `\n\n${CAPTURE_TRUNCATED_NOTICE}`;
-        if (result.fullOutputPath) text += `\nFull output: ${result.fullOutputPath}`;
-      }
+      text = appendTruncationNotice(text, result.truncation, result.fullOutputPath);
       return {
         content: [
           { type: "text" as const, text },

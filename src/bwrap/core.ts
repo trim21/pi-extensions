@@ -11,7 +11,12 @@ import { Value } from "typebox/value";
 import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { expandHome } from "../lib/path.js";
 import { type ApprovalRule } from "./approval-rules.js";
-import { type NetworkStack, resolveDnsServers, startNetworkStack } from "./network-stack.js";
+import {
+  type NetworkStack,
+  resolveDnsServers,
+  startNetworkStack,
+  TimeoutError,
+} from "./network-stack.js";
 
 const PROTECTED_DIRS = [".pi", ".agent"];
 
@@ -399,7 +404,8 @@ export function createBwrapBashOperations(
       await fsAccess(cwd, constants.F_OK).catch(() => {
         throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
       });
-      if (signal?.aborted) throw new Error("aborted");
+      // 已中断（signal.reason 是 name=AbortError 的 DOMException）：直接抛，不再执行
+      signal?.throwIfAborted();
 
       // 干净环境：不继承父进程 env/PATH，由 bash -lc 从 /etc/profile 与用户 profile 重建
       const home = process.env.HOME;
@@ -470,9 +476,17 @@ export function createBwrapBashOperations(
         child.once("close", (exitCode) => {
           if (timeoutHandle) clearTimeout(timeoutHandle);
           signal?.removeEventListener("abort", onAbort);
-          if (signal?.aborted) reject(new Error("aborted"));
-          else if (timedOut) reject(new Error(`timeout:${timeout}`));
-          else resolve({ exitCode });
+          // 中断：reject signal.reason（默认是 name=AbortError 的 DOMException）
+          if (signal?.aborted) {
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error("The operation was aborted"),
+            );
+          } else if (timedOut) {
+            // 超时：name=TimeoutError（对齐标准错误分类）
+            reject(new TimeoutError(timeout));
+          } else resolve({ exitCode });
         });
       });
     },

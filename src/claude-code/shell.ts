@@ -6,10 +6,11 @@ import {
   type BashToolDetails,
   type ExtensionAPI,
   formatSize,
+  type TruncationResult,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
+import { BashInterruptedError, type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -36,6 +37,25 @@ function formatBashError(exitCode: number | null, output: string): string {
   );
 }
 
+/** 输出被截断时附加的 `[Showing lines...]` 提示（成功、超时、中断路径共用）。 */
+function appendTruncationNotice(
+  text: string,
+  truncation: TruncationResult,
+  fullOutputPath: string | undefined,
+): string {
+  if (!fullOutputPath || !truncation.truncated) return text;
+  const startLine = truncation.totalLines - truncation.outputLines + 1;
+  const endLine = truncation.totalLines;
+  if (truncation.lastLinePartial) {
+    const lastLineSize = formatSize(text.length - text.lastIndexOf("\n", text.length - 2) - 1);
+    return `${text}\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${fullOutputPath}]`;
+  }
+  if (truncation.truncatedBy === "lines") {
+    return `${text}\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${fullOutputPath}]`;
+  }
+  return `${text}\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(truncation.maxBytes)} limit). Full output: ${fullOutputPath}]`;
+}
+
 /**
  * 成功路径：消费 runtime 的截断结果（输出已由 runtime 截断并落盘），
  * 截断时追加 `[Showing lines X-Y of N. Full output: path]` 提示。
@@ -46,21 +66,7 @@ export function formatBashSuccess(result: Awaited<ReturnType<BwrapRuntime["execu
   details: BashToolDetails | undefined;
 } {
   const { output, truncation, fullOutputPath } = result;
-  let text = output || "(no output)";
-  if (fullOutputPath && truncation.truncated) {
-    const startLine = truncation.totalLines - truncation.outputLines + 1;
-    const endLine = truncation.totalLines;
-    if (truncation.lastLinePartial) {
-      const lastLineSize = formatSize(
-        output.length - output.lastIndexOf("\n", output.length - 2) - 1,
-      );
-      text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${fullOutputPath}]`;
-    } else if (truncation.truncatedBy === "lines") {
-      text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${fullOutputPath}]`;
-    } else {
-      text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(truncation.maxBytes)} limit). Full output: ${fullOutputPath}]`;
-    }
-  }
+  const text = appendTruncationNotice(output || "(no output)", truncation, fullOutputPath);
   return {
     content: [{ type: "text", text }],
     details: fullOutputPath && truncation.truncated ? { truncation, fullOutputPath } : undefined,
@@ -133,13 +139,24 @@ export function registerShellTools(
         });
       } catch (error) {
         if (!(error instanceof Error)) throw error;
-        const timeoutMatch = /Command timed out after [\d.]+ seconds/.exec(error.message);
-        const message = timeoutMatch
-          ? error.message.slice(0, timeoutMatch.index) +
-            `Command timed out after ${timeout} milliseconds` +
-            error.message.slice(timeoutMatch.index + timeoutMatch[0].length)
-          : error.message;
-        throw new Error(message, { cause: error });
+        if (error instanceof BashInterruptedError) {
+          // 输出在前（必要时带截断提示），状态文本在最后
+          const text = appendTruncationNotice(
+            error.partial.output || "",
+            error.partial.truncation,
+            error.partial.fullOutputPath,
+          );
+          if (error.kind === "aborted") {
+            // 用户取消：直接返回已捕获的输出，不抛错
+            const full = text ? `${text}\n\nCommand aborted` : "Command aborted";
+            return { content: [{ type: "text", text: full }], details: undefined };
+          }
+          const full = text
+            ? `${text}\n\nCommand timed out after ${timeout} milliseconds`
+            : `Command timed out after ${timeout} milliseconds`;
+          throw new Error(full, { cause: error });
+        }
+        throw error;
       }
 
       // 对齐 Claude Code：非 0 退出码视为错误（不做 grep/find 等命令语义化特判，

@@ -61,7 +61,7 @@ export function formatDisplayPath(cwd: string, filePath: string): string {
 }
 
 /** subtitle 中路径的最大显示长度，超过时退化为 `parent/basename`。 */
-export const MAX_SUBTITLE_PATH_LENGTH = 20;
+export const MAX_SUBTITLE_PATH_LENGTH = 30;
 
 function shortenSubtitlePath(filePath: string, display: string): string {
   if (display.length <= MAX_SUBTITLE_PATH_LENGTH) return display;

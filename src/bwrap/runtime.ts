@@ -108,6 +108,35 @@ export interface BwrapExecutionResult {
   truncation: TruncationResult;
 }
 
+/**
+ * 超时/中断时命令终止前已捕获的部分输出快照（截断后的文本 + 落盘信息）。
+ * 展示格式（输出在前、状态在最后）由上层 Bash 工具按各自风格拼接。
+ */
+export interface BashExecutionPartial {
+  output: string;
+  truncation: TruncationResult;
+  fullOutputPath?: string;
+}
+
+/** 命令超时或中断（abort signal）时抛出的错误，携带部分输出供上层展示。 */
+export class BashInterruptedError extends Error {
+  readonly kind: "timeout" | "aborted";
+  readonly partial: BashExecutionPartial;
+
+  constructor(
+    kind: "timeout" | "aborted",
+    message: string,
+    partial: BashExecutionPartial,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.kind = kind;
+    this.partial = partial;
+    // 对齐标准错误分类：中断=AbortError（用户取消），超时=TimeoutError
+    this.name = kind === "aborted" ? "AbortError" : "TimeoutError";
+  }
+}
+
 function escapeHtml(text: string): string {
   return text
     .replaceAll("&", "&amp;")
@@ -402,41 +431,63 @@ export class BwrapRuntime {
         signal: request.signal,
         timeout: request.timeout,
       });
-      await output.close();
-      const truncation = truncateTail(output.tailText());
-      // 未截断：完整输出已直接返回给模型，临时文件没有用途，删掉避免
-      // agent-dir/tmp 堆积无主文件（删除失败只残留文件，不影响命令结果）
-      if (!truncation.truncated && output.filePath) {
-        try {
-          await unlink(output.filePath);
-        } catch {
-          // 删除失败（如沙箱只读）：best-effort，命令结果不受影响
-        }
-        output.filePath = undefined;
-      }
+      const partial = await this.finalizeOutput(output);
       return {
         exitCode,
-        output: truncation.content,
-        ...(output.filePath && { fullOutputPath: output.filePath }),
-        // 用精确统计值覆盖尾部缓冲的估算（提示文本的行数/字节数要准确）
-        truncation: { ...truncation, ...output.stats },
+        output: partial.output,
+        ...(partial.fullOutputPath && { fullOutputPath: partial.fullOutputPath }),
+        truncation: partial.truncation,
       };
     } catch (error) {
-      // 底层统一把超时/中断转成可读文案（对齐 pi 内置 bash 工具）
-      if (error instanceof Error && error.message.startsWith("timeout:")) {
-        throw new Error(
+      // 超时/中断：把命令终止前已捕获的输出附在错误上（文本 + 落盘路径），
+      // 展示时输出在前、状态在最后（对齐 pi 内置 bash），避免只报超时丢输出
+      // 超时识别：优先 name=TimeoutError（对齐标准错误分类），
+      // 兼容 pi local ops 抛的 `timeout:N`（name=Error）
+      if (
+        error instanceof Error &&
+        (error.name === "TimeoutError" || error.message.startsWith("timeout:"))
+      ) {
+        const partial = await this.finalizeOutput(output);
+        throw new BashInterruptedError(
+          "timeout",
           `Command timed out after ${error.message.slice("timeout:".length)} seconds`,
-          { cause: error },
+          partial,
+          error,
         );
       }
-      if (error instanceof Error && error.message === "aborted") {
-        throw new Error("Command aborted", { cause: error });
+      // 中断识别：优先 name=AbortError（throwIfAborted/signal.reason），
+      // 兼容 pi local ops 抛的 new Error("aborted")
+      if (error instanceof Error && (error.name === "AbortError" || error.message === "aborted")) {
+        const partial = await this.finalizeOutput(output);
+        throw new BashInterruptedError("aborted", "Command aborted", partial, error);
       }
       throw error;
     } finally {
       emitUpdate.flush();
       emitUpdate.cancel();
     }
+  }
+
+  /** 关闭输出流并返回截断后的快照；未截断时删除临时文件（成功与超时/中断路径共用）。 */
+  private async finalizeOutput(output: BashOutput): Promise<BashExecutionPartial> {
+    await output.close();
+    const truncation = truncateTail(output.tailText());
+    // 未截断：完整输出已直接返回给模型，临时文件没有用途，删掉避免
+    // agent-dir/tmp 堆积无主文件（删除失败只残留文件，不影响命令结果）
+    if (!truncation.truncated && output.filePath) {
+      try {
+        await unlink(output.filePath);
+      } catch {
+        // 删除失败（如沙箱只读）：best-effort，命令结果不受影响
+      }
+      output.filePath = undefined;
+    }
+    return {
+      output: truncation.content,
+      ...(output.filePath && { fullOutputPath: output.filePath }),
+      // 用精确统计值覆盖尾部缓冲的估算（提示文本的行数/字节数要准确）
+      truncation: { ...truncation, ...output.stats },
+    };
   }
 
   private resolve(ctx: Pick<ExtensionContext, "cwd" | "hasUI">): ResolvedBwrap {

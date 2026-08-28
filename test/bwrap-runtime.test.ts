@@ -176,6 +176,52 @@ describe("BwrapRuntime", () => {
     expect(result).toMatchObject({ exitCode: 3, output: "oops" });
   });
 
+  it("attaches partial output to timeout errors", async () => {
+    const { runtime } = setupRuntime();
+    runtime.setMode(process.cwd(), "allow-all");
+    await expect(
+      runtime.execute({
+        toolCallId: "test",
+        command: "printf partial; sleep 1",
+        timeout: 0.02,
+        ctx: {
+          cwd: process.cwd(),
+          hasUI: true,
+          sessionManager: { getSessionId: () => "test-session" },
+        } as never,
+      }),
+    ).rejects.toMatchObject({
+      kind: "timeout",
+      name: "TimeoutError",
+      message: "Command timed out after 0.02 seconds",
+      partial: { output: "partial" },
+    });
+  });
+
+  it("attaches partial output to abort errors", async () => {
+    const { runtime } = setupRuntime();
+    runtime.setMode(process.cwd(), "allow-all");
+    const controller = new AbortController();
+    const promise = runtime.execute({
+      toolCallId: "test",
+      command: "printf partial; sleep 1",
+      signal: controller.signal,
+      ctx: {
+        cwd: process.cwd(),
+        hasUI: true,
+        sessionManager: { getSessionId: () => "test-session" },
+      } as never,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({
+      kind: "aborted",
+      name: "AbortError",
+      message: "Command aborted",
+      partial: { output: "partial" },
+    });
+  });
+
   it("rejects full-access requests before execution without a UI", async () => {
     const { runtime } = setupRuntime();
     await expect(

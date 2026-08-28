@@ -53,10 +53,6 @@ export function toRelativePath(filePath: string, cwd: string): string {
   return relativePath.startsWith("..") ? filePath : relativePath;
 }
 
-export function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw new Error("Operation aborted");
-}
-
 export function snapshotsEqual(left: FileSnapshot, right: FileSnapshot): boolean {
   return left.digest === right.digest;
 }

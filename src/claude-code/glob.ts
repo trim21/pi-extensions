@@ -15,7 +15,7 @@ import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { searchRoot, suggestPathUnderCwd, throwIfAborted, toRelativePath } from "./common.js";
+import { searchRoot, suggestPathUnderCwd, toRelativePath } from "./common.js";
 
 const GLOB_RESULT_LIMIT = 100;
 
@@ -58,7 +58,7 @@ export async function globFiles(
   cwd: string,
   signal?: AbortSignal,
 ): Promise<{ files: string[]; truncated: boolean }> {
-  throwIfAborted(signal);
+  signal?.throwIfAborted();
   let searchDir = cwd;
   let searchPattern = pattern;
   if (isAbsolute(pattern)) {
@@ -87,7 +87,6 @@ export async function globFiles(
     });
     stdout = result.stdout;
   } catch (error) {
-    if (signal?.aborted) throwIfAborted(signal);
     // rg exit code 1 = 搜索完成但无匹配，对齐 Claude Code 的 ripGrep（正常空结果）
     const code = (error as { code?: unknown }).code;
     if (code === 1) return { files: [], truncated: false };

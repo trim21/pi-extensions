@@ -1082,6 +1082,26 @@ describe("Bash", () => {
     ).rejects.toThrow(/20 milliseconds/);
   });
 
+  it("includes partial output before the timeout message", async () => {
+    await expect(
+      call(bashTool, { command: "printf partial; sleep 1", timeout: 20 }, context(process.cwd())),
+    ).rejects.toThrow(/^partial\n\nCommand timed out after 20 milliseconds$/);
+  });
+
+  it("returns partial output with an abort status when aborted", async () => {
+    const controller = new AbortController();
+    const promise = call(
+      bashTool,
+      { command: "printf partial; sleep 1", timeout: 5_000 },
+      context(process.cwd()),
+      controller.signal,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort();
+    const result = await promise;
+    expect(result.content[0].text).toBe("partial\n\nCommand aborted");
+  });
+
   it("fails any non-zero exit with Exit code N, without command semantics", async () => {
     // grep 无匹配（exit 1）在 CC 里是"正常"，但我们不做语义化特判，一律报错
     await expect(

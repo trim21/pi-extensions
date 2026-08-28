@@ -6,6 +6,14 @@ import { fileURLToPath } from "node:url";
 
 import { generateMihomoConfig } from "./mihomo-config.js";
 
+/** 命令超时错误：name=TimeoutError（对齐标准错误分类），message 保留 timeout:N 格式。 */
+export class TimeoutError extends Error {
+  constructor(timeout: number | undefined) {
+    super(`timeout:${timeout}`);
+    this.name = "TimeoutError";
+  }
+}
+
 export interface NetworkStackOptions {
   /** 允许直连的域名 / IP:port 列表（每次命令从配置重新读取）。 */
   readonly allowlist: readonly string[];
@@ -225,9 +233,17 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
           settled = true;
           if (timeoutHandle) clearTimeout(timeoutHandle);
           execOptions.signal?.removeEventListener("abort", onAbort);
-          if (execOptions.signal?.aborted) reject(new Error("aborted"));
-          else if (timedOut) reject(new Error(`timeout:${execOptions.timeout}`));
-          else resolve({ exitCode });
+          // 中断：reject signal.reason（默认是 name=AbortError 的 DOMException）
+          if (execOptions.signal?.aborted) {
+            reject(
+              execOptions.signal.reason instanceof Error
+                ? execOptions.signal.reason
+                : new Error("The operation was aborted"),
+            );
+          } else if (timedOut) {
+            // 超时：name=TimeoutError（对齐标准错误分类）
+            reject(new TimeoutError(execOptions.timeout));
+          } else resolve({ exitCode });
         });
       });
     },

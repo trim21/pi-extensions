@@ -99,9 +99,42 @@ describe("opencode bash", () => {
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
       "Command exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
-      "Command timed out before completion.",
     ]);
     expect(result.details).toEqual({ timeout: true });
+  });
+
+  it("includes partial output before the timeout message", async () => {
+    const { tool } = loadBashTool();
+    const result = await tool.execute(
+      "id",
+      { command: "printf partial; sleep 1", timeout: 20 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "partial\n\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
+    ]);
+    expect(result.details).toEqual({ timeout: true });
+  });
+
+  it("returns partial output with an abort status instead of throwing", async () => {
+    const { tool } = loadBashTool();
+    const controller = new AbortController();
+    const promise = tool.execute(
+      "id",
+      { command: "printf partial; sleep 1", timeout: 5_000 },
+      controller.signal,
+      undefined,
+      context(process.cwd()),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort();
+    const result = await promise;
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "partial\n\nCommand aborted",
+    ]);
+    expect(result.details).toEqual({});
   });
 
   it("rejects an invalid timeout", async () => {

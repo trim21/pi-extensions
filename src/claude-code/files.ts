@@ -27,7 +27,6 @@ import {
   type FileSnapshot,
   requireAbsolutePath,
   snapshotsEqual,
-  throwIfAborted,
 } from "./common.js";
 import { convertLeadingTabsToSpaces, findActualString, preserveQuoteStyle } from "./edit-utils.js";
 
@@ -256,7 +255,7 @@ export function registerFileTools(
       { additionalProperties: false },
     ),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      throwIfAborted(signal);
+      signal?.throwIfAborted();
       const filePath = requireAbsolutePath(params.file_path);
       if (
         params.offset !== undefined &&
@@ -280,7 +279,7 @@ export function registerFileTools(
         }
         throw error;
       }
-      throwIfAborted(signal);
+      signal?.throwIfAborted();
 
       const extension = extname(filePath).toLowerCase();
       if (extension === ".pdf") {
@@ -392,7 +391,7 @@ export function registerFileTools(
       { additionalProperties: false },
     ),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      throwIfAborted(signal);
+      signal?.throwIfAborted();
       const filePath = requireAbsolutePath(params.file_path);
       await guardWriteAccess(ctx, {
         toolName: "Edit",
@@ -438,7 +437,7 @@ export function registerFileTools(
               const key = await readStateKey(filePath);
               state.reads.set(key, snapshot);
               const diff = generateDiffString("", convertLeadingTabsToSpaces(newString));
-              throwIfAborted(signal);
+              signal?.throwIfAborted();
               const {
                 text: diagnosticText,
                 errorCount,
@@ -495,7 +494,7 @@ export function registerFileTools(
             const key = await readStateKey(filePath);
             requireCurrentRead(state, key, filePath, content);
             await access(filePath, constants.R_OK | constants.W_OK);
-            throwIfAborted(signal);
+            signal?.throwIfAborted();
             const original = content.toString("utf8");
 
             // CRLF 规范化后匹配（old_string 不需要带 \r），写回时恢复原行尾
@@ -541,7 +540,7 @@ export function registerFileTools(
             const text = replaceAll
               ? `The file ${filePath} has been updated. All occurrences were successfully replaced.`
               : `The file ${filePath} has been updated successfully.`;
-            throwIfAborted(signal);
+            signal?.throwIfAborted();
             const {
               text: diagnosticText,
               errorCount,
@@ -602,7 +601,7 @@ export function registerFileTools(
       { additionalProperties: false },
     ),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      throwIfAborted(signal);
+      signal?.throwIfAborted();
       const filePath = requireAbsolutePath(params.file_path);
       await guardWriteAccess(ctx, {
         toolName: "Write",
@@ -628,7 +627,7 @@ export function registerFileTools(
                 throw error;
               }
             }
-            throwIfAborted(signal);
+            signal?.throwIfAborted();
             await mkdir(dirname(filePath), { recursive: true });
             await writeFile(filePath, params.content, "utf8");
             const snapshot = snapshotOf(params.content);
@@ -640,7 +639,7 @@ export function registerFileTools(
               original === undefined
                 ? `File created successfully at: ${filePath}`
                 : `The file ${filePath} has been updated successfully.`;
-            throwIfAborted(signal);
+            signal?.throwIfAborted();
             const {
               text: diagnosticText,
               errorCount,

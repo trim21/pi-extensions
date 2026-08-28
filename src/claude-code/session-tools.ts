@@ -193,7 +193,7 @@ export function registerSessionTools(pi: ExtensionAPI): void {
       if (!ctx.hasUI) throw new Error("Cannot ask questions: interactive UI is not available");
       const answers: Record<string, string> = {};
       for (const question of params.questions) {
-        if (signal?.aborted) throw new Error("Operation aborted");
+        signal?.throwIfAborted();
         answers[question.question] = question.multiSelect
           ? await askMultiple(question, ctx, signal)
           : await askSingle(question, ctx, signal);
