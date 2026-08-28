@@ -13,6 +13,7 @@ import {
   truncateTail,
   type TruncationResult,
 } from "@earendil-works/pi-coding-agent";
+import { throttle } from "lodash-es";
 import { type TObject, Type } from "typebox";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
@@ -379,42 +380,24 @@ export class BwrapRuntime {
     await using output = new BashOutput(request.ctx.sessionManager.getSessionId());
     const { onUpdate } = request;
 
-    // 流式进度：节流推送尾部快照（对齐 pi 内置 bash 的实时输出体验）
-    let updateTimer: ReturnType<typeof setTimeout> | undefined;
-    let dirty = false;
-    let lastUpdateAt = 0;
-    const emitUpdate = () => {
-      if (!onUpdate || !dirty) return;
-      dirty = false;
-      lastUpdateAt = Date.now();
-      onUpdate({
-        content: [{ type: "text", text: output.tailSnapshot() }],
-        details: undefined,
-      });
-    };
-    const scheduleUpdate = () => {
-      if (!onUpdate) return;
-      dirty = true;
-      const delay = BASH_UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
-      if (delay <= 0) {
-        if (updateTimer) clearTimeout(updateTimer);
-        updateTimer = undefined;
-        emitUpdate();
-        return;
-      }
-      if (updateTimer) return;
-      updateTimer = setTimeout(() => {
-        updateTimer = undefined;
-        emitUpdate();
-      }, delay);
-    };
+    // 流式进度：限流推送尾部快照（对齐 pi 内置 bash 的实时输出体验）
+    const emitUpdate = throttle(
+      () => {
+        onUpdate?.({
+          content: [{ type: "text", text: output.tailSnapshot() }],
+          details: undefined,
+        });
+      },
+      BASH_UPDATE_THROTTLE_MS,
+      { trailing: true },
+    );
 
     try {
       if (onUpdate) onUpdate({ content: [], details: undefined });
       const { exitCode } = await operations.exec(request.command, execCwd, {
         onData: (data) => {
           output.append(data);
-          scheduleUpdate();
+          emitUpdate();
         },
         signal: request.signal,
         timeout: request.timeout,
@@ -451,8 +434,8 @@ export class BwrapRuntime {
       }
       throw error;
     } finally {
-      if (updateTimer) clearTimeout(updateTimer);
-      if (onUpdate && dirty) emitUpdate();
+      emitUpdate.flush();
+      emitUpdate.cancel();
     }
   }
 
