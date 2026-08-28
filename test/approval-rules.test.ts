@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  type BashCommand,
-  commandPattern,
-  evaluateBashApproval,
-  matchRule,
-  parseBashCommands,
-} from "../src/bwrap/approval-rules.js";
+import { evaluateBashApproval, matchRule, parseBashCommands } from "../src/bwrap/approval-rules.js";
 
 describe("parseBashCommands", () => {
   it("extracts top-level commands with name and args", async () => {
@@ -50,27 +44,18 @@ describe("parseBashCommands", () => {
   });
 });
 
-const cmd = (name: string, args: string[]): BashCommand => ({ name, args, raw: "", nested: [] });
-
-describe("commandPattern", () => {
-  it("uses BashArity to keep subcommands, dropping flags and values", () => {
-    expect(commandPattern(cmd("git", ["checkout", "main"]))).toBe("git checkout *");
-    expect(commandPattern(cmd("git", ["push", "origin", "main"]))).toBe("git push *");
-    expect(commandPattern(cmd("npm", ["install", "react"]))).toBe("npm install *");
-    expect(commandPattern(cmd("npm", ["run", "dev"]))).toBe("npm run dev *");
-  });
-
-  it("falls back to command name + * for unknown commands", () => {
-    expect(commandPattern(cmd("some-tool", ["--flag", "value"]))).toBe("some-tool *");
-  });
-});
-
 describe("matchRule", () => {
   it("matches wildcards", () => {
     expect(matchRule("git push *", "git push *")).toBe(true);
     expect(matchRule("git push *", "git *")).toBe(true);
     expect(matchRule("git checkout *", "git push *")).toBe(false);
     expect(matchRule("npm install *", "npm *")).toBe(true);
+  });
+
+  it("matches raw commands against a -- separated rule pattern", () => {
+    expect(
+      matchRule("python ./script/file.py -- some sub command", "python ./script/file.py -- *"),
+    ).toBe(true);
   });
 });
 
@@ -181,12 +166,36 @@ describe("evaluateBashApproval", () => {
   });
 
   it("last matching rule wins (later rules take precedence)", async () => {
-    // 命令模式是 arity 粒度（git push *），规则需按同粒度写
     expect(
       await evaluateBashApproval("git push origin main", [
         { action: "deny", pattern: "git push *" },
         { action: "allow", pattern: "git *" },
       ]),
     ).toBe("allow");
+  });
+
+  it("allows a script invocation under a rule that lists the -- separator", async () => {
+    // 规则匹配的是命令原文，`--` 只是普通字面 token
+    expect(
+      await evaluateBashApproval("python ./script/file.py -- some sub command", [
+        { action: "allow", pattern: "python ./script/file.py -- *" },
+      ]),
+    ).toBe("allow");
+  });
+
+  it("allows a command under a rule that lists a literal flag", async () => {
+    expect(
+      await evaluateBashApproval("npm install --save-dev vitest", [
+        { action: "allow", pattern: "npm install --save-dev *" },
+      ]),
+    ).toBe("allow");
+  });
+
+  it("does not allow a script invocation when the rule requires a different literal", async () => {
+    expect(
+      await evaluateBashApproval("python ./script/file.py other.py", [
+        { action: "allow", pattern: "python ./script/file.py -- *" },
+      ]),
+    ).toBeUndefined();
   });
 });

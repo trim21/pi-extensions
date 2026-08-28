@@ -23,12 +23,8 @@ import {
   selectCheckboxActions,
   selectWithOptionalInput,
 } from "../lib/ui.js";
-import {
-  type ApprovalRule,
-  commandPatternsFor,
-  evaluateBashApproval,
-  matchRule,
-} from "./approval-rules.js";
+import { type ApprovalRule, evaluateBashApproval, matchRule } from "./approval-rules.js";
+import { commandPatternsFor } from "./approval-suggest.js";
 import {
   type BwrapMode,
   createBwrapBashOperations,
