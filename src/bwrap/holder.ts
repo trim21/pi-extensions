@@ -1,14 +1,12 @@
 /* eslint-disable no-console, unicorn/no-process-exit -- 独立 CLI 脚本，由 unshare 直接执行 */
 import { spawn } from "node:child_process";
-import { open, readFile, writeFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 
-// 用法：unshare -Urn node holder.ts <config> <singbox> <ready-file>
+// 用法：unshare -Urn node holder.ts <config> <singbox>
 const args = process.argv.slice(2);
 const configPath = args[0];
 const singBoxPath = args[1];
-const readyFile = args[2];
-if (!configPath || !singBoxPath || !readyFile) {
+if (!configPath || !singBoxPath) {
   process.exit(2);
 }
 
@@ -36,11 +34,10 @@ async function main(): Promise<void> {
   // slirp4netns 由宿主侧 spawn，这里等它建好 tap0
   await waitFor(100, 100, tap0Exists);
 
-  const logPath = `${configPath}.log`;
-  const logFd = await open(logPath, "w");
+  // sing-box 日志透传到 holder 的 stdout/stderr，宿主侧监听 "sing-box started" 判定就绪
   const singbox = spawn(singBoxPath, ["run", "-c", configPath], {
     env: { ...process.env, ENABLE_DEPRECATED_MISSING_DOMAIN_RESOLVER: "true" },
-    stdio: ["ignore", logFd.fd, logFd.fd],
+    stdio: ["ignore", "inherit", "inherit"],
   });
 
   const stop = (): void => {
@@ -54,17 +51,6 @@ async function main(): Promise<void> {
     stop();
     process.exit(0);
   });
-
-  // 以 "sing-box started" 日志作为就绪标志（TUN 与 gvisor 数据面此时已可用）
-  await waitFor(200, 100, async () => {
-    try {
-      const log = await readFile(logPath, "utf8");
-      return log.includes("sing-box started");
-    } catch {
-      return false;
-    }
-  });
-  await writeFile(readyFile, "");
 
   await new Promise<void>((resolve) => singbox.once("exit", () => resolve()));
 }

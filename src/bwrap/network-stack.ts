@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { access, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { type ChildProcess, spawn } from "node:child_process";
+import { mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,17 +72,32 @@ async function waitForNewUserns(pid: number, timeoutMs = 5000): Promise<void> {
   throw new Error("Timed out waiting for sandbox network namespace");
 }
 
-async function waitForFile(path: string, timeoutMs = 15000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      await access(path);
-      return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  throw new Error("Timed out waiting for sandbox network stack to become ready");
+/** 监听 holder 的 stdout/stderr（sing-box 日志透传），以 "sing-box started" 作为就绪标志。 */
+function waitForSingboxStarted(holder: ChildProcess, timeoutMs = 20000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("Timed out waiting for sing-box to start"));
+    }, timeoutMs);
+    const onData = (data: Buffer): void => {
+      if (settled) return;
+      if (data.toString().includes("sing-box started")) {
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      }
+    };
+    holder.stdout?.on("data", onData);
+    holder.stderr?.on("data", onData);
+    holder.once("exit", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`Sandbox holder exited before sing-box started (code ${code})`));
+    });
+  });
 }
 
 function killChild(pid: number | undefined): void {
@@ -125,20 +140,16 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
   const { allowlist, dnsServers, singBoxPath, slirp4netnsPath } = options;
   const directory = await mkdtemp(join(tmpdir(), "pi-netns-"));
   const configPath = join(directory, "singbox.json");
-  const readyFile = join(directory, "ready");
   await writeFile(configPath, generateSingboxConfig({ allowlist, dnsServers }));
 
-  const holder = spawn(
-    "unshare",
-    ["-Urn", "--", "node", HOLDER_PATH, configPath, singBoxPath, readyFile],
-    {
-      env: {
-        HOME: process.env.HOME ?? "",
-        PATH: `${process.env.PATH ?? ""}:${SBIN_PATH_SUFFIX}`,
-      },
-      stdio: "ignore",
+  const holder = spawn("unshare", ["-Urn", "--", "node", HOLDER_PATH, configPath, singBoxPath], {
+    env: {
+      HOME: process.env.HOME ?? "",
+      PATH: `${process.env.PATH ?? ""}:${SBIN_PATH_SUFFIX}`,
     },
-  );
+    // sing-box 日志经 holder 透传到这里的 stdout/stderr，用于判定就绪
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   if (holder.pid === undefined) {
     throw new Error("Failed to start network namespace holder");
   }
@@ -157,7 +168,7 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
     { stdio: "ignore" },
   );
   const slirpPid = slirp.pid;
-  await waitForFile(readyFile);
+  await waitForSingboxStarted(holder);
 
   const state: NetworkStackState = { holderPid, slirpPid, directory };
   const stack: NetworkStack = {
