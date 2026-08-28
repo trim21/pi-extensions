@@ -9,6 +9,7 @@ import { type BashOperations, getAgentDir, getShellConfig } from "@earendil-work
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { expandHome } from "../lib/path.js";
 import { type ApprovalRule } from "./approval-rules.js";
 import { type NetworkStack, resolveDnsServers, startNetworkStack } from "./network-stack.js";
@@ -42,18 +43,20 @@ const bwrapConfigProperties = {
           action: StringEnum(["allow", "deny"] as const),
           pattern: Type.String({ description: '命令模式，如 "git push *"、"npm install *"' }),
         },
-        { additionalProperties: false },
+        { additionalProperties: true },
       ),
     ),
   ),
 };
 
+// 配置文件容忍未知字段：schema 之外的字段（如新版本扩展新增的配置）会被忽略，
+// 避免整个 bwrap 配置因单个未知字段失效；已声明字段仍做类型/取值校验。
 export const bwrapConfigSchema = Type.Object(bwrapConfigProperties, {
-  additionalProperties: false,
+  additionalProperties: true,
 });
 
 export const bwrapConfigFileSchema = Type.Partial(bwrapConfigSchema, {
-  additionalProperties: false,
+  additionalProperties: true,
 });
 
 export type BwrapConfig = Static<typeof bwrapConfigSchema>;
@@ -151,9 +154,10 @@ function parseBwrapConfigFile(path: string): BwrapConfigFile {
     throw new Error(`Invalid bwrap configuration at ${path}: ${String(error)}`, { cause: error });
   }
   try {
-    return Value.Parse(bwrapConfigFileSchema, raw);
+    return parseWithSchema(bwrapConfigFileSchema, raw);
   } catch (error) {
-    throw new Error(`Invalid bwrap configuration at ${path}: ${String(error)}`, { cause: error });
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid bwrap configuration at ${path}: ${detail}`, { cause: error });
   }
 }
 

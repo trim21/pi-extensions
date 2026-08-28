@@ -39,30 +39,50 @@ describe("loadBwrapConfig", () => {
     );
   });
 
-  it("raises for an invalid mode", async () => {
+  it("raises for an invalid mode with the field path", async () => {
     const { directory, global, project } = await configPaths();
     await writeFile(global, JSON.stringify({ mode: "unsafe" }));
 
-    expect(() => loadBwrapConfig(directory, { global, project })).toThrow(
-      `Invalid bwrap configuration at ${global}`,
-    );
+    const load = () => loadBwrapConfig(directory, { global, project });
+    expect(load).toThrow(`Invalid bwrap configuration at ${global}`);
+    expect(load).toThrow(/\/mode: /);
   });
 
-  it("raises for an invalid array member", async () => {
+  it("raises for an invalid array member with the field path", async () => {
     const { directory, global, project } = await configPaths();
     await writeFile(project, JSON.stringify({ extraArgs: ["--bind", 42] }));
 
-    expect(() => loadBwrapConfig(directory, { global, project })).toThrow(
-      `Invalid bwrap configuration at ${project}`,
-    );
+    const load = () => loadBwrapConfig(directory, { global, project });
+    expect(load).toThrow(`Invalid bwrap configuration at ${project}`);
+    expect(load).toThrow(/\/extraArgs\/1: /);
   });
 
-  it("raises for an unknown configuration property", async () => {
+  it("ignores unknown configuration properties", async () => {
     const { directory, global, project } = await configPaths();
-    await writeFile(project, JSON.stringify({ unknowable: true }));
+    await writeFile(project, JSON.stringify({ mode: "allow-net", unknowable: { future: 1 } }));
 
-    expect(() => loadBwrapConfig(directory, { global, project })).toThrow(
-      `Invalid bwrap configuration at ${project}`,
+    expect(loadBwrapConfig(directory, { global, project })).toEqual({
+      mode: "allow-net",
+      writablePaths: [".", "/tmp"],
+      extraWritablePaths: [],
+      tmpfsPaths: [],
+      extraArgs: [],
+      networkAllowlist: [],
+      approvalRules: [],
+    });
+  });
+
+  it("tolerates unknown fields inside approval rules", async () => {
+    const { directory, global, project } = await configPaths();
+    await writeFile(
+      project,
+      JSON.stringify({
+        approvalRules: [{ action: "allow", pattern: "git *", description: "git" }],
+      }),
     );
+
+    expect(loadBwrapConfig(directory, { global, project })).toMatchObject({
+      approvalRules: [{ action: "allow", pattern: "git *" }],
+    });
   });
 });
