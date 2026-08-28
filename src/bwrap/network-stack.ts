@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { generateSingboxConfig } from "./singbox-config.js";
 
 export interface NetworkStackOptions {
-  /** 允许直连的域名 / IP:port 列表（session 启动时固定，reload 才会重新加载）。 */
+  /** 允许直连的域名 / IP:port 列表（每次命令从配置重新读取）。 */
   readonly allowlist: readonly string[];
   /** 真实 DNS 服务器列表，按顺序 fallback。 */
   readonly dnsServers: readonly string[];
@@ -132,7 +132,7 @@ const stackFinalizer = new FinalizationRegistry<NetworkStackState>((state) => {
 });
 
 /**
- * 启动常驻的 per-session 网络栈：holder 进程持有 netns（内部跑 sing-box 的
+ * 启动网络栈：holder 进程持有 netns（内部跑 sing-box 的
  * TUN + fakeip + deny-by-default），slirp4netns 提供 egress。返回前
  * netns/sing-box/slirp4netns 均已就绪，命令通过 nsenter 进入该 netns 执行。
  */

@@ -370,7 +370,7 @@ function killChild(child: ChildProcess): void {
   }
 }
 
-/** 为 net-allowlist 模式创建常驻网络栈；非该模式返回 undefined。 */
+/** 为 net-allowlist 模式创建网络栈；非该模式返回 undefined。每次命令现建现停。 */
 export async function createNetworkStack(
   resolved: ResolvedBwrap,
 ): Promise<NetworkStack | undefined> {

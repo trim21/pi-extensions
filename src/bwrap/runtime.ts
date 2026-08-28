@@ -38,7 +38,6 @@ import {
   resolveHeadlessBwrap,
 } from "./core.js";
 import { dcgSuggestion } from "./dcg-scan.js";
-import { type NetworkStack } from "./network-stack.js";
 
 export type EscalationDecision = { kind: "dialog" } | { kind: "deny"; reason: string };
 
@@ -197,6 +196,11 @@ class BashOutput {
     });
   }
 
+  // eslint-disable-next-line unicorn/no-nonstandard-builtin-properties -- ES2024 标准（Node 24 原生支持）
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
+  }
+
   /** 尾部文本（截断结果的候选，未截断时即完整输出）。 */
   tailText(): string {
     return Buffer.concat(this.tail, this.tailBytes).toString("utf8");
@@ -242,7 +246,6 @@ export class BwrapRuntime {
   private resolved: ResolvedBwrap | undefined;
   private sandboxDisabled = false;
   private bwrapUnavailable = false;
-  private networkStack: NetworkStack | undefined;
 
   setup(pi: ExtensionAPI): void {
     pi.registerFlag("no-bwrap", {
@@ -315,8 +318,6 @@ export class BwrapRuntime {
   setMode(cwd: string, mode: BwrapMode): ResolvedBwrap {
     this.resolved = resolveBwrap({ ...loadBwrapConfig(cwd), mode });
     this.sandboxDisabled = false;
-    void this.networkStack?.stop();
-    this.networkStack = undefined;
     return this.resolved;
   }
 
@@ -324,8 +325,6 @@ export class BwrapRuntime {
     this.resolved = undefined;
     this.sandboxDisabled = false;
     this.bwrapUnavailable = false;
-    void this.networkStack?.stop();
-    this.networkStack = undefined;
   }
 
   async execute(request: BwrapExecutionRequest): Promise<BwrapExecutionResult> {
@@ -361,11 +360,23 @@ export class BwrapRuntime {
         await this.approveFullAccess(request.ctx, request.command, request.description, execCwd);
       }
     }
-    const operations =
-      isWindows || needsApproval || !runtime.bwrapEnabled
-        ? createLocalBashOperations()
-        : createBwrapBashOperations(runtime, workspace, await this.getNetworkStack(runtime));
-    const output = new BashOutput(request.ctx.sessionManager.getSessionId());
+    const local = isWindows || needsApproval || !runtime.bwrapEnabled;
+    // 每次命令现建网络栈（启动约 140ms），作用域结束自动停栈；allowlist 变化即时生效
+    const networkStack = local ? undefined : await createNetworkStack(runtime);
+    await using _stack = {
+      // eslint-disable-next-line unicorn/no-nonstandard-builtin-properties -- ES2024 标准（Node 24 原生支持）
+      async [Symbol.asyncDispose]() {
+        try {
+          await networkStack?.stop();
+        } catch {
+          // best-effort：停栈失败（进程已退出/目录删除失败）不掩盖命令结果
+        }
+      },
+    };
+    const operations = local
+      ? createLocalBashOperations()
+      : createBwrapBashOperations(runtime, workspace, networkStack);
+    await using output = new BashOutput(request.ctx.sessionManager.getSessionId());
     const { onUpdate } = request;
 
     // 流式进度：节流推送尾部快照（对齐 pi 内置 bash 的实时输出体验）
@@ -442,7 +453,6 @@ export class BwrapRuntime {
     } finally {
       if (updateTimer) clearTimeout(updateTimer);
       if (onUpdate && dirty) emitUpdate();
-      await output.close();
     }
   }
 
@@ -452,21 +462,6 @@ export class BwrapRuntime {
     if (this.sandboxDisabled) return resolveBwrap({ ...config, mode: "allow-all" });
     if (!this.resolved) this.resolved = resolveBwrap(config);
     return this.resolved;
-  }
-
-  /** net-allowlist 模式的常驻网络栈：惰性创建，session 期间复用（allowlist 固定）。 */
-  private async getNetworkStack(runtime: ResolvedBwrap): Promise<NetworkStack | undefined> {
-    if (runtime.mode !== "net-allowlist" || runtime.networkAllowlist.length === 0) {
-      if (this.networkStack) {
-        void this.networkStack.stop();
-        this.networkStack = undefined;
-      }
-      return undefined;
-    }
-    if (!this.networkStack) {
-      this.networkStack = await createNetworkStack(runtime);
-    }
-    return this.networkStack;
   }
 
   private async approveFullAccess(
@@ -744,8 +739,6 @@ export class BwrapRuntime {
   private reload(ctx: ExtensionCommandContext): void {
     this.resolved = undefined;
     this.bwrapUnavailable = false;
-    void this.networkStack?.stop();
-    this.networkStack = undefined;
     const runtime = this.resolve(ctx);
     ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${runtime.mode}`));
     ctx.ui.notify(`bwrap config reloaded (mode: ${runtime.mode})`, "info");
