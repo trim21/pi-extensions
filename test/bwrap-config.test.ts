@@ -25,6 +25,7 @@ describe("loadBwrapConfig", () => {
       extraWritablePaths: ["/cache"],
       tmpfsPaths: [],
       extraArgs: [],
+      networkAllowlist: [],
       approvalRules: [],
     });
   });

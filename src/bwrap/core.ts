@@ -11,10 +11,17 @@ import { Value } from "typebox/value";
 
 import { expandHome } from "../lib/path.js";
 import { type ApprovalRule } from "./approval-rules.js";
+import { type NetworkStack, resolveDnsServers, startNetworkStack } from "./network-stack.js";
 
 const PROTECTED_DIRS = [".pi", ".agent"];
 
-export const BWRAP_MODES = ["allow-all", "workspace-write", "allow-net", "readonly"] as const;
+export const BWRAP_MODES = [
+  "allow-all",
+  "workspace-write",
+  "allow-net",
+  "net-allowlist",
+  "readonly",
+] as const;
 
 export type BwrapMode = (typeof BWRAP_MODES)[number];
 
@@ -25,6 +32,9 @@ const bwrapConfigProperties = {
   extraWritablePaths: Type.Array(Type.String()),
   tmpfsPaths: Type.Array(Type.String()),
   extraArgs: Type.Array(Type.String()),
+  networkAllowlist: Type.Array(Type.String()),
+  singBoxPath: Type.Optional(Type.String()),
+  slirp4netnsPath: Type.Optional(Type.String()),
   approvalRules: Type.Optional(
     Type.Array(
       Type.Object(
@@ -58,6 +68,10 @@ export interface ResolvedBwrap {
   extraWritablePaths: string[];
   tmpfsPaths: string[];
   extraArgs: string[];
+  /** per-domain 过滤的允许域名（非空 = 启用 sing-box 网络过滤）。 */
+  networkAllowlist: string[];
+  singBoxPath?: string;
+  slirp4netnsPath?: string;
   /** 全权限执行的自动审批规则（allow/deny 命令模式）。 */
   approvalRules: ApprovalRule[];
 }
@@ -68,6 +82,7 @@ const DEFAULT_CONFIG: BwrapConfig = {
   extraWritablePaths: [],
   tmpfsPaths: [],
   extraArgs: [],
+  networkAllowlist: [],
 };
 
 export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
@@ -78,6 +93,9 @@ export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
     extraWritablePaths: config.extraWritablePaths,
     tmpfsPaths: config.tmpfsPaths ?? [],
     extraArgs: config.extraArgs ?? [],
+    networkAllowlist: config.networkAllowlist ?? [],
+    singBoxPath: config.singBoxPath,
+    slirp4netnsPath: config.slirp4netnsPath,
     approvalRules: config.approvalRules ?? [],
   };
   switch (config.mode) {
@@ -88,6 +106,9 @@ export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
       return { ...base, bwrapEnabled: true, network: false };
     }
     case "allow-net": {
+      return { ...base, bwrapEnabled: true, network: true };
+    }
+    case "net-allowlist": {
       return { ...base, bwrapEnabled: true, network: true };
     }
     case "readonly": {
@@ -115,6 +136,9 @@ function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapCon
     extraWritablePaths: [...base.extraWritablePaths, ...(overrides.extraWritablePaths ?? [])],
     tmpfsPaths: overrides.tmpfsPaths ?? base.tmpfsPaths,
     extraArgs: overrides.extraArgs ?? base.extraArgs,
+    networkAllowlist: overrides.networkAllowlist ?? base.networkAllowlist,
+    singBoxPath: overrides.singBoxPath ?? base.singBoxPath,
+    slirp4netnsPath: overrides.slirp4netnsPath ?? base.slirp4netnsPath,
     approvalRules: [...(base.approvalRules ?? []), ...(overrides.approvalRules ?? [])],
   };
 }
@@ -188,6 +212,41 @@ export function findBwrap(override?: string): string {
     return override;
   }
   return findDefaultBwrap();
+}
+
+function findCommandInPath(name: string, hint: string): string {
+  const pathEnv = process.env.PATH ?? "";
+  for (const directory of pathEnv.split(delimiter)) {
+    const candidate = join(directory, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(hint);
+}
+
+export function findSingBox(override?: string): string {
+  if (override) {
+    if (!existsSync(override)) {
+      throw new Error(`sing-box not found at configured path: ${override}`);
+    }
+    return override;
+  }
+  return findCommandInPath(
+    "sing-box",
+    "sing-box not found in PATH. Install it from https://sing-box.sagernet.org/",
+  );
+}
+
+export function findSlirp4netns(override?: string): string {
+  if (override) {
+    if (!existsSync(override)) {
+      throw new Error(`slirp4netns not found at configured path: ${override}`);
+    }
+    return override;
+  }
+  return findCommandInPath(
+    "slirp4netns",
+    "slirp4netns not found in PATH. Install it from https://github.com/rootless-containers/slirp4netns",
+  );
 }
 
 /** 扫描 .git 时跳过的目录：包/依赖/构建产物，嵌套 git 仓库几乎不会出现在这里。 */
@@ -310,6 +369,19 @@ function killChild(child: ChildProcess): void {
   }
 }
 
+/** 为 net-allowlist 模式创建常驻网络栈；非该模式返回 undefined。 */
+export async function createNetworkStack(
+  resolved: ResolvedBwrap,
+): Promise<NetworkStack | undefined> {
+  if (!resolved.network || resolved.networkAllowlist.length === 0) return undefined;
+  return startNetworkStack({
+    allowlist: resolved.networkAllowlist,
+    dnsServers: await resolveDnsServers(),
+    singBoxPath: findSingBox(resolved.singBoxPath),
+    slirp4netnsPath: findSlirp4netns(resolved.slirp4netnsPath),
+  });
+}
+
 /**
  * @param workspace session 工作区：writablePaths 的 "." 与 PROTECTED_DIRS 都基于它解析，
  *   与当次命令的 cwd（仅作为进程执行目录）解耦，避免 workdir 参数漂移可写边界。
@@ -317,6 +389,7 @@ function killChild(child: ChildProcess): void {
 export function createBwrapBashOperations(
   resolved: ResolvedBwrap,
   workspace: string,
+  networkStack?: NetworkStack,
 ): BashOperations {
   // 沙箱内不透传 PATH，execvp 的默认路径可能找不到 bash（如 NixOS），故在父进程解析绝对路径
   const shell = getShellConfig().shell;
@@ -333,7 +406,6 @@ export function createBwrapBashOperations(
         throw new Error("HOME is not set; refusing to run bash in a clean environment");
       }
 
-      const seccompFd = resolved.network ? undefined : getSeccompFd();
       const baseArgs = [
         "--ro-bind",
         "/",
@@ -344,6 +416,33 @@ export function createBwrapBashOperations(
         "--proc",
         "/proc",
       ];
+      const env = {
+        HOME: home,
+        SHELL: "/bin/bash",
+        TERM: "dumb",
+        LANG: "C.UTF-8",
+        // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
+        PATH: "/usr/local/bin:/usr/bin:/bin",
+      };
+
+      if (resolved.network && resolved.networkAllowlist.length > 0) {
+        if (!networkStack) {
+          throw new Error("Network stack is not initialized for net-allowlist mode");
+        }
+        return networkStack.exec({
+          command,
+          cwd,
+          bwrapPath: findBwrap(resolved.bwrapPath),
+          bwrapArgs: baseArgs,
+          shell,
+          env,
+          onData,
+          signal,
+          timeout,
+        });
+      }
+
+      const seccompFd = resolved.network ? undefined : getSeccompFd();
       const child = spawn(
         findBwrap(resolved.bwrapPath),
         seccompFd === undefined
@@ -356,14 +455,7 @@ export function createBwrapBashOperations(
             seccompFd === undefined
               ? ["ignore", "pipe", "pipe"]
               : ["ignore", "pipe", "pipe", seccompFd],
-          env: {
-            HOME: home,
-            SHELL: "/bin/bash",
-            TERM: "dumb",
-            LANG: "C.UTF-8",
-            // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
-            PATH: "/usr/local/bin:/usr/bin:/bin",
-          },
+          env,
         },
       );
 

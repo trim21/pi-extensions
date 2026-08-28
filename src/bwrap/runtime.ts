@@ -28,6 +28,7 @@ import { commandPatternsFor } from "./approval-suggest.js";
 import {
   type BwrapMode,
   createBwrapBashOperations,
+  createNetworkStack,
   findBwrap,
   getBwrapConfigPaths,
   loadBwrapConfig,
@@ -37,6 +38,7 @@ import {
   resolveHeadlessBwrap,
 } from "./core.js";
 import { dcgSuggestion } from "./dcg-scan.js";
+import { type NetworkStack } from "./network-stack.js";
 
 export type EscalationDecision = { kind: "dialog" } | { kind: "deny"; reason: string };
 
@@ -230,6 +232,7 @@ function notifyMode(
     "allow-all": "allow-all: sandbox off, network on",
     "workspace-write": "workspace-write: sandbox on, network off",
     "allow-net": "allow-net: sandbox on, network on, workspace writable",
+    "net-allowlist": "net-allowlist: sandbox on, network filtered by domain allowlist",
     readonly: "readonly: sandbox on, network off, read-only fs",
   };
   ctx.ui.notify(labels[mode], "info");
@@ -239,6 +242,7 @@ export class BwrapRuntime {
   private resolved: ResolvedBwrap | undefined;
   private sandboxDisabled = false;
   private bwrapUnavailable = false;
+  private networkStack: NetworkStack | undefined;
 
   setup(pi: ExtensionAPI): void {
     pi.registerFlag("no-bwrap", {
@@ -311,6 +315,8 @@ export class BwrapRuntime {
   setMode(cwd: string, mode: BwrapMode): ResolvedBwrap {
     this.resolved = resolveBwrap({ ...loadBwrapConfig(cwd), mode });
     this.sandboxDisabled = false;
+    void this.networkStack?.stop();
+    this.networkStack = undefined;
     return this.resolved;
   }
 
@@ -318,6 +324,8 @@ export class BwrapRuntime {
     this.resolved = undefined;
     this.sandboxDisabled = false;
     this.bwrapUnavailable = false;
+    void this.networkStack?.stop();
+    this.networkStack = undefined;
   }
 
   async execute(request: BwrapExecutionRequest): Promise<BwrapExecutionResult> {
@@ -356,7 +364,7 @@ export class BwrapRuntime {
     const operations =
       isWindows || needsApproval || !runtime.bwrapEnabled
         ? createLocalBashOperations()
-        : createBwrapBashOperations(runtime, workspace);
+        : createBwrapBashOperations(runtime, workspace, await this.getNetworkStack(runtime));
     const output = new BashOutput(request.ctx.sessionManager.getSessionId());
     const { onUpdate } = request;
 
@@ -444,6 +452,21 @@ export class BwrapRuntime {
     if (this.sandboxDisabled) return resolveBwrap({ ...config, mode: "allow-all" });
     if (!this.resolved) this.resolved = resolveBwrap(config);
     return this.resolved;
+  }
+
+  /** net-allowlist 模式的常驻网络栈：惰性创建，session 期间复用（allowlist 固定）。 */
+  private async getNetworkStack(runtime: ResolvedBwrap): Promise<NetworkStack | undefined> {
+    if (runtime.mode !== "net-allowlist" || runtime.networkAllowlist.length === 0) {
+      if (this.networkStack) {
+        void this.networkStack.stop();
+        this.networkStack = undefined;
+      }
+      return undefined;
+    }
+    if (!this.networkStack) {
+      this.networkStack = await createNetworkStack(runtime);
+    }
+    return this.networkStack;
   }
 
   private async approveFullAccess(
@@ -646,10 +669,22 @@ export class BwrapRuntime {
         description: "Sandbox on, network on, workspace writable",
         flags: Type.Object({}),
       },
+      "bwrap-net-allowlist": {
+        name: "bwrap-net-allowlist",
+        usage: "",
+        description: "Sandbox on, network filtered by domain allowlist, workspace writable",
+        flags: Type.Object({}),
+      },
       "bwrap-readonly": {
         name: "bwrap-readonly",
         usage: "",
         description: "Sandbox on, network off, no writes",
+        flags: Type.Object({}),
+      },
+      "bwrap-reload": {
+        name: "bwrap-reload",
+        usage: "",
+        description: "Reload bwrap config and restart the network stack",
         flags: Type.Object({}),
       },
     } as const satisfies Record<string, CommandSpec<TObject>>;
@@ -685,6 +720,7 @@ export class BwrapRuntime {
       ["bwrap-allow-all", "allow-all"],
       ["bwrap-workspace-write", "workspace-write"],
       ["bwrap-allow-net", "allow-net"],
+      ["bwrap-net-allowlist", "net-allowlist"],
       ["bwrap-readonly", "readonly"],
     ] as const) {
       pi.registerCommand(name, {
@@ -695,6 +731,24 @@ export class BwrapRuntime {
           ),
       });
     }
+
+    pi.registerCommand("bwrap-reload", {
+      description: specs["bwrap-reload"].description,
+      handler: (args, ctx) =>
+        this.runCommand(pi, specs["bwrap-reload"], args, ctx, (commandCtx) => {
+          this.reload(commandCtx);
+        }),
+    });
+  }
+
+  private reload(ctx: ExtensionCommandContext): void {
+    this.resolved = undefined;
+    this.bwrapUnavailable = false;
+    void this.networkStack?.stop();
+    this.networkStack = undefined;
+    const runtime = this.resolve(ctx);
+    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${runtime.mode}`));
+    ctx.ui.notify(`bwrap config reloaded (mode: ${runtime.mode})`, "info");
   }
 
   private switchMode(pi: ExtensionAPI, mode: BwrapMode, ctx: ExtensionCommandContext): void {

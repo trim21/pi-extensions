@@ -41,6 +41,7 @@ describe("resolveBwrap", () => {
       extraWritablePaths: [],
       tmpfsPaths: [],
       extraArgs: [],
+      networkAllowlist: [],
     });
 
     expect(resolved.mode).toBe("allow-net");
@@ -56,6 +57,7 @@ describe("resolveBwrap", () => {
       extraWritablePaths: [],
       tmpfsPaths: [],
       extraArgs: [],
+      networkAllowlist: [],
     });
 
     expect(resolved.bwrapEnabled).toBe(true);
@@ -71,6 +73,7 @@ describe("resolveHeadlessBwrap", () => {
       extraWritablePaths: [],
       tmpfsPaths: [],
       extraArgs: [],
+      networkAllowlist: [],
     });
 
     expect(resolved.mode).toBe("readonly");
@@ -86,6 +89,7 @@ describe("resolveHeadlessBwrap", () => {
       extraWritablePaths: ["~/.cache", "~/go/pkg"],
       tmpfsPaths: ["/tmp/scratch"],
       extraArgs: ["--bind", "/x", "/x"],
+      networkAllowlist: [],
     });
 
     expect(resolved.mode).toBe("readonly");
@@ -119,6 +123,7 @@ describe("buildBwrapArgs", () => {
     extraWritablePaths: [],
     tmpfsPaths: [],
     extraArgs: [],
+    networkAllowlist: [],
     approvalRules: [],
   };
 
