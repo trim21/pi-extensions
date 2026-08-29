@@ -24,6 +24,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "sandbox": "tsx bin/sandbox.ts",
+    "build:holder": "esbuild src/bwrap/holder.ts --format=esm --target=node24 --outfile=src/bwrap/holder.js",
     "prepare": "husky"
   },
   "peerDependencies": {
@@ -42,6 +43,7 @@
     "@types/turndown": "^5.0.6",
     "@typescript/native": "npm:typescript@^7.0.2",
     "@vitest/coverage-v8": "^4.1.10",
+    "esbuild": "^0.28.2",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-erasable-syntax-only": "0.7.1",

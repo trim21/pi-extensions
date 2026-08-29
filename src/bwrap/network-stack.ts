@@ -44,7 +44,9 @@ export interface NetworkStackExecOptions {
 }
 
 const NAMESERVER_PATTERN = /^\s*nameserver\s+(\S+)/;
-const HOLDER_PATH = fileURLToPath(new URL("holder.ts", import.meta.url));
+// 构建产物 holder.js（esbuild 编译）：node 对 node_modules 下的 .ts 拒绝 type stripping，
+// 扩展从 npm 包加载时 holder.ts 落在 node_modules 下，直接运行会 ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING
+const HOLDER_PATH = fileURLToPath(new URL("holder.js", import.meta.url));
 // ip 通常位于 /usr/sbin 或 /sbin，进程默认 PATH 不含它们；node 则依赖宿主完整 PATH
 const SBIN_PATH_SUFFIX = "/usr/local/sbin:/usr/sbin:/sbin";
 
