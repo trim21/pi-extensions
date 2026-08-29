@@ -202,8 +202,46 @@ describe("lsp client watched files", () => {
       directory: dir,
     });
     try {
-      await vi.waitFor(() => expect(client.watchPatterns()).toContain("**/*.py"));
-      expect(client.watchPatterns().toSorted()).toEqual(["**/*.py", "**/*.ts"]);
+      await vi.waitFor(() =>
+        expect(client.watchers()).toContainEqual({ pattern: "**/*.py", kind: 7 }),
+      );
+      expect(
+        client
+          .watchers()
+          .map((w) => [w.pattern, w.kind] as const)
+          .toSorted(),
+      ).toEqual([
+        ["**/*.py", 7],
+        ["**/*.ts", 7],
+      ]);
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("registerCapability 保留 watcher 的 WatchKind 位，缺省为 7", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-test-"));
+    const { proc } = spawnMock({ MOCK_REGISTER_WATCHERS: "**/*.py:2,**/*.ts" });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      await vi.waitFor(() =>
+        expect(client.watchers()).toContainEqual({ pattern: "**/*.py", kind: 2 }),
+      );
+      expect(
+        client
+          .watchers()
+          .map((w) => [w.pattern, w.kind] as const)
+          .toSorted(),
+      ).toEqual([
+        ["**/*.py", 2],
+        ["**/*.ts", 7],
+      ]);
     } finally {
       await client.shutdown();
       await rm(dir, { recursive: true, force: true });
@@ -225,13 +263,17 @@ describe("lsp client watched files", () => {
       directory: dir,
     });
     try {
-      await vi.waitFor(() => expect(client.watchPatterns()).toContain("**/*.ts"));
+      await vi.waitFor(() =>
+        expect(client.watchers()).toContainEqual({ pattern: "**/*.ts", kind: 7 }),
+      );
       await client.notify.open({ path: file });
       await client.connection.sendNotification("textDocument/didClose", {
         textDocument: { uri: pathToFileURL(file).href },
       });
-      await vi.waitFor(() => expect(client.watchPatterns()).not.toContain("**/*.py"));
-      expect(client.watchPatterns()).toEqual(["**/*.ts"]);
+      await vi.waitFor(() =>
+        expect(client.watchers()).not.toContainEqual({ pattern: "**/*.py", kind: 7 }),
+      );
+      expect(client.watchers()).toEqual([{ pattern: "**/*.ts", kind: 7 }]);
     } finally {
       await client.shutdown();
       await rm(dir, { recursive: true, force: true });

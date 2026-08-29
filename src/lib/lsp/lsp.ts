@@ -27,7 +27,15 @@ import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { type LspServerAdapter } from "./adapter.js";
-import { create, type CreateInput, type Diagnostic, type Info as LspClient } from "./client.js";
+import {
+  create,
+  type CreateInput,
+  type Diagnostic,
+  type Info as LspClient,
+  WATCH_KIND_CHANGE,
+  WATCH_KIND_CREATE,
+  WATCH_KIND_DELETE,
+} from "./client.js";
 import { report } from "./diagnostic.js";
 import { createAdapters, mergeServerRecords, serverConfigSchema } from "./server-config.js";
 import { type FileChange, watchWorkspace, type WorkspaceWatcher } from "./watcher.js";
@@ -346,10 +354,26 @@ export function createLspService(
           if (!containsPath(change.path, cwd) || !containsPath(change.path, client.root)) {
             return false;
           }
-          const patterns = client.watchPatterns();
-          if (patterns.length > 0) {
-            const candidate = relative(client.root, change.path).split(sep).join("/");
-            if (patterns.every((pattern) => !minimatch(candidate, pattern))) return false;
+          const watchers = client.watchers();
+          if (watchers.length > 0) {
+            // pattern 可能是相对 glob（pyright 的 "**"）也可能是绝对 glob
+            // （gopls 的 "/workspace/**/*.{go,mod}"），两个候选任一命中即转发；
+            // 并按各 watcher 注册的 WatchKind 位过滤事件类型
+            const relativeCandidate = relative(client.root, change.path).split(sep).join("/");
+            const absoluteCandidate = change.path.split(sep).join("/");
+            const kindBit =
+              change.type === "created"
+                ? WATCH_KIND_CREATE
+                : change.type === "changed"
+                  ? WATCH_KIND_CHANGE
+                  : WATCH_KIND_DELETE;
+            const matched = watchers.some(
+              (watcher) =>
+                (watcher.kind & kindBit) !== 0 &&
+                (minimatch(relativeCandidate, watcher.pattern) ||
+                  minimatch(absoluteCandidate, watcher.pattern)),
+            );
+            if (!matched) return false;
           }
           const extensions = state.clientExtensions.get(client);
           return (

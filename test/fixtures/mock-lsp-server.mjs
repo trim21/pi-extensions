@@ -1,13 +1,20 @@
 // 简易 stdio LSP 服务器 fixture：用于 client 测试。
 // 行为：initialize 握手 → didOpen 后 50ms 推送一个 ERROR 诊断 → shutdown/exit。
 // 收到的 notifications 以 JSONL 写到 stderr 供测试断言载荷；
-// env MOCK_REGISTER_WATCHERS（逗号分隔 glob）时，initialized 后主动发送
-// client/registerCapability 注册 workspace/didChangeWatchedFiles watchers；
+// env MOCK_REGISTER_WATCHERS（逗号分隔，每项 "pattern" 或 "pattern:kind"，
+// kind 缺省 7）时，initialized 后主动发送 client/registerCapability 注册
+// workspace/didChangeWatchedFiles watchers；
 // env MOCK_UNREGISTER_IDS（逗号分隔 registration id）时，收到 textDocument/didClose
 // 后发送 client/unregisterCapability 移除对应注册。
 let buffer = Buffer.alloc(0);
 
-const registerWatchers = (process.env.MOCK_REGISTER_WATCHERS ?? "").split(",").filter(Boolean);
+const registerWatchers = (process.env.MOCK_REGISTER_WATCHERS ?? "")
+  .split(",")
+  .filter(Boolean)
+  .map((entry) => {
+    const [pattern, kind] = entry.split(":");
+    return { globPattern: pattern, ...(kind !== undefined ? { kind: Number(kind) } : {}) };
+  });
 const unregisterIds = (process.env.MOCK_UNREGISTER_IDS ?? "").split(",").filter(Boolean);
 let watchersRegistered = false;
 let unregisterSent = false;
@@ -56,10 +63,10 @@ function handle(msg) {
         id: "reg-cap-1",
         method: "client/registerCapability",
         params: {
-          registrations: registerWatchers.map((pattern, i) => ({
+          registrations: registerWatchers.map((watcher, i) => ({
             id: `watcher-${i}`,
             method: "workspace/didChangeWatchedFiles",
-            registerOptions: { watchers: [{ globPattern: pattern, kind: 7 }] },
+            registerOptions: { watchers: [watcher] },
           })),
         },
       });

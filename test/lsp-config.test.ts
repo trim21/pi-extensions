@@ -601,8 +601,25 @@ describe("lsp service watcher", () => {
     try {
       await service.touchFile(file, dir);
       await vi.waitFor(() => expect(fakes.length).toBe(1));
+
+      // 等注册生效（fail-open 期间 pattern 不匹配的事件也会被转发，见 WatchKind 用例）
+      await vi.waitFor(
+        async () => {
+          const probe = spy.notifications.length;
+          fakes[0].emit([{ path: join(dir, "y.nomatch"), type: "changed", isDirectory: false }]);
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          expect(
+            spy.notifications
+              .slice(probe)
+              .some((n) => n.method === "workspace/didChangeWatchedFiles"),
+          ).toBe(false);
+        },
+        { timeout: 10_000 },
+      );
+
       const before = spy.notifications.length;
 
+      // pattern 不匹配（.py），不转发
       fakes[0].emit([{ path: join(dir, "x.py"), type: "changed", isDirectory: false }]);
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(
@@ -610,6 +627,62 @@ describe("lsp service watcher", () => {
       ).toBe(false);
 
       fakes[0].emit([{ path: join(dir, "x.ts"), type: "changed", isDirectory: false }]);
+      await vi.waitFor(() => {
+        expect(
+          spy.notifications
+            .slice(before)
+            .some((n) => n.method === "workspace/didChangeWatchedFiles"),
+        ).toBe(true);
+      });
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fan-out 按注册的 WatchKind 位过滤事件类型", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.ts");
+    await writeFile(file, "const x = 1;\n");
+    const fakes = installFakeWatcher();
+    // 服务器注册 *.ts 且只要 change 事件（kind 2）；驻留 x.py 避免 x.ts 被排除出 watchedFiles
+    const spy = spyAdapter("a", dir, {
+      env: { MOCK_REGISTER_WATCHERS: "**/*.ts:2" },
+      extensions: [],
+    });
+    const service = createLspService([spy.adapter], join(dir, "no-global.json"));
+    try {
+      await service.touchFile(join(dir, "x.py"), dir);
+      await vi.waitFor(() => expect(fakes.length).toBe(1));
+
+      // 等注册生效：fail-open 期间（注册请求尚未被 client 处理）pattern 不匹配的
+      // 事件也会被转发，注册生效后才会被过滤
+      await vi.waitFor(
+        async () => {
+          const probe = spy.notifications.length;
+          fakes[0].emit([{ path: join(dir, "y.nomatch"), type: "changed", isDirectory: false }]);
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          expect(
+            spy.notifications
+              .slice(probe)
+              .some((n) => n.method === "workspace/didChangeWatchedFiles"),
+          ).toBe(false);
+        },
+        { timeout: 10_000 },
+      );
+
+      const before = spy.notifications.length;
+
+      // created / deleted 不在注册的 kind 里，不转发
+      fakes[0].emit([{ path: join(dir, "a.ts"), type: "created", isDirectory: false }]);
+      fakes[0].emit([{ path: join(dir, "b.ts"), type: "deleted", isDirectory: false }]);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(
+        spy.notifications.slice(before).some((n) => n.method === "workspace/didChangeWatchedFiles"),
+      ).toBe(false);
+
+      // changed 在 kind 里，转发
+      fakes[0].emit([{ path: file, type: "changed", isDirectory: false }]);
       await vi.waitFor(() => {
         expect(
           spy.notifications

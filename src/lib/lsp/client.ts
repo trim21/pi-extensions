@@ -31,6 +31,18 @@ const FILE_CHANGE_CHANGED = 2;
 const FILE_CHANGE_DELETED = 3;
 const TEXT_DOCUMENT_SYNC_INCREMENTAL = 2;
 
+/** LSP WatchKind 位掩码（FileSystemWatcher.kind，缺省 create|change|delete）。 */
+export const WATCH_KIND_CREATE = 1;
+export const WATCH_KIND_CHANGE = 2;
+export const WATCH_KIND_DELETE = 4;
+const WATCH_KIND_ALL = WATCH_KIND_CREATE | WATCH_KIND_CHANGE | WATCH_KIND_DELETE;
+
+/** 服务器通过 client/registerCapability 注册的单个 watcher。 */
+export interface WatcherGlob {
+  pattern: string;
+  kind: number;
+}
+
 const FILE_CHANGE_TYPE: Record<FileChangeType, number> = {
   created: FILE_CHANGE_CREATED,
   changed: FILE_CHANGE_CHANGED,
@@ -77,7 +89,7 @@ interface CapabilityRegistration {
   registerOptions?: {
     identifier?: string;
     workspaceDiagnostics?: boolean;
-    watchers?: { globPattern?: string }[];
+    watchers?: { globPattern?: string; kind?: number }[];
   };
 }
 
@@ -115,8 +127,8 @@ export interface LspClient {
     /** 把工作区文件事件批量通知服务器；驻留文档不在此通道（走 didOpen/didChange/退场）。 */
     watchedFiles(changes: FileChange[]): Promise<void>;
   };
-  /** 服务器注册的 workspace/didChangeWatchedFiles watchers glob（去重）。 */
-  watchPatterns(): string[];
+  /** 服务器注册的 workspace/didChangeWatchedFiles watchers（pattern + kind，按 pattern+kind 去重）。 */
+  watchers(): WatcherGlob[];
   readonly diagnostics: Map<string, Diagnostic[]>;
   waitForDiagnostics(request: {
     path: string;
@@ -247,8 +259,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
   const pullDiagnostics = new Map<string, Diagnostic[]>();
   const published = new Map<string, { at: number; version?: number }>();
   const diagnosticRegistrations = new Map<string, CapabilityRegistration>();
-  /** registration id → workspace/didChangeWatchedFiles watchers glob。 */
-  const watcherRegistrations = new Map<string, string[]>();
+  /** registration id → workspace/didChangeWatchedFiles watchers（pattern + WatchKind 位）。 */
+  const watcherRegistrations = new Map<string, WatcherGlob[]>();
   const registrationListeners = new Set<() => void>();
   const diagnosticListeners = new Set<(input: { path: string; serverID: string }) => void>();
   /** resolvedPath → 客户端已发送的最新文档版本（didOpen=0，didChange 递增）。 */
@@ -307,8 +319,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
       if (registration.method === "workspace/didChangeWatchedFiles") {
         const watchers =
           registration.registerOptions?.watchers
-            ?.map((watcher) => watcher.globPattern)
-            .filter((pattern): pattern is string => typeof pattern === "string") ?? [];
+            ?.map((watcher) => ({
+              pattern: watcher.globPattern,
+              kind: watcher.kind ?? WATCH_KIND_ALL,
+            }))
+            .filter((watcher): watcher is WatcherGlob => typeof watcher.pattern === "string") ?? [];
         watcherRegistrations.set(registration.id, watchers);
       } else if (registration.method === "textDocument/diagnostic") {
         diagnosticRegistrations.set(registration.id, registration);
@@ -754,8 +769,15 @@ export async function create(input: CreateInput): Promise<LspClient> {
     get serverID() {
       return input.serverID;
     },
-    watchPatterns(): string[] {
-      return [...new Set([...watcherRegistrations.values()].flat())];
+    watchers(): WatcherGlob[] {
+      return [
+        ...new Set(
+          [...watcherRegistrations.values()].flat().map((w) => JSON.stringify([w.pattern, w.kind])),
+        ),
+      ].map((key) => {
+        const [pattern, kind] = JSON.parse(key) as [string, number];
+        return { pattern, kind };
+      });
     },
     get connection() {
       return connection;
