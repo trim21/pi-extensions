@@ -37,7 +37,7 @@ export interface NetworkStackExecOptions {
 }
 
 const NAMESERVER_PATTERN = /^\s*nameserver\s+(\S+)/;
-const HOLDER_PATH = fileURLToPath(new URL("holder.js", import.meta.url));
+const HOLDER_PATH = fileURLToPath(new URL("holder.ts", import.meta.url));
 // ip 通常位于 /usr/sbin 或 /sbin，进程默认 PATH 不含它们；node 则依赖宿主完整 PATH
 const SBIN_PATH_SUFFIX = "/usr/local/sbin:/usr/sbin:/sbin";
 

@@ -226,7 +226,6 @@ class BashOutput {
     });
   }
 
-  // eslint-disable-next-line unicorn/no-nonstandard-builtin-properties -- ES2024 标准（Node 24 原生支持）
   async [Symbol.asyncDispose](): Promise<void> {
     await this.close();
   }
@@ -394,7 +393,6 @@ export class BwrapRuntime {
     // 每次命令现建网络栈（启动约 140ms），作用域结束自动停栈；allowlist 变化即时生效
     const networkStack = local ? undefined : await createNetworkStack(runtime);
     await using _stack = {
-      // eslint-disable-next-line unicorn/no-nonstandard-builtin-properties -- ES2024 标准（Node 24 原生支持）
       async [Symbol.asyncDispose]() {
         try {
           await networkStack?.stop();
