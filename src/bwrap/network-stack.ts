@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { generateMihomoConfig } from "./mihomo-config.js";
+import { generateMihomoConfig, TUN_MTU } from "./mihomo-config.js";
 
 /** 命令超时错误：name=TimeoutError（对齐标准错误分类），message 保留 timeout:N 格式。 */
 export class TimeoutError extends Error {
@@ -169,6 +169,7 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
     slirp4netnsPath,
     [
       "-c",
+      `--mtu=${TUN_MTU}`,
       `--userns-path=/proc/${holderPid}/ns/user`,
       "--netns-type=pid",
       String(holderPid),

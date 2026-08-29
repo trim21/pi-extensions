@@ -4,6 +4,7 @@ import {
   generateMihomoConfig,
   type MihomoConfig,
   type MihomoConfigOptions,
+  TUN_MTU,
 } from "../src/bwrap/mihomo-config.js";
 
 function config(options: MihomoConfigOptions): MihomoConfig {
@@ -102,10 +103,11 @@ describe("generateMihomoConfig", () => {
   it("configures the tun inbound with routing and dns hijack", () => {
     const result = config({ allowlist: ["pypi.org"], dnsServers: ["192.168.2.1"] });
 
+    expect(TUN_MTU).toBe(1500);
     expect(result.tun).toEqual({
       enable: true,
       stack: "mixed",
-      mtu: 1500,
+      mtu: TUN_MTU,
       "auto-route": true,
       "strict-route": true,
       "auto-detect-interface": true,

@@ -1,5 +1,6 @@
 const FAKEIP_RANGE = "198.18.0.1/16";
-const TUN_MTU = 1500;
+/** TUN 与 slirp4netns tap0 共用；不对齐时大包会在 slirp NAT 后 PMTU blackhole。 */
+export const TUN_MTU = 1500;
 
 export interface MihomoConfigOptions {
   /** 允许直连的条目列表（域名 / IP / CIDR，可带 :port；空列表 = 默认拒绝一切出网）。 */
@@ -158,6 +159,7 @@ function buildRules(allowlist: readonly string[]): BuiltRules {
  *
  * - auto-detect-interface 让 mihomo 出站绑定 slirp4netns 的 tap0，否则它自己的
  *   DNS 查询会被 auto_route 送回 TUN 形成环；
+ * - TUN mtu 与 slirp4netns `--mtu` 共用 TUN_MTU，避免依赖各自默认值；
  * - allowlist 域名走 fake-ip-filter 真实解析（见 buildRules 注释）。
  */
 export function generateMihomoConfig(options: MihomoConfigOptions): MihomoConfig {
