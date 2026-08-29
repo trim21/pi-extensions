@@ -1,10 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, readlink } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-
+import { forEachLine } from "../lib/proc.js";
 import { generateMihomoConfig, TUN_MTU } from "./mihomo-config.js";
 
 /** 命令超时错误：name=TimeoutError（对齐标准错误分类），message 保留 timeout:N 格式。 */
@@ -120,16 +118,23 @@ function waitForMihomoStarted(holder: ChildProcess, timeoutMs = 20000): Promise<
       settled = true;
       reject(new Error("Timed out waiting for mihomo to start"));
     }, timeoutMs);
-    const onData = (data: Buffer): void => {
+    const onReady = (): void => {
       if (settled) return;
-      if (data.toString().includes("Tun adapter listening")) {
-        settled = true;
-        clearTimeout(timer);
-        resolve();
-      }
+      settled = true;
+      clearTimeout(timer);
+      resolve();
     };
-    holder.stdout?.on("data", onData);
-    holder.stderr?.on("data", onData);
+    // 按行扫描：mihomo 日志行可能跨 data chunk，由 forEachLine 负责拼接
+    for (const stream of [holder.stdout, holder.stderr]) {
+      if (stream) {
+        // 不提前停止：holder 生命周期内持续消费输出，避免流无消费者触发背压
+        void forEachLine(stream, (line) => {
+          if (line.includes("Tun adapter listening")) onReady();
+        }).catch(() => {
+          // 就绪判定由超时与 holder exit 兜底，流的 error 忽略
+        });
+      }
+    }
     holder.once("exit", (code) => {
       if (settled) return;
       settled = true;
@@ -169,20 +174,16 @@ export interface NetworkStack {
   stop(): Promise<void>;
   /** holder pid：可 `nsenter -U -n --preserve-credentials -t <pid>` 手动进入该 netns 排查。 */
   readonly holderPid: number;
-  /** 生成的 mihomo 配置路径（stop() 后随临时目录一起删除）。 */
-  readonly configPath: string;
 }
 
 interface NetworkStackState {
   holderPid: number;
-  directory: string;
 }
 
-/** 兜底：调用方忘记 stop() 时，对象被 GC 回收后 kill 残留进程并清理目录。 */
+/** 兜底：调用方忘记 stop() 时，对象被 GC 回收后 kill 残留进程。 */
 const stackFinalizer = new FinalizationRegistry<NetworkStackState>((state) => {
   // SIGTERM 经 unshare --kill-child 转发给 init，内核清理 pid ns 内全部进程
   killProcess(state.holderPid);
-  void rm(state.directory, { recursive: true, force: true }).catch(() => false);
 });
 
 /**
@@ -198,11 +199,9 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
     slirp4netnsPath,
     onHolderOutput: holderOutput,
   } = options;
-  // 临时目录放在 agent-dir/tmp（pi 自有临时区），不污染系统 /tmp
-  const directory = await mkdtemp(join(getAgentDir(), "tmp", "pi-netns-"));
-  const configPath = join(directory, "mihomo.json");
+  // mihomo 支持 -config 直接接收 base64 配置，无需写配置文件中转
   const config = generateMihomoConfig({ allowlist, dnsServers });
-  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  const configBase64 = Buffer.from(JSON.stringify(config)).toString("base64");
 
   let holder: ChildProcess | undefined;
   try {
@@ -218,7 +217,7 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
         "--",
         "node",
         HOLDER_PATH,
-        configPath,
+        configBase64,
         mihomoPath,
         slirp4netnsPath,
         String(TUN_MTU),
@@ -242,7 +241,7 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
 
     await waitForMihomoStarted(holder);
 
-    const state: NetworkStackState = { holderPid, directory };
+    const state: NetworkStackState = { holderPid };
     const stack: NetworkStack = {
       exec: async (execOptions: NetworkStackExecOptions) => {
         const child = spawn(
@@ -320,10 +319,8 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
         for (const pid of children) {
           killProcess(pid, "SIGKILL");
         }
-        await rm(state.directory, { recursive: true, force: true }).catch(() => false);
       },
       holderPid,
-      configPath,
     };
     stackFinalizer.register(stack, state);
     return stack;
@@ -338,7 +335,6 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
         killProcess(pid, "SIGKILL");
       }
     }
-    await rm(directory, { recursive: true, force: true }).catch(() => false);
     throw error;
   }
 }

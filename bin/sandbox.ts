@@ -247,7 +247,6 @@ async function run(invocation: Invocation): Promise<number> {
         },
         onNetworkStack: (stack) => {
           diagnose(`netns holder pid: ${String(stack.holderPid)}`);
-          diagnose(`mihomo config: ${stack.configPath}`);
         },
       }),
     });

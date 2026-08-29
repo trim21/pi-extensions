@@ -1,16 +1,15 @@
 import { spawn } from "node:child_process";
-import { rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 const args = process.argv.slice(2);
-const configPath = args[0];
+const configBase64 = args[0];
 const mihomoPath = args[1];
 const slirp4netnsPath = args[2];
 const tunMtu = Number(args[3]);
-if (!configPath || !mihomoPath || !slirp4netnsPath || !tunMtu) {
+if (!configBase64 || !mihomoPath || !slirp4netnsPath || !tunMtu) {
   process.exit(2);
 }
+process.chdir("/");
 function tap0Exists() {
   return new Promise((resolve) => {
     const child = spawn("ip", ["link", "show", "tap0"], { stdio: "ignore" });
@@ -27,10 +26,7 @@ async function waitFor(attempts, delayMs, predicate) {
 }
 async function main() {
   process.stdin.resume();
-  process.stdin.on("end", () => {
-    rmSync(dirname(configPath), { recursive: true, force: true });
-    process.exit(0);
-  });
+  process.stdin.on("end", () => process.exit(0));
   const status = await readFile("/proc/self/status", "utf8");
   const hostPid = /^NSpid:\s+(.+)$/m.exec(status)?.[1].split(/\s+/, 1)[0];
   if (!hostPid) {
@@ -40,7 +36,7 @@ async function main() {
     stdio: ["ignore", "inherit", "inherit"]
   });
   await waitFor(100, 100, tap0Exists);
-  const mihomo = spawn(mihomoPath, ["-d", dirname(configPath), "-f", configPath], {
+  const mihomo = spawn(mihomoPath, ["-config", configBase64], {
     stdio: ["ignore", "inherit", "inherit"]
   });
   const stop = () => {
