@@ -3,8 +3,8 @@
  *
  * 参数经 bridge.toolCall 以 agent 工具名 "refactor" 分派，Rust 侧 subc 翻译层
  * 按 op 转成内部命令（move_symbol / extract_function / inline_symbol）。
- * 与 ast_edit 不同，这些命令不支持 preview：写保护退化为路径级审批
- * （workspace 内自动放行，外部路径经 write-guard 确认，无 diff 预览）。
+ * 这些命令不支持 preview，写保护退化为路径级审批（workspace 内自动放行，
+ * 外部路径经 write-guard 确认，无 diff 预览）。
  */
 
 import { readFileSync } from "node:fs";
@@ -71,10 +71,9 @@ export function registerRefactorTool(pi: ExtensionAPI, ctx: AftToolContext): voi
     label: "aft_refactor",
     description: [
       "workspace-wide 重构：更新跨文件的 import 与引用。",
-      "move：把顶层符号（非嵌套函数/类方法）移到另一文件，全 workspace 重写 import；执行前自动创建 checkpoint。",
+      "move：把顶层符号（非嵌套函数/类方法）移到另一文件，全 workspace 重写 import。",
       "extract：把行区间抽成新函数（TS/JS/TSX、Python）。",
       "inline：把调用点替换为函数体。",
-      "move / rename 整个文件用 aft_move（OS 层操作，不更新引用）；移动代码符号用本工具 op=move。",
     ].join("\n"),
     promptSnippet: "Workspace-wide symbol move / function extraction / inlining",
     promptGuidelines: [REFACTOR_PROMPT],

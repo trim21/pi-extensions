@@ -3,9 +3,10 @@
  * + aft_refactor / aft_import（workspace-wide 重构与 import 管理，路径级写保护）。
  *
  * 感知工具只读，不触碰本仓库自己的 read/write/edit/bash 工具及其安全机制
- * （bwrap 沙箱、write-guard、reads 记账）。aft_search 仅当用户级
- * aft.jsonc 开启 semantic_search 时注册（本地语义索引需 ONNX 运行时，
- * 内网默认关闭）。aft_refactor / aft_import 的 Rust 命令不支持 preview，
+ * （bwrap 沙箱、write-guard、reads 记账）。aft_search 仅当用户级 aft.jsonc 开启
+ * semantic_search 且配好外部 embedding 后端（semantic.backend 为
+ * openai_compatible / ollama 且有 base_url）时注册；aft 默认的本地 ONNX
+ * fastembed 后端不使用。aft_refactor / aft_import 的 Rust 命令不支持 preview，
  * 写保护退化为路径级审批。
  *
  * 二进制缺失或 pool 创建失败时降级：不注册任何工具并在 session 开始时报
@@ -36,7 +37,7 @@ export default async function aftReadTools(pi: ExtensionAPI): Promise<void> {
 
   let pool: AftPool;
   try {
-    pool = await createAftPool(cwd);
+    pool = await createAftPool(cwd, cfg.semanticRemote);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     pi.on("session_start", (_event, ctx) => {
@@ -55,7 +56,17 @@ export default async function aftReadTools(pi: ExtensionAPI): Promise<void> {
   registerRefactorTool(pi, toolCtx);
   registerImportTool(pi, toolCtx);
   if (cfg.semanticSearch) {
-    registerSearchTool(pi, toolCtx);
+    if (cfg.semanticRemote) {
+      registerSearchTool(pi, toolCtx);
+    } else {
+      // 只开了开关、没配外部 embedding 后端：与其静默不注册，不如说明缺什么。
+      pi.on("session_start", (_event, ctx) => {
+        ctx.ui.notify(
+          "aft_search is not registered: semantic_search needs an external embedding backend (aft.jsonc semantic.backend = openai_compatible | ollama, plus base_url). The local ONNX fastembed default is not used here.",
+          "warning",
+        );
+      });
+    }
   }
 
   // 关闭 bridge pool。session_shutdown 是 pi 的正常生命周期；beforeExit 兜底

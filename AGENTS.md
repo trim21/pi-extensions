@@ -20,6 +20,7 @@ pi-extensions 是 pi coding-agent 的自定义扩展集合，TypeScript ESM 项�
 
 ```
 src/
+├── aft/          # AFT 代码感知与重构工具（outline/zoom/callgraph/refactor/import/search，index.ts 为扩展入口）
 ├── bwrap/        # bubblewrap 沙箱执行层（被 claude-code / opencode 的 Bash 工具复用）
 ├── claude-code/  # Claude Code 风格工具集（index.ts 为扩展入口）
 ├── opencode/     # opencode 风格工具集（index.ts 为扩展入口）
@@ -32,6 +33,7 @@ test/             # Vitest 测试，文件与 src 对应
 
 - `claude-code` 与 `opencode` 是两套平行的工具集，由用户在 pi 配置里选择**启用其中一个**，不会同时启用；两者在行为、命名上的差异与冲突是符合预期的，不要试图统一。
 - 扩展没有单一根入口，各目录的 `index.ts` 作为扩展入口，在 `package.json` 的 `pi.extensions` 中注册；skills 在 `pi.skills` 中注册；`src/bwrap/` 不单独注册。
+- `aft` 只注册只读感知工具与「改文件」的写工具。引擎自带的回滚面（`aft_safety` 的 undo / history / checkpoint / restore）与 OS 级文件操作（`aft_delete` / `aft_move`）不暴露给模型——模型只负责改，恢复由用户用 git 完成；prompt 里也不要提「快照」「撤销」这类模型用不了的概念。`aft_search` 只走外部 embedding 后端（`openai_compatible` / `ollama`），本地 ONNX 的 `fastembed` 不注册。
 
 ## pi 扩展约定
 
