@@ -9,9 +9,9 @@
  *   tsx bin/sandbox.ts --mode=readonly --print-args -- ls -al
  *
  * 约定：
- *   - 待执行命令放在 ` -- ` 之后，用空格拼成一条命令原样交给 `bash -lc`；
- *     引号/`$` 展开由你自己的 shell 处理一次，本 CLI 不再二次转义。
- *     需要带空格的路径就写 `-- 'cp "a b" c'`（整体一个 argv）。
+ *   - 待执行命令放在 ` -- ` 之后，按 argv 逐个接收，用 shlex 安全引用后交给 `bash -lc`；
+ *     参数边界因此被保留（`-- cp "a b" out` 仍是三个参数）。
+ *     需要管道/`&&` 等 shell 语义时显式嵌套：`-- bash -c 'echo hi && pwd'`。
  *   - `--print-args` 输出 JSON（argv 与环境变量按结构化数据给出，无 quoting 歧义）；
  *     命令输出走 stdout，诊断信息一律以 `# ` 前缀走 stderr，便于分开重定向。
  *   - 退出码即被执行命令的退出码（被信号杀死为 1；用法错误为 2）。
@@ -19,6 +19,7 @@
 
 import { resolve } from "node:path";
 
+import * as shlex from "shlex";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -47,8 +48,8 @@ type Flags = Static<typeof flagsSchema>;
 
 interface Invocation {
   flags: Flags;
-  /** ` -- ` 之后的 argv 以空格拼接的命令，原样交给 `bash -lc`。 */
-  command: string;
+  /** ` -- ` 之后的原始 argv。 */
+  command: string[];
 }
 
 /** 用法/参数错误：打印 usage，退出码 2。 */
@@ -71,7 +72,7 @@ const BOOLEAN_FLAGS = new Set<keyof Flags>(["printArgs", "verbose", "headless", 
 function parseInvocation(argv: string[]): Invocation {
   const separator = argv.indexOf("--");
   const flagTokens = separator === -1 ? argv : argv.slice(0, separator);
-  const command = separator === -1 ? "" : argv.slice(separator + 1).join(" ");
+  const command = separator === -1 ? [] : argv.slice(separator + 1);
 
   const raw: Record<string, unknown> = {};
   for (let index = 0; index < flagTokens.length; index++) {
@@ -147,9 +148,13 @@ function usage(modes: readonly string[]): string {
     "  --verbose         透传 netns holder（unshare/mihomo）与 slirp4netns 日志",
     "  -h, --help        显示本说明",
     "",
+    "命令按 argv 接收，逐参数安全引用（shlex.join）后交给 `bash -lc`；",
+    "需要管道 / && 等 shell 语义时显式嵌套： -- bash -c 'echo hi && pwd'",
+    "",
     "Examples:",
     "  tsx bin/sandbox.ts --mode=workspace-write -- pwd",
     "  tsx bin/sandbox.ts --print-args -- ls -al",
+    "  tsx bin/sandbox.ts -- cp 'a b.txt' out.txt",
     "  tsx bin/sandbox.ts --config=/tmp/allowlist.json --verbose -- curl -sS https://pypi.org/simple/",
   ].join("\n");
 }
@@ -168,11 +173,13 @@ async function run(invocation: Invocation): Promise<number> {
     ...(mode && { mode }),
     headless: flags.headless === true,
   });
+  // argv -> shell 源文本：逐参数安全引用，保留参数边界（与 Python shlex.join 同语义）
+  const commandLine = shlex.join(command);
   const preview = strategy.bwrapEnabled
     ? await previewSandboxCommand(strategy, {
         workspace,
         commandCwd,
-        command,
+        command: commandLine,
       })
     : undefined;
 
@@ -222,7 +229,7 @@ async function run(invocation: Invocation): Promise<number> {
     const { exitCode } = await runInSandbox(strategy, {
       workspace,
       commandCwd,
-      command,
+      command: commandLine,
       onData: (data) => process.stdout.write(data),
       signal: controller.signal,
       ...(flags.timeout !== undefined && { timeout: flags.timeout }),
@@ -262,7 +269,7 @@ async function main(): Promise<void> {
     return;
   }
   try {
-    if (invocation.command === "") {
+    if (invocation.command.length === 0) {
       console.error("缺少命令：用 ' -- ' 分隔选项与待执行命令");
       console.error(usage(BWRAP_MODES));
       process.exit(2);
