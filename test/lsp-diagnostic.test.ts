@@ -47,15 +47,15 @@ describe("lsp diagnostic report", () => {
     );
   });
 
-  it("超过 20 条时截断并提示 more", () => {
+  it("超过 5 条时截断并提示 more", () => {
     const many = [
-      ...Array.from({ length: 18 }, (_, i) => diag({ message: `err${i}` })),
-      ...Array.from({ length: 5 }, (_, i) => diag({ severity: 2, message: `warn${i}` })),
+      ...Array.from({ length: 8 }, (_, i) => diag({ message: `err${i}` })),
+      ...Array.from({ length: 4 }, (_, i) => diag({ severity: 2, message: `warn${i}` })),
     ];
     const text = report("/x.py", many);
-    expect(text).toContain("... and 3 more");
-    expect(text.match(/^ERROR/gm)?.length).toBe(18);
-    expect(text.match(/^WARN/gm)?.length).toBe(2);
+    expect(text).toContain("... and 7 more");
+    expect(text.match(/^ERROR/gm)?.length).toBe(5);
+    expect(text.match(/^WARN/gm)).toBeNull();
   });
 
   it("appendLspDiagnosticText 按错误数量选择标题", () => {

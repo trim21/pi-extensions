@@ -1,10 +1,10 @@
 /**
- * 诊断报告格式化：报告 ERROR 与 WARN，每个文件最多 20 条。
+ * 诊断报告格式化：报告 ERROR 与 WARN，每个文件最多 5 条。
  */
 
 import type { Diagnostic } from "./client.js";
 
-const MAX_PER_FILE = 20;
+const MAX_PER_FILE = 5;
 
 const SEVERITY_LABELS: Record<number, string> = {
   1: "ERROR",
