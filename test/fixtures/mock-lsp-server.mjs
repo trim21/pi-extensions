@@ -1,6 +1,16 @@
 // 简易 stdio LSP 服务器 fixture：用于 client 测试。
 // 行为：initialize 握手 → didOpen 后 50ms 推送一个 ERROR 诊断 → shutdown/exit。
+// 收到的 notifications 以 JSONL 写到 stderr 供测试断言载荷；
+// env MOCK_REGISTER_WATCHERS（逗号分隔 glob）时，initialized 后主动发送
+// client/registerCapability 注册 workspace/didChangeWatchedFiles watchers；
+// env MOCK_UNREGISTER_IDS（逗号分隔 registration id）时，收到 textDocument/didClose
+// 后发送 client/unregisterCapability 移除对应注册。
 let buffer = Buffer.alloc(0);
+
+const registerWatchers = (process.env.MOCK_REGISTER_WATCHERS ?? "").split(",").filter(Boolean);
+const unregisterIds = (process.env.MOCK_UNREGISTER_IDS ?? "").split(",").filter(Boolean);
+let watchersRegistered = false;
+let unregisterSent = false;
 
 process.stdin.on("data", (chunk) => {
   buffer = Buffer.concat([buffer, chunk]);
@@ -26,12 +36,51 @@ function send(msg) {
 }
 
 function handle(msg) {
+  // 通知回传（请求/响应带 id，通知不带）
+  if (msg.id === undefined && msg.method !== undefined) {
+    process.stderr.write(JSON.stringify({ method: msg.method, params: msg.params }) + "\n");
+  }
   if (msg.method === "initialize") {
     send({
       jsonrpc: "2.0",
       id: msg.id,
       result: { capabilities: { textDocumentSync: 1 } },
     });
+    return;
+  }
+  if (msg.method === "initialized") {
+    if (!watchersRegistered && registerWatchers.length > 0) {
+      watchersRegistered = true;
+      send({
+        jsonrpc: "2.0",
+        id: "reg-cap-1",
+        method: "client/registerCapability",
+        params: {
+          registrations: registerWatchers.map((pattern, i) => ({
+            id: `watcher-${i}`,
+            method: "workspace/didChangeWatchedFiles",
+            registerOptions: { watchers: [{ globPattern: pattern, kind: 7 }] },
+          })),
+        },
+      });
+    }
+    return;
+  }
+  if (msg.method === "textDocument/didClose") {
+    if (!unregisterSent && unregisterIds.length > 0) {
+      unregisterSent = true;
+      send({
+        jsonrpc: "2.0",
+        id: "unreg-cap-1",
+        method: "client/unregisterCapability",
+        params: {
+          unregisterations: unregisterIds.map((id) => ({
+            id,
+            method: "workspace/didChangeWatchedFiles",
+          })),
+        },
+      });
+    }
     return;
   }
   if (msg.method === "textDocument/didOpen") {

@@ -80,19 +80,18 @@ const SERVERS = {
   },
 };
 
-async function setupProject(disabled: string[] = []) {
+async function setupProject(disabled: string[] = [], maxOpenDocuments?: number) {
   const directory = await mkdtemp(join(tmpdir(), "cc-lsp-e2e-"));
   // pyright 与 ruff 的 root marker；放宽诊断等待时间避免首次启动超时
   await writeFile(join(directory, "pyproject.toml"), "[tool.ruff]\n");
   await mkdir(join(directory, ".pi"), { recursive: true });
-  await writeFile(
-    join(directory, ".pi", "lsp.json"),
-    JSON.stringify({
-      diagnosticsDocumentWaitTimeoutMs: "20s",
-      servers: SERVERS,
-      ...(disabled.length > 0 && { disabled }),
-    }),
-  );
+  const lspConfig: Record<string, unknown> = {
+    diagnosticsDocumentWaitTimeoutMs: "20s",
+    servers: SERVERS,
+    ...(disabled.length > 0 && { disabled }),
+  };
+  if (maxOpenDocuments !== undefined) lspConfig.maxOpenDocuments = maxOpenDocuments;
+  await writeFile(join(directory, ".pi", "lsp.json"), JSON.stringify(lspConfig));
   const filePath = join(directory, "bad.py");
   await writeFile(
     filePath,
@@ -216,6 +215,79 @@ describe("cc Edit + real pyright/ruff LSP", () => {
       const clean = await readFile(filePath, "utf8");
       const recheck = await call(tools.get("Write")!, { file_path: filePath, content: clean }, ctx);
       expect(recheck.content[0].text).not.toContain("LSP errors detected");
+    },
+    90_000,
+  );
+
+  it.runIf(hasRuff)(
+    "连续 edit 超过 maxOpenDocuments 个文件后，每个 Edit 仍包含其自身诊断",
+    async () => {
+      const { directory } = await setupProject(["pyright"], 2);
+      const tools = loadFileTools();
+      const ctx = context(directory);
+
+      for (const name of ["a.py", "b.py", "c.py"]) {
+        const filePath = join(directory, name);
+        await writeFile(filePath, "x = 1\n");
+        // read 不占驻留名额；Edit 让文件进入有界 LRU，容量 2 时第三个 Edit 会淘汰最早者
+        await call(tools.get("Read")!, { file_path: filePath }, ctx);
+        const result = await call(
+          tools.get("Edit")!,
+          {
+            file_path: filePath,
+            old_string: "x = 1",
+            new_string: "x = undefined_name",
+          },
+          ctx,
+        );
+        expect(result.content[0].text).toContain("LSP errors detected in this file");
+        expect(result.content[0].text).toContain("undefined_name");
+      }
+    },
+    90_000,
+  );
+
+  it.runIf(hasPyright)(
+    "外部改写被依赖文件后，Edit 上层文件的诊断反映新磁盘状态",
+    async () => {
+      const { directory } = await setupProject(["ruff"]);
+      const libPath = join(directory, "lib.py");
+      const mainPath = join(directory, "main.py");
+      await writeFile(libPath, 'def greet(name: str) -> str:\n    return f"hi {name}"\n');
+      await writeFile(mainPath, 'import lib\nprint(lib.greet("world"))\n');
+      const tools = loadFileTools();
+      const ctx = context(directory);
+
+      // 建立 client 并驻留 main.py（引入自身错误拿到基线诊断）
+      await call(tools.get("Read")!, { file_path: mainPath }, ctx);
+      const baseline = await call(
+        tools.get("Edit")!,
+        {
+          file_path: mainPath,
+          old_string: 'print(lib.greet("world"))',
+          new_string: "print(lib.greet(undefined_name))",
+        },
+        ctx,
+      );
+      expect(baseline.content[0].text).toContain("undefined_name");
+
+      // 外部工具改写被依赖的 lib.py（greet 参数改为 int）
+      await writeFile(libPath, 'def greet(name: int) -> str:\n    return "hi"\n');
+      // 等 watcher 去抖（300ms）+ fan-out + pyright 刷新磁盘快照
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+
+      // 修复 main.py 自身错误：诊断应反映 lib.py 的新签名（str 不能赋给 int）
+      const fixed = await call(
+        tools.get("Edit")!,
+        {
+          file_path: mainPath,
+          old_string: "print(lib.greet(undefined_name))",
+          new_string: 'print(lib.greet("world"))',
+        },
+        ctx,
+      );
+      expect(fixed.content[0].text).toContain("LSP errors detected in this file");
+      expect(fixed.content[0].text).toMatch(/cannot be assigned|reportArgumentType/);
     },
     90_000,
   );

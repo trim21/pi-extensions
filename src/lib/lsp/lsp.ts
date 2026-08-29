@@ -13,15 +13,16 @@
  *   的 id 直接忽略；
  * - client 按 (root, serverID) 缓存，并发 spawn 去重，启动失败记入 broken
  *   集合（服务实例生命周期内不再重试）；
- * - 工具只与 touchFile / diagnostics / lspDiagnosticsForFile 三个方法打交道；通知回调按请求传入。
+ * - 工具只与 touchFile / notifyFile / diagnostics / lspDiagnosticsForFile 四个方法打交道；通知回调按请求传入。
  */
 
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { extname, join, normalize, sep } from "node:path";
+import { extname, join, normalize, relative, sep } from "node:path";
 
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { minimatch } from "minimatch";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -29,9 +30,22 @@ import { type LspServerAdapter } from "./adapter.js";
 import { create, type CreateInput, type Diagnostic, type Info as LspClient } from "./client.js";
 import { report } from "./diagnostic.js";
 import { createAdapters, mergeServerRecords, serverConfigSchema } from "./server-config.js";
+import { type FileChange, watchWorkspace, type WorkspaceWatcher } from "./watcher.js";
 
 /** 超时值：number（毫秒，>=1）或字符串（"500"、"5s"、"1m"），Parse 后由 toMs 统一换算。 */
 const timeoutValue = Type.Union([Type.Number({ minimum: 1 }), Type.String()]);
+
+/** lsp.json 顶层 `watch` 段：工作区文件监听配置。 */
+const watchConfigSchema = Type.Object({
+  /** 是否启用工作区文件监听（缺省 true）。 */
+  enabled: Type.Optional(Type.Boolean()),
+  /** 事件去抖时长（ms，缺省 300），沿用 timeoutValue 字符串写法。 */
+  debounceMs: Type.Optional(timeoutValue),
+  /** 单批事件上限（缺省 500），超出截断并提示一次。 */
+  maxBatch: Type.Optional(Type.Number({ minimum: 1 })),
+  /** 追加忽略 glob（相对工作区根的 POSIX 路径）。 */
+  ignore: Type.Optional(Type.Array(Type.String())),
+});
 
 /** lsp.json 的配置项（全局与本地同构）。 */
 const lspConfigSchema = Type.Object({
@@ -43,6 +57,10 @@ const lspConfigSchema = Type.Object({
   enabled: Type.Optional(Type.Array(Type.String())),
   /** 从启用集中排除的服务器 id（缺省 = 无）。 */
   disabled: Type.Optional(Type.Array(Type.String())),
+  /** 工作区文件监听配置（缺省全部字段用 watcher 默认值）。 */
+  watch: Type.Optional(watchConfigSchema),
+  /** 驻留文档上限（LRU 容量，缺省 32）。 */
+  maxOpenDocuments: Type.Optional(Type.Number({ minimum: 1 })),
   /** push 诊断去抖（ms，缺省 150）。 */
   diagnosticsDebounceMs: Type.Optional(timeoutValue),
   /** document 模式诊断等待上限（ms，缺省 5_000）。 */
@@ -92,6 +110,32 @@ function timeoutOptions(
     diagnosticsRequestTimeoutMs: toMs(config.diagnosticsRequestTimeoutMs),
     initializeTimeoutMs: toMs(config.initializeTimeoutMs),
   };
+}
+
+/** 生效的工作区监听配置（应用缺省值）。 */
+export interface EffectiveWatchConfig {
+  enabled: boolean;
+  debounceMs: number;
+  flushMs: number;
+  maxBatch: number;
+  ignore: string[];
+}
+
+/** lsp.json 的 `watch` 段 + 缺省值；debounceMs 字符串时长在此换算。 */
+export function watchOptions(config: LspConfig): EffectiveWatchConfig {
+  const watch = config.watch;
+  return {
+    enabled: watch?.enabled ?? true,
+    debounceMs: toMs(watch?.debounceMs) ?? 300,
+    flushMs: 1_000,
+    maxBatch: watch?.maxBatch ?? 500,
+    ignore: watch?.ignore ?? [],
+  };
+}
+
+/** 驻留文档 LRU 容量（缺省 32）。 */
+export function maxOpenDocuments(config: LspConfig): number {
+  return config.maxOpenDocuments ?? 32;
 }
 
 /** 读取并解析单个配置文件；文件不存在或解析失败时返回空配置。 */
@@ -179,6 +223,10 @@ interface LspState {
   disabled: boolean;
   /** root+serverID → 服务器状态，用于 footer status 显示。 */
   servers: Map<string, { serverID: string; root: string; state: "running" | "broken" }>;
+  /** 当前会话工作目录（watcher 挂载点）；变化时重建监听器。 */
+  cwd: string | undefined;
+  /** client → adapter 扩展名集合，fan-out 时按扩展名过滤。 */
+  clientExtensions: Map<LspClient, readonly string[]>;
 }
 
 /** 渲染 LSP status 文本的回调（传入 undefined 表示清除）。 */
@@ -209,6 +257,8 @@ export interface LspService {
     diagnostics?: "document" | "full",
     options?: LspRequestOptions,
   ): Promise<void>;
+  /** read 用：只发文件事件通知服务器磁盘上有该文件，不驻留、不等诊断。 */
+  notifyFile(file: string, cwd: string, options?: LspRequestOptions): Promise<void>;
   diagnostics(): Promise<Record<string, Diagnostic[]>>;
   lspDiagnosticsForFile(
     file: string,
@@ -262,9 +312,93 @@ export function createLspService(
     closing: false,
     disabled: false,
     servers: new Map(),
+    cwd: undefined,
+    clientExtensions: new Map(),
   };
 
   let renderStatus: StatusRenderer | undefined;
+
+  // ── 工作区文件监听（watcher）───────────────────────────────────────────────
+
+  let watcher: WorkspaceWatcher | undefined;
+  let watcherCwd: string | undefined;
+
+  async function stopWatcher(): Promise<void> {
+    const current = watcher;
+    watcher = undefined;
+    watcherCwd = undefined;
+    if (current) {
+      try {
+        await current.stop();
+      } catch {
+        // 停止失败不影响流程
+      }
+    }
+  }
+
+  /** 事件按各 client 的 root 前缀 / 注册 pattern / 扩展名过滤后投递。 */
+  async function fanOut(changes: FileChange[]): Promise<void> {
+    const cwd = state.cwd;
+    if (!cwd) return;
+    await Promise.all(
+      state.clients.map(async (client) => {
+        const filtered = changes.filter((change) => {
+          if (!containsPath(change.path, cwd) || !containsPath(change.path, client.root)) {
+            return false;
+          }
+          const patterns = client.watchPatterns();
+          if (patterns.length > 0) {
+            const candidate = relative(client.root, change.path).split(sep).join("/");
+            if (patterns.every((pattern) => !minimatch(candidate, pattern))) return false;
+          }
+          const extensions = state.clientExtensions.get(client);
+          return (
+            extensions === undefined ||
+            extensions.length === 0 ||
+            extensions.includes(extname(change.path))
+          );
+        });
+        if (filtered.length === 0) return;
+        try {
+          await client.notify.watchedFiles(filtered);
+        } catch {
+          // 单个 client 通知失败不影响其余 client
+        }
+      }),
+    );
+  }
+
+  /** 首个 client 建立 / 会话 cwd 变化时（重）建监听器；watch.enabled: false 时不启动。 */
+  async function ensureWatcher(cwd: string, notify?: ExtensionUIContext["notify"]): Promise<void> {
+    if (state.closing || state.disabled) return;
+    const config = await loadLspConfig(cwd, globalConfigPath);
+    const watch = watchOptions(config);
+    if (!watch.enabled) return;
+    if (watcher && watcherCwd === cwd) return;
+    await stopWatcher();
+    try {
+      watcher = await watchWorkspace(cwd, (changes) => void fanOut(changes), {
+        debounceMs: watch.debounceMs,
+        flushMs: watch.flushMs,
+        maxBatch: watch.maxBatch,
+        ignore: watch.ignore,
+        onError: (message) => notify?.(message, "error"),
+        onTruncated: () =>
+          notify?.(
+            "workspace file events truncated (batch limit exceeded); run /lsp-reload <id> if diagnostics look stale",
+            "warning",
+          ),
+      });
+      watcherCwd = cwd;
+    } catch (error) {
+      notify?.(
+        `workspace watcher failed to start for ${cwd}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        "error",
+      );
+    }
+  }
 
   /** 汇总当前所有 LSP server 状态并渲染到 footer status。 */
   function updateStatusText(): void {
@@ -300,6 +434,12 @@ export function createLspService(
     const active = filterAdapters(adapters ?? createAdapters(config.servers), config);
     const extension = extname(file) || file;
     const result: LspClient[] = [];
+
+    // 会话 cwd 变化时重建 watcher（首个 client 建立后启动）
+    if (state.cwd !== cwd) {
+      state.cwd = cwd;
+      await stopWatcher();
+    }
 
     for (const adapter of active) {
       if (adapter.extensions.length > 0 && !adapter.extensions.includes(extension)) continue;
@@ -343,6 +483,7 @@ export function createLspService(
             initializeTimeoutMs: adapter.startupTimeoutMs ?? timeout.initializeTimeoutMs,
             diagnosticsDocumentWaitTimeoutMs:
               adapter.diagnosticsWaitMs ?? timeout.diagnosticsDocumentWaitTimeoutMs,
+            maxOpenDocuments: maxOpenDocuments(config),
           });
           if (state.closing || state.disabled) {
             await client.shutdown();
@@ -354,8 +495,10 @@ export function createLspService(
             return duplicate;
           }
           state.clients.push(client);
+          state.clientExtensions.set(client, adapter.extensions);
           state.servers.set(key, { serverID: adapter.id, root, state: "running" });
           updateStatusText();
+          void ensureWatcher(cwd, notify);
           return client;
         } catch (error) {
           state.broken.add(key);
@@ -426,6 +569,21 @@ export function createLspService(
   }
 
   /**
+   * read 的 warm-up：通知服务器磁盘上有这个文件（D5），不 didOpen 驻留、不等诊断。
+   * 驻留文档若磁盘已被外部改写会顺带触发退场。
+   */
+  async function notifyFile(file: string, cwd: string, options?: LspRequestOptions): Promise<void> {
+    const clients = await getClients(file, cwd, options?.notify);
+    await Promise.all(
+      clients.map((client) =>
+        client.notify.watchedFiles([{ path: file, type: "changed", isDirectory: false }]),
+      ),
+    ).catch(() => {
+      // 文件事件通知失败不影响读取
+    });
+  }
+
+  /**
    * edit/write 用：等待文档诊断并返回该文件的 ERROR / WARN 报告（text 空串表示无此类诊断）
    * 与数量。内部所有 LSP 失败都会被吞掉，不干扰写操作本身。
    */
@@ -451,8 +609,10 @@ export function createLspService(
       // 个别进程退出失败不阻止清理流程
     });
     state.clients = [];
+    state.clientExtensions.clear();
     state.broken.clear();
     state.servers.clear();
+    await stopWatcher();
     updateStatusText();
   }
 
@@ -482,11 +642,13 @@ export function createLspService(
       // 个别进程退出失败不阻止清理流程
     });
     state.clients = state.clients.filter((client) => client.serverID !== serverID);
+    for (const client of targets) state.clientExtensions.delete(client);
     for (const [key, server] of state.servers) {
       if (server.serverID !== serverID) continue;
       state.broken.delete(key);
       state.servers.delete(key);
     }
+    if (state.clients.length === 0) await stopWatcher();
     state.closing = false;
     state.disabled = false;
     updateStatusText();
@@ -498,6 +660,7 @@ export function createLspService(
 
   return {
     touchFile,
+    notifyFile,
     diagnostics,
     lspDiagnosticsForFile,
     shutdownAll,

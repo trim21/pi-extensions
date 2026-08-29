@@ -372,6 +372,13 @@ read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级�
       "settings": {}, // → didChangeConfiguration / workspace/configuration 请求
     },
   },
+  "maxOpenDocuments": 32, // 驻留文档上限（LRU 容量），缺省 32
+  "watch": {
+    "enabled": true, // 工作区文件监听，缺省 true
+    "debounceMs": "300ms", // 事件去抖，缺省 300ms；也支持 "5s" / "1m"
+    "maxBatch": 500, // 单批事件上限，缺省 500，超出截断并提示一次
+    "ignore": [], // 追加忽略 glob（相对工作区根）
+  },
 }
 ```
 
@@ -384,9 +391,13 @@ read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级�
 - `startupTimeoutMs` / `diagnosticsWaitMs`：per-server 超时，覆盖全局配置与默认值
 - `initializationOptions` 与 `settings` 按 LSP 语义分离：前者进 initialize 请求，后者进 didChangeConfiguration / workspace/configuration 请求
 
-内置默认服务器（typescript / pyright / ruff / clangd）始终存在；`servers` 以 key 为服务器 id 与默认合并——同 key 整体覆盖（整个配置替换默认）、新 key 新增、`"enabled": false` 移除（如 `"clangd": { "enabled": false }`）。executable 的发现逻辑（如 tsserver 路径、venv 里的 python）不内置，需要时用 `bin` / `args` / `settings` 自行表达。
+没有内置默认服务器：`servers` 的 key 就是服务器 id，全部来自你的配置，未定义 `servers` 时不启动任何语言服务器。executable 的发现逻辑（如 tsserver 路径、venv 里的 python）不内置，需要时用 `bin` / `args` / `settings` 自行表达。
 
-旧的 `enabled`（白名单）/ `disabled`（排除）与全局超时字段（`initializeTimeoutMs` 等）继续可用。`enabled` 里的 id 必须是已注册服务器，否则视为配置错误；`disabled` 里未注册的 id 直接忽略。
+启用控制只有顶层两处：`enabled`（白名单）与 `disabled`（排除），按服务器 id 生效。`enabled` 里的 id 必须是已配置服务器，否则视为配置错误；`disabled` 里未注册的 id 直接忽略。全局超时字段（`initializeTimeoutMs` 等）同样配在顶层。
+
+顶层 `watch` 段控制工作区文件监听（事件源是会话 cwd 的递归 fs.watch，非本 agent 写入的改动——如 `git checkout`、外部格式化——也会以 `workspace/didChangeWatchedFiles` 批量通知服务器）；内置忽略 `node_modules`、`.git`、`dist`、`build`、`.venv`、`venv`、`target`、`coverage`，`ignore` 可追加。`maxOpenDocuments` 是保持 open 的文档上限（LRU）：超过时最久未使用的文档会被 `didClose`，服务器回落到读磁盘。`watch.enabled: false` 可整体关闭监听，回到仅工具触发同步的现状。
+
+服务器记录里不认识的键会被忽略：历史配置中残留的 `"clangd": { "enabled": false }` 已无任何效果，要禁用某个已配置的服务器请改用顶层 `disabled`。
 
 ---
 

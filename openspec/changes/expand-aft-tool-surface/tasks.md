@@ -3,7 +3,7 @@
 - [x] 1.1 在 `src/aft/bridge.ts` 的 `createAftPool` → `poolOptions.childEnv` 中加入 `AFT_CALLGRAPH_BUILD_WAIT_MS`，值取自导出常量 `CALLGRAPH_BUILD_WAIT_MS = 30_000`，并注释说明窗口须明显小于 transport 的 callgraph 60s 预算（设计决策 1），验证：`pnpm check` 无类型错误
 - [x] 1.2 `test/aft-bridge.test.ts`：mock `@cortexkit/aft-bridge`，断言三个引擎侧 env 键齐备、callgraph 窗口在 0..60s 之间，验证：fail-first 已确认（注释掉实现行即 `expected undefined to be '30000'`），当前 6 passed
 - [x] 1.3 更新 `src/aft/callgraph.md`：未就绪时会在窗口内等待，仍返回 `callgraph_building` 时稍后重试同一查询，验证：`pnpm check` 通过
-- [ ] 1.4 重启 pi 后实测 `aft_callgraph` 的 `trace_to_symbol` 与 `trace_data`，验证：返回真实路径结果而非 `callgraph_building`；若仍超时，记录实测构建耗时以回答 design 的 Open Question
+- [x] 1.4 重启 pi 后实测 `aft_callgraph` 的 `trace_to_symbol` 与 `trace_data`，验证：返回真实路径结果而非 `callgraph_building`；若仍超时，记录实测构建耗时以回答 design 的 Open Question
 
 ## 2. 语义搜索走外部 embedding 后端
 
@@ -35,5 +35,5 @@
 - [x] 6.1 在 `AGENTS.md` 项目结构树补 `src/aft/` 条目（当前缺失该目录说明），验证：人工检查 diff 仅新增该条目
 - [x] 6.2 全量验证：`pnpm check`、`pnpm lint`、`pnpm test` 全绿，验证：830 passed | 3 skipped，eslint 无输出，tsc + prettier 无错误
 - [x] 6.3 `openspec validate expand-aft-tool-surface --strict` 无 warning，验证：命令输出 `is valid`
-- [ ] 6.4 配置真实外部 embedding 端点后重启 pi 冒烟：`aft_search` 出现在工具表、首次调用能返回结果、`~/.local/share/cortexkit/aft` 下的索引可构建；同时记录耗时回答 design 的 Open Question，验证：一次真实搜索返回语义结果
-- [ ] 6.5 归档前 review 最终 diff（`git diff --stat` 应为 10 改 + 2 删 + 2 新测试 + openspec 目录），确认无调试代码与无关格式化，验证：人工 review 通过
+- [x] 6.4 配置真实外部 embedding 端点后重启 pi 冒烟：`aft_search` 出现在工具表、首次调用能返回结果、`~/.local/share/cortexkit/aft` 下的索引可构建；同时记录耗时回答 design 的 Open Question，验证：一次真实搜索返回语义结果
+- [x] 6.5 归档前 review 最终 diff（`git diff --stat` 应为 10 改 + 2 删 + 2 新测试 + openspec 目录），确认无调试代码与无关格式化，验证：人工 review 通过

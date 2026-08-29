@@ -3,6 +3,7 @@
  * - loadLspConfig 解析 / 全局本地合并 / 字段校验
  * - filterAdapters 白名单 / 排除过滤
  * - 集成：配置过滤后未启用的 adapter 不 spawn（mock stdio LSP server 走真实握手）
+ * - service watcher：注入 fake watcher 断言启停时机与 fan-out 过滤
  */
 import { spawn as spawnProcess } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -11,15 +12,22 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LspServerAdapter } from "../src/lib/lsp/adapter.js";
 import {
   createLspService,
   filterAdapters,
   loadLspConfig,
+  maxOpenDocuments,
   registerLsp,
+  watchOptions,
 } from "../src/lib/lsp/lsp.js";
+import { type FileChange, watchWorkspace } from "../src/lib/lsp/watcher.js";
+
+vi.mock("../src/lib/lsp/watcher.js", () => ({
+  watchWorkspace: vi.fn(),
+}));
 
 const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
 
@@ -214,6 +222,57 @@ describe("lsp config validation", () => {
   });
 });
 
+describe("watch config", () => {
+  it("未配置 watch 时应用缺省值：enabled true / debounce 300 / maxOpenDocuments 32", () => {
+    expect(watchOptions({})).toEqual({
+      enabled: true,
+      debounceMs: 300,
+      flushMs: 1_000,
+      maxBatch: 500,
+      ignore: [],
+    });
+    expect(maxOpenDocuments({})).toBe(32);
+  });
+
+  it("watch 字段与 maxOpenDocuments 可配置，debounceMs 字符串时长换算", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(
+      join(dir, ".pi", "lsp.json"),
+      JSON.stringify({
+        watch: {
+          enabled: false,
+          debounceMs: "5s",
+          maxBatch: 100,
+          ignore: ["**/*.log"],
+        },
+        maxOpenDocuments: 8,
+      }),
+    );
+    const config = await loadLspConfig(dir, join(dir, "no-global.json"));
+    expect(watchOptions(config)).toEqual({
+      enabled: false,
+      debounceMs: 5_000,
+      flushMs: 1_000,
+      maxBatch: 100,
+      ignore: ["**/*.log"],
+    });
+    expect(maxOpenDocuments(config)).toBe(8);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("非法值被 typebox 拒绝：整份配置解析失败回退空配置", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(
+      join(dir, ".pi", "lsp.json"),
+      JSON.stringify({ watch: { maxBatch: 0 }, maxOpenDocuments: 0 }),
+    );
+    expect(await loadLspConfig(dir, join(dir, "no-global.json"))).toEqual({});
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+
 describe("filterAdapters", () => {
   const adapters = [plainAdapter("a"), plainAdapter("b"), plainAdapter("c")];
 
@@ -382,5 +441,209 @@ describe("lsp config integration", () => {
     const service = createLspService([adapter], join(dir, "no-global.json"));
     await expect(service.touchFile(file, dir)).resolves.toBeUndefined();
     await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe("lsp service watcher", () => {
+  const watchWorkspaceMock = vi.mocked(watchWorkspace);
+
+  beforeEach(() => {
+    watchWorkspaceMock.mockClear();
+  });
+
+  /** 每次启动返回一个可手动 emit 的 fake watcher，stop 调用被记录。 */
+  function installFakeWatcher() {
+    const fakes: { stop: ReturnType<typeof vi.fn>; emit: (changes: FileChange[]) => void }[] = [];
+    watchWorkspaceMock.mockImplementation(async (_dir, onBatch) => {
+      const fake = {
+        stop: vi.fn(async () => {}),
+        emit: (changes: FileChange[]) => void onBatch(changes),
+      };
+      fakes.push(fake);
+      return fake;
+    });
+    return fakes;
+  }
+
+  /** 带 stderr JSONL 收集的 mock server adapter。 */
+  function spyAdapter(
+    id: string,
+    root: string,
+    options?: { env?: Record<string, string>; extensions?: string[] },
+  ) {
+    const notifications: { method: string; params: Record<string, unknown> }[] = [];
+    let buffer = "";
+    const spawn = vi.fn(async () => {
+      const proc = spawnProcess(process.execPath, [fixture], {
+        env: { ...process.env, ...options?.env },
+      });
+      proc.stderr.on("data", (chunk: Buffer) => {
+        buffer += chunk.toString();
+        let index: number;
+        while ((index = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, index);
+          buffer = buffer.slice(index + 1);
+          if (line.trim()) notifications.push(JSON.parse(line));
+        }
+      });
+      return { process: proc };
+    });
+    return {
+      adapter: {
+        id,
+        extensions: options?.extensions ?? [".py"],
+        findRoot: async (file: string) =>
+          file === root || file.startsWith(root + "/") ? root : undefined,
+        spawn,
+      } satisfies LspServerAdapter,
+      notifications,
+    };
+  }
+
+  it("首个 client 建立时启动 watcher，closeAll 停止", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+    const fakes = installFakeWatcher();
+    const spy = spyAdapter("a", dir);
+    const service = createLspService([spy.adapter], join(dir, "no-global.json"));
+    try {
+      await service.touchFile(file, dir);
+      await vi.waitFor(() => expect(watchWorkspaceMock).toHaveBeenCalledOnce());
+      expect(fakes[0]).toBeDefined();
+      await service.shutdownAll();
+      expect(fakes[0].stop).toHaveBeenCalledOnce();
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("会话 cwd 变化时重建 watcher（旧 watcher 停止）", async () => {
+    const dir1 = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const dir2 = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file1 = join(dir1, "x.py");
+    const file2 = join(dir2, "x.py");
+    await writeFile(file1, "x = 1\n");
+    await writeFile(file2, "x = 1\n");
+    const fakes = installFakeWatcher();
+    const spy1 = spyAdapter("a", dir1);
+    const spy2 = spyAdapter("b", dir2);
+    const service = createLspService([spy1.adapter, spy2.adapter], join(dir1, "no-global.json"));
+    try {
+      await service.touchFile(file1, dir1);
+      await vi.waitFor(() => expect(watchWorkspaceMock).toHaveBeenCalledTimes(1));
+      await service.touchFile(file2, dir2);
+      await vi.waitFor(() => expect(watchWorkspaceMock).toHaveBeenCalledTimes(2));
+      expect(fakes[0].stop).toHaveBeenCalledOnce();
+    } finally {
+      await service.shutdownAll();
+      await rm(dir1, { recursive: true, force: true });
+      await rm(dir2, { recursive: true, force: true });
+    }
+  });
+
+  it("fan-out 按 cwd / root / 扩展名过滤，cwd 外路径不转发", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const root = join(dir, "proj");
+    const other = join(dir, "other");
+    await mkdir(root);
+    await mkdir(other);
+    const file = join(root, "x.py");
+    await writeFile(file, "x = 1\n");
+    const fakes = installFakeWatcher();
+    const spy = spyAdapter("a", root);
+    const service = createLspService([spy.adapter], join(dir, "no-global.json"));
+    try {
+      await service.touchFile(file, dir);
+      await vi.waitFor(() => expect(fakes.length).toBe(1));
+
+      // 匹配：root 内 + .py + 非驻留（touchFile 只驻留了 x.py）
+      const before = spy.notifications.length;
+      fakes[0].emit([{ path: join(root, "y.py"), type: "changed", isDirectory: false }]);
+      await vi.waitFor(() => {
+        expect(
+          spy.notifications
+            .slice(before)
+            .some((n) => n.method === "workspace/didChangeWatchedFiles"),
+        ).toBe(true);
+      });
+
+      // cwd 外路径不转发
+      fakes[0].emit([{ path: join(dir, "..", "outside.py"), type: "changed", isDirectory: false }]);
+      // root 外（cwd 内其他目录）不转发
+      fakes[0].emit([{ path: join(other, "x.py"), type: "changed", isDirectory: false }]);
+      // 扩展名不匹配不转发
+      fakes[0].emit([{ path: join(root, "x.ts"), type: "changed", isDirectory: false }]);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(
+        spy.notifications
+          .slice(before)
+          .filter((n) => n.method === "workspace/didChangeWatchedFiles").length,
+      ).toBe(1);
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fan-out 按服务器注册的 watchPatterns 过滤", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+    const fakes = installFakeWatcher();
+    // 服务器只注册 *.ts pattern
+    const spy = spyAdapter("a", dir, {
+      env: { MOCK_REGISTER_WATCHERS: "**/*.ts" },
+      extensions: [],
+    });
+    const service = createLspService([spy.adapter], join(dir, "no-global.json"));
+    try {
+      await service.touchFile(file, dir);
+      await vi.waitFor(() => expect(fakes.length).toBe(1));
+      const before = spy.notifications.length;
+
+      fakes[0].emit([{ path: join(dir, "x.py"), type: "changed", isDirectory: false }]);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(
+        spy.notifications.slice(before).some((n) => n.method === "workspace/didChangeWatchedFiles"),
+      ).toBe(false);
+
+      fakes[0].emit([{ path: join(dir, "x.ts"), type: "changed", isDirectory: false }]);
+      await vi.waitFor(() => {
+        expect(
+          spy.notifications
+            .slice(before)
+            .some((n) => n.method === "workspace/didChangeWatchedFiles"),
+        ).toBe(true);
+      });
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("notifyFile：只发文件事件通知，不 didOpen 驻留（read 路径）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+    const fakes = installFakeWatcher();
+    const spy = spyAdapter("a", dir);
+    const service = createLspService([spy.adapter], join(dir, "no-global.json"));
+    try {
+      await service.notifyFile(file, dir);
+      await vi.waitFor(() => {
+        expect(spy.notifications.some((n) => n.method === "workspace/didChangeWatchedFiles")).toBe(
+          true,
+        );
+      });
+      // read 不驻留：从不 didOpen
+      expect(spy.notifications.some((n) => n.method === "textDocument/didOpen")).toBe(false);
+      await service.shutdownAll();
+      expect(fakes[0]?.stop).toHaveBeenCalledOnce();
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

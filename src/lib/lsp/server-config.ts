@@ -3,9 +3,9 @@
  * languageId/超时等），替代为每个语言写一个 adapter class。
  *
  * 配置文件沿用 lsp.json（全局 ~/.pi/agent/lsp.json + 本地 <cwd>/.pi/lsp.json）：
- * 顶层 `servers` 是 id → 配置的 record，按 id 与内置默认服务器合并
- * （同名 id 整体覆盖、新增 id、enabled:false 禁用），之后仍受现有
- * enabled/disabled 白名单过滤。
+ * 顶层 `servers` 是 id → 配置的 record，全局与本地按 id 合并（同名 id 整体
+ * 覆盖、新增 id、全局其余保留），之后受顶层 enabled/disabled 列表过滤。
+ * 没有内置默认服务器：未配置 servers 时不启动任何服务器。
  *
  * executable 发现统一由用户配置：bin 支持绝对路径 / 项目工作区
  * （node_modules/.bin、.venv/bin、venv/bin）/ PATH，不再内置各语言的
@@ -23,8 +23,6 @@ import { exists, findBinaryInWorkspace, which } from "./bin.js";
 import { spawnProcess } from "./launch.js";
 
 export const serverConfigSchema = Type.Object({
-  /** false = 从启用集中移除（覆盖同名内置服务器）；缺省启用。 */
-  enabled: Type.Optional(Type.Boolean()),
   /** 文件 glob（相对项目根或调用 cwd，任一命中即可）；缺省匹配所有文件。 */
   include: Type.Optional(Type.Array(Type.String())),
   /** 项目根标记文件（从文件目录向上查找）；缺省用调用 cwd 作为根。 */

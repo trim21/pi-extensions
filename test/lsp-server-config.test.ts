@@ -1,6 +1,6 @@
 /**
  * 配置驱动 LSP 服务器测试（server-config.ts）：
- * - serverConfigSchema 解析（含 enabled:false 简写）
+ * - serverConfigSchema 解析（含未知键透传，不因此拒绝整份配置）
  * - mergeServerRecords 覆盖 / 新增 / 保留
  * - ConfigAdapter.findRoot：include glob（相对 root/cwd）、rootMarkers 查找
  * - ConfigAdapter.spawn：bin 解析（绝对路径 / 项目工作区 / PATH）、cwd 模板、
@@ -62,10 +62,8 @@ describe("serverConfigSchema", () => {
     expect(config.initializationOptions).toEqual({});
   });
 
-  it("enabled:false 简写只用于禁用（其余字段可省略）", () => {
-    const config = parse({ enabled: false });
-    expect(config.enabled).toBe(false);
-    expect(config.bin).toBeUndefined();
+  it("历史配置残留的 per-server enabled 不影响解析（未知键透传）", () => {
+    expect(() => parse({ enabled: false, bin: "x" })).not.toThrow();
   });
 
   it("非法字段（bin 为数字）被 typebox 拒绝", () => {
@@ -227,7 +225,7 @@ describe("ConfigAdapter.spawn", () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
     const missing = new ConfigAdapter("x", parse({ bin: "definitely-not-a-real-lsp-bin" }));
     expect(await missing.spawn(dir, dir)).toBeUndefined();
-    const noBin = new ConfigAdapter("y", parse({ enabled: false }));
+    const noBin = new ConfigAdapter("y", parse({}));
     expect(await noBin.spawn(dir, dir)).toBeUndefined();
     await rm(dir, { recursive: true, force: true });
   });

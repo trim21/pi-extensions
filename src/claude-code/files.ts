@@ -349,9 +349,9 @@ export function registerFileTools(
       }
       const snapshot = { ...snapshotOf(buffer), offset, limit };
       state.reads.set(key, snapshot);
-      // LSP warm-up 是后台任务，失败不影响读取
-      void service.touchFile(filePath, ctx.cwd).catch(() => {
-        // 后台 warm-up 失败不影响读取
+      // LSP 文件事件通知是后台任务，失败不影响读取（read 不驻留文档）
+      void service.notifyFile(filePath, ctx.cwd).catch(() => {
+        // 后台通知失败不影响读取
       });
       return {
         content: [{ type: "text", text: formatted.text }],

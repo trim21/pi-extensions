@@ -1,48 +1,4 @@
-# lsp Specification
-
-## Purpose
-
-read / edit / write 工具内置 LSP 诊断：写文件后等待并报告 ERROR 级诊断。LSP 服务器通过一份 JSON 配置声明如何启动，无需为每种语言写 adapter。
-
-## Requirements
-
-### Requirement: 服务器配置
-
-LSP 服务器全部由 JSON 配置声明，项目配置优先于全局，按服务器 id 合并；不存在内置默认服务器集合。
-
-#### Scenario: 项目覆盖全局
-
-- **WHEN** 项目 `.pi/lsp.json` 与全局 `~/.pi/agent/lsp.json` 都存在
-- **THEN** 顶层字段本地覆盖全局；`servers` 按 id 合并（同名整体覆盖、新 id 新增、全局其余保留）
-
-#### Scenario: 无内置默认服务器
-
-- **WHEN** 全局与本地配置都没有定义 `servers`
-- **THEN** 不启动任何语言服务器；写文件后诊断集合为空，不报错也不提示配置缺失
-
-#### Scenario: 用顶层列表启用或禁用服务器
-
-- **WHEN** 需要排除某个已在配置中定义的服务器
-- **THEN** 用顶层 `disabled: [id]`（未注册的 id 直接忽略）；顶层 `enabled: [id, ...]` 为白名单，引用未注册的 id 视为配置错误并在加载时提示
-
-### Requirement: 服务器启动
-
-服务器按配置启动，包含匹配规则、项目根定位与可执行文件发现。
-
-#### Scenario: 按 include glob 启用
-
-- **WHEN** 文件匹配任一服务器的 `include` glob（相对项目根或调用 cwd）
-- **THEN** 该服务器启用（支持 `!` 否定排除）
-
-#### Scenario: 项目根定位
-
-- **WHEN** 配置了 `rootMarkers`
-- **THEN** 从文件目录向上查找标记文件作为项目根；缺省用调用 cwd
-
-#### Scenario: 可执行文件发现
-
-- **WHEN** 配置了 `bin`
-- **THEN** 按绝对路径 / 相对调用 cwd / 名字（先在项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin` 找，再走 PATH）解析
+## ADDED Requirements
 
 ### Requirement: 工作区文件事件同步
 
@@ -137,6 +93,8 @@ WHEN 文件监听器报告某个仍在驻留集合中的文档被外部改动，
 - **WHEN** 写后诊断等待窗口内收到同路径的监听事件
 - **THEN** 本次写入的诊断结果仍在窗口内返回，不空转到超时
 
+## MODIFIED Requirements
+
 ### Requirement: 写后诊断
 
 写文件后等待服务器诊断，报告 ERROR 级诊断。系统 MUST 在诊断收集完成之后才关闭该文档——服务器可能在 `didClose` 时推送空诊断。
@@ -155,16 +113,3 @@ WHEN 文件监听器报告某个仍在驻留集合中的文档被外部改动，
 
 - **WHEN** 本次写入的诊断尚未收集完成
 - **THEN** 不得因 LRU 淘汰或外部改动而关闭该文档；`didClose` 只发生在诊断汇总之后
-
-## Implementation
-
-实现位于 `src/lib/lsp/`：read / edit / write 工具写文件后经 LSP 客户端请求诊断并报告 ERROR 级诊断。
-
-- **配置解析**（`server-config.ts`）：`~/.pi/agent/lsp.json`（全局）与 `.pi/lsp.json`（项目）合并——顶层字段本地覆盖全局，`servers` 按 id 合并（同名整体覆盖、新 id 新增、全局其余保留）；无内置默认服务器，服务器全部来自配置，禁用某服务器用顶层 `disabled: [id]`。
-- **服务器启动**（`adapter.ts`）：按 `include` glob 匹配启用（`!` 否定排除），`rootMarkers` 向上定位项目根（缺省调用 cwd），`bin` 按绝对路径 / 相对调用 cwd / 名字（先项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin`，再 PATH）解析；`cwd` 支持 `{root}` / `{cwd}` 模板。
-- **协议**：`initializationOptions` 进 initialize 请求，`settings` 进 didChangeConfiguration / workspace/configuration；languageId 按扩展名映射（缺省内置映射表）。
-- **超时**：per-server `startupTimeoutMs` / `diagnosticsWaitMs` 覆盖全局与默认值。
-- **文件监听**（`watcher.ts`）：会话 cwd 上的递归 fs.watch（`node:fs/promises`），尾部去抖 + 最长 flush 批量回调；事件按各 client 的 root 前缀 / 注册 pattern / 扩展名过滤后以 `workspace/didChangeWatchedFiles` 投递（created=1 / changed=2 / deleted=3）；监听器失败降级提示，不影响诊断链路。
-- **驻留与退场**（`client.ts`）：edit/write 进入有界 LRU（`maxOpenDocuments`，缺省 32），淘汰时 `didClose`；驻留文档被外部改动时先 `didClose` 再发 changed 事件，内容一致的自身写入 echo 完全忽略；read 只发文件事件通知，不驻留。
-
-涉及文件：`src/lib/lsp/`（lsp.ts / server-config.ts / adapter.ts / client.ts / watcher.ts）。

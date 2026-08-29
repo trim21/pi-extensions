@@ -23,11 +23,19 @@ import type { Diagnostic as VSCodeDiagnostic } from "vscode-languageserver-types
 
 import type { LspServerHandle } from "./adapter.js";
 import { LANGUAGE_EXTENSIONS } from "./language.js";
+import type { FileChange, FileChangeType } from "./watcher.js";
 
 // LSP spec 常量
 const FILE_CHANGE_CREATED = 1;
 const FILE_CHANGE_CHANGED = 2;
+const FILE_CHANGE_DELETED = 3;
 const TEXT_DOCUMENT_SYNC_INCREMENTAL = 2;
+
+const FILE_CHANGE_TYPE: Record<FileChangeType, number> = {
+  created: FILE_CHANGE_CREATED,
+  changed: FILE_CHANGE_CHANGED,
+  deleted: FILE_CHANGE_DELETED,
+};
 
 export type Diagnostic = VSCodeDiagnostic;
 
@@ -69,6 +77,7 @@ interface CapabilityRegistration {
   registerOptions?: {
     identifier?: string;
     workspaceDiagnostics?: boolean;
+    watchers?: { globPattern?: string }[];
   };
 }
 
@@ -93,6 +102,8 @@ export interface CreateInput {
   diagnosticsFullWaitTimeoutMs?: number;
   diagnosticsRequestTimeoutMs?: number;
   initializeTimeoutMs?: number;
+  /** 驻留文档上限（LRU 容量，缺省 32）；超过时淘汰最久未使用并 didClose。 */
+  maxOpenDocuments?: number;
 }
 
 export interface LspClient {
@@ -101,7 +112,11 @@ export interface LspClient {
   readonly connection: MessageConnection;
   readonly notify: {
     open(request: { path: string }): Promise<number>;
+    /** 把工作区文件事件批量通知服务器；驻留文档不在此通道（走 didOpen/didChange/退场）。 */
+    watchedFiles(changes: FileChange[]): Promise<void>;
   };
+  /** 服务器注册的 workspace/didChangeWatchedFiles watchers glob（去重）。 */
+  watchPatterns(): string[];
   readonly diagnostics: Map<string, Diagnostic[]>;
   waitForDiagnostics(request: {
     path: string;
@@ -210,6 +225,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
   const diagnosticsFullWaitTimeoutMs = input.diagnosticsFullWaitTimeoutMs ?? 10_000;
   const diagnosticsRequestTimeoutMs = input.diagnosticsRequestTimeoutMs ?? 3_000;
   const initializeTimeoutMs = input.initializeTimeoutMs ?? 45_000;
+  const maxOpenDocuments = input.maxOpenDocuments ?? 32;
 
   const connection = createMessageConnection(
     new StreamMessageReader(input.server.process.stdout),
@@ -231,6 +247,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
   const pullDiagnostics = new Map<string, Diagnostic[]>();
   const published = new Map<string, { at: number; version?: number }>();
   const diagnosticRegistrations = new Map<string, CapabilityRegistration>();
+  /** registration id → workspace/didChangeWatchedFiles watchers glob。 */
+  const watcherRegistrations = new Map<string, string[]>();
   const registrationListeners = new Set<() => void>();
   const diagnosticListeners = new Set<(input: { path: string; serverID: string }) => void>();
   /** resolvedPath → 客户端已发送的最新文档版本（didOpen=0，didChange 递增）。 */
@@ -286,9 +304,16 @@ export async function create(input: CreateInput): Promise<LspClient> {
       (params as { registrations?: CapabilityRegistration[] }).registrations ?? [];
     let changed = false;
     for (const registration of registrations) {
-      if (registration.method !== "textDocument/diagnostic") continue;
-      diagnosticRegistrations.set(registration.id, registration);
-      changed = true;
+      if (registration.method === "workspace/didChangeWatchedFiles") {
+        const watchers =
+          registration.registerOptions?.watchers
+            ?.map((watcher) => watcher.globPattern)
+            .filter((pattern): pattern is string => typeof pattern === "string") ?? [];
+        watcherRegistrations.set(registration.id, watchers);
+      } else if (registration.method === "textDocument/diagnostic") {
+        diagnosticRegistrations.set(registration.id, registration);
+        changed = true;
+      }
     }
     if (changed) emitRegistrationChange();
   });
@@ -297,9 +322,12 @@ export async function create(input: CreateInput): Promise<LspClient> {
       (params as { unregisterations?: { id: string; method: string }[] }).unregisterations ?? [];
     let changed = false;
     for (const registration of registrations) {
-      if (registration.method !== "textDocument/diagnostic") continue;
-      diagnosticRegistrations.delete(registration.id);
-      changed = true;
+      if (registration.method === "workspace/didChangeWatchedFiles") {
+        watcherRegistrations.delete(registration.id);
+      } else if (registration.method === "textDocument/diagnostic") {
+        diagnosticRegistrations.delete(registration.id);
+        changed = true;
+      }
     }
     if (changed) emitRegistrationChange();
   });
@@ -353,6 +381,39 @@ export async function create(input: CreateInput): Promise<LspClient> {
   }
 
   const files: Record<string, { version: number; text: string }> = {};
+
+  // ── 驻留 LRU ────────────────────────────────────────────────────────────────
+
+  /** path → 最近使用时间；迭代序即使用序（头部最久）。 */
+  const lruOrder = new Map<string, number>();
+  /** 正在等待诊断的文档（didClose 淘汰时跳过，见"关闭不得早于诊断收集"）。 */
+  const waitingForDiagnostics = new Set<string>();
+
+  const touch = (path: string): void => {
+    lruOrder.delete(path);
+    lruOrder.set(path, Date.now());
+  };
+
+  /** 超过容量时淘汰最久未使用的文档（didClose 并移出驻留集合）。 */
+  async function evictExcess(): Promise<void> {
+    while (lruOrder.size > maxOpenDocuments) {
+      const oldest = lruOrder.keys().next().value;
+      if (oldest === undefined) return;
+      lruOrder.delete(oldest);
+      const document = files[oldest];
+      if (document === undefined) continue;
+      if (waitingForDiagnostics.has(oldest)) {
+        // 防御：等待中的文档挪到 MRU，等下轮再淘汰（正常不会发生，刚 touch 即 MRU）
+        touch(oldest);
+        continue;
+      }
+      await connection.sendNotification("textDocument/didClose", {
+        textDocument: { uri: pathToFileURL(oldest).href },
+      });
+      delete files[oldest];
+      documentVersions.delete(oldest);
+    }
+  }
 
   // ── 诊断拉取（pull）辅助 ────────────────────────────────────────────────────
 
@@ -693,6 +754,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
     get serverID() {
       return input.serverID;
     },
+    watchPatterns(): string[] {
+      return [...new Set([...watcherRegistrations.values()].flat())];
+    },
     get connection() {
       return connection;
     },
@@ -713,9 +777,6 @@ export async function create(input: CreateInput): Promise<LspClient> {
           // 重算未完成时（大项目可远超窗口）聚合到过期诊断；新 push 到达即填充。
           pushDiagnostics.delete(resolvedPath);
           pullDiagnostics.delete(resolvedPath);
-          await connection.sendNotification("workspace/didChangeWatchedFiles", {
-            changes: [{ uri, type: FILE_CHANGE_CHANGED }],
-          });
 
           const next = document.version + 1;
           files[resolvedPath] = { version: next, text };
@@ -732,12 +793,10 @@ export async function create(input: CreateInput): Promise<LspClient> {
                   ]
                 : [{ text }],
           });
+          touch(resolvedPath);
+          await evictExcess();
           return next;
         }
-
-        await connection.sendNotification("workspace/didChangeWatchedFiles", {
-          changes: [{ uri, type: FILE_CHANGE_CREATED }],
-        });
 
         pushDiagnostics.delete(resolvedPath);
         pullDiagnostics.delete(resolvedPath);
@@ -746,7 +805,46 @@ export async function create(input: CreateInput): Promise<LspClient> {
         });
         files[resolvedPath] = { version: 0, text };
         documentVersions.set(resolvedPath, 0);
+        touch(resolvedPath);
+        await evictExcess();
         return 0;
+      },
+      async watchedFiles(changes: FileChange[]): Promise<void> {
+        const notified: { uri: string; type: number }[] = [];
+        for (const change of changes) {
+          const resolvedPath = normalize(
+            isAbsolute(change.path) ? change.path : resolve(input.directory, change.path),
+          );
+          const document = files[resolvedPath];
+          if (document !== undefined) {
+            // 写后诊断等待中的文档不退场（didClose 可能抹掉本次写入的诊断结果）
+            if (waitingForDiagnostics.has(resolvedPath)) continue;
+            // 驻留文档被外部改动：内容一致的自身写入 echo 完全忽略；否则先 didClose
+            // 让服务器回落磁盘，再以文件事件通知——不 bump 版本，避免与写后等待竞态。
+            if (change.type === "changed") {
+              let disk: string | undefined;
+              try {
+                disk = await readFile(resolvedPath, "utf8");
+              } catch {
+                // 文件已被删除或不可读：按磁盘状态变化处理
+              }
+              if (disk === document.text) continue;
+            }
+            await connection.sendNotification("textDocument/didClose", {
+              textDocument: { uri: pathToFileURL(resolvedPath).href },
+            });
+            delete files[resolvedPath];
+            documentVersions.delete(resolvedPath);
+          }
+          notified.push({
+            uri: pathToFileURL(resolvedPath).href,
+            type: FILE_CHANGE_TYPE[change.type],
+          });
+        }
+        if (notified.length === 0) return;
+        await connection.sendNotification("workspace/didChangeWatchedFiles", {
+          changes: notified,
+        });
       },
     },
     get diagnostics() {
@@ -760,21 +858,26 @@ export async function create(input: CreateInput): Promise<LspClient> {
       const normalizedPath = normalize(
         isAbsolute(request.path) ? request.path : resolve(input.directory, request.path),
       );
-      if (request.mode === "document") {
-        await waitForDocumentDiagnostics({
+      waitingForDiagnostics.add(normalizedPath);
+      try {
+        if (request.mode === "document") {
+          await waitForDocumentDiagnostics({
+            path: normalizedPath,
+            version: request.version,
+            after: request.after,
+            signal: request.signal,
+          });
+          return;
+        }
+        await waitForFullDiagnostics({
           path: normalizedPath,
           version: request.version,
           after: request.after,
           signal: request.signal,
         });
-        return;
+      } finally {
+        waitingForDiagnostics.delete(normalizedPath);
       }
-      await waitForFullDiagnostics({
-        path: normalizedPath,
-        version: request.version,
-        after: request.after,
-        signal: request.signal,
-      });
     },
     async shutdown() {
       connection.end();

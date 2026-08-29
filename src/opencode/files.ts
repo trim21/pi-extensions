@@ -431,9 +431,9 @@ function registerReadTool(pi: ExtensionAPI, service: LspService): void {
 
       content = [{ type: "text", text: outputText }];
 
-      // opencode: LSP warm-up 是后台任务，失败不影响读取
-      void service.touchFile(absolutePath, ctx.cwd).catch(() => {
-        // 后台 warm-up 失败不影响读取
+      // opencode: LSP 文件事件通知是后台任务，失败不影响读取（read 不驻留文档）
+      void service.notifyFile(absolutePath, ctx.cwd).catch(() => {
+        // 后台通知失败不影响读取
       });
 
       return {
