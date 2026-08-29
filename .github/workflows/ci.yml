@@ -49,3 +49,13 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - run: pnpm test
+
+  # 矩阵 job 的 check context 带矩阵值（`check (24)`、`check (26)` …），直接写进
+  # mergify.yml 会随 matrix 变化失效。这里收敛成单个稳定 context 供合并门槛引用。
+  # 名字必须在所有 workflow 里唯一，否则 Mergify 的 check-success 只要任一同名 check
+  # 通过就成立；也不要加 `if: always()`，那会让它在矩阵失败时也成功。
+  all-checks:
+    needs: [check]
+    runs-on: ubuntu-slim # 只跑 echo，不需要 ubuntu-latest 的完整镜像与预装工具缓存
+    steps:
+      - run: echo "all node matrix checks passed"

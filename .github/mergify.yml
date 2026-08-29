@@ -26,8 +26,8 @@ pull_request_rules:
           and:
             - "head*=renovate/lockfile-maintenance-*"
             - "created-at>24h ago"
-      - check-success=check
-      - check-success=windows
+      # ci.yml 里的聚合 job，收敛 node 矩阵的多个 check 实例为单一稳定 context
+      - check-success=all-checks
     actions:
       queue:
         name: default

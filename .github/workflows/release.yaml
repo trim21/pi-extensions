@@ -40,10 +40,13 @@ jobs:
 
       - run: pnpm run check
 
+      # package.json 的 major.minor 是发布版本线的唯一来源，patch 由 commit 数填充，
+      # bump 版本线只改 package.json，不需要动本 workflow。
       - name: Set version from commit count
         run: |
+          BASE=$(node -p "require('./package.json').version")
           COMMIT_COUNT=$(git rev-list --count HEAD)
-          VERSION="0.0.$COMMIT_COUNT"
+          VERSION="${BASE%.*}.$COMMIT_COUNT"
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));

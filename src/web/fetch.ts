@@ -1,20 +1,25 @@
 /**
- * web_fetch：抓取 URL 并提取正文为 markdown。
+ * `web_fetch` 工具：抓取 URL 并提取正文为 markdown。
  *
  * SSRF 防护：DNS 预解析 + 拒绝私有/保留地址 + 每跳重定向重新校验，
  * 防止把 agent 变成内网探测口。正文提取用 readability 主内容算法。
+ *
+ * 本文件是独立扩展入口（见 package.json 的 pi.extensions），可在配置里单独禁用。
  */
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
+import { Type } from "typebox";
 
 const MAX_REDIRECTS = 5;
 const TIMEOUT_MS = 30_000;
 const MAX_BYTES = 5 * 1024 * 1024;
 const MIN_USEFUL_CONTENT = 200;
+const MAX_MARKDOWN_BYTES = 100 * 1024;
 
 function isPrivateIpv4(ip: string): boolean {
   const parts = ip.split(".").map(Number);
@@ -211,4 +216,51 @@ export function extractMarkdown(html: string, sourceUrl: string): FetchedPage {
     .turndown(body)
     .trim();
   return { url: sourceUrl, title, markdown };
+}
+
+function truncateMarkdown(text: string): { text: string; truncated: boolean } {
+  if (Buffer.byteLength(text, "utf8") <= MAX_MARKDOWN_BYTES) return { text, truncated: false };
+  const bytes = Buffer.from(text, "utf8");
+  const sliced = bytes.subarray(0, MAX_MARKDOWN_BYTES).toString("utf8");
+  const cut = sliced.lastIndexOf("\n", sliced.length - 1);
+  return { text: (cut > 0 ? sliced.slice(0, cut) : sliced) + "\n…(已截断)", truncated: true };
+}
+
+export default function webFetchTool(pi: ExtensionAPI): void {
+  pi.registerTool({
+    name: "web_fetch",
+    label: "Web Fetch",
+    description:
+      "Fetch a URL and return its content as markdown (HTML pages) or raw text " +
+      "(JSON/XML/plain-text API responses). SSRF-protected: refuses private/internal " +
+      "addresses.",
+    promptSnippet: "Fetch a web page or API response",
+    parameters: Type.Object({
+      url: Type.String({ description: "The URL to fetch" }),
+    }),
+    async execute(_id, params, signal) {
+      try {
+        const page = await fetchPage(params.url, signal);
+        const { text, truncated } = truncateMarkdown(page.markdown);
+        const details: Record<string, unknown> = {
+          url: page.url,
+          title: page.title,
+          bytes: Buffer.byteLength(page.markdown, "utf8"),
+          truncated,
+        };
+        return {
+          content: [{ type: "text", text }],
+          details,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const details: Record<string, unknown> = { error: message, url: params.url };
+        return {
+          isError: true,
+          content: [{ type: "text", text: `抓取失败: ${message}` }],
+          details,
+        };
+      }
+    },
+  });
 }

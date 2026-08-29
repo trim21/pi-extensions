@@ -1,6 +1,6 @@
 {
   "name": "@trim21/personal-pi-extensions",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "Custom pi coding-agent extensions: bwrap sandbox, workspace guard, opencode edit, and more",
   "keywords": [
@@ -70,7 +70,8 @@
       "src/spawn-agent.ts",
       "src/system-prompt/index.ts",
       "src/talk/index.ts",
-      "src/web/index.ts"
+      "src/web/search.ts",
+      "src/web/fetch.ts"
     ],
     "skills": [
       "src/talk/skills"
