@@ -5,13 +5,13 @@
  * bwrap 沙箱调试入口：加载一份 bwrap 配置，在同一条代码路径
  * （src/bwrap/sandbox.ts，与 pi 扩展层共用）里执行一条命令。
  *
- *   pnpm sandbox --config=/tmp/net.json --verbose -- curl -sS https://pypi.org/simple/
- *   tsx bin/sandbox.ts --mode=readonly --print-args -- ls -al
+ *   pnpm sandbox --config=/tmp/net.json --verbose -- 'curl -sS https://pypi.org/simple/'
+ *   tsx bin/sandbox.ts --mode=readonly --print-args -- 'ls -al'
  *
  * 约定：
- *   - 待执行命令放在 ` -- ` 之后，按 argv 逐个接收，用 shlex 安全引用后交给 `bash -lc`；
- *     参数边界因此被保留（`-- cp "a b" out` 仍是三个参数）。
- *     需要管道/`&&` 等 shell 语义时显式嵌套：`-- bash -c 'echo hi && pwd'`。
+ *   - ` -- ` 之后只接受**一个**参数：整条命令的字符串，原样交给 `bash -lc` 解析，
+ *     本 CLI 不做任何再转义，所以 `&&`、管道、`$()`、`*` 都与 pi 的 Bash 工具同语义。
+ *     用你自己的 shell 引号包住整体：-- 'cd ~/tmp && ls'
  *   - `--print-args` 输出 JSON（argv 与环境变量按结构化数据给出，无 quoting 歧义）；
  *     命令输出走 stdout，诊断信息一律以 `# ` 前缀走 stderr，便于分开重定向。
  *   - 退出码即被执行命令的退出码（被信号杀死为 1；用法错误为 2）。
@@ -19,7 +19,6 @@
 
 import { resolve } from "node:path";
 
-import * as shlex from "shlex";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -48,8 +47,8 @@ type Flags = Static<typeof flagsSchema>;
 
 interface Invocation {
   flags: Flags;
-  /** ` -- ` 之后的原始 argv。 */
-  command: string[];
+  /** ` -- ` 之后的整条命令字符串，原样交给 `bash -lc`。 */
+  command: string;
 }
 
 /** 用法/参数错误：打印 usage，退出码 2。 */
@@ -72,7 +71,7 @@ const BOOLEAN_FLAGS = new Set<keyof Flags>(["printArgs", "verbose", "headless", 
 function parseInvocation(argv: string[]): Invocation {
   const separator = argv.indexOf("--");
   const flagTokens = separator === -1 ? argv : argv.slice(0, separator);
-  const command = separator === -1 ? [] : argv.slice(separator + 1);
+  const rest = separator === -1 ? [] : argv.slice(separator + 1);
 
   const raw: Record<string, unknown> = {};
   for (let index = 0; index < flagTokens.length; index++) {
@@ -113,7 +112,19 @@ function parseInvocation(argv: string[]): Invocation {
     const [first] = [...Value.Errors(flagsSchema, converted)];
     throw new UsageError(`选项取值不合法：${first?.message ?? "与 schema 不匹配"}`);
   }
-  return { flags: converted, command };
+  // 只接受一条命令字符串：多个 argv 说明整体没被引号包住，拼接会静默改变语义
+  if (converted.help !== true) {
+    if (rest.length === 0) {
+      throw new UsageError("缺少命令：用 ' -- ' 分隔选项与待执行命令");
+    }
+    if (rest.length > 1) {
+      throw new UsageError(
+        `待执行命令必须是单个字符串（收到 ${String(rest.length)} 个参数），` +
+          `用引号包住整体：-- '${rest.join(" ")}'`,
+      );
+    }
+  }
+  return { flags: converted, command: rest[0] ?? "" };
 }
 
 function diagnose(text: string): void {
@@ -133,7 +144,7 @@ function parseMode(value: string | undefined, modes: readonly string[]): BwrapMo
 
 function usage(modes: readonly string[]): string {
   return [
-    "Usage: tsx bin/sandbox.ts [options] -- <command> [args...]",
+    "Usage: tsx bin/sandbox.ts [options] -- '<command string>'",
     "",
     "加载 bwrap 配置并在对应沙箱里执行一条命令（与 pi 扩展同一条代码路径）。",
     "",
@@ -148,14 +159,13 @@ function usage(modes: readonly string[]): string {
     "  --verbose         透传 netns holder（unshare/mihomo）与 slirp4netns 日志",
     "  -h, --help        显示本说明",
     "",
-    "命令按 argv 接收，逐参数安全引用（shlex.join）后交给 `bash -lc`；",
-    "需要管道 / && 等 shell 语义时显式嵌套： -- bash -c 'echo hi && pwd'",
+    "` -- ` 之后必须是单个参数：整条命令字符串，原样交给 bash -lc 解析（&&、管道、$() 均可用）。",
     "",
     "Examples:",
-    "  tsx bin/sandbox.ts --mode=workspace-write -- pwd",
-    "  tsx bin/sandbox.ts --print-args -- ls -al",
-    "  tsx bin/sandbox.ts -- cp 'a b.txt' out.txt",
-    "  tsx bin/sandbox.ts --config=/tmp/allowlist.json --verbose -- curl -sS https://pypi.org/simple/",
+    "  tsx bin/sandbox.ts --mode=workspace-write -- 'pwd'",
+    "  tsx bin/sandbox.ts --print-args -- 'ls -al'",
+    "  tsx bin/sandbox.ts --mode=workspace-write --workdir ~/proj -- 'uv sync --upgrade'",
+    "  tsx bin/sandbox.ts --config=/tmp/allowlist.json --verbose -- 'curl -sS https://pypi.org/simple/'",
   ].join("\n");
 }
 
@@ -173,13 +183,11 @@ async function run(invocation: Invocation): Promise<number> {
     ...(mode && { mode }),
     headless: flags.headless === true,
   });
-  // argv -> shell 源文本：逐参数安全引用，保留参数边界（与 Python shlex.join 同语义）
-  const commandLine = shlex.join(command);
   const preview = strategy.bwrapEnabled
     ? await previewSandboxCommand(strategy, {
         workspace,
         commandCwd,
-        command: commandLine,
+        command,
       })
     : undefined;
 
@@ -229,7 +237,7 @@ async function run(invocation: Invocation): Promise<number> {
     const { exitCode } = await runInSandbox(strategy, {
       workspace,
       commandCwd,
-      command: commandLine,
+      command,
       onData: (data) => process.stdout.write(data),
       signal: controller.signal,
       ...(flags.timeout !== undefined && { timeout: flags.timeout }),
@@ -269,11 +277,7 @@ async function main(): Promise<void> {
     return;
   }
   try {
-    if (invocation.command.length === 0) {
-      console.error("缺少命令：用 ' -- ' 分隔选项与待执行命令");
-      console.error(usage(BWRAP_MODES));
-      process.exit(2);
-    }
+    // 命令的存在性与「必须是单个参数」已由 parseInvocation 校验
     process.exitCode = await run(invocation);
   } catch (error) {
     if (error instanceof UsageError) {
