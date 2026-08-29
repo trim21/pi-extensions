@@ -3,7 +3,32 @@ import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { buildOutlineSubtitle, buildZoomSubtitle, resolvePathArg } from "../src/aft/tools.js";
+import {
+  buildOutlineSubtitle,
+  buildZoomSubtitle,
+  compactArgs,
+  resolvePathArg,
+} from "../src/aft/tools.js";
+
+describe("compactArgs", () => {
+  it("drops undefined and blank strings but keeps false and empty arrays", () => {
+    expect(
+      compactArgs({
+        a: undefined,
+        b: "",
+        c: " ".repeat(3),
+        d: false,
+        e: [],
+        f: 0,
+        g: "x",
+      }),
+    ).toEqual({ d: false, e: [], f: 0, g: "x" });
+  });
+
+  it("keeps strings with non-whitespace content intact", () => {
+    expect(compactArgs({ s: " spaced " })).toEqual({ s: " spaced " });
+  });
+});
 
 describe("resolvePathArg", () => {
   const cwd = resolve("/work", "project");

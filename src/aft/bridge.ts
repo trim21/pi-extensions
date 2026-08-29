@@ -23,7 +23,7 @@ import {
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { SemanticRemote } from "./config.js";
-import { bridgeLogger } from "./logger.js";
+import { type AftLogger, createAftLogger } from "./logger.js";
 
 /** Pi 会话 ID：Rust 侧用它做 session 作用域（undo/checkpoint），感知工具可留空。 */
 export function resolveSessionId(extCtx: ExtensionContext): string | undefined {
@@ -55,6 +55,23 @@ export interface AftPool {
   projectRoot: string;
 }
 
+/** 一次 session 生命周期内的 bridge 状态：日志落盘 + 常驻 aft 子进程。 */
+export interface AftState {
+  logger: AftLogger;
+  pool: AftPool;
+}
+
+/** 创建一份 session 级 bridge 状态；日志落在 tmp/{sessionId}/aft-plugin.log。 */
+export async function createAftState(
+  cwd: string,
+  sessionId: string | undefined,
+  semantic?: SemanticRemote,
+): Promise<AftState> {
+  const logger = createAftLogger(sessionId);
+  const pool = await createAftPool(cwd, logger, semantic);
+  return { logger, pool };
+}
+
 /** semantic_search 等待索引构建完成的上限（与 Rust 侧 AFT_WAIT_FOR_SEMANTIC_READY_MS 一致）。 */
 export const SEMANTIC_INDEX_WAIT_TIMEOUT_MS = 600_000;
 
@@ -79,10 +96,14 @@ export const SEMANTIC_API_KEY_ENV = "AFT_SEMANTIC_API_KEY";
  * 这个「变量名」，再自己 `env::var` 取值，所以提供值时必须连带把名字告诉它。
  * 两者都缺省时不注入任何凭据（无鉴权端点直接可用）。
  */
-export async function createAftPool(cwd: string, semantic?: SemanticRemote): Promise<AftPool> {
+export async function createAftPool(
+  cwd: string,
+  logger: AftLogger,
+  semantic?: SemanticRemote,
+): Promise<AftPool> {
   // 必须在任何 bridge 代码运行前注册：不设 logger 时 aft-bridge 会把 child
   // stderr / 生命周期日志 fallback 到 console.error，raw 输出打进 pi 的 stderr 破坏 TUI。
-  setActiveLogger(bridgeLogger);
+  setActiveLogger(logger);
   const binaryPath = await resolveAftBinary();
   const paths = resolveCortexKitConfigPaths(cwd);
   const childEnv: Record<string, string> = {
@@ -114,7 +135,7 @@ export async function createAftPool(cwd: string, semantic?: SemanticRemote): Pro
   const pool = await createAftTransportPool({
     harness: "pi",
     binaryPath,
-    poolOptions: { childEnv, logger: bridgeLogger },
+    poolOptions: { childEnv, logger },
     configOverrides: {
       storage_dir: resolveCortexKitStorageRoot(),
       cortexkit_user_config_path: paths.userConfigPath,

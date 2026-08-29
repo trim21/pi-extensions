@@ -17,7 +17,13 @@ import { Type } from "typebox";
 import { type ToolPendant } from "../lib/pendant.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { callAftTool } from "./bridge.js";
-import { type AftToolContext, bridgeFor, buildPendantMarkdown, resolvePathArg } from "./tools.js";
+import {
+  type AftToolContext,
+  bridgeFor,
+  buildPendantMarkdown,
+  compactArgs,
+  resolvePathArg,
+} from "./tools.js";
 
 /** 工具使用指南，以 markdown 形式维护，读起来像文档。 */
 const REFACTOR_PROMPT = readFileSync(
@@ -118,20 +124,17 @@ export function registerRefactorTool(pi: ExtensionAPI, ctx: AftToolContext): voi
         await guardWriteAccess(extCtx, { toolName: "aft_refactor", absolutePath: target });
       }
 
-      const rawArgs: Record<string, unknown> = { op: params.op, path: filePath };
-      if (params.symbol !== undefined && params.symbol.trim() !== "") {
-        rawArgs.symbol = params.symbol;
-      }
-      if (destination !== undefined) rawArgs.destination = destination;
-      if (params.scope !== undefined && params.scope.trim() !== "") {
-        rawArgs.scope = params.scope;
-      }
-      if (params.name !== undefined && params.name.trim() !== "") {
-        rawArgs.name = params.name;
-      }
-      if (startLine !== undefined) rawArgs.startLine = startLine;
-      if (endLine !== undefined) rawArgs.endLine = endLine;
-      if (callSiteLine !== undefined) rawArgs.callSiteLine = callSiteLine;
+      const rawArgs = compactArgs({
+        op: params.op,
+        path: filePath,
+        symbol: params.symbol,
+        destination,
+        scope: params.scope,
+        name: params.name,
+        startLine,
+        endLine,
+        callSiteLine,
+      });
 
       const { text } = await callAftTool(bridgeFor(ctx), "refactor", rawArgs, extCtx);
       return {

@@ -15,7 +15,13 @@ import { Type } from "typebox";
 import { type ToolPendant } from "../lib/pendant.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { callAftTool } from "./bridge.js";
-import { type AftToolContext, bridgeFor, buildPendantMarkdown, resolvePathArg } from "./tools.js";
+import {
+  type AftToolContext,
+  bridgeFor,
+  buildPendantMarkdown,
+  compactArgs,
+  resolvePathArg,
+} from "./tools.js";
 
 /** 工具使用指南，以 markdown 形式维护，读起来像文档。 */
 const IMPORT_PROMPT = readFileSync(
@@ -101,19 +107,20 @@ export function registerImportTool(pi: ExtensionAPI, ctx: AftToolContext): void 
       const filePath = resolvePathArg(extCtx.cwd, params.path);
       await guardWriteAccess(extCtx, { toolName: "aft_import", absolutePath: filePath });
 
-      const rawArgs: Record<string, unknown> = { op: params.op, path: filePath };
-      if (params.module !== undefined && params.module.trim() !== "") {
-        rawArgs.module = params.module;
-      }
-      if (params.names !== undefined) rawArgs.names = params.names;
-      if (params.default_import !== undefined) rawArgs.defaultImport = params.default_import;
-      if (params.namespace !== undefined) rawArgs.namespace = params.namespace;
-      if (params.alias !== undefined) rawArgs.alias = params.alias;
-      if (params.modifiers !== undefined) rawArgs.modifiers = params.modifiers;
-      if (params.import_kind !== undefined) rawArgs.importKind = params.import_kind;
-      if (params.remove_name !== undefined) rawArgs.removeName = params.remove_name;
-      if (params.type_only !== undefined) rawArgs.typeOnly = params.type_only;
-      if (params.validate !== undefined) rawArgs.validate = params.validate;
+      const rawArgs = compactArgs({
+        op: params.op,
+        path: filePath,
+        module: params.module,
+        names: params.names,
+        defaultImport: params.default_import,
+        namespace: params.namespace,
+        alias: params.alias,
+        modifiers: params.modifiers,
+        importKind: params.import_kind,
+        removeName: params.remove_name,
+        typeOnly: params.type_only,
+        validate: params.validate,
+      });
 
       const { text } = await callAftTool(bridgeFor(ctx), "import", rawArgs, extCtx);
       return {

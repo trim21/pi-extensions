@@ -37,6 +37,7 @@ vi.mock("@cortexkit/aft-bridge", () => ({
 
 import { CALLGRAPH_BUILD_WAIT_MS, createAftPool, SEMANTIC_API_KEY_ENV } from "../src/aft/bridge.js";
 import type { SemanticRemote } from "../src/aft/config.js";
+import { createAftLogger } from "../src/aft/logger.js";
 
 const PROJECT = "/tmp/aft-bridge-test-project";
 
@@ -46,7 +47,7 @@ interface PoolOptions {
 }
 
 async function poolOptionsFor(semantic?: SemanticRemote): Promise<PoolOptions> {
-  await createAftPool(PROJECT, semantic);
+  await createAftPool(PROJECT, createAftLogger(), semantic);
   return createAftTransportPool.mock.calls[0][0] as PoolOptions;
 }
 

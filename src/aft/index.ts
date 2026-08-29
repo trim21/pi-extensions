@@ -9,8 +9,10 @@
  * fastembed 后端不使用。aft_refactor / aft_import 的 Rust 命令不支持 preview，
  * 写保护退化为路径级审批。
  *
- * 二进制缺失或 pool 创建失败时降级：不注册任何工具并在 session 开始时报
- * 一次错，而不是让每个工具调用失败。
+ * bridge 状态（日志 + 常驻 aft 子进程）的生命周期跟 session 走：session_start
+ * 时用当次 session id 创建（日志落在 tmp/{sessionId}/aft-plugin.log），
+ * session_shutdown / 进程退出时释放。工具实现经 getState() 取状态，
+ * session 未初始化时抛错。
  *
  * Usage:
  *   pi -e ./aft/index.ts
@@ -19,7 +21,7 @@
 import { resolveCortexKitConfigPaths } from "@cortexkit/aft-bridge";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { type AftPool, createAftPool, shutdownAftPool } from "./bridge.js";
+import { createAftState, resolveSessionId, shutdownAftPool } from "./bridge.js";
 import { loadAftConfig } from "./config.js";
 import { registerImportTool } from "./imports.js";
 import { registerRefactorTool } from "./refactor.js";
@@ -30,26 +32,30 @@ import {
   registerZoomTool,
 } from "./tools.js";
 
-export default async function aftReadTools(pi: ExtensionAPI): Promise<void> {
+export default function aftReadTools(pi: ExtensionAPI): void {
   const cwd = process.cwd();
   const cfg = loadAftConfig(resolveCortexKitConfigPaths(cwd).userConfigPath);
   if (!cfg.enabled) return;
 
-  let pool: AftPool;
-  try {
-    pool = await createAftPool(cwd, cfg.semanticRemote);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    pi.on("session_start", (_event, ctx) => {
-      ctx.ui.notify(
-        `AFT tools are disabled: ${message}. Install @cortexkit/aft-<platform> via your npm mirror (locked to the same version as @cortexkit/aft-bridge), then reload.`,
-        "error",
-      );
-    });
-    return;
-  }
+  // bridge 状态跟 session 生命周期走，作用域就是本工厂闭包，不落到模块级。
+  let state: Awaited<ReturnType<typeof createAftState>> | null = null;
 
-  const toolCtx = { cwd, pool: pool.pool };
+  // 预热：提前解析二进制并拉起 bridge 子进程；失败直接抛给 pi（runner 捕获
+  // 后上报 ExtensionError），工具调用侧经 getState() 抛未初始化错误。
+  pi.on("session_start", async (_event, ctx) => {
+    state = await createAftState(cwd, resolveSessionId(ctx), cfg.semanticRemote);
+  });
+
+  const getState = (): Awaited<ReturnType<typeof createAftState>> => {
+    if (!state) {
+      throw new Error(
+        "AFT is not initialized for this session (no session_start event has fired yet)",
+      );
+    }
+    return state;
+  };
+
+  const toolCtx = { cwd, getState };
   registerOutlineTool(pi, toolCtx);
   registerZoomTool(pi, toolCtx);
   registerCallgraphTool(pi, toolCtx);
@@ -69,16 +75,18 @@ export default async function aftReadTools(pi: ExtensionAPI): Promise<void> {
     }
   }
 
-  // 关闭 bridge pool。session_shutdown 是 pi 的正常生命周期；beforeExit 兜底
-  // 进程自然退出（不能注册 SIGINT/SIGTERM——那会吞掉 pi 主进程自己的信号处理）。
-  let shuttingDown = false;
+  // 释放当前 session 的 bridge 状态。session_shutdown 是 pi 的正常生命周期；
+  // beforeExit 兜底进程自然退出（不能注册 SIGINT/SIGTERM——那会吞掉 pi 主进程
+  // 自己的信号处理）。释放后下个 session_start 用新 session id 重建。
   const shutdown = async (): Promise<void> => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    const current = state;
+    state = null;
+    if (!current) return;
     try {
-      await shutdownAftPool(pool);
+      await shutdownAftPool(current.pool);
+      await current.logger.drain();
     } catch {
-      // 关闭失败不影响退出流程
+      // 释放失败不影响退出流程
     }
   };
   process.once("beforeExit", () => void shutdown());

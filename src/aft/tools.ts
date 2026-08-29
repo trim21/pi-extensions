@@ -13,7 +13,6 @@ import { fileURLToPath } from "node:url";
 
 import {
   type AftProjectTransport,
-  type AftTransportPool,
   coerceBoolean,
   coerceOptionalInt,
   coerceTargetParam,
@@ -25,7 +24,7 @@ import { Type } from "typebox";
 
 import { formatDisplayPath, formatSubtitlePath } from "../lib/path.js";
 import { type ToolPendant } from "../lib/pendant.js";
-import { callAftTool, SEMANTIC_INDEX_WAIT_TIMEOUT_MS } from "./bridge.js";
+import { type AftState, callAftTool, SEMANTIC_INDEX_WAIT_TIMEOUT_MS } from "./bridge.js";
 
 /** 工具使用指南，以 markdown 形式维护，读起来像文档。 */
 const OUTLINE_PROMPT = readFileSync(
@@ -53,11 +52,25 @@ export function resolvePathArg(cwd: string, input: string): string {
 
 export interface AftToolContext {
   cwd: string;
-  pool: AftTransportPool;
+  /** 当前 session 的 bridge 状态；session 未初始化时抛错。 */
+  getState(): AftState;
 }
 
 export function bridgeFor(ctx: AftToolContext): AftProjectTransport {
-  return ctx.pool.getBridge(ctx.cwd);
+  return ctx.getState().pool.pool.getBridge(ctx.cwd);
+}
+
+/**
+ * 丢弃 undefined 与空白字符串字段：bridge 参数经 JSON.stringify 发给 Rust 侧，
+ * 「缺 key」与「空字符串」在 Rust 端语义不同，这里把空串统一归一成缺省。
+ * false / 空数组等是合法取值，保留。
+ */
+export function compactArgs(args: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(args).filter(
+      ([, value]) => value !== undefined && !(typeof value === "string" && value.trim() === ""),
+    ),
+  );
 }
 
 /** 人类视角的调用记录：input params + 与 LLM 相同的输出结果。 */
@@ -132,11 +145,11 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
         const stats = await stat(resolved).catch(() => null);
         filesMode = stats?.isDirectory() ?? false;
       }
-      const rawArgs: Record<string, unknown> = {
+      const rawArgs = compactArgs({
         target: filesMode ? target : resolved,
-      };
-      if (filesMode) rawArgs.files = true;
-      if (params.includeTests !== undefined) rawArgs.includeTests = params.includeTests;
+        files: filesMode ? true : undefined,
+        includeTests: params.includeTests,
+      });
 
       const subtitle = buildOutlineSubtitle(extCtx.cwd, target);
 
@@ -198,19 +211,17 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
     promptGuidelines: [ZOOM_PROMPT],
     parameters: ZoomParams,
     async execute(_id, params, _signal, _onUpdate, extCtx) {
-      const rawArgs: Record<string, unknown> = {
+      const rawArgs = compactArgs({
         filePath: resolvePathArg(extCtx.cwd, params.path),
-        ...(params.symbols && { symbols: params.symbols }),
-      };
-
-      const contextLines = coerceOptionalInt(
-        params.contextLines,
-        "contextLines",
-        1,
-        Number.MAX_SAFE_INTEGER,
-      );
-      if (contextLines !== undefined) rawArgs.contextLines = contextLines;
-      if (coerceBoolean(params.callgraph)) rawArgs.callgraph = true;
+        symbols: params.symbols,
+        contextLines: coerceOptionalInt(
+          params.contextLines,
+          "contextLines",
+          1,
+          Number.MAX_SAFE_INTEGER,
+        ),
+        callgraph: coerceBoolean(params.callgraph) ? true : undefined,
+      });
 
       const subtitle = buildZoomSubtitle(extCtx.cwd, params);
 
@@ -305,26 +316,17 @@ export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): vo
     promptGuidelines: [CALLGRAPH_PROMPT],
     parameters: CallgraphParams,
     async execute(_id, params, _signal, _onUpdate, extCtx) {
-      const rawArgs: Record<string, unknown> = {
+      const rawArgs = compactArgs({
         op: params.op,
         filePath: resolvePathArg(extCtx.cwd, params.path),
         symbol: params.symbol,
-      };
-      const depth = coerceOptionalInt(params.depth, "depth", 1, Number.MAX_SAFE_INTEGER);
-      if (depth !== undefined) rawArgs.depth = depth;
-      if (params.expression !== undefined && params.expression !== "") {
-        rawArgs.expression = params.expression;
-      }
-      if (params.toSymbol !== undefined && params.toSymbol !== "") {
-        rawArgs.toSymbol = params.toSymbol;
-      }
-      if (params.toPath !== undefined && params.toPath !== "") {
-        rawArgs.toFile = resolvePathArg(extCtx.cwd, params.toPath);
-      }
-      if (params.includeTests !== undefined) rawArgs.includeTests = params.includeTests;
-      if (params.includeUnresolved !== undefined) {
-        rawArgs.includeUnresolved = params.includeUnresolved;
-      }
+        depth: coerceOptionalInt(params.depth, "depth", 1, Number.MAX_SAFE_INTEGER),
+        expression: params.expression,
+        toSymbol: params.toSymbol,
+        toFile: params.toPath ? resolvePathArg(extCtx.cwd, params.toPath) : undefined,
+        includeTests: params.includeTests,
+        includeUnresolved: params.includeUnresolved,
+      });
 
       const { text, response } = await callAftTool(
         bridgeFor(ctx),
@@ -398,12 +400,12 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
       if (typeof params.query !== "string" || params.query.trim().length === 0) {
         throw new Error("'query' must be a non-empty string");
       }
-      const rawArgs: Record<string, unknown> = { query: params.query };
-      if (params.topK !== undefined) rawArgs.topK = params.topK;
-      if (params.includeTests !== undefined) rawArgs.includeTests = params.includeTests;
-      if (params.path !== undefined && params.path !== "") {
-        rawArgs.path = resolvePathArg(extCtx.cwd, params.path);
-      }
+      const rawArgs = compactArgs({
+        query: params.query,
+        topK: params.topK,
+        includeTests: params.includeTests,
+        path: params.path ? resolvePathArg(extCtx.cwd, params.path) : undefined,
+      });
 
       const { text, response } = await callAftTool(bridgeFor(ctx), "search", rawArgs, extCtx, {
         // 默认 search 传输超时仅 60s，会早于索引等待（600s）触发；覆盖为等待

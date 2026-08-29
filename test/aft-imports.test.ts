@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AftTransportPool } from "@cortexkit/aft-bridge";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,7 +9,7 @@ vi.mock("../src/aft/bridge.js", () => ({
   callAftTool: vi.fn(),
 }));
 
-import { callAftTool } from "../src/aft/bridge.js";
+import { type AftState, callAftTool } from "../src/aft/bridge.js";
 import { registerImportTool } from "../src/aft/imports.js";
 import type { AftToolContext } from "../src/aft/tools.js";
 
@@ -40,7 +39,15 @@ function captureTool(pi: ExtensionAPI, ctx: AftToolContext) {
 
 describe("aft_import", () => {
   const dir = mkdtempSync(join(tmpdir(), "aft-import-test-"));
-  const pool = { getBridge: () => ({}) } as unknown as AftTransportPool;
+  const bridge = {};
+  const ctx: AftToolContext = {
+    cwd: dir,
+    getState: () =>
+      ({
+        logger: { getLogFilePath: () => "/tmp/aft-plugin.log" },
+        pool: { pool: { getBridge: () => bridge }, projectRoot: dir },
+      }) as unknown as AftState,
+  };
 
   beforeEach(() => {
     mockCallAftTool.mockReset();
@@ -54,7 +61,7 @@ describe("aft_import", () => {
       response: { success: true, file, module: "react", group: "external" },
     });
 
-    const tool = captureTool({} as ExtensionAPI, { cwd: dir, pool });
+    const tool = captureTool({} as ExtensionAPI, ctx);
     const result = await tool.execute(
       "id",
       {
@@ -72,7 +79,7 @@ describe("aft_import", () => {
 
     expect(mockCallAftTool).toHaveBeenCalledTimes(1);
     expect(mockCallAftTool).toHaveBeenCalledWith(
-      pool.getBridge(dir),
+      bridge as never,
       "import",
       {
         op: "add",
@@ -88,7 +95,7 @@ describe("aft_import", () => {
   });
 
   it("requires module for add", async () => {
-    const tool = captureTool({} as ExtensionAPI, { cwd: dir, pool });
+    const tool = captureTool({} as ExtensionAPI, ctx);
     await expect(
       tool.execute("id", { op: "add", path: "a.ts" }, undefined, undefined, {
         cwd: dir,
@@ -102,7 +109,7 @@ describe("aft_import", () => {
       text: "removed import ./utils",
       response: { success: true, file: join(dir, "a.ts"), module: "./utils" },
     });
-    const tool = captureTool({} as ExtensionAPI, { cwd: dir, pool });
+    const tool = captureTool({} as ExtensionAPI, ctx);
     await tool.execute(
       "id",
       { op: "remove", path: "a.ts", module: "./utils", remove_name: "helper" },
@@ -111,7 +118,7 @@ describe("aft_import", () => {
       { cwd: dir, hasUI: false },
     );
     expect(mockCallAftTool).toHaveBeenCalledWith(
-      pool.getBridge(dir),
+      bridge as never,
       "import",
       { op: "remove", path: join(dir, "a.ts"), module: "./utils", removeName: "helper" },
       expect.anything(),

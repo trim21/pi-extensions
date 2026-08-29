@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AftTransportPool } from "@cortexkit/aft-bridge";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,7 +9,7 @@ vi.mock("../src/aft/bridge.js", () => ({
   callAftTool: vi.fn(),
 }));
 
-import { callAftTool } from "../src/aft/bridge.js";
+import { type AftState, callAftTool } from "../src/aft/bridge.js";
 import { registerRefactorTool } from "../src/aft/refactor.js";
 import type { AftToolContext } from "../src/aft/tools.js";
 
@@ -40,7 +39,14 @@ function captureTool(pi: ExtensionAPI, ctx: AftToolContext) {
 
 describe("aft_refactor", () => {
   const dir = mkdtempSync(join(tmpdir(), "aft-refactor-test-"));
-  const pool = { getBridge: () => ({}) } as unknown as AftTransportPool;
+  const ctx: AftToolContext = {
+    cwd: dir,
+    getState: () =>
+      ({
+        logger: { getLogFilePath: () => "/tmp/aft-plugin.log" },
+        pool: { pool: { getBridge: () => ({}) }, projectRoot: dir },
+      }) as unknown as AftState,
+  };
 
   beforeEach(() => {
     mockCallAftTool.mockReset();
@@ -59,7 +65,7 @@ describe("aft_refactor", () => {
       },
     });
 
-    const tool = captureTool({} as ExtensionAPI, { cwd: dir, pool });
+    const tool = captureTool({} as ExtensionAPI, ctx);
     const result = await tool.execute(
       "id",
       {
@@ -75,7 +81,7 @@ describe("aft_refactor", () => {
 
     expect(mockCallAftTool).toHaveBeenCalledTimes(1);
     expect(mockCallAftTool).toHaveBeenCalledWith(
-      pool.getBridge(dir),
+      {} as never,
       "refactor",
       { op: "move", path: file, symbol: "foo", destination: join(dir, "b.ts") },
       expect.anything(),
@@ -88,7 +94,7 @@ describe("aft_refactor", () => {
   });
 
   it("requires symbol and destination for move", async () => {
-    const tool = captureTool({} as ExtensionAPI, { cwd: dir, pool });
+    const tool = captureTool({} as ExtensionAPI, ctx);
     await expect(
       tool.execute("id", { op: "move", path: "a.ts" }, undefined, undefined, {
         cwd: dir,
@@ -102,7 +108,7 @@ describe("aft_refactor", () => {
       text: "extracted helper",
       response: { success: true, name: "helper", file: join(dir, "a.ts") },
     });
-    const tool = captureTool({} as ExtensionAPI, { cwd: dir, pool });
+    const tool = captureTool({} as ExtensionAPI, ctx);
     await tool.execute(
       "id",
       { op: "extract", path: "a.ts", name: "helper", start_line: "3", end_line: "5" },
@@ -111,7 +117,7 @@ describe("aft_refactor", () => {
       { cwd: dir, hasUI: false },
     );
     expect(mockCallAftTool).toHaveBeenCalledWith(
-      pool.getBridge(dir),
+      {} as never,
       "refactor",
       { op: "extract", path: join(dir, "a.ts"), name: "helper", startLine: 3, endLine: 5 },
       expect.anything(),
@@ -119,7 +125,7 @@ describe("aft_refactor", () => {
   });
 
   it("requires start_line and end_line for extract", async () => {
-    const tool = captureTool({} as ExtensionAPI, { cwd: dir, pool });
+    const tool = captureTool({} as ExtensionAPI, ctx);
     await expect(
       tool.execute("id", { op: "extract", path: "a.ts", name: "helper" }, undefined, undefined, {
         cwd: dir,
@@ -133,7 +139,7 @@ describe("aft_refactor", () => {
       text: "inlined foo",
       response: { success: true, symbol: "foo", file: join(dir, "a.ts") },
     });
-    const tool = captureTool({} as ExtensionAPI, { cwd: dir, pool });
+    const tool = captureTool({} as ExtensionAPI, ctx);
     await tool.execute(
       "id",
       { op: "inline", path: "a.ts", symbol: "foo", call_site_line: 10 },
@@ -142,7 +148,7 @@ describe("aft_refactor", () => {
       { cwd: dir, hasUI: false },
     );
     expect(mockCallAftTool).toHaveBeenCalledWith(
-      pool.getBridge(dir),
+      {} as never,
       "refactor",
       { op: "inline", path: join(dir, "a.ts"), symbol: "foo", callSiteLine: 10 },
       expect.anything(),
