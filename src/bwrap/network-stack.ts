@@ -59,6 +59,29 @@ function killProcess(pid: number | undefined): void {
   }
 }
 
+/**
+ * SIGTERM 后等待进程退出；超时仍未退出则 SIGKILL。
+ * holder/slirp 持有 userns/netns 引用，进程不退 ns 就不会释放。
+ */
+async function terminateProcess(pid: number | undefined, timeoutMs = 2000): Promise<void> {
+  if (!pid) return;
+  killProcess(pid);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // 已退出
+  }
+}
+
 /** 读宿主机 /etc/resolv.conf 的全部 IPv4 nameserver，按声明顺序返回。 */
 export async function resolveDnsServers(): Promise<string[]> {
   const content = await readFile("/etc/resolv.conf", "utf8");
@@ -183,114 +206,125 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
   const config = generateMihomoConfig({ allowlist, dnsServers });
   await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
-  const holder = spawn("unshare", ["-Urn", "--", "node", HOLDER_PATH, configPath, mihomoPath], {
-    env: {
-      HOME: process.env.HOME ?? "",
-      PATH: `${process.env.PATH ?? ""}:${SBIN_PATH_SUFFIX}`,
-    },
-    // mihomo 日志经 holder 透传到这里的 stdout/stderr，用于判定就绪
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  forwardOutput(holder, holderOutput);
-  if (holder.pid === undefined) {
-    throw new Error("Failed to start network namespace holder");
+  let holder: ChildProcess | undefined;
+  let slirp: ChildProcess | undefined;
+  try {
+    holder = spawn("unshare", ["-Urn", "--", "node", HOLDER_PATH, configPath, mihomoPath], {
+      env: {
+        HOME: process.env.HOME ?? "",
+        PATH: `${process.env.PATH ?? ""}:${SBIN_PATH_SUFFIX}`,
+      },
+      // mihomo 日志经 holder 透传到这里的 stdout/stderr，用于判定就绪
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    forwardOutput(holder, holderOutput);
+    if (holder.pid === undefined) {
+      throw new Error("Failed to start network namespace holder");
+    }
+    const holderPid = holder.pid;
+    await waitForNewUserns(holderPid);
+
+    slirp = spawn(
+      slirp4netnsPath,
+      [
+        "-c",
+        `--mtu=${TUN_MTU}`,
+        `--userns-path=/proc/${holderPid}/ns/user`,
+        "--netns-type=pid",
+        String(holderPid),
+        "tap0",
+      ],
+      // 默认丢弃 slirp4netns 日志；诊断时改为管道转发
+      { stdio: slirpOutput ? ["ignore", "pipe", "pipe"] : "ignore" },
+    );
+    forwardOutput(slirp, slirpOutput);
+    const slirpPid = slirp.pid;
+    await waitForMihomoStarted(holder);
+
+    const state: NetworkStackState = { holderPid, slirpPid, directory };
+    const stack: NetworkStack = {
+      exec: async (execOptions: NetworkStackExecOptions) => {
+        const child = spawn(
+          "nsenter",
+          [
+            "-U",
+            "-n",
+            "--preserve-credentials",
+            "-t",
+            String(holderPid),
+            "--",
+            execOptions.bwrapPath,
+            ...execOptions.bwrapArgs,
+            "--",
+            execOptions.shell,
+            "-lc",
+            execOptions.command,
+          ],
+          {
+            cwd: execOptions.cwd,
+            detached: true,
+            stdio: ["ignore", "pipe", "pipe"],
+            env: execOptions.env,
+          },
+        );
+
+        return new Promise<{ exitCode: number | null }>((resolve, reject) => {
+          let timedOut = false;
+          let settled = false;
+          const timeoutHandle = execOptions.timeout
+            ? setTimeout(() => {
+                timedOut = true;
+                killChild(child.pid);
+              }, execOptions.timeout * 1000)
+            : undefined;
+          const onAbort = (): void => {
+            killChild(child.pid);
+          };
+
+          child.stdout?.on("data", execOptions.onData);
+          child.stderr?.on("data", execOptions.onData);
+          execOptions.signal?.addEventListener("abort", onAbort, { once: true });
+
+          child.once("error", (error) => {
+            if (settled) return;
+            settled = true;
+            reject(error);
+          });
+          child.once("close", (exitCode) => {
+            if (settled) return;
+            settled = true;
+            if (timeoutHandle) clearTimeout(timeoutHandle);
+            execOptions.signal?.removeEventListener("abort", onAbort);
+            // 中断：reject signal.reason（默认是 name=AbortError 的 DOMException）
+            if (execOptions.signal?.aborted) {
+              reject(
+                execOptions.signal.reason instanceof Error
+                  ? execOptions.signal.reason
+                  : new Error("The operation was aborted"),
+              );
+            } else if (timedOut) {
+              // 超时：name=TimeoutError（对齐标准错误分类）
+              reject(new TimeoutError(execOptions.timeout));
+            } else resolve({ exitCode });
+          });
+        });
+      },
+      stop: async () => {
+        await terminateProcess(state.slirpPid);
+        await terminateProcess(state.holderPid);
+        await rm(state.directory, { recursive: true, force: true }).catch(() => false);
+      },
+      holderPid,
+      configPath,
+    };
+    stackFinalizer.register(stack, state);
+    return stack;
+  } catch (error) {
+    // 失败清理：holder/slirp 持有 userns/netns 引用，不 kill 就会锁住 namespace；
+    // 调用方（runInSandbox）拿不到 stack，这里的清理只能靠自己
+    if (slirp?.pid) await terminateProcess(slirp.pid);
+    if (holder?.pid) await terminateProcess(holder.pid);
+    await rm(directory, { recursive: true, force: true }).catch(() => false);
+    throw error;
   }
-  const holderPid = holder.pid;
-  await waitForNewUserns(holderPid);
-
-  const slirp = spawn(
-    slirp4netnsPath,
-    [
-      "-c",
-      `--mtu=${TUN_MTU}`,
-      `--userns-path=/proc/${holderPid}/ns/user`,
-      "--netns-type=pid",
-      String(holderPid),
-      "tap0",
-    ],
-    // 默认丢弃 slirp4netns 日志；诊断时改为管道转发
-    { stdio: slirpOutput ? ["ignore", "pipe", "pipe"] : "ignore" },
-  );
-  forwardOutput(slirp, slirpOutput);
-  const slirpPid = slirp.pid;
-  await waitForMihomoStarted(holder);
-
-  const state: NetworkStackState = { holderPid, slirpPid, directory };
-  const stack: NetworkStack = {
-    exec: async (execOptions: NetworkStackExecOptions) => {
-      const child = spawn(
-        "nsenter",
-        [
-          "-U",
-          "-n",
-          "--preserve-credentials",
-          "-t",
-          String(holderPid),
-          "--",
-          execOptions.bwrapPath,
-          ...execOptions.bwrapArgs,
-          "--",
-          execOptions.shell,
-          "-lc",
-          execOptions.command,
-        ],
-        {
-          cwd: execOptions.cwd,
-          detached: true,
-          stdio: ["ignore", "pipe", "pipe"],
-          env: execOptions.env,
-        },
-      );
-
-      return new Promise<{ exitCode: number | null }>((resolve, reject) => {
-        let timedOut = false;
-        let settled = false;
-        const timeoutHandle = execOptions.timeout
-          ? setTimeout(() => {
-              timedOut = true;
-              killChild(child.pid);
-            }, execOptions.timeout * 1000)
-          : undefined;
-        const onAbort = (): void => {
-          killChild(child.pid);
-        };
-
-        child.stdout?.on("data", execOptions.onData);
-        child.stderr?.on("data", execOptions.onData);
-        execOptions.signal?.addEventListener("abort", onAbort, { once: true });
-
-        child.once("error", (error) => {
-          if (settled) return;
-          settled = true;
-          reject(error);
-        });
-        child.once("close", (exitCode) => {
-          if (settled) return;
-          settled = true;
-          if (timeoutHandle) clearTimeout(timeoutHandle);
-          execOptions.signal?.removeEventListener("abort", onAbort);
-          // 中断：reject signal.reason（默认是 name=AbortError 的 DOMException）
-          if (execOptions.signal?.aborted) {
-            reject(
-              execOptions.signal.reason instanceof Error
-                ? execOptions.signal.reason
-                : new Error("The operation was aborted"),
-            );
-          } else if (timedOut) {
-            // 超时：name=TimeoutError（对齐标准错误分类）
-            reject(new TimeoutError(execOptions.timeout));
-          } else resolve({ exitCode });
-        });
-      });
-    },
-    stop: async () => {
-      killProcess(state.slirpPid);
-      killProcess(state.holderPid);
-      await rm(state.directory, { recursive: true, force: true }).catch(() => false);
-    },
-    holderPid,
-    configPath,
-  };
-  stackFinalizer.register(stack, state);
-  return stack;
 }

@@ -185,7 +185,7 @@ describe("previewSandboxCommand", () => {
       "-n",
       "--preserve-credentials",
       "-t",
-      "$HOLDER_PID",
+      "<HOLDER_PID>",
     ]);
     expect(withHolder.argv[5]).toBe("4242");
     expect(withHolder.argv).not.toContain("--unshare-net");
