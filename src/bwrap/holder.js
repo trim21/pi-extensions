@@ -1,12 +1,11 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 const args = process.argv.slice(2);
 const configBase64 = args[0];
 const mihomoPath = args[1];
-const slirp4netnsPath = args[2];
-const tunMtu = Number(args[3]);
-if (!configBase64 || !mihomoPath || !slirp4netnsPath || !tunMtu) {
+const tunMtu = Number(args[2]);
+const mihomoHome = args[3];
+if (!configBase64 || !mihomoPath || !tunMtu || !mihomoHome) {
   process.exit(2);
 }
 process.chdir("/");
@@ -27,16 +26,8 @@ async function waitFor(attempts, delayMs, predicate) {
 async function main() {
   process.stdin.resume();
   process.stdin.on("end", () => process.exit(0));
-  const status = await readFile("/proc/self/status", "utf8");
-  const hostPid = /^NSpid:\s+(.+)$/m.exec(status)?.[1].split(/\s+/, 1)[0];
-  if (!hostPid) {
-    throw new Error("Failed to resolve host pid from NSpid");
-  }
-  spawn(slirp4netnsPath, ["-c", `--mtu=${tunMtu}`, "--netns-type=pid", hostPid, "tap0"], {
-    stdio: ["ignore", "inherit", "inherit"]
-  });
   await waitFor(100, 100, tap0Exists);
-  const mihomo = spawn(mihomoPath, ["-config", configBase64], {
+  const mihomo = spawn(mihomoPath, ["-d", mihomoHome, "-config", configBase64], {
     stdio: ["ignore", "inherit", "inherit"]
   });
   const stop = () => {

@@ -1,6 +1,10 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { readFile, readlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, readlink } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import { forEachLine } from "../lib/proc.js";
 import { generateMihomoConfig, TUN_MTU } from "./mihomo-config.js";
@@ -178,12 +182,15 @@ export interface NetworkStack {
 
 interface NetworkStackState {
   holderPid: number;
+  slirpPid: number;
 }
 
 /** 兜底：调用方忘记 stop() 时，对象被 GC 回收后 kill 残留进程。 */
 const stackFinalizer = new FinalizationRegistry<NetworkStackState>((state) => {
-  // SIGTERM 经 unshare --kill-child 转发给 init，内核清理 pid ns 内全部进程
+  // SIGTERM 经 unshare --kill-child 转发给 init，内核清理 pid ns 内全部进程；
+  // slirp4netns 在宿主侧持有 tap fd，单独终止
   killProcess(state.holderPid);
+  killProcess(state.slirpPid);
 });
 
 /**
@@ -203,10 +210,17 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
   const config = generateMihomoConfig({ allowlist, dnsServers });
   const configBase64 = Buffer.from(JSON.stringify(config)).toString("base64");
 
+  // mihomo 工作目录（-d）：cache.db 等落在这里，而不是它默认的 ~/.config/mihomo/
+  //（后者不存在时 mihomo 每次启动都告警且 fakeip 映射无持久化）。每次启动用独立
+  // uuid 目录，避免并发的多个 holder 争抢 bbolt 文件锁。
+  const mihomoHome = join(getAgentDir(), "tmp", `mihomo-${randomUUID()}`);
+  await mkdir(mihomoHome, { recursive: true });
+
   let holder: ChildProcess | undefined;
+  let slirp: ChildProcess | undefined;
   try {
     // unshare -p --fork：node 成为 pid namespace 的 init，任何方式退出（含 SIGKILL）
-    // 内核都会清理 pid ns 内全部进程（slirp4netns/mihomo），ns 引用随之归零；
+    // 内核都会清理 pid ns 内全部进程（mihomo），ns 引用随之归零；
     // --kill-child=SIGTERM：宿主侧 SIGTERM unshare 时转发给 init 走优雅退出
     holder = spawn(
       "unshare",
@@ -219,8 +233,8 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
         HOLDER_PATH,
         configBase64,
         mihomoPath,
-        slirp4netnsPath,
         String(TUN_MTU),
+        mihomoHome,
       ],
       {
         env: {
@@ -228,8 +242,9 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
           PATH: `${process.env.PATH ?? ""}:${SBIN_PATH_SUFFIX}`,
         },
         // stdin 保持 pipe：本进程持有写端，进程退出（含 SIGKILL）时内核关闭 fd，
-        // holder 读到 EOF 即自杀（init 退出 → 内核清理 pid ns）
-        stdio: ["pipe", "pipe", "pipe"],
+        // holder 读到 EOF 即自杀（init 退出 → 内核清理 pid ns）。
+        // fd 3：exit-fd 写端，传给 holder 持有（holder 死亡 → 读端 HUP → slirp4netns 退出）。
+        stdio: ["pipe", "pipe", "pipe", "pipe"],
       },
     );
     forwardOutput(holder, holderOutput);
@@ -239,9 +254,45 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
     const holderPid = holder.pid;
     await waitForNewUserns(holderPid);
 
+    // slirp4netns 提供 egress，必须在宿主 netns 启动：它的 egress socket 决定出站
+    // 视角，留在沙盒 netns 里会被 mihomo 的 TUN 策略路由 + dns-hijack 自劫持成环
+    //（上游 DNS 查询自己劫自己，allowlist 域名全部 SERVFAIL）。tap fd 会被它持有
+    // 而 pin 住 netns，因此用 exit-fd（holder 的 fd 3 写端的读端）绑定 holder 生命
+    // 周期：holder 退出 → 读端 HUP → slirp4netns 退出 → tap fd 释放。
+    // --userns-path / --netns-type=pid 都指向 unshare 进程：它创建并持有目标
+    // userns/netns（node holder 是它的子进程，同 ns）。
+    // exit-fd 的读端 fd：从 holder 的额外 stdio pipe 取父进程侧的原始 fd。
+    // Node 没有公开 API 拿它（stdio[3].fd 恒为 undefined，只能读 _handle，且仅在
+    // 子进程存活期间有效）；pipe 要跨两个子进程共享（holder 持写端、slirp4netns
+    // 持读端），所以必须把父进程侧的 fd 重新 dup 给 slirp4netns。
+    const exitReadFd = (holder.stdio[3] as unknown as { _handle?: { fd?: number } } | null)?._handle
+      ?.fd;
+    if (typeof exitReadFd !== "number") {
+      throw new TypeError("Failed to resolve exit-fd from holder stdio");
+    }
+    slirp = spawn(
+      slirp4netnsPath,
+      [
+        "-c",
+        `--mtu=${TUN_MTU}`,
+        `--userns-path=/proc/${String(holderPid)}/ns/user`,
+        "--netns-type=pid",
+        String(holderPid),
+        "tap0",
+        // exit-fd：本子进程的 fd 3（stdio 第 4 项 dup 为 fd 3）
+        "-e",
+        "3",
+      ],
+      { stdio: ["ignore", "pipe", "pipe", exitReadFd] },
+    );
+    forwardOutput(slirp, holderOutput);
+    if (slirp.pid === undefined) {
+      throw new Error("Failed to start slirp4netns");
+    }
+
     await waitForMihomoStarted(holder);
 
-    const state: NetworkStackState = { holderPid };
+    const state: NetworkStackState = { holderPid, slirpPid: slirp.pid };
     const stack: NetworkStack = {
       exec: async (execOptions: NetworkStackExecOptions) => {
         const child = spawn(
@@ -311,10 +362,14 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
       },
       stop: async () => {
         const children = await readChildPids(state.holderPid);
+        // slirp4netns 持有 tap fd（pin 住 netns），必须随 holder 一起显式终止；
+        // 先杀它再杀 holder，避免 stop() 与 exit-fd HUP 的收尾时序竞争
+        killProcess(state.slirpPid);
         // SIGTERM unshare → --kill-child 转发 SIGTERM 给 init（pid ns 的 pid 1），
         // init 优雅停 mihomo 后退出，内核清理 pid ns 内全部进程，ns 引用随之归零
         killProcess(state.holderPid);
         await waitForExit(state.holderPid);
+        await waitForExit(state.slirpPid);
         // 兜底：init 未在超时内退出 → SIGKILL init → 内核清 pid ns
         for (const pid of children) {
           killProcess(pid, "SIGKILL");
@@ -326,7 +381,11 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
     return stack;
   } catch (error) {
     // 失败清理：holder（unshare）的 SIGTERM 经 --kill-child 转发给 init，
-    // init 退出时内核清理 pid ns 内全部进程；调用方拿不到 stack，这里只能靠自己
+    // init 退出时内核清理 pid ns 内全部进程；slirp4netns 在宿主侧，需单独终止
+    //（exit-fd 写端也会随 holder 死亡关闭，这里主动杀只是不等到 HUP 轮询）
+    if (slirp?.pid) {
+      killProcess(slirp.pid);
+    }
     if (holder?.pid) {
       const children = await readChildPids(holder.pid);
       killProcess(holder.pid);

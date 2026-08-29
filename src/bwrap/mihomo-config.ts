@@ -20,6 +20,8 @@ export interface MihomoConfig {
   mode: "rule";
   "log-level": "info";
   ipv6: false;
+  /** 出站静态绑定 slirp 接口（固定名 tap0）。 */
+  "interface-name": string;
   dns: {
     enable: true;
     ipv6: false;
@@ -173,6 +175,11 @@ export function generateMihomoConfig(options: MihomoConfigOptions): MihomoConfig
     mode: "rule",
     "log-level": "info",
     ipv6: false,
+    // 静态绑定 tap0：auto-detect-interface 在启动瞬间可能探测到未就绪的接口
+    //（tap0 尚由 slirp4netns 创建），monitor 事后纠正但 DNS 拨号已经走错接口，
+    // 上游查询进自己的 TUN 被 dns-hijack 自劫持形成回环（allowlist 域名全部
+    // SERVFAIL）。slirp 接口名固定是 tap0，直接写死最可靠。
+    "interface-name": "tap0",
     dns: {
       enable: true,
       ipv6: false,
