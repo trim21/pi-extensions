@@ -1,10 +1,14 @@
 import { spawn } from "node:child_process";
+import { rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 const args = process.argv.slice(2);
 const configPath = args[0];
 const mihomoPath = args[1];
-if (!configPath || !mihomoPath) {
+const slirp4netnsPath = args[2];
+const tunMtu = Number(args[3]);
+if (!configPath || !mihomoPath || !slirp4netnsPath || !tunMtu) {
   process.exit(2);
 }
 function tap0Exists() {
@@ -22,6 +26,19 @@ async function waitFor(attempts, delayMs, predicate) {
   return false;
 }
 async function main() {
+  process.stdin.resume();
+  process.stdin.on("end", () => {
+    rmSync(dirname(configPath), { recursive: true, force: true });
+    process.exit(0);
+  });
+  const status = await readFile("/proc/self/status", "utf8");
+  const hostPid = /^NSpid:\s+(.+)$/m.exec(status)?.[1].split(/\s+/, 1)[0];
+  if (!hostPid) {
+    throw new Error("Failed to resolve host pid from NSpid");
+  }
+  spawn(slirp4netnsPath, ["-c", `--mtu=${tunMtu}`, "--netns-type=pid", hostPid, "tap0"], {
+    stdio: ["ignore", "inherit", "inherit"]
+  });
   await waitFor(100, 100, tap0Exists);
   const mihomo = spawn(mihomoPath, ["-d", dirname(configPath), "-f", configPath], {
     stdio: ["ignore", "inherit", "inherit"]

@@ -380,7 +380,6 @@ function killChild(child: ChildProcess): void {
 /** 网络栈子进程输出转发通道，仅用于诊断（默认丢弃）。 */
 export interface NetworkStackLog {
   holder?: (chunk: string) => void;
-  slirp?: (chunk: string) => void;
 }
 
 /** 为 net-allowlist 模式创建网络栈；非该模式返回 undefined。每次命令现建现停。 */
@@ -395,7 +394,6 @@ export async function createNetworkStack(
     mihomoPath: findMihomo(resolved.mihomoPath),
     slirp4netnsPath: findSlirp4netns(resolved.slirp4netnsPath),
     ...(log?.holder && { onHolderOutput: log.holder }),
-    ...(log?.slirp && { onSlirpOutput: log.slirp }),
   });
 }
 

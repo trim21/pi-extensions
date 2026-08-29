@@ -244,7 +244,6 @@ async function run(invocation: Invocation): Promise<number> {
       ...(verbose && {
         log: {
           holder: (chunk: string) => diagnose(`[holder] ${chunk.trimEnd()}`),
-          slirp: (chunk: string) => diagnose(`[slirp] ${chunk.trimEnd()}`),
         },
         onNetworkStack: (stack) => {
           diagnose(`netns holder pid: ${String(stack.holderPid)}`);
