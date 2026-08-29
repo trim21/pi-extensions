@@ -17,11 +17,13 @@ import {
   readConfigTiers,
   resolveCortexKitConfigPaths,
   resolveCortexKitStorageRoot,
+  setActiveLogger,
   timeoutForCommand,
 } from "@cortexkit/aft-bridge";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { SemanticRemote } from "./config.js";
+import { bridgeLogger } from "./logger.js";
 
 /** Pi 会话 ID：Rust 侧用它做 session 作用域（undo/checkpoint），感知工具可留空。 */
 export function resolveSessionId(extCtx: ExtensionContext): string | undefined {
@@ -78,6 +80,9 @@ export const SEMANTIC_API_KEY_ENV = "AFT_SEMANTIC_API_KEY";
  * 两者都缺省时不注入任何凭据（无鉴权端点直接可用）。
  */
 export async function createAftPool(cwd: string, semantic?: SemanticRemote): Promise<AftPool> {
+  // 必须在任何 bridge 代码运行前注册：不设 logger 时 aft-bridge 会把 child
+  // stderr / 生命周期日志 fallback 到 console.error，raw 输出打进 pi 的 stderr 破坏 TUI。
+  setActiveLogger(bridgeLogger);
   const binaryPath = await resolveAftBinary();
   const paths = resolveCortexKitConfigPaths(cwd);
   const childEnv: Record<string, string> = {
@@ -109,7 +114,7 @@ export async function createAftPool(cwd: string, semantic?: SemanticRemote): Pro
   const pool = await createAftTransportPool({
     harness: "pi",
     binaryPath,
-    poolOptions: { childEnv },
+    poolOptions: { childEnv, logger: bridgeLogger },
     configOverrides: {
       storage_dir: resolveCortexKitStorageRoot(),
       cortexkit_user_config_path: paths.userConfigPath,

@@ -1,14 +1,19 @@
 import type { ConfigTier } from "@cortexkit/aft-bridge";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createAftTransportPool, findBinary, readConfigTiers, inlineUserConfigTier } = vi.hoisted(
-  () => ({
-    createAftTransportPool: vi.fn(),
-    findBinary: vi.fn(),
-    readConfigTiers: vi.fn(),
-    inlineUserConfigTier: vi.fn(),
-  }),
-);
+const {
+  createAftTransportPool,
+  findBinary,
+  readConfigTiers,
+  inlineUserConfigTier,
+  setActiveLogger,
+} = vi.hoisted(() => ({
+  createAftTransportPool: vi.fn(),
+  findBinary: vi.fn(),
+  readConfigTiers: vi.fn(),
+  inlineUserConfigTier: vi.fn(),
+  setActiveLogger: vi.fn(),
+}));
 
 vi.mock("@cortexkit/aft-bridge", () => ({
   findBinary: () => findBinary(),
@@ -22,6 +27,12 @@ vi.mock("@cortexkit/aft-bridge", () => ({
   inlineUserConfigTier: (config: Record<string, unknown>, source?: string) =>
     inlineUserConfigTier(config, source),
   timeoutForCommand: (command: string) => (command === "callgraph" ? 60_000 : undefined),
+  setActiveLogger: (logger: unknown) => setActiveLogger(logger),
+  RotatingLogSink: class {
+    drain() {
+      return Promise.resolve();
+    }
+  },
 }));
 
 import { CALLGRAPH_BUILD_WAIT_MS, createAftPool, SEMANTIC_API_KEY_ENV } from "../src/aft/bridge.js";
@@ -55,6 +66,7 @@ describe("createAftPool", () => {
     findBinary.mockReset();
     readConfigTiers.mockReset();
     inlineUserConfigTier.mockReset();
+    setActiveLogger.mockReset();
     createAftTransportPool.mockResolvedValue({
       setConfigureOverride: vi.fn(),
       shutdown: vi.fn(),
