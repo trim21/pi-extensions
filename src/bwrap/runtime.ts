@@ -5,7 +5,6 @@ import { dirname, join } from "node:path";
 
 import {
   type AgentToolUpdateCallback,
-  createLocalBashOperations,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
@@ -28,8 +27,6 @@ import { type ApprovalRule, evaluateBashApproval, matchRule } from "./approval-r
 import { commandPatternsFor } from "./approval-suggest.js";
 import {
   type BwrapMode,
-  createBwrapBashOperations,
-  createNetworkStack,
   findBwrap,
   getBwrapConfigPaths,
   loadBwrapConfig,
@@ -39,6 +36,7 @@ import {
   resolveHeadlessBwrap,
 } from "./core.js";
 import { dcgSuggestion } from "./dcg-scan.js";
+import { loadSandboxConfig, runInSandbox } from "./sandbox.js";
 
 export type EscalationDecision = { kind: "dialog" } | { kind: "deny"; reason: string };
 
@@ -345,7 +343,7 @@ export class BwrapRuntime {
   }
 
   setMode(cwd: string, mode: BwrapMode): ResolvedBwrap {
-    this.resolved = resolveBwrap({ ...loadBwrapConfig(cwd), mode });
+    this.resolved = loadSandboxConfig({ workspace: cwd, mode });
     this.sandboxDisabled = false;
     return this.resolved;
   }
@@ -389,21 +387,8 @@ export class BwrapRuntime {
         await this.approveFullAccess(request.ctx, request.command, request.description, execCwd);
       }
     }
+    // 不经沙箱的三种情形：Windows（无 bubblewrap）、审批通过的全权限、allow-all 模式
     const local = isWindows || needsApproval || !runtime.bwrapEnabled;
-    // 每次命令现建网络栈（启动约 140ms），作用域结束自动停栈；allowlist 变化即时生效
-    const networkStack = local ? undefined : await createNetworkStack(runtime);
-    await using _stack = {
-      async [Symbol.asyncDispose]() {
-        try {
-          await networkStack?.stop();
-        } catch {
-          // best-effort：停栈失败（进程已退出/目录删除失败）不掩盖命令结果
-        }
-      },
-    };
-    const operations = local
-      ? createLocalBashOperations()
-      : createBwrapBashOperations(runtime, workspace, networkStack);
     await using output = new BashOutput(request.ctx.sessionManager.getSessionId());
     const { onUpdate } = request;
 
@@ -420,8 +405,12 @@ export class BwrapRuntime {
     );
 
     try {
-      if (onUpdate) onUpdate({ content: [], details: undefined });
-      const { exitCode } = await operations.exec(request.command, execCwd, {
+      onUpdate?.({ content: [], details: undefined });
+      const { exitCode } = await runInSandbox(runtime, {
+        workspace,
+        commandCwd: execCwd,
+        command: request.command,
+        unsandboxed: local,
         onData: (data) => {
           output.append(data);
           emitUpdate();

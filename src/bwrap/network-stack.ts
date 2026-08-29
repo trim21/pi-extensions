@@ -21,6 +21,13 @@ export interface NetworkStackOptions {
   readonly dnsServers: readonly string[];
   readonly mihomoPath: string;
   readonly slirp4netnsPath: string;
+  /**
+   * holder（unshare + mihomo）输出透传。默认只用于就绪探测、内容丢弃，
+   * 因此启动失败时只剩 "exited before mihomo started"，诊断需要它。
+   */
+  readonly onHolderOutput?: (chunk: string) => void;
+  /** slirp4netns 输出透传；不传时其 stdio 保持 ignore。 */
+  readonly onSlirpOutput?: (chunk: string) => void;
 }
 
 export interface NetworkStackExecOptions {
@@ -121,9 +128,25 @@ function killChild(pid: number | undefined): void {
   }
 }
 
+/**
+ * 额外转发子进程输出给诊断回调（就绪探测的监听器不受影响）。
+ * 注册 error 监听器后 spawn 失败（如 unshare 缺失）不再以未捕获异常结束进程。
+ */
+function forwardOutput(child: ChildProcess, onOutput: ((chunk: string) => void) | undefined): void {
+  if (!onOutput) return;
+  const write = (chunk: Buffer): void => onOutput(chunk.toString());
+  child.stdout?.on("data", write);
+  child.stderr?.on("data", write);
+  child.once("error", (error) => onOutput(String(error)));
+}
+
 export interface NetworkStack {
   exec(options: NetworkStackExecOptions): Promise<{ exitCode: number | null }>;
   stop(): Promise<void>;
+  /** holder pid：可 `nsenter -U -n --preserve-credentials -t <pid>` 手动进入该 netns 排查。 */
+  readonly holderPid: number;
+  /** 生成的 mihomo 配置路径（stop() 后随临时目录一起删除）。 */
+  readonly configPath: string;
 }
 
 interface NetworkStackState {
@@ -145,7 +168,14 @@ const stackFinalizer = new FinalizationRegistry<NetworkStackState>((state) => {
  * netns/mihomo/slirp4netns 均已就绪，命令通过 nsenter 进入该 netns 执行。
  */
 export async function startNetworkStack(options: NetworkStackOptions): Promise<NetworkStack> {
-  const { allowlist, dnsServers, mihomoPath, slirp4netnsPath } = options;
+  const {
+    allowlist,
+    dnsServers,
+    mihomoPath,
+    slirp4netnsPath,
+    onHolderOutput: holderOutput,
+    onSlirpOutput: slirpOutput,
+  } = options;
   const directory = await mkdtemp(join(tmpdir(), "pi-netns-"));
   const configPath = join(directory, "mihomo.json");
   const config = generateMihomoConfig({ allowlist, dnsServers });
@@ -159,6 +189,7 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
     // mihomo 日志经 holder 透传到这里的 stdout/stderr，用于判定就绪
     stdio: ["ignore", "pipe", "pipe"],
   });
+  forwardOutput(holder, holderOutput);
   if (holder.pid === undefined) {
     throw new Error("Failed to start network namespace holder");
   }
@@ -175,8 +206,10 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
       String(holderPid),
       "tap0",
     ],
-    { stdio: "ignore" },
+    // 默认丢弃 slirp4netns 日志；诊断时改为管道转发
+    { stdio: slirpOutput ? ["ignore", "pipe", "pipe"] : "ignore" },
   );
+  forwardOutput(slirp, slirpOutput);
   const slirpPid = slirp.pid;
   await waitForMihomoStarted(holder);
 
@@ -253,6 +286,8 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
       killProcess(state.holderPid);
       await rm(state.directory, { recursive: true, force: true }).catch(() => false);
     },
+    holderPid,
+    configPath,
   };
   stackFinalizer.register(stack, state);
   return stack;

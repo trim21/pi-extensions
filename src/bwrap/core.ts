@@ -187,7 +187,9 @@ export function getBwrapConfigPaths(cwd: string): BwrapConfigPaths {
 
 export function loadBwrapConfig(cwd: string, paths = getBwrapConfigPaths(cwd)): BwrapConfig {
   let config = DEFAULT_CONFIG;
-  for (const path of [paths.global, paths.project]) {
+  // 去重：调用方用同一路径表达「只读这一个文件」时不做二次合并
+  // （否则 extraWritablePaths / approvalRules 会被重复拼接）
+  for (const path of new Set([paths.global, paths.project])) {
     if (!existsSync(path)) continue;
     config = deepMerge(config, parseBwrapConfigFile(path));
   }
@@ -375,9 +377,16 @@ function killChild(child: ChildProcess): void {
   }
 }
 
+/** 网络栈子进程输出转发通道，仅用于诊断（默认丢弃）。 */
+export interface NetworkStackLog {
+  holder?: (chunk: string) => void;
+  slirp?: (chunk: string) => void;
+}
+
 /** 为 net-allowlist 模式创建网络栈；非该模式返回 undefined。每次命令现建现停。 */
 export async function createNetworkStack(
   resolved: ResolvedBwrap,
+  log?: NetworkStackLog,
 ): Promise<NetworkStack | undefined> {
   if (!resolved.network || resolved.networkAllowlist.length === 0) return undefined;
   return startNetworkStack({
@@ -385,7 +394,75 @@ export async function createNetworkStack(
     dnsServers: await resolveDnsServers(),
     mihomoPath: findMihomo(resolved.mihomoPath),
     slirp4netnsPath: findSlirp4netns(resolved.slirp4netnsPath),
+    ...(log?.holder && { onHolderOutput: log.holder }),
+    ...(log?.slirp && { onSlirpOutput: log.slirp }),
   });
+}
+
+/** 一次 bwrap 调用的完整组装结果：argv 与干净环境。 */
+export interface BwrapInvocation {
+  /** bwrap 可执行文件路径 */
+  file: string;
+  /** bwrap 参数（不含结尾的 `-- shell -lc command`） */
+  args: string[];
+  /** 沙箱内 shell 的绝对路径 */
+  shell: string;
+  /** 交给 shell 的命令 */
+  command: string;
+  /** 命令执行目录 */
+  cwd: string;
+  /** 沙箱内环境（不继承父进程） */
+  env: Record<string, string>;
+  /** net-allowlist 模式：命令需先经 nsenter 进入 holder 的 netns。 */
+  needsNetworkStack: boolean;
+}
+
+/**
+ * 组装一次 bwrap 调用。实际执行（createBwrapBashOperations）与调试打印共用这里，
+ * 保证 `--print-args` 输出的命令行与真正跑的那条完全一致。
+ */
+export async function buildBwrapInvocation(
+  resolved: ResolvedBwrap,
+  workspace: string,
+  command: string,
+  cwd: string,
+): Promise<BwrapInvocation> {
+  // 干净环境：不继承父进程 env/PATH，由 bash -lc 从 /etc/profile 与用户 profile 重建
+  const home = process.env.HOME;
+  if (home === undefined) {
+    throw new Error("HOME is not set; refusing to run bash in a clean environment");
+  }
+  return {
+    // 沙箱内不透传 PATH，execvp 的默认路径可能找不到 bash（如 NixOS），故在父进程解析绝对路径
+    shell: getShellConfig().shell,
+    file: findBwrap(resolved.bwrapPath),
+    args: [
+      "--ro-bind",
+      "/",
+      "/",
+      ...(await buildBwrapArgs(resolved, workspace)),
+      "--dev",
+      "/dev",
+      "--proc",
+      "/proc",
+    ],
+    command,
+    cwd,
+    env: {
+      HOME: home,
+      SHELL: "/bin/bash",
+      TERM: "dumb",
+      LANG: "C.UTF-8",
+      // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
+      PATH: "/usr/local/bin:/usr/bin:/bin",
+    },
+    needsNetworkStack: resolved.network && resolved.networkAllowlist.length > 0,
+  };
+}
+
+/** 完整 argv（`[bwrap, ...args, "--", shell, "-lc", command]`），spawn 与打印共用。 */
+export function bwrapArgv(invocation: BwrapInvocation): string[] {
+  return [invocation.file, ...invocation.args, "--", invocation.shell, "-lc", invocation.command];
 }
 
 /**
@@ -397,8 +474,6 @@ export function createBwrapBashOperations(
   workspace: string,
   networkStack?: NetworkStack,
 ): BashOperations {
-  // 沙箱内不透传 PATH，execvp 的默认路径可能找不到 bash（如 NixOS），故在父进程解析绝对路径
-  const shell = getShellConfig().shell;
   return {
     async exec(command, cwd, { onData, signal, timeout }) {
       await fsAccess(cwd, constants.F_OK).catch(() => {
@@ -407,58 +482,32 @@ export function createBwrapBashOperations(
       // 已中断（signal.reason 是 name=AbortError 的 DOMException）：直接抛，不再执行
       signal?.throwIfAborted();
 
-      // 干净环境：不继承父进程 env/PATH，由 bash -lc 从 /etc/profile 与用户 profile 重建
-      const home = process.env.HOME;
-      if (home === undefined) {
-        throw new Error("HOME is not set; refusing to run bash in a clean environment");
-      }
+      const invocation = await buildBwrapInvocation(resolved, workspace, command, cwd);
 
-      const baseArgs = [
-        "--ro-bind",
-        "/",
-        "/",
-        ...(await buildBwrapArgs(resolved, workspace)),
-        "--dev",
-        "/dev",
-        "--proc",
-        "/proc",
-      ];
-      const env = {
-        HOME: home,
-        SHELL: "/bin/bash",
-        TERM: "dumb",
-        LANG: "C.UTF-8",
-        // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
-        PATH: "/usr/local/bin:/usr/bin:/bin",
-      };
-
-      if (resolved.network && resolved.networkAllowlist.length > 0) {
+      if (invocation.needsNetworkStack) {
         if (!networkStack) {
           throw new Error("Network stack is not initialized for net-allowlist mode");
         }
         return networkStack.exec({
           command,
           cwd,
-          bwrapPath: findBwrap(resolved.bwrapPath),
-          bwrapArgs: baseArgs,
-          shell,
-          env,
+          bwrapPath: invocation.file,
+          bwrapArgs: invocation.args,
+          shell: invocation.shell,
+          env: invocation.env,
           onData,
           signal,
           timeout,
         });
       }
 
-      const child = spawn(
-        findBwrap(resolved.bwrapPath),
-        [...baseArgs, "--", shell, "-lc", command],
-        {
-          cwd,
-          detached: true,
-          stdio: ["ignore", "pipe", "pipe"],
-          env,
-        },
-      );
+      const argv = bwrapArgv(invocation);
+      const child = spawn(argv[0], argv.slice(1), {
+        cwd,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: invocation.env,
+      });
 
       return new Promise<{ exitCode: number | null }>((resolve, reject) => {
         let timedOut = false;

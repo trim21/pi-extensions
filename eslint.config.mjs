@@ -179,6 +179,7 @@ export default defineConfig(
   {
     files: ["test/**/*", "**/*.test.ts"],
     rules: {
+      "@typescript-eslint/no-empty-function": "off",
       "@typescript-eslint/consistent-type-imports": ["error", { disallowTypeAnnotations: false }],
       "@typescript-eslint/require-await": "off",
       "@typescript-eslint/no-unnecessary-condition": "off",
