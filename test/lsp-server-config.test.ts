@@ -336,6 +336,60 @@ describe("ConfigAdapter.spawn", () => {
     await new Promise((resolve) => handle!.process.once("exit", resolve));
     await rm(dir, { recursive: true, force: true });
   });
+
+  it("env {sh} 执行命令取 stdout（trim），命令在 spawn cwd 下运行，可被 initializationOptions 引用", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const adapter = new ConfigAdapter(
+      "mock",
+      parse({
+        bin: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 10000)"],
+        env: {
+          TOKEN: {
+            sh: [
+              process.execPath,
+              "-e",
+              String.raw`require("node:fs").writeFileSync("cwd.txt", process.cwd());console.log(" secret\n")`,
+            ],
+          },
+        },
+        initializationOptions: { token: "${TOKEN}" },
+      }),
+    );
+    const handle = await adapter.spawn(dir, dir);
+    expect(await readFile(join(dir, "cwd.txt"), "utf8")).toBe(dir);
+    expect(handle?.initialization).toEqual({ token: "secret" });
+    handle?.process.kill();
+    await new Promise((resolve) => handle!.process.once("exit", resolve));
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("env {sh} 命令失败（非零退出 / 空输出）时 spawn 抛错", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    try {
+      const failed = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          env: { TOKEN: { sh: [process.execPath, "-e", "console.error('boom');process.exit(3)"] } },
+        }),
+      );
+      await expect(failed.spawn(dir, dir)).rejects.toThrow(/exit code 3: boom/);
+
+      const empty = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          env: { TOKEN: { sh: [process.execPath, "-e", "process.exit(0)"] } },
+        }),
+      );
+      await expect(empty.spawn(dir, dir)).rejects.toThrow(/produced empty output/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // 没有内置默认服务器：只写入本次 mock servers，并用空的全局配置路径

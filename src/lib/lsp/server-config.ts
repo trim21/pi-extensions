@@ -12,8 +12,10 @@
  * 特殊探测逻辑（tsserver 路径、venv python 等）。
  */
 
+import { execFile as nodeExecFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
+import { promisify } from "node:util";
 
 import { minimatch } from "minimatch";
 import { type Static, Type } from "typebox";
@@ -39,8 +41,17 @@ export const serverConfigSchema = Type.Object({
   args: Type.Optional(Type.Array(Type.String())),
   /** 启动工作目录，支持 {root} / {cwd} 模板；缺省 {root}。 */
   cwd: Type.Optional(Type.String()),
-  /** 追加到子进程的环境变量；值支持 {root} / {cwd} 模板与 ${VAR} 环境变量引用。 */
-  env: Type.Optional(Type.Record(Type.String(), Type.String())),
+  /**
+   * 追加到子进程的环境变量。string 值支持 {root} / {cwd} 模板与 ${VAR} 引用；
+   * {sh: [...]} 在启动时执行命令（argv 直接执行、不经 shell），stdout trim 后作为值，
+   * 失败（非零退出 / 空输出）时服务器启动失败并报错。
+   */
+  env: Type.Optional(
+    Type.Record(
+      Type.String(),
+      Type.Union([Type.String(), Type.Object({ sh: Type.Array(Type.String()) })]),
+    ),
+  ),
   /** 文件扩展名（含点）→ LSP languageId，didOpen 用；缺省回退内置映射表。 */
   languageIdByExtension: Type.Optional(Type.Record(Type.String(), Type.String())),
   /** initialize 握手超时（ms）；缺省用全局配置 / client 默认。 */
@@ -101,20 +112,50 @@ function interpolateEnvDeep(value: unknown, env: NodeJS.ProcessEnv): unknown {
   return value;
 }
 
-/** 解析 per-server env：值先做 {root} / {cwd} 模板，再做环境变量引用插值。 */
-function resolveEnv(
-  config: Record<string, string> | undefined,
+/** 解析 per-server env：string 值做 {root} / {cwd} 模板 + 环境变量引用插值，{sh} 执行命令取 stdout。 */
+async function resolveEnv(
+  config: Record<string, string | { sh: string[] }> | undefined,
   root: string,
   cwd: string,
-): NodeJS.ProcessEnv | undefined {
+): Promise<NodeJS.ProcessEnv | undefined> {
   const entries = Object.entries(config ?? {});
   if (entries.length === 0) return undefined;
-  return Object.fromEntries(
-    entries.map(([key, value]) => [
-      key,
-      interpolateEnvVars(resolveTemplate(value, root, cwd), process.env),
-    ]),
+  const resolved = await Promise.all(
+    entries.map(async ([key, value]): Promise<[string, string]> => {
+      if (typeof value === "string") {
+        return [key, interpolateEnvVars(resolveTemplate(value, root, cwd), process.env)];
+      }
+      return [key, await runEnvCommand(value.sh, cwd)];
+    }),
   );
+  return Object.fromEntries(resolved);
+}
+
+const execFile = promisify(nodeExecFile);
+
+/**
+ * argv 直接执行（不经 shell，避免注入面；需要 shell 特性时配置里自行包
+ * ["bash", "-c", "..."]），stdout trim 后作为 env 值。
+ * 失败（spawn 错误 / 非零退出 / 空输出）时抛错，由 lsp.ts 捕获后 notify 给用户。
+ */
+async function runEnvCommand(argv: string[], cwd: string): Promise<string> {
+  let stdout: string;
+  try {
+    ({ stdout } = await execFile(argv[0], argv.slice(1), { cwd }));
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException & { stderr?: string };
+    const reason = typeof err.code === "number" ? `exit code ${err.code}` : err.message;
+    const stderr = err.stderr?.trim();
+    throw new Error(
+      `env command failed (${argv.join(" ")}): ${reason}${stderr ? `: ${stderr}` : ""}`,
+      { cause: error },
+    );
+  }
+  const output = stdout.trim();
+  if (!output) {
+    throw new Error(`env command (${argv.join(" ")}) produced empty output`);
+  }
+  return output;
 }
 
 /** 解析可执行文件：绝对/相对路径直接用；名字走项目工作区（node_modules/.bin 等）→ PATH。 */
@@ -184,10 +225,11 @@ export class ConfigAdapter implements LspServerAdapter {
     if (!bin) return undefined;
     const resolved = await resolveBinary(bin, root, cwd);
     if (!resolved) return undefined;
-    const env = resolveEnv(this.config.env, root, cwd);
+    const spawnCwd = resolveTemplate(this.config.cwd ?? "{root}", root, cwd);
+    const env = await resolveEnv(this.config.env, root, cwd);
     return {
       process: spawnProcess(resolved, this.config.args ?? [], {
-        cwd: resolveTemplate(this.config.cwd ?? "{root}", root, cwd),
+        cwd: spawnCwd,
         env,
       }),
       initialization: interpolateEnvDeep(this.config.initializationOptions, {
