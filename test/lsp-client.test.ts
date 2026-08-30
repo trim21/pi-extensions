@@ -11,7 +11,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { create, RenameNotPossibleError } from "../src/lib/lsp/client.js";
+import {
+  create,
+  RenameIncompleteError,
+  RenameNotPossibleError,
+  renameVerificationTiming,
+} from "../src/lib/lsp/client.js";
 
 const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
 
@@ -478,6 +483,71 @@ describe("lsp client renameSymbol", () => {
         client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" }),
       ).rejects.toThrow(RenameNotPossibleError);
     } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("references 收敛且 rename 覆盖全部文件：正常返回完整 edit", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: {
+        ...process.env,
+        MOCK_RENAME_MODE: "ok",
+        MOCK_REFERENCES_MODE: "grow_then_settle",
+      },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      const result = await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
+      const uris = Object.keys(result.edit.changes ?? {});
+      expect(uris).toHaveLength(2);
+      expect(uris).toContain(pathToFileURL(file).href);
+      expect(uris).toContain(pathToFileURL(join(dir, "extra-a.py")).href);
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("references 稳定但 rename 漏文件：预算耗尽抛 RenameIncompleteError", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: {
+        ...process.env,
+        MOCK_RENAME_MODE: "ok",
+        MOCK_REFERENCES_MODE: "stable_mismatch",
+      },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    const savedTiming = { ...renameVerificationTiming };
+    renameVerificationTiming.pollMs = 20;
+    renameVerificationTiming.budgetMs = 200;
+    try {
+      try {
+        await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
+        expect.unreachable("expected renameSymbol to reject");
+      } catch (error) {
+        expect(error).toBeInstanceOf(RenameIncompleteError);
+        expect((error as RenameIncompleteError).message).toContain(join(dir, "extra-a.py"));
+        expect((error as RenameIncompleteError).missing).toEqual([join(dir, "extra-a.py")]);
+      }
+    } finally {
+      Object.assign(renameVerificationTiming, savedTiming);
       await client.shutdown();
       await rm(dir, { recursive: true, force: true });
     }

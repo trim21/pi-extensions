@@ -160,6 +160,14 @@ export async function expandWorkspaceEdit(
 }
 
 /**
+ * rename edit 覆盖的文件路径集合（changes + documentChanges 的 text edits）。
+ * 供 renameSymbol 用 references 结果做覆盖校验。
+ */
+export function editFilePaths(edit: WorkspaceEdit): Set<string> {
+  return new Set(collectTextEdits(edit).keys());
+}
+
+/**
  * 归一化 WorkspaceEdit 为稳定字符串（URI → 规范路径、结构化字段），供比较
  * 两次 rename 的编辑集合是否一致（同一符号的多次出现 vs 不同符号）。
  */

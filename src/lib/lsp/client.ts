@@ -24,6 +24,7 @@ import type { Diagnostic as VSCodeDiagnostic, WorkspaceEdit } from "vscode-langu
 
 import type { LspServerHandle } from "./adapter.js";
 import { LANGUAGE_EXTENSIONS } from "./language.js";
+import { editFilePaths } from "./rename.js";
 import type { FileChange, FileChangeType } from "./watcher.js";
 
 // LSP spec 常量
@@ -52,6 +53,13 @@ const FILE_CHANGE_TYPE: Record<FileChangeType, number> = {
 
 export type Diagnostic = VSCodeDiagnostic;
 
+/** 两个路径集合是否一致（用于判断 references 结果是否收敛）。 */
+function samePaths(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const path of a) if (!b.has(path)) return false;
+  return true;
+}
+
 /** LSP MethodNotFound（-32601）：服务器未实现 prepareRename / rename 请求。 */
 const LSP_METHOD_NOT_FOUND = -32601;
 
@@ -60,6 +68,29 @@ const LSP_METHOD_NOT_FOUND = -32601;
  * 供调用方在多候选探测时跳过该 client 而不是中断整个操作。
  */
 export class RenameNotPossibleError extends Error {}
+
+/**
+ * rename edit 未覆盖 references 看到的全部文件：服务器索引可能仍在后台加载。
+ * 抛出时发生在写盘之前，整个 rename 无副作用，可稍后重试。
+ */
+export class RenameIncompleteError extends Error {
+  readonly missing: readonly string[];
+  constructor(missing: readonly string[]) {
+    super(
+      `LSP rename incomplete: textDocument/references found the symbol in ` +
+        `${missing.length} file(s) that the rename edit does not cover ` +
+        `(${missing.join(", ")}). The server index may still be loading; ` +
+        `nothing was modified, retry shortly.`,
+    );
+    this.missing = missing;
+  }
+}
+
+/**
+ * rename 覆盖校验的轮询节奏。budgetMs 是 references 收敛 + 重试的总预算；
+ * 测试可临时缩小以缩短等待。
+ */
+export const renameVerificationTiming = { pollMs: 400, budgetMs: 10_000 };
 
 interface PrepareRenameResponse {
   range?: unknown;
@@ -925,24 +956,29 @@ export async function create(input: CreateInput): Promise<LspClient> {
       const notRenameable = () =>
         new RenameNotPossibleError(`LSP server "${input.serverID}" cannot rename at ${at}`);
 
-      // references 前置作为同步点：服务器必须完成项目加载才能回答引用位置，
-      // 其响应到达后紧随的 rename 必然基于完整索引（LSP 没有标准化的
-      // "索引完成"信号，这是协议内唯一的同步手段）。references 请求本身
-      // 的结果不用于校验 rename 编辑——信任服务器，与编辑器行为一致；
-      // 服务器不支持 references（MethodNotFound）时直接跳过。
-      const awaitReferences = async (): Promise<void> => {
-        try {
-          await connection.sendRequest<{ uri: string }[] | null>("textDocument/references", {
-            textDocument: { uri },
-            position,
-            context: { includeDeclaration: true },
-          });
-        } catch (error) {
-          if (!(error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND)) {
-            throw error;
-          }
-        }
-      };
+      // references 前置 + rename 覆盖校验：LSP 没有标准化的"索引完成"信号，
+      // 服务器（如 tsserver）可能在项目加载完成前回答，导致 rename 漏掉
+      // 尚未入索引的文件。对策分两层：
+      // 1. 收敛检测：references 连续两次文件集合一致才认为索引稳定，防止
+      //    "服务器根本还没发现某文件"时校验形同虚设；
+      // 2. 覆盖校验：references 报告的文件必须都被 rename edit 覆盖，
+      //    不完整时等待重试，预算耗尽仍不完整抛 RenameIncompleteError——
+      //    调用方尚未写盘，整个操作无副作用，可稍后重试。
+      // 服务器不支持 references（MethodNotFound）时跳过校验，信任服务器，
+      // 与编辑器行为一致。
+      const referencesRequest = () =>
+        connection.sendRequest<{ uri: string }[] | null>("textDocument/references", {
+          textDocument: { uri },
+          position,
+          context: { includeDeclaration: true },
+        });
+
+      const toPaths = (locations: { uri: string }[] | null): Set<string> =>
+        new Set(
+          (locations ?? []).flatMap((location) =>
+            location.uri.startsWith("file:") ? [normalize(fileURLToPath(location.uri))] : [],
+          ),
+        );
 
       const sendRename = async (): Promise<WorkspaceEdit | null> => {
         try {
@@ -977,10 +1013,34 @@ export async function create(input: CreateInput): Promise<LspClient> {
         if (typeof prepared.placeholder === "string") placeholder = prepared.placeholder;
       }
 
-      await awaitReferences();
-      const edit = await sendRename();
-      if (!edit) throw notRenameable();
-      return placeholder === undefined ? { edit } : { edit, placeholder };
+      let locations: { uri: string }[] | null;
+      try {
+        locations = await referencesRequest();
+      } catch (error) {
+        if (!(error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND)) throw error;
+        const edit = await sendRename();
+        if (!edit) throw notRenameable();
+        return placeholder === undefined ? { edit } : { edit, placeholder };
+      }
+
+      const deadline = Date.now() + renameVerificationTiming.budgetMs;
+      let previous: Set<string> | undefined;
+      let current = toPaths(locations);
+      for (;;) {
+        const settled = previous !== undefined && samePaths(previous, current);
+        if (settled || Date.now() >= deadline) {
+          const edit = await sendRename();
+          if (!edit) throw notRenameable();
+          const missing = [...current].filter((path) => !editFilePaths(edit).has(path));
+          if (missing.length === 0) {
+            return placeholder === undefined ? { edit } : { edit, placeholder };
+          }
+          throw new RenameIncompleteError(missing);
+        }
+        previous = current;
+        await sleep(renameVerificationTiming.pollMs);
+        current = toPaths(await referencesRequest());
+      }
     },
     get diagnostics() {
       const result = new Map<string, Diagnostic[]>();

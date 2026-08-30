@@ -12,7 +12,13 @@
 //   null_prepare prepare 返回 null（位置不可 rename）
 //   null_rename prepare 成功但 rename 返回 null
 //   unsupported 不声明 renameProvider，请求返回 MethodNotFound
+// env MOCK_REFERENCES_MODE 控制 references 行为（缺省 MethodNotFound，即跳过覆盖校验）：
+//   stable_mismatch references 稳定返回 [self, extra]，rename 只覆盖 self → 永不完整
+//   grow_then_settle references 第 1 次返回 [self]，第 2 次起返回 [self, extra]；
+//                   rename 在 references 调用 ≥2 次后覆盖两者 → 收敛后成功
 const renameMode = process.env.MOCK_RENAME_MODE ?? "";
+const referencesMode = process.env.MOCK_REFERENCES_MODE ?? "";
+let referencesCalls = 0;
 const prepareResult = {
   range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
   placeholder: "mockSymbol",
@@ -157,23 +163,43 @@ function handle(msg) {
     });
     return;
   }
-  if (msg.method === "textDocument/rename" && renameMode !== "unsupported") {
+  if (msg.method === "textDocument/references" && referencesMode !== "") {
+    referencesCalls++;
+    const selfUri = msg.params.textDocument.uri;
+    const extraUri = selfUri.replace(/([^/]+)$/, "extra-$1");
+    const growDone = referencesMode !== "grow_then_settle" || referencesCalls >= 2;
     send({
       jsonrpc: "2.0",
       id: msg.id,
-      result:
-        renameMode === "null_rename"
-          ? null
-          : {
-              changes: {
-                [msg.params.textDocument.uri]: [
-                  {
-                    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
-                    newText: msg.params.newName,
-                  },
-                ],
-              },
-            },
+      result: growDone ? [{ uri: selfUri }, { uri: extraUri }] : [{ uri: selfUri }],
+    });
+    return;
+  }
+  if (msg.method === "textDocument/rename" && renameMode !== "unsupported") {
+    // stable_mismatch：rename 永远只覆盖 self（校验永不通过）；
+    // grow_then_settle：references 调用 ≥2 次后 rename 覆盖两者（收敛后成功）
+    const referencesCoverExtra =
+      referencesMode === "grow_then_settle" && referencesCalls >= 2;
+    const changes = {
+      [msg.params.textDocument.uri]: [
+        {
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+          newText: msg.params.newName,
+        },
+      ],
+    };
+    if (referencesCoverExtra) {
+      changes[msg.params.textDocument.uri.replace(/([^/]+)$/, "extra-$1")] = [
+        {
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+          newText: msg.params.newName,
+        },
+      ];
+    }
+    send({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: renameMode === "null_rename" ? null : { changes },
     });
     return;
   }
