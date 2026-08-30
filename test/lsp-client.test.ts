@@ -339,20 +339,19 @@ describe("lsp client watched files", () => {
       await sleep(200);
       expect(notifications.slice(before)).toHaveLength(0);
 
-      // 外部改写磁盘 → 一条 didClose + 一条 changed watchedFiles
+      // 外部改写磁盘 → 一条 didClose + 一条 changed watchedFiles。
+      // 两条通知经 mock server 的 stderr JSONL 异步到达，需一起等齐再断言，
+      // 只等 didClose 就断言第二条会在 CI 负载下间歇性失败
       await writeFile(file, "x = 999\n");
       const before2 = notifications.length;
       await client.notify.watchedFiles([{ path: file, type: "changed", isDirectory: false }]);
       await vi.waitFor(() => {
-        expect(notifications.slice(before2).some((n) => n.method === "textDocument/didClose")).toBe(
-          true,
-        );
+        const slice = notifications.slice(before2);
+        const didClose = slice.find((n) => n.method === "textDocument/didClose");
+        const watchedFiles = slice.find((n) => n.method === "workspace/didChangeWatchedFiles");
+        expect(didClose?.params.textDocument).toEqual({ uri: pathToFileURL(file).href });
+        expect(watchedFiles?.params.changes).toEqual([{ uri: pathToFileURL(file).href, type: 2 }]);
       });
-      const slice = notifications.slice(before2);
-      const didClose = slice.find((n) => n.method === "textDocument/didClose");
-      expect(didClose?.params.textDocument).toEqual({ uri: pathToFileURL(file).href });
-      const watchedFiles = slice.find((n) => n.method === "workspace/didChangeWatchedFiles");
-      expect(watchedFiles?.params.changes).toEqual([{ uri: pathToFileURL(file).href, type: 2 }]);
     } finally {
       await client.shutdown();
       await rm(dir, { recursive: true, force: true });
