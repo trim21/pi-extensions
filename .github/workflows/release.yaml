@@ -61,7 +61,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download --repo MetaCubeX/mihomo --latest \
+          # 不带 tag 时 gh release download 即取 latest release
+          gh release download --repo MetaCubeX/mihomo \
             --pattern 'mihomo-linux-amd64-v[0-9].[0-9]*.[0-9]*.gz' --dir mihomo-tmp
           mkdir -p vendor
           gunzip -c mihomo-tmp/*.gz > vendor/mihomo-linux-x64
