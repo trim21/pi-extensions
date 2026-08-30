@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { constants, type Dirent, existsSync, readFileSync } from "node:fs";
 import { access as fsAccess, readdir, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type BashOperations, getAgentDir, getShellConfig } from "@earendil-works/pi-coding-agent";
@@ -241,16 +242,28 @@ function findCommandInPath(name: string, hint: string): string {
   throw new Error(hint);
 }
 
-export function findMihomo(override?: string): string {
+// npm 包内自带的静态编译 mihomo（linux-x64），发布时由 CI 下载到 vendor/；
+// 源码方式运行（vendor 不存在）时自然跳过，走 PATH 查找。
+const VENDORED_MIHOMO_PATH = fileURLToPath(
+  new URL("../../vendor/mihomo-linux-x64", import.meta.url),
+);
+
+export function findMihomo(override?: string, bundledPath = VENDORED_MIHOMO_PATH): string {
   if (override) {
     if (!existsSync(override)) {
       throw new Error(`mihomo not found at configured path: ${override}`);
     }
     return override;
   }
-  return findCommandInPath(
-    "mihomo",
-    "mihomo not found in PATH. Install it from https://github.com/MetaCubeX/mihomo",
+  // 优先全局 PATH（用户自装的 mihomo），没有时回退到包内自带二进制
+  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+    const candidate = join(directory, "mihomo");
+    if (existsSync(candidate)) return candidate;
+  }
+  if (existsSync(bundledPath)) return bundledPath;
+  throw new Error(
+    "mihomo not found in PATH and the package ships no bundled binary. " +
+      "Install it from https://github.com/MetaCubeX/mihomo",
   );
 }
 

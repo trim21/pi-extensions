@@ -55,5 +55,19 @@ jobs:
           " "$VERSION"
           echo "Publishing @trim21/personal-pi-extensions@$VERSION"
 
+      # 打包静态编译的 mihomo（linux-x64）：PATH 找不到 mihomo 时运行时回退用它。
+      # 每次发布取 latest release 的 mihomo-linux-amd64-vX.Y.Z.gz（排除 compatible/v1/v2/v3 等变体）。
+      - name: Download bundled mihomo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo MetaCubeX/mihomo --latest \
+            --pattern 'mihomo-linux-amd64-v[0-9].[0-9]*.[0-9]*.gz' --dir mihomo-tmp
+          mkdir -p vendor
+          gunzip -c mihomo-tmp/*.gz > vendor/mihomo-linux-x64
+          rm -rf mihomo-tmp
+          chmod 755 vendor/mihomo-linux-x64
+          ./vendor/mihomo-linux-x64 -v
+
       - name: Publish to npm via OIDC
         run: npm publish --provenance

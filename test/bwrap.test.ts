@@ -17,6 +17,7 @@ import {
   buildBwrapArgs,
   findBwrap,
   findGitDirs,
+  findMihomo,
   resolveBwrap,
   type ResolvedBwrap,
   resolveHeadlessBwrap,
@@ -30,6 +31,32 @@ describe("findBwrap", () => {
 
   it("returns an existing configured path", () => {
     expect(findBwrap(process.execPath)).toBe(process.execPath);
+  });
+});
+
+describe("findMihomo", () => {
+  it("throws when the configured mihomoPath does not exist", () => {
+    expect(() => findMihomo("/nonexistent/mihomo")).toThrow(/not found at configured path/);
+  });
+
+  it("falls back to the bundled binary when mihomo is not in PATH", () => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      expect(findMihomo(undefined, process.execPath)).toBe(process.execPath);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("throws when neither PATH nor the bundled binary has mihomo", () => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      expect(() => findMihomo(undefined, "/nonexistent/mihomo")).toThrow(/bundled/);
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 });
 

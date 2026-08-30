@@ -28,6 +28,7 @@ import { commandPatternsFor } from "./approval-suggest.js";
 import {
   type BwrapMode,
   findBwrap,
+  findMihomo,
   getBwrapConfigPaths,
   loadBwrapConfig,
   resolveBwrap,
@@ -273,6 +274,8 @@ export class BwrapRuntime {
   private resolved: ResolvedBwrap | undefined;
   private sandboxDisabled = false;
   private bwrapUnavailable = false;
+  /** net-allowlist 首次执行时解析一次 mihomo 路径，之后随 runtime 复用，不逐命令扫描 PATH。 */
+  private mihomoPath: string | undefined;
 
   setup(pi: ExtensionAPI): void {
     pi.registerFlag("no-bwrap", {
@@ -389,6 +392,12 @@ export class BwrapRuntime {
     }
     // 不经沙箱的三种情形：Windows（无 bubblewrap）、审批通过的全权限、allow-all 模式
     const local = isWindows || needsApproval || !runtime.bwrapEnabled;
+    // mihomoPath 是 ResolvedBwrap 的 override 语义：首次 net-allowlist 执行时解析
+    // 一次存入私有字段，之后写回 resolved 直达 createNetworkStack，不逐命令扫描 PATH
+    if (runtime.network && runtime.networkAllowlist.length > 0) {
+      runtime.mihomoPath ??= this.mihomoPath ?? findMihomo();
+      this.mihomoPath = runtime.mihomoPath;
+    }
     await using output = new BashOutput(request.ctx.sessionManager.getSessionId());
     const { onUpdate } = request;
 
