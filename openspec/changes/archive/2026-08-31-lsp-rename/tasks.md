@@ -1,11 +1,11 @@
 ## 1. 配置与基础设施
 
-- [ ] 1.1 `serverConfigSchema` 增加 `kind` 字段（`language` | `linter`，缺省 `language`，非法值按配置错误拒绝），`ConfigAdapter` 透传为 `readonly kind`；`test/lsp-server-config.test.ts` 补 kind 解析与非法值用例（`pnpm test` 通过）
-- [ ] 1.2 `resolvePathArg` 从 `src/aft/tools.ts` 移至 `src/lib/path.js`，aft 各工具改为从 lib 导入；`pnpm check` 与 aft 相关测试全绿
+- [x] 1.1 `serverConfigSchema` 增加 `kind` 字段（`language` | `linter`，缺省 `language`，非法值按配置错误拒绝），`ConfigAdapter` 透传为 `readonly kind`；`test/lsp-server-config.test.ts` 补 kind 解析与非法值用例（`pnpm test` 通过）
+- [x] 1.2 `resolvePathArg` 从 `src/aft/tools.ts` 移至 `src/lib/path.js`，aft 各工具改为从 lib 导入；`pnpm check` 与 aft 相关测试全绿
 
 ## 2. LSP 层 rename 能力
 
-- [ ] 2.1 `src/lib/lsp/client.ts`：`LspClient` 增加 `renameSymbol()`——resolve 路径、`notify.open` 同步磁盘内容、按能力决定是否先发 `prepareRename`（返回 null 抛"位置不可 rename"）、发 `textDocument/rename` 返回 WorkspaceEdit；服务器 MethodNotFound / 无 renameProvider 统一转为可定位错误；`test/lsp-client.test.ts` 补 mock 用例
+- [x] 2.1 `src/lib/lsp/client.ts`：`LspClient` 增加 `renameSymbol()`——resolve 路径、`notify.open` 同步磁盘内容、按能力决定是否先发 `prepareRename`（返回 null 抛"位置不可 rename"）、发 `textDocument/rename` 返回 WorkspaceEdit；服务器 MethodNotFound / 无 renameProvider 统一转为可定位错误；`test/lsp-client.test.ts` 补 mock 用例
 - [x] 2.2 `src/lib/lsp/lsp.ts`：`LspService` 增加 `rename()`（`kind: "language"` 过滤、多 client 按配置顺序取第一个成功、全部失败抛聚合错误）；既有 lsp 测试不回归
 
 ## 3. WorkspaceEdit 应用层

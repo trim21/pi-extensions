@@ -64,34 +64,6 @@ outline / zoom / callgraph / search 为纯只读查询，MUST NOT 经过写保�
 - **WHEN** `aft_search` 已注册且语义索引仍在构建
 - **THEN** 首次调用阻塞等待构建完成（至多 600 秒），避免返回部分结果
 
-### Requirement: 写工具路径级审批
-
-refactor / import 是写操作，不支持 preview，写保护 MUST 退化为路径级审批。
-
-#### Scenario: workspace 内自动放行
-
-- **WHEN** 重构 / import 操作的目标在 workspace 内（或 /tmp）
-- **THEN** 直接执行，无需审批
-
-#### Scenario: 外部路径审批
-
-- **WHEN** 目标在 workspace 外部
-- **THEN** 弹确认框（无 diff 预览）；headless 直接拒绝
-
-#### Scenario: 重构前 checkpoint
-
-- **WHEN** 执行 `move` 重构
-- **THEN** 全 workspace 重写 import 与引用；引擎会先保存内部快照，但 prompt MUST NOT 把它描述成模型可自助调用的回退手段
-
-### Requirement: import 管理
-
-语言感知的 import 添加与移除。
-
-#### Scenario: 多语言 import 操作
-
-- **WHEN** `aft_import` 执行 add / remove
-- **THEN** 支持 18 种语言的具名 / 默认 / 命名空间 / 类型导入等；`remove_name` 缺省移除整个 import；不做 import 排序（交给 lint）
-
 ### Requirement: 语义搜索只使用外部 embedding 后端
 
 `aft_search` 的 embedding 计算 MUST 走外部 HTTP 后端（`openai_compatible` 或 `ollama`）；引擎默认的本地 ONNX `fastembed` 后端 MUST NOT 采用（内网镜像不提供 ONNX Runtime）。
@@ -179,10 +151,8 @@ aft 引擎自带备份、undo 栈、命名 checkpoint 以及 `safety` / `delete`
 AFT 工具基于常驻 Rust bridge 进程池（`src/aft/bridge.ts`）：每项目根一个 bridge 进程、跨 session 共享；二进制解析顺序为缓存 → npm 平台包（`@cortexkit/aft-linux-x64`）→ PATH → cargo → GitHub release 兜底；二进制缺失时不注册工具。
 
 - **配置**（`src/aft/config.ts`）：用户级 `aft.jsonc`——`enabled`（默认 true）、`semantic_search`（默认 false，涉及外部 embedding 后端，仅用户级可开）。
-- **感知 / 写工具分离**：outline / zoom / callgraph / search 纯只读，不过写保护；refactor / import 是写操作，不支持 preview，写保护退化为路径级审批（workspace 内与 /tmp 自动放行，外部弹确认框、headless 拒绝，无 diff 预览）。
-- **重构**：`move` 只支持顶层符号，执行前自动 checkpoint，全 workspace 重写 import 与引用；`extract` 支持 TS/JS/TSX/Python 行区间。
-- **import**：支持 18 种语言的具名 / 默认 / 命名空间 / 类型导入等，`validate` 默认 syntax 级；不做 import 排序（交给 lint）。
+- **感知工具只读**：outline / zoom / callgraph / search 均为纯只读查询，不经过写保护审批；写类能力（符号重命名、跨文件引用更新）由 LSP 侧的 `lsp-rename` 承接。
 - **语义搜索**：`semantic_search: true` 时注册 `aft_search`，首次调用阻塞至多 600 秒等索引构建完成。
 - sessionId 传给 Rust 侧做 undo / checkpoint 作用域。
 
-涉及文件：`src/aft/`（tools.ts / bridge.ts / config.ts / refactor.ts / imports.ts / index.ts）。
+涉及文件：`src/aft/`（tools.ts / bridge.ts / config.ts / index.ts）。
