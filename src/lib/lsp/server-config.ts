@@ -39,13 +39,15 @@ export const serverConfigSchema = Type.Object({
   args: Type.Optional(Type.Array(Type.String())),
   /** 启动工作目录，支持 {root} / {cwd} 模板；缺省 {root}。 */
   cwd: Type.Optional(Type.String()),
+  /** 追加到子进程的环境变量；值支持 {root} / {cwd} 模板与 ${VAR} 环境变量引用。 */
+  env: Type.Optional(Type.Record(Type.String(), Type.String())),
   /** 文件扩展名（含点）→ LSP languageId，didOpen 用；缺省回退内置映射表。 */
   languageIdByExtension: Type.Optional(Type.Record(Type.String(), Type.String())),
   /** initialize 握手超时（ms）；缺省用全局配置 / client 默认。 */
   startupTimeoutMs: Type.Optional(Type.Number({ minimum: 1 })),
   /** 写文件后等待诊断的时长（ms）；缺省用全局配置 / client 默认。 */
   diagnosticsWaitMs: Type.Optional(Type.Number({ minimum: 1 })),
-  /** initialize 请求的 initializationOptions。 */
+  /** initialize 请求的 initializationOptions；字符串值支持 ${VAR} / ${VAR:-default} 插值。 */
   initializationOptions: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   /** didChangeConfiguration / workspace/configuration 请求的 settings。 */
   settings: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
@@ -75,6 +77,44 @@ export function createAdapters(
 /** {root} / {cwd} 模板替换（bin / cwd 字段均支持）。 */
 function resolveTemplate(template: string, root: string, cwd: string): string {
   return template.split("{root}").join(root).split("{cwd}").join(cwd);
+}
+
+/** ${VAR} / ${VAR:-default} 插值；shell 语义：未定义或空时用 default（缺省空字符串）。 */
+const envVarPattern = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g;
+
+function interpolateEnvVars(value: string, env: NodeJS.ProcessEnv): string {
+  return value.replaceAll(envVarPattern, (_match, name: string, fallback?: string) => {
+    const resolved = env[name];
+    return resolved !== undefined && resolved !== "" ? resolved : (fallback ?? "");
+  });
+}
+
+/** 深遍历配置值，对所有字符串做环境变量插值。 */
+function interpolateEnvDeep(value: unknown, env: NodeJS.ProcessEnv): unknown {
+  if (typeof value === "string") return interpolateEnvVars(value, env);
+  if (Array.isArray(value)) return value.map((item) => interpolateEnvDeep(item, env));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, interpolateEnvDeep(item, env)]),
+    );
+  }
+  return value;
+}
+
+/** 解析 per-server env：值先做 {root} / {cwd} 模板，再做环境变量引用插值。 */
+function resolveEnv(
+  config: Record<string, string> | undefined,
+  root: string,
+  cwd: string,
+): NodeJS.ProcessEnv | undefined {
+  const entries = Object.entries(config ?? {});
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(
+    entries.map(([key, value]) => [
+      key,
+      interpolateEnvVars(resolveTemplate(value, root, cwd), process.env),
+    ]),
+  );
 }
 
 /** 解析可执行文件：绝对/相对路径直接用；名字走项目工作区（node_modules/.bin 等）→ PATH。 */
@@ -144,11 +184,16 @@ export class ConfigAdapter implements LspServerAdapter {
     if (!bin) return undefined;
     const resolved = await resolveBinary(bin, root, cwd);
     if (!resolved) return undefined;
+    const env = resolveEnv(this.config.env, root, cwd);
     return {
       process: spawnProcess(resolved, this.config.args ?? [], {
         cwd: resolveTemplate(this.config.cwd ?? "{root}", root, cwd),
+        env,
       }),
-      initialization: this.config.initializationOptions,
+      initialization: interpolateEnvDeep(this.config.initializationOptions, {
+        ...process.env,
+        ...env,
+      }) as Record<string, unknown> | undefined,
       settings: this.config.settings,
       languageIds: this.config.languageIdByExtension,
     };

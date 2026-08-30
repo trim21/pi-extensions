@@ -52,6 +52,7 @@ describe("serverConfigSchema", () => {
       bin: "gopls",
       args: [],
       cwd: "{root}",
+      env: { VIRTUAL_ENV: "/venv" },
       languageIdByExtension: { ".go": "go" },
       startupTimeoutMs: 45_000,
       diagnosticsWaitMs: 1500,
@@ -59,6 +60,7 @@ describe("serverConfigSchema", () => {
       settings: {},
     });
     expect(config.include).toEqual(["**/*.go"]);
+    expect(config.env).toEqual({ VIRTUAL_ENV: "/venv" });
     expect(config.initializationOptions).toEqual({});
   });
 
@@ -245,6 +247,93 @@ describe("ConfigAdapter.spawn", () => {
     expect(await missing.spawn(dir, dir)).toBeUndefined();
     const noBin = new ConfigAdapter("y", parse({}));
     expect(await noBin.spawn(dir, dir)).toBeUndefined();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("env 传给子进程，值支持 {root} / {cwd} 模板与环境变量引用", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const logFile = join(dir, "env.json");
+    vi.stubEnv("PATH_SUFFIX", "/extra");
+    try {
+      const script = [
+        `require("node:fs").writeFileSync(${JSON.stringify(logFile)}`,
+        ` JSON.stringify({VIRTUAL_ENV: process.env.VIRTUAL_ENV`,
+        ` PATH_APPEND: process.env.PATH_APPEND`,
+        ` FROM_UNDEF: process.env.FROM_UNDEF}))`,
+      ].join(",");
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", script],
+          env: {
+            VIRTUAL_ENV: "{root}/.venv",
+            PATH_APPEND: "${PATH_SUFFIX}",
+            FROM_UNDEF: "${MOCK_TEST_UNDEF_VAR:-fallback}",
+          },
+        }),
+      );
+      const handle = await adapter.spawn(dir, dir);
+      await new Promise((resolve) => handle!.process.once("exit", resolve));
+      const env = JSON.parse(await readFile(logFile, "utf8"));
+      expect(env.VIRTUAL_ENV).toBe(join(dir, ".venv"));
+      expect(env.PATH_APPEND).toBe("/extra");
+      expect(env.FROM_UNDEF).toBe("fallback");
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("initializationOptions 字符串值做 ${VAR} / ${VAR:-default} 深插值", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    vi.stubEnv("MOCK_TEST_PY", "/stubbed/venv");
+    try {
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          initializationOptions: {
+            pythonPath: "${MOCK_TEST_PY}/bin/python",
+            fallback: "${MOCK_TEST_UNDEF_VAR:-/default/venv}",
+            unset: "${MOCK_TEST_UNDEF_VAR}",
+            nested: { list: ["${MOCK_TEST_PY}"] },
+            count: 42,
+          },
+        }),
+      );
+      const handle = await adapter.spawn(dir, dir);
+      expect(handle?.initialization).toEqual({
+        pythonPath: "/stubbed/venv/bin/python",
+        fallback: "/default/venv",
+        unset: "",
+        nested: { list: ["/stubbed/venv"] },
+        count: 42,
+      });
+      handle?.process.kill();
+      await new Promise((resolve) => handle!.process.once("exit", resolve));
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("initializationOptions 插值可引用配置 env 里的变量", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const adapter = new ConfigAdapter(
+      "mock",
+      parse({
+        bin: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 10000)"],
+        env: { MOCK_TEST_CONFIG_ENV: "/config/venv" },
+        initializationOptions: { pythonPath: "${MOCK_TEST_CONFIG_ENV}/bin/python" },
+      }),
+    );
+    const handle = await adapter.spawn(dir, dir);
+    expect(handle?.initialization).toEqual({ pythonPath: "/config/venv/bin/python" });
+    handle?.process.kill();
+    await new Promise((resolve) => handle!.process.once("exit", resolve));
     await rm(dir, { recursive: true, force: true });
   });
 });

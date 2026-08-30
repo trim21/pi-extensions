@@ -365,10 +365,11 @@ read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级�
       "bin": "gopls",
       "args": [],
       "cwd": "{root}", // 支持 {root} / {cwd} 模板
+      "env": { "VIRTUAL_ENV": "{root}/.venv", "PATH_SUFFIX": "${EXTRA_PATH}" }, // 追加到子进程环境变量；值支持 {root} / {cwd} 模板与 ${VAR} 引用
       "languageIdByExtension": { ".go": "go" },
       "startupTimeoutMs": 45000,
       "diagnosticsWaitMs": 1500,
-      "initializationOptions": {}, // → initialize 请求
+      "initializationOptions": { "pythonPath": "${VIRTUAL_ENV:-/opt/venv}/bin/python" }, // → initialize 请求；字符串值支持 ${VAR} / ${VAR:-default} 插值
       "settings": {}, // → didChangeConfiguration / workspace/configuration 请求
     },
   },
@@ -389,7 +390,8 @@ read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级�
 - `bin`：可执行文件——绝对路径、相对调用 cwd 的路径，或名字（先在项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin` 找，再走 PATH）
 - `languageIdByExtension`：扩展名 → LSP languageId（didOpen 用）；缺省回退内置映射表
 - `startupTimeoutMs` / `diagnosticsWaitMs`：per-server 超时，覆盖全局配置与默认值
-- `initializationOptions` 与 `settings` 按 LSP 语义分离：前者进 initialize 请求，后者进 didChangeConfiguration / workspace/configuration 请求
+- `env`：追加到 LSP 子进程的环境变量（在 `process.env` 之上合并）；值支持 `{root}` / `{cwd}` 模板与 `${VAR}` 环境变量引用
+- `initializationOptions` 与 `settings` 按 LSP 语义分离：前者进 initialize 请求，后者进 didChangeConfiguration / workspace/configuration 请求；`initializationOptions` 的字符串值（含嵌套对象/数组）在启动时做 `${VAR}` 插值，`${VAR:-default}` 在变量未定义或为空时用 default，未定义且无 default 替换为空字符串；插值时可引用 `env` 里配置的变量
 
 没有内置默认服务器：`servers` 的 key 就是服务器 id，全部来自你的配置，未定义 `servers` 时不启动任何语言服务器。executable 的发现逻辑（如 tsserver 路径、venv 里的 python）不内置，需要时用 `bin` / `args` / `settings` 自行表达。
 
