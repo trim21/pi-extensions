@@ -56,6 +56,9 @@ describe("workspace watcher", () => {
       const sub = join(dir, "sub");
       const file = join(sub, "b.txt");
       await mkdir(sub);
+      // 递归 watcher 异步挂载新目录；立刻写文件会丢失 created 的 rename 事件，
+      // 只留下内容写入的 change 事件（被 classify 报成 changed）
+      await sleep(100);
       await writeFile(file, "x");
       await sleep(250);
       await watcher.stop();
