@@ -279,10 +279,10 @@ describe("guardWriteAccess", () => {
     const select = vi.fn(async () => "Block");
     await expect(
       guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), {
-        toolName: "aft_refactor",
+        toolName: "test-tool",
         absolutePath: OUTSIDE,
       }),
-    ).rejects.toThrow("user deny aft_refactor: blocked");
+    ).rejects.toThrow("user deny test-tool: blocked");
   });
 
   it.skipIf(process.platform === "win32")("shows a diff preview for an outside edit", async () => {

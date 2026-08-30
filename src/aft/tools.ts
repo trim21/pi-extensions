@@ -7,8 +7,6 @@
 
 import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -22,7 +20,7 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { formatDisplayPath, formatSubtitlePath } from "../lib/path.js";
+import { formatDisplayPath, formatSubtitlePath, resolvePathArg } from "../lib/path.js";
 import { type ToolPendant } from "../lib/pendant.js";
 import { type AftState, callAftTool, SEMANTIC_INDEX_WAIT_TIMEOUT_MS } from "./bridge.js";
 
@@ -40,15 +38,6 @@ const SEARCH_PROMPT = readFileSync(
   fileURLToPath(new URL("search.md", import.meta.url)),
   "utf8",
 ).trim();
-
-/** 解析 `~` 前缀与相对路径（相对 session cwd）。URL 与绝对路径原样返回。 */
-export function resolvePathArg(cwd: string, input: string): string {
-  if (input === "~" || input.startsWith("~/")) {
-    return join(homedir(), input.slice(1));
-  }
-  if (input.startsWith("http://") || input.startsWith("https://")) return input;
-  return isAbsolute(input) ? input : resolve(cwd, input);
-}
 
 export interface AftToolContext {
   cwd: string;

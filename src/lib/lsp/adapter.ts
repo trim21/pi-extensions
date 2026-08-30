@@ -20,8 +20,13 @@ export interface LspServerHandle {
   languageIds?: Record<string, string>;
 }
 
+/** 服务器类型：真语言服务器（language，可承载符号级请求）或 LSP 协议 linter。 */
+export type ServerKind = "language" | "linter";
+
 export interface LspServerAdapter {
   readonly id: string;
+  /** 服务器类型；缺省视为 "language"（诊断之外的符号级功能只面向 language）。 */
+  readonly kind?: ServerKind;
   /** 关联的文件扩展名（含点，小写）；空数组表示匹配所有文件。 */
   readonly extensions: readonly string[];
   /** per-server initialize 握手超时（ms）；缺省用全局配置 / client 默认。 */

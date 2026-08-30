@@ -3,12 +3,8 @@ import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  buildOutlineSubtitle,
-  buildZoomSubtitle,
-  compactArgs,
-  resolvePathArg,
-} from "../src/aft/tools.js";
+import { buildOutlineSubtitle, buildZoomSubtitle, compactArgs } from "../src/aft/tools.js";
+import { resolvePathArg } from "../src/lib/path.js";
 
 describe("compactArgs", () => {
   it("drops undefined and blank strings but keeps false and empty arrays", () => {
@@ -48,8 +44,10 @@ describe("resolvePathArg", () => {
     expect(resolvePathArg(cwd, "~")).toBe(homedir());
   });
 
-  it("keeps URLs unchanged", () => {
-    expect(resolvePathArg(cwd, "https://example.com/a.md")).toBe("https://example.com/a.md");
+  it("resolves URLs as relative paths（URL 不再透传，文件工具只接受路径）", () => {
+    expect(resolvePathArg(cwd, "https://example.com/a.md")).toBe(
+      resolve(cwd, "https://example.com/a.md"),
+    );
   });
 });
 

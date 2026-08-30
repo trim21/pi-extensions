@@ -47,6 +47,14 @@ export async function resolveWorkdir(workdir: string, baseDir: string): Promise<
   return target;
 }
 
+/** 解析 `~` 前缀与相对路径（相对调用 cwd）；绝对路径原样返回。 */
+export function resolvePathArg(cwd: string, input: string): string {
+  if (input === "~" || input.startsWith("~/")) {
+    return join(homedir(), input.slice(1));
+  }
+  return isAbsolute(input) ? input : resolve(cwd, input);
+}
+
 /** 人类可读的显示路径：cwd 内用 `./…`，home 内用 `~/…`，否则原样绝对路径。 */
 export function formatDisplayPath(cwd: string, filePath: string): string {
   const relToCwd = relative(cwd, filePath);

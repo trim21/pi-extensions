@@ -2,7 +2,7 @@
 
 ## Purpose
 
-基于常驻 Rust bridge 的代码分析工具集：感知工具（outline / zoom / callgraph / search）只读地解析符号与调用关系，写工具（refactor / import）走路径级写保护；AFT 二进制缺失时不注册工具。
+基于常驻 Rust bridge 的代码分析工具集：感知工具（outline / zoom / callgraph / search）只读地解析符号与调用关系；AFT 二进制缺失时不注册工具。
 
 ## Requirements
 

@@ -25,6 +25,7 @@ import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding
 import { minimatch } from "minimatch";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import type { WorkspaceEdit } from "vscode-languageserver-types";
 
 import { type LspServerAdapter } from "./adapter.js";
 import {
@@ -32,6 +33,7 @@ import {
   type CreateInput,
   type Diagnostic,
   type Info as LspClient,
+  RenameNotPossibleError,
   WATCH_KIND_CHANGE,
   WATCH_KIND_CREATE,
   WATCH_KIND_DELETE,
@@ -273,6 +275,19 @@ export interface LspService {
     cwd: string,
     options?: LspRequestOptions,
   ): Promise<{ text: string; errorCount: number; warningCount: number }>;
+  /**
+   * 符号重命名：只面向 kind 为 "language" 的服务器（linter 不参与符号级
+   * 功能）；多 client 按配置顺序取第一个成功结果，全部失败时抛聚合错误。
+   * line / character 为 0-based LSP position。
+   */
+  rename(request: {
+    file: string;
+    cwd: string;
+    line: number;
+    character: number;
+    newName: string;
+    options?: LspRequestOptions;
+  }): Promise<{ serverID: string; edit: WorkspaceEdit; placeholder?: string }>;
   shutdownAll(): Promise<void>;
   /** 停止全部服务器并禁用 LSP：之后工具调用不再 spawn，直到 start/reload。 */
   stop(): Promise<void>;
@@ -450,6 +465,7 @@ export function createLspService(
     file: string,
     cwd: string,
     notify?: ExtensionUIContext["notify"],
+    adapterFilter?: (adapter: LspServerAdapter) => boolean,
   ): Promise<LspClient[]> {
     if (state.closing || state.disabled) return [];
     if (!containsPath(file, cwd)) return [];
@@ -466,6 +482,7 @@ export function createLspService(
     }
 
     for (const adapter of active) {
+      if (adapterFilter && !adapterFilter(adapter)) continue;
       if (adapter.extensions.length > 0 && !adapter.extensions.includes(extension)) continue;
       const root = await adapter.findRoot(file, cwd);
       if (!root) continue;
@@ -626,6 +643,53 @@ export function createLspService(
     return { text: report(normalized, issues), errorCount, warningCount };
   }
 
+  /** 符号重命名：只面向 language 类服务器；按配置顺序取第一个成功结果。 */
+  async function rename(request: {
+    file: string;
+    cwd: string;
+    line: number;
+    character: number;
+    newName: string;
+    options?: LspRequestOptions;
+  }): Promise<{ serverID: string; edit: WorkspaceEdit; placeholder?: string }> {
+    const clients = await getClients(
+      request.file,
+      request.cwd,
+      request.options?.notify,
+      (adapter) => adapter.kind !== "linter",
+    );
+    if (clients.length === 0) {
+      throw new RenameNotPossibleError(
+        `no LSP language server available for ${request.file} (check lsp.json servers and kind)`,
+      );
+    }
+    const failures: { serverID: string; error: unknown }[] = [];
+    for (const client of clients) {
+      try {
+        const result = await client.renameSymbol({
+          path: request.file,
+          line: request.line,
+          character: request.character,
+          newName: request.newName,
+        });
+        return {
+          serverID: client.serverID,
+          edit: result.edit,
+          ...(result.placeholder !== undefined && { placeholder: result.placeholder }),
+        };
+      } catch (error) {
+        failures.push({ serverID: client.serverID, error });
+      }
+    }
+    const allNotRenameable = failures.every((f) => f.error instanceof RenameNotPossibleError);
+    const detail = failures
+      .map((f) => `${f.serverID}: ${f.error instanceof Error ? f.error.message : String(f.error)}`)
+      .join("; ");
+    throw allNotRenameable
+      ? new RenameNotPossibleError(detail)
+      : new Error(`LSP rename failed on all servers — ${detail}`);
+  }
+
   /** 关闭全部 client 并清空缓存；closing 置 true 让 in-flight spawn 自行退出。 */
   async function closeAll(): Promise<void> {
     state.closing = true;
@@ -687,6 +751,7 @@ export function createLspService(
     notifyFile,
     diagnostics,
     lspDiagnosticsForFile,
+    rename,
     shutdownAll,
     stop,
     start,

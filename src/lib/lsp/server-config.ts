@@ -18,13 +18,20 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { minimatch } from "minimatch";
 import { type Static, Type } from "typebox";
 
-import { type LspServerAdapter, type LspServerHandle, nearestRoot } from "./adapter.js";
+import {
+  type LspServerAdapter,
+  type LspServerHandle,
+  nearestRoot,
+  type ServerKind,
+} from "./adapter.js";
 import { exists, findBinaryInWorkspace, which } from "./bin.js";
 import { spawnProcess } from "./launch.js";
 
 export const serverConfigSchema = Type.Object({
   /** 文件 glob（相对项目根或调用 cwd，任一命中即可）；缺省匹配所有文件。 */
   include: Type.Optional(Type.Array(Type.String())),
+  /** 服务器类型：language（真语言服务器，缺省）或 linter（只实现 LSP 协议的 lint）。 */
+  kind: Type.Optional(Type.Union([Type.Literal("language"), Type.Literal("linter")])),
   /** 项目根标记文件（从文件目录向上查找）；缺省用调用 cwd 作为根。 */
   rootMarkers: Type.Optional(Type.Array(Type.String())),
   /** 可执行文件：绝对路径、相对调用 cwd 的路径，或名字（项目工作区优先，PATH 兜底）。 */
@@ -111,6 +118,7 @@ function matchesInclude(
 /** 由配置构建的通用 adapter；include 精确过滤在 findRoot 完成，extensions 不设扩展名过滤。 */
 export class ConfigAdapter implements LspServerAdapter {
   readonly id: string;
+  readonly kind: ServerKind;
   readonly extensions: readonly string[] = [];
   readonly startupTimeoutMs: number | undefined;
   readonly diagnosticsWaitMs: number | undefined;
@@ -119,6 +127,7 @@ export class ConfigAdapter implements LspServerAdapter {
   constructor(id: string, config: ServerConfig) {
     this.id = id;
     this.config = config;
+    this.kind = config.kind ?? "language";
     this.startupTimeoutMs = config.startupTimeoutMs;
     this.diagnosticsWaitMs = config.diagnosticsWaitMs;
   }

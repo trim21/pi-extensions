@@ -113,8 +113,7 @@ export interface WriteGuardOptions {
   /** The resolved absolute target path (caller has already parsed its args). */
   absolutePath: string;
   /**
-   * 待审批的变更内容；缺省时（如 aft_refactor/aft_import 无 preview diff）
-   * 审批对话框不展示 diff 预览，仅按路径审批。
+   * 待审批的变更内容；缺省时审批对话框不展示 diff 预览，仅按路径审批。
    */
   change?: PendingChange;
 }

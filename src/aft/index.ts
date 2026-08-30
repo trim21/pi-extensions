@@ -1,13 +1,12 @@
 /**
- * AFT 扩展入口：感知工具（aft_outline / aft_zoom / aft_callgraph / aft_search）
- * + aft_refactor / aft_import（workspace-wide 重构与 import 管理，路径级写保护）。
+ * AFT 扩展入口：感知工具（aft_outline / aft_zoom / aft_callgraph / aft_search），
+ * 全部只读。
  *
- * 感知工具只读，不触碰本仓库自己的 read/write/edit/bash 工具及其安全机制
+ * 感知工具不触碰本仓库自己的 read/write/edit/bash 工具及其安全机制
  * （bwrap 沙箱、write-guard、reads 记账）。aft_search 仅当用户级 aft.jsonc 开启
  * semantic_search 且配好外部 embedding 后端（semantic.backend 为
  * openai_compatible / ollama 且有 base_url）时注册；aft 默认的本地 ONNX
- * fastembed 后端不使用。aft_refactor / aft_import 的 Rust 命令不支持 preview，
- * 写保护退化为路径级审批。
+ * fastembed 后端不使用。
  *
  * bridge 状态（日志 + 常驻 aft 子进程）的生命周期跟 session 走：session_start
  * 时用当次 session id 创建（日志落在 tmp/{sessionId}/aft-plugin.log），
@@ -23,8 +22,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { createAftState, resolveSessionId, shutdownAftPool } from "./bridge.js";
 import { loadAftConfig } from "./config.js";
-import { registerImportTool } from "./imports.js";
-import { registerRefactorTool } from "./refactor.js";
 import {
   registerCallgraphTool,
   registerOutlineTool,
@@ -59,8 +56,6 @@ export default function aftReadTools(pi: ExtensionAPI): void {
   registerOutlineTool(pi, toolCtx);
   registerZoomTool(pi, toolCtx);
   registerCallgraphTool(pi, toolCtx);
-  registerRefactorTool(pi, toolCtx);
-  registerImportTool(pi, toolCtx);
   if (cfg.semanticSearch) {
     if (cfg.semanticRemote) {
       registerSearchTool(pi, toolCtx);

@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { create } from "../src/lib/lsp/client.js";
+import { create, RenameNotPossibleError } from "../src/lib/lsp/client.js";
 
 const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
 
@@ -352,6 +352,131 @@ describe("lsp client watched files", () => {
         expect(didClose?.params.textDocument).toEqual({ uri: pathToFileURL(file).href });
         expect(watchedFiles?.params.changes).toEqual([{ uri: pathToFileURL(file).href, type: 2 }]);
       });
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("lsp client renameSymbol", () => {
+  it("prepare + rename 成功：返回 WorkspaceEdit 与 placeholder，并先同步磁盘内容", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: { ...process.env, MOCK_RENAME_MODE: "ok" },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      const result = await client.renameSymbol({
+        path: file,
+        line: 0,
+        character: 0,
+        newName: "y",
+      });
+      expect(result.placeholder).toBe("mockSymbol");
+      const changes = result.edit.changes ?? {};
+      const [uri] = Object.keys(changes);
+      expect(uri).toBe(pathToFileURL(file).href);
+      expect(changes[uri]?.[0]?.newText).toBe("y");
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("服务器无 prepare 能力时跳过 prepare 直接 rename", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: { ...process.env, MOCK_RENAME_MODE: "no_prepare" },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      const result = await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
+      expect(result.placeholder).toBeUndefined();
+      expect(result.edit.changes?.[pathToFileURL(file).href]?.[0]?.newText).toBe("y");
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prepareRename 返回 null 时抛 RenameNotPossibleError", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: { ...process.env, MOCK_RENAME_MODE: "null_prepare" },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      await expect(
+        client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" }),
+      ).rejects.toThrow(RenameNotPossibleError);
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rename 返回 null 时抛 RenameNotPossibleError", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: { ...process.env, MOCK_RENAME_MODE: "null_rename" },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      await expect(
+        client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" }),
+      ).rejects.toThrow(RenameNotPossibleError);
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("服务器未实现 rename（MethodNotFound）时抛 RenameNotPossibleError", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: { ...process.env, MOCK_RENAME_MODE: "unsupported" },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      await expect(
+        client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" }),
+      ).rejects.toThrow(RenameNotPossibleError);
     } finally {
       await client.shutdown();
       await rm(dir, { recursive: true, force: true });

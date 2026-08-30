@@ -16,10 +16,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createMessageConnection,
   type MessageConnection,
+  ResponseError,
   StreamMessageReader,
   StreamMessageWriter,
 } from "vscode-jsonrpc/node";
-import type { Diagnostic as VSCodeDiagnostic } from "vscode-languageserver-types";
+import type { Diagnostic as VSCodeDiagnostic, WorkspaceEdit } from "vscode-languageserver-types";
 
 import type { LspServerHandle } from "./adapter.js";
 import { LANGUAGE_EXTENSIONS } from "./language.js";
@@ -50,6 +51,35 @@ const FILE_CHANGE_TYPE: Record<FileChangeType, number> = {
 };
 
 export type Diagnostic = VSCodeDiagnostic;
+
+/** LSP MethodNotFound（-32601）：服务器未实现 prepareRename / rename 请求。 */
+const LSP_METHOD_NOT_FOUND = -32601;
+
+/**
+ * 位置不可 rename 或服务器不具备 rename 能力；与传输失败等意外错误区分，
+ * 供调用方在多候选探测时跳过该 client 而不是中断整个操作。
+ */
+export class RenameNotPossibleError extends Error {}
+
+interface PrepareRenameResponse {
+  range?: unknown;
+  placeholder?: string;
+  defaultBehavior?: boolean;
+}
+
+/** renameSymbol 的请求与结果（line / character 为 0-based LSP position）。 */
+export interface RenameSymbolRequest {
+  path: string;
+  line: number;
+  character: number;
+  newName: string;
+}
+
+export interface RenameSymbolResult {
+  edit: WorkspaceEdit;
+  /** prepareRename 返回的符号当前名；服务器未提供 prepare 时缺省。 */
+  placeholder?: string;
+}
 
 export class InitializeError extends Error {
   readonly serverID: string;
@@ -100,6 +130,7 @@ interface ServerCapabilities {
         change?: number;
       };
   diagnosticProvider?: unknown;
+  renameProvider?: boolean | { prepareProvider?: boolean };
   [key: string]: unknown;
 }
 
@@ -137,6 +168,12 @@ export interface LspClient {
     after?: number;
     signal?: AbortSignal;
   }): Promise<void>;
+  /**
+   * 符号重命名：先把磁盘内容同步给服务器（didOpen/didChange），再按能力决定
+   * 是否先发 prepareRename 校验位置，最后发 textDocument/rename 返回 WorkspaceEdit。
+   * 位置不在符号上 / 服务器不支持 rename 时抛 RenameNotPossibleError。
+   */
+  renameSymbol(request: RenameSymbolRequest): Promise<RenameSymbolResult>;
   shutdown(): Promise<void>;
 }
 
@@ -387,6 +424,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
   const syncKind = getSyncKind(initialized.capabilities);
   const hasStaticPullDiagnostics = Boolean(initialized.capabilities?.diagnosticProvider);
+  // prepareProvider 只在静态声明为对象且显式开启时使用；其余情况跳过 prepare
+  // 直接 rename（能力可能经动态注册，静态声明缺失不代表服务器不支持）。
+  const renameProvider = initialized.capabilities?.renameProvider;
+  const hasPrepareProvider =
+    typeof renameProvider === "object" && renameProvider.prepareProvider === true;
 
   await connection.sendNotification("initialized", {});
 
@@ -764,6 +806,55 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
   // ── 公开 API ────────────────────────────────────────────────────────────────
 
+  const openDocument = async (request: { path: string }): Promise<number> => {
+    const resolvedPath = normalize(
+      isAbsolute(request.path) ? request.path : resolve(input.directory, request.path),
+    );
+    const text = await readFile(resolvedPath, "utf8");
+    const extension = extname(resolvedPath);
+    const languageId =
+      input.server.languageIds?.[extension] ?? LANGUAGE_EXTENSIONS[extension] ?? "plaintext";
+    const uri = pathToFileURL(resolvedPath).href;
+
+    const document = files[resolvedPath];
+    if (document !== undefined) {
+      // didChange：内容已变，旧诊断立即失效。清空缓存避免等待窗口内服务器
+      // 重算未完成时（大项目可远超窗口）聚合到过期诊断；新 push 到达即填充。
+      pushDiagnostics.delete(resolvedPath);
+      pullDiagnostics.delete(resolvedPath);
+
+      const next = document.version + 1;
+      files[resolvedPath] = { version: next, text };
+      documentVersions.set(resolvedPath, next);
+      await connection.sendNotification("textDocument/didChange", {
+        textDocument: { uri, version: next },
+        contentChanges:
+          syncKind === TEXT_DOCUMENT_SYNC_INCREMENTAL
+            ? [
+                {
+                  range: { start: { line: 0, character: 0 }, end: endPosition(document.text) },
+                  text,
+                },
+              ]
+            : [{ text }],
+      });
+      touch(resolvedPath);
+      await evictExcess();
+      return next;
+    }
+
+    pushDiagnostics.delete(resolvedPath);
+    pullDiagnostics.delete(resolvedPath);
+    await connection.sendNotification("textDocument/didOpen", {
+      textDocument: { uri, languageId, version: 0, text },
+    });
+    files[resolvedPath] = { version: 0, text };
+    documentVersions.set(resolvedPath, 0);
+    touch(resolvedPath);
+    await evictExcess();
+    return 0;
+  };
+
   return {
     root: input.root,
     get serverID() {
@@ -783,54 +874,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
       return connection;
     },
     notify: {
-      async open(request: { path: string }): Promise<number> {
-        const resolvedPath = normalize(
-          isAbsolute(request.path) ? request.path : resolve(input.directory, request.path),
-        );
-        const text = await readFile(resolvedPath, "utf8");
-        const extension = extname(resolvedPath);
-        const languageId =
-          input.server.languageIds?.[extension] ?? LANGUAGE_EXTENSIONS[extension] ?? "plaintext";
-        const uri = pathToFileURL(resolvedPath).href;
-
-        const document = files[resolvedPath];
-        if (document !== undefined) {
-          // didChange：内容已变，旧诊断立即失效。清空缓存避免等待窗口内服务器
-          // 重算未完成时（大项目可远超窗口）聚合到过期诊断；新 push 到达即填充。
-          pushDiagnostics.delete(resolvedPath);
-          pullDiagnostics.delete(resolvedPath);
-
-          const next = document.version + 1;
-          files[resolvedPath] = { version: next, text };
-          documentVersions.set(resolvedPath, next);
-          await connection.sendNotification("textDocument/didChange", {
-            textDocument: { uri, version: next },
-            contentChanges:
-              syncKind === TEXT_DOCUMENT_SYNC_INCREMENTAL
-                ? [
-                    {
-                      range: { start: { line: 0, character: 0 }, end: endPosition(document.text) },
-                      text,
-                    },
-                  ]
-                : [{ text }],
-          });
-          touch(resolvedPath);
-          await evictExcess();
-          return next;
-        }
-
-        pushDiagnostics.delete(resolvedPath);
-        pullDiagnostics.delete(resolvedPath);
-        await connection.sendNotification("textDocument/didOpen", {
-          textDocument: { uri, languageId, version: 0, text },
-        });
-        files[resolvedPath] = { version: 0, text };
-        documentVersions.set(resolvedPath, 0);
-        touch(resolvedPath);
-        await evictExcess();
-        return 0;
-      },
+      open: openDocument,
       async watchedFiles(changes: FileChange[]): Promise<void> {
         const notified: { uri: string; type: number }[] = [];
         for (const change of changes) {
@@ -868,6 +912,75 @@ export async function create(input: CreateInput): Promise<LspClient> {
           changes: notified,
         });
       },
+    },
+    async renameSymbol(request: RenameSymbolRequest): Promise<RenameSymbolResult> {
+      const resolvedPath = normalize(
+        isAbsolute(request.path) ? request.path : resolve(input.directory, request.path),
+      );
+      const uri = pathToFileURL(resolvedPath).href;
+      // rename 前强制同步磁盘内容，保证服务器基于最新文本计算编辑
+      await openDocument({ path: resolvedPath });
+      const position = { line: request.line, character: request.character };
+      const at = `${resolvedPath}:${request.line + 1}:${request.character + 1}`;
+      const notRenameable = () =>
+        new RenameNotPossibleError(`LSP server "${input.serverID}" cannot rename at ${at}`);
+
+      // references 前置作为同步点：服务器必须完成项目加载才能回答引用位置，
+      // 其响应到达后紧随的 rename 必然基于完整索引（LSP 没有标准化的
+      // "索引完成"信号，这是协议内唯一的同步手段）。references 请求本身
+      // 的结果不用于校验 rename 编辑——信任服务器，与编辑器行为一致；
+      // 服务器不支持 references（MethodNotFound）时直接跳过。
+      const awaitReferences = async (): Promise<void> => {
+        try {
+          await connection.sendRequest<{ uri: string }[] | null>("textDocument/references", {
+            textDocument: { uri },
+            position,
+            context: { includeDeclaration: true },
+          });
+        } catch (error) {
+          if (!(error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND)) {
+            throw error;
+          }
+        }
+      };
+
+      const sendRename = async (): Promise<WorkspaceEdit | null> => {
+        try {
+          return await connection.sendRequest<WorkspaceEdit | null>("textDocument/rename", {
+            textDocument: { uri },
+            position,
+            newName: request.newName,
+          });
+        } catch (error) {
+          if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
+            throw notRenameable();
+          }
+          throw error;
+        }
+      };
+
+      let placeholder: string | undefined;
+      if (hasPrepareProvider) {
+        let prepared: PrepareRenameResponse | null;
+        try {
+          prepared = await connection.sendRequest<PrepareRenameResponse | null>(
+            "textDocument/prepareRename",
+            { textDocument: { uri }, position },
+          );
+        } catch (error) {
+          if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
+            throw notRenameable();
+          }
+          throw error;
+        }
+        if (!prepared) throw notRenameable();
+        if (typeof prepared.placeholder === "string") placeholder = prepared.placeholder;
+      }
+
+      await awaitReferences();
+      const edit = await sendRename();
+      if (!edit) throw notRenameable();
+      return placeholder === undefined ? { edit } : { edit, placeholder };
     },
     get diagnostics() {
       const result = new Map<string, Diagnostic[]>();

@@ -69,6 +69,24 @@ describe("serverConfigSchema", () => {
   it("非法字段（bin 为数字）被 typebox 拒绝", () => {
     expect(() => parse({ bin: 42 })).toThrow();
   });
+
+  it("kind 接受 language / linter，缺省 undefined（由 ConfigAdapter 补 language）", () => {
+    expect(parse({ bin: "x", kind: "language" }).kind).toBe("language");
+    expect(parse({ bin: "x", kind: "linter" }).kind).toBe("linter");
+    expect(parse({ bin: "x" }).kind).toBeUndefined();
+  });
+
+  it("kind 非法值被 typebox 拒绝", () => {
+    expect(() => parse({ bin: "x", kind: "formatter" })).toThrow();
+    expect(() => parse({ bin: "x", kind: 42 })).toThrow();
+  });
+});
+
+describe("ConfigAdapter.kind", () => {
+  it("缺省为 language，显式配置透传", () => {
+    expect(new ConfigAdapter("a", parse({ bin: "x" })).kind).toBe("language");
+    expect(new ConfigAdapter("b", parse({ bin: "x", kind: "linter" })).kind).toBe("linter");
+  });
 });
 
 describe("mergeServerRecords", () => {

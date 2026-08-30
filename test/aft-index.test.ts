@@ -30,13 +30,7 @@ const NEVER_REGISTERED = [
   "ast_edit",
 ];
 
-const ALWAYS_REGISTERED = [
-  "aft_callgraph",
-  "aft_import",
-  "aft_outline",
-  "aft_refactor",
-  "aft_zoom",
-];
+const ALWAYS_REGISTERED = ["aft_callgraph", "aft_outline", "aft_zoom"];
 
 const REMOTE: SemanticRemote = {
   backend: "openai_compatible",

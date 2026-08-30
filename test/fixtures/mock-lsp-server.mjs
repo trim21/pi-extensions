@@ -6,6 +6,17 @@
 // workspace/didChangeWatchedFiles watchers；
 // env MOCK_UNREGISTER_IDS（逗号分隔 registration id）时，收到 textDocument/didClose
 // 后发送 client/unregisterCapability 移除对应注册。
+// env MOCK_RENAME_MODE 控制 rename 能力：
+//   ok          声明 renameProvider: { prepareProvider: true }，prepare/rename 正常响应
+//   no_prepare  声明 renameProvider: true（无 prepare），仅响应 rename
+//   null_prepare prepare 返回 null（位置不可 rename）
+//   null_rename prepare 成功但 rename 返回 null
+//   unsupported 不声明 renameProvider，请求返回 MethodNotFound
+const renameMode = process.env.MOCK_RENAME_MODE ?? "";
+const prepareResult = {
+  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+  placeholder: "mockSymbol",
+};
 let buffer = Buffer.alloc(0);
 
 const registerWatchers = (process.env.MOCK_REGISTER_WATCHERS ?? "")
@@ -48,10 +59,16 @@ function handle(msg) {
     process.stderr.write(JSON.stringify({ method: msg.method, params: msg.params }) + "\n");
   }
   if (msg.method === "initialize") {
+    const capabilities = { textDocumentSync: 1 };
+    if (["ok", "null_prepare", "null_rename"].includes(renameMode)) {
+      capabilities.renameProvider = { prepareProvider: true };
+    } else if (renameMode === "no_prepare") {
+      capabilities.renameProvider = true;
+    }
     send({
       jsonrpc: "2.0",
       id: msg.id,
-      result: { capabilities: { textDocumentSync: 1 } },
+      result: { capabilities },
     });
     return;
   }
@@ -131,11 +148,44 @@ function handle(msg) {
     }, 300);
     return;
   }
+  if (msg.method === "textDocument/prepareRename" && renameMode !== "unsupported") {
+    if (renameMode === "no_prepare") return;
+    send({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: renameMode === "null_prepare" ? null : prepareResult,
+    });
+    return;
+  }
+  if (msg.method === "textDocument/rename" && renameMode !== "unsupported") {
+    send({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result:
+        renameMode === "null_rename"
+          ? null
+          : {
+              changes: {
+                [msg.params.textDocument.uri]: [
+                  {
+                    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+                    newText: msg.params.newName,
+                  },
+                ],
+              },
+            },
+    });
+    return;
+  }
   if (msg.method === "shutdown") {
     send({ jsonrpc: "2.0", id: msg.id, result: null });
     return;
   }
   if (msg.method === "exit") {
     process.exit(0);
+  }
+  // 未实现的请求统一回 MethodNotFound，避免客户端挂起
+  if (msg.id !== undefined && msg.method !== undefined) {
+    send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "MethodNotFound" } });
   }
 }
