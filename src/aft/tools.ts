@@ -363,11 +363,6 @@ const SearchParams = Type.Object(
       }),
     ),
     includeTests: Type.Optional(Type.Boolean({ description: "包含测试文件。默认 false。" })),
-    path: Type.Optional(
-      Type.String({
-        description: "仅当要搜索不同的 Git 项目时设置（绝对或 ~ 路径）。默认搜索当前项目。",
-      }),
-    ),
   },
   { additionalProperties: false },
 );
@@ -393,7 +388,6 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
         query: params.query,
         topK: params.topK,
         includeTests: params.includeTests,
-        path: params.path ? resolvePathArg(extCtx.cwd, params.path) : undefined,
       });
 
       const { text, response } = await callAftTool(bridgeFor(ctx), "search", rawArgs, extCtx, {
