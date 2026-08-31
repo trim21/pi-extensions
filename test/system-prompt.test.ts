@@ -31,7 +31,13 @@ describe("formatTools", () => {
   it("lists only tools that have snippets", () => {
     const tools = ["read", "bash", "custom"];
     const snippets = { read: "Read files", custom: "Custom thing" };
-    expect(formatTools(tools, snippets)).toBe("- read: Read files\n- custom: Custom thing");
+    expect(formatTools(tools, snippets)).toBe("- custom: Custom thing\n- read: Read files");
+  });
+
+  it("sorts tools by name regardless of discovery order", () => {
+    expect(formatTools(["write", "read"], { write: "Write files", read: "Read files" })).toBe(
+      "- read: Read files\n- write: Write files",
+    );
   });
 
   it("returns (none) when no tool has a snippet", () => {
@@ -43,7 +49,13 @@ describe("formatTools", () => {
 describe("formatGuidelines", () => {
   it("renders guidelines verbatim under a Guidelines heading, trimmed", () => {
     expect(formatGuidelines(["Use custom_tool when scanning", "  padded  "])).toBe(
-      "## Guidelines\n\nUse custom_tool when scanning\n\npadded",
+      "## Guidelines\n\npadded\n\nUse custom_tool when scanning",
+    );
+  });
+
+  it("sorts guidelines regardless of discovery order", () => {
+    expect(formatGuidelines(["Use write", "Use read"])).toBe(
+      "## Guidelines\n\nUse read\n\nUse write",
     );
   });
 
@@ -62,6 +74,14 @@ describe("formatContextFiles", () => {
       '<project_instructions path="/a/AGENTS.md">\n# Rules\n\nBe nice.\n</project_instructions>',
     );
     expect(out).toContain("</project_context>");
+  });
+
+  it("sorts context files by path regardless of discovery order", () => {
+    const out = formatContextFiles([
+      { path: "/b/AGENTS.md", content: "b" },
+      { path: "/a/AGENTS.md", content: "a" },
+    ]);
+    expect(out.indexOf("/a/AGENTS.md")).toBeLessThan(out.indexOf("/b/AGENTS.md"));
   });
 
   it("omits the block when empty", () => {
@@ -94,6 +114,18 @@ describe("formatSkills", () => {
         { name: "hidden", description: "d", filePath: "/h", disableModelInvocation: true },
       ]),
     ).toBe("");
+  });
+
+  it("sorts skills by name then path regardless of discovery order", () => {
+    const out = formatSkills([
+      { name: "write", description: "w", filePath: "/w" },
+      { name: "read", description: "r2", filePath: "/r2" },
+      { name: "read", description: "r1", filePath: "/r1" },
+    ]);
+    expect(out.indexOf("<location>/r1</location>")).toBeLessThan(
+      out.indexOf("<location>/r2</location>"),
+    );
+    expect(out.indexOf("<name>read</name>")).toBeLessThan(out.indexOf("<name>write</name>"));
   });
 
   it("omits the block when empty", () => {
@@ -133,7 +165,7 @@ describe("buildSystemPromptText", () => {
     });
 
     expect(out).toContain("You are an expert coding assistant operating inside pi");
-    expect(out).toContain("- read: Read files\n- bash: Run commands");
+    expect(out).toContain("- bash: Run commands\n- read: Read files");
     expect(out).toContain("## Guidelines\n\nUse read for files");
     expect(out).toContain('<project_instructions path="/home/user/proj/AGENTS.md">');
     expect(out).toContain("<available_skills>");

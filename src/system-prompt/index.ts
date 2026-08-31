@@ -61,8 +61,9 @@ export function formatTools(
   selectedTools: string[] | undefined,
   toolSnippets: Record<string, string> | undefined,
 ): string {
+  const names = (selectedTools ?? []).toSorted((a, b) => a.localeCompare(b));
   const lines: string[] = [];
-  for (const name of selectedTools ?? []) {
+  for (const name of names) {
     const snippet = toolSnippets?.[name];
     if (snippet) {
       lines.push(`- ${name}: ${snippet}`);
@@ -73,7 +74,10 @@ export function formatTools(
 
 /** 渲染工具特定 guideline 块；为空时整个块（含标题）省略。guide 本身是 md 文档，直接拼接。 */
 export function formatGuidelines(promptGuidelines: string[] | undefined): string {
-  const items = (promptGuidelines ?? []).map((g) => g.trim()).filter((g) => g.length > 0);
+  const items = (promptGuidelines ?? [])
+    .map((g) => g.trim())
+    .filter((g) => g.length > 0)
+    .toSorted((a, b) => a.localeCompare(b));
   if (items.length === 0) return "";
   return `## Guidelines\n\n${items.join("\n\n")}`;
 }
@@ -84,6 +88,7 @@ export function formatContextFiles(
 ): string {
   if (!contextFiles || contextFiles.length === 0) return "";
   const inner = contextFiles
+    .toSorted((a, b) => a.path.localeCompare(b.path))
     .map(
       ({ path, content }) =>
         `<project_instructions path="${path}">\n${content}\n</project_instructions>`,
@@ -97,7 +102,9 @@ export function formatContextFiles(
  * 一致；disableModelInvocation 的 skill 不展示；为空时省略。
  */
 export function formatSkills(skills: SkillLike[] | undefined): string {
-  const visible = (skills ?? []).filter((skill) => !skill.disableModelInvocation);
+  const visible = (skills ?? [])
+    .filter((skill) => !skill.disableModelInvocation)
+    .toSorted((a, b) => a.name.localeCompare(b.name) || a.filePath.localeCompare(b.filePath));
   if (visible.length === 0) return "";
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
