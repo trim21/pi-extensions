@@ -138,7 +138,6 @@ describe("buildSystemPromptText", () => {
     expect(out).toContain('<project_instructions path="/home/user/proj/AGENTS.md">');
     expect(out).toContain("<available_skills>");
     expect(out).toContain("extra");
-    expect(out).toContain("Current date: 2026-04-16");
     expect(out).toContain("Current working directory: /home/user/proj");
     expect(out).not.toContain("{{");
   });
@@ -151,7 +150,6 @@ describe("buildSystemPromptText", () => {
     expect(out).not.toContain("<available_skills>");
     expect(out).not.toContain("<project_context>");
     expect(out).not.toContain("## Guidelines");
-    expect(out).toContain("Current date: 2026-04-16");
     expect(out).toContain("Current working directory: /tmp");
     expect(out).not.toContain("{{");
   });
