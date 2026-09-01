@@ -30,6 +30,8 @@ jobs:
   # test，避免只在一版上验证导致版本相关回归漏网。
   test:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # codecov OIDC 上传需要
     strategy:
       fail-fast: false
       matrix:
@@ -72,6 +74,7 @@ jobs:
         with:
           files: coverage/lcov.info
           fail_ci_if_error: true
+          use_oidc: true
 
   # 矩阵 job 的 check context 带矩阵值（`check (24)`、`check (26)` …），直接写进
   # mergify.yml 会随 matrix 变化失效。这里收敛成单个稳定 context 供合并门槛引用。
