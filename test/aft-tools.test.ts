@@ -1,15 +1,24 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import type { AftProjectTransport } from "@cortexkit/aft-bridge";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { callAftTool } from "../src/aft/bridge.js";
 import {
   buildOutlineSubtitle,
   buildZoomSubtitle,
+  callCallgraphWithBuildRetry,
   compactArgs,
   formatSemanticIndexProgress,
 } from "../src/aft/tools.js";
 import { resolvePathArg } from "../src/lib/path.js";
+
+vi.mock("../src/aft/bridge.js", () => ({
+  callAftTool: vi.fn(),
+  SEMANTIC_INDEX_WAIT_TIMEOUT_MS: 600_000,
+}));
 
 describe("compactArgs", () => {
   it("drops undefined and blank strings but keeps false and empty arrays", () => {
@@ -165,5 +174,63 @@ describe("formatSemanticIndexProgress", () => {
         building({ stage: "embedding_symbols", embedded_chunks: "6", total_chunks: 12 }),
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("callCallgraphWithBuildRetry", () => {
+  const bridge = {} as AftProjectTransport;
+  const extCtx = {} as ExtensionContext;
+  const mockCallAftTool = vi.mocked(callAftTool);
+
+  beforeEach(() => {
+    mockCallAftTool.mockReset();
+  });
+
+  it("retries callgraph_building until a ready response arrives", async () => {
+    mockCallAftTool
+      .mockResolvedValueOnce({
+        text: "callgraph_building — callgraph store is building in the background",
+        response: { code: "callgraph_building" },
+      })
+      .mockResolvedValueOnce({ text: "3 callers", response: {} });
+
+    const { text } = await callCallgraphWithBuildRetry(bridge, { op: "callers" }, extCtx, {
+      budgetMs: 5_000,
+      intervalMs: 1,
+    });
+
+    expect(text).toBe("3 callers");
+    expect(mockCallAftTool).toHaveBeenCalledTimes(2);
+    expect(mockCallAftTool.mock.calls[0]?.[1]).toBe("callgraph");
+  });
+
+  it("returns the building response once the budget is exhausted", async () => {
+    mockCallAftTool.mockResolvedValue({
+      text: "callgraph_building — callgraph store is building in the background",
+      response: { code: "callgraph_building" },
+    });
+
+    const { response } = await callCallgraphWithBuildRetry(bridge, { op: "callers" }, extCtx, {
+      budgetMs: 30,
+      intervalMs: 5,
+    });
+
+    expect(response.code).toBe("callgraph_building");
+    expect(mockCallAftTool.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("returns symbol_not_found immediately without retrying", async () => {
+    mockCallAftTool.mockResolvedValue({
+      text: "symbol_not_found — no such symbol",
+      response: { code: "symbol_not_found" },
+    });
+
+    const { text } = await callCallgraphWithBuildRetry(bridge, { op: "callers" }, extCtx, {
+      budgetMs: 5_000,
+      intervalMs: 1,
+    });
+
+    expect(text).toBe("symbol_not_found — no such symbol");
+    expect(mockCallAftTool).toHaveBeenCalledTimes(1);
   });
 });

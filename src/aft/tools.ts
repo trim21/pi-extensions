@@ -7,6 +7,7 @@
 
 import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -18,7 +19,7 @@ import {
   PLAIN_CALLGRAPH_THEME,
   type StatusSnapshot,
 } from "@cortexkit/aft-bridge";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -290,6 +291,42 @@ const CallgraphParams = Type.Object(
 /** 只读导航的合法"否定答案"：符号未定义或索引仍在构建——返回文本而非报错。 */
 const CALLGRAPH_SOFT_CODES = new Set(["symbol_not_found", "callgraph_building"]);
 
+/**
+ * callgraph 查询的 building 重试总预算与间隔。Rust 侧内联等待窗口
+ * （AFT_CALLGRAPH_BUILD_WAIT_MS）覆盖不到的场景会秒回 callgraph_building：
+ * 语义索引冷种子 gate 激活期间 callgraph 冷构建被 defer（大仓库可持续数分钟），
+ * 以及冷构建本身超过内联窗口。这里在扩展侧重试，预算耗尽才把 building
+ * 文本交给模型。
+ */
+export const CALLGRAPH_BUILD_RETRY_BUDGET_MS = 90_000;
+const CALLGRAPH_BUILD_RETRY_INTERVAL_MS = 3_000;
+
+export async function callCallgraphWithBuildRetry(
+  bridge: AftProjectTransport,
+  rawArgs: Record<string, unknown>,
+  extCtx: ExtensionContext,
+  timing?: { budgetMs: number; intervalMs: number },
+): Promise<{ text: string; response: Record<string, unknown> }> {
+  const budgetMs = timing?.budgetMs ?? CALLGRAPH_BUILD_RETRY_BUDGET_MS;
+  const intervalMs = timing?.intervalMs ?? CALLGRAPH_BUILD_RETRY_INTERVAL_MS;
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    const { text, response } = await callAftTool(
+      bridge,
+      "callgraph",
+      rawArgs,
+      extCtx,
+      undefined,
+      CALLGRAPH_SOFT_CODES,
+    );
+    const code = typeof response.code === "string" ? response.code : "";
+    if (code !== "callgraph_building" || Date.now() >= deadline) {
+      return { text, response };
+    }
+    await sleep(intervalMs);
+  }
+}
+
 export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): void {
   pi.registerTool({
     name: "aft_callgraph",
@@ -317,14 +354,7 @@ export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): vo
         includeUnresolved: params.includeUnresolved,
       });
 
-      const { text, response } = await callAftTool(
-        bridgeFor(ctx),
-        "callgraph",
-        rawArgs,
-        extCtx,
-        undefined,
-        CALLGRAPH_SOFT_CODES,
-      );
+      const { text, response } = await callCallgraphWithBuildRetry(bridgeFor(ctx), rawArgs, extCtx);
       const out =
         text ||
         formatCallgraphSections(params.op, response, PLAIN_CALLGRAPH_THEME, {
