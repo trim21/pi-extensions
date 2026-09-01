@@ -12,6 +12,10 @@
       "matchPackageNames": ["@cortexkit/aft-bridge", "@cortexkit/aft-linux-x64"],
       "groupName": "@cortexkit/aft",
       "groupSlug": "cortexkit-aft"
+    },
+    {
+      "matchPackageNames": ["pnpm"],
+      "groupName": "pnpm"
     }
   ]
 }
