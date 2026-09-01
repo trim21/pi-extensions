@@ -63,6 +63,9 @@ function samePaths(a: Set<string>, b: Set<string>): boolean {
 /** LSP MethodNotFound（-32601）：服务器未实现 prepareRename / rename 请求。 */
 const LSP_METHOD_NOT_FOUND = -32601;
 
+/** LSP ContentModified（-32801）：服务器处理请求期间内容被修改，重发请求即可。 */
+const LSP_CONTENT_MODIFIED = -32801;
+
 /**
  * 位置不可 rename 或服务器不具备 rename 能力；与传输失败等意外错误区分，
  * 供调用方在多候选探测时跳过该 client 而不是中断整个操作。
@@ -103,7 +106,27 @@ export class RenameIncompleteError extends Error {
  * rename 覆盖校验的轮询节奏。budgetMs 是 references 收敛 + 重试的总预算；
  * 测试可临时缩小以缩短等待。
  */
-export const renameVerificationTiming = { pollMs: 400, budgetMs: 10_000 };
+export const renameVerificationTiming = {
+  pollMs: 400,
+  budgetMs: 10_000,
+  /** ContentModified(-32801) 重试上限：服务器处理期间文档被修改，重发请求即可。 */
+  contentModifiedRetries: 3,
+};
+
+/**
+ * ContentModified 语义：请求处理期间 salsa 数据库被文件变更修改，服务器请
+ * 客户端重发请求。重发无副作用，直接重试；仅连续超限才向上抛，避免无限循环。
+ */
+async function retryOnContentModified<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!(error instanceof ResponseError && error.code === LSP_CONTENT_MODIFIED)) throw error;
+      if (attempt >= renameVerificationTiming.contentModifiedRetries) throw error;
+    }
+  }
+}
 
 interface PrepareRenameResponse {
   range?: unknown;
@@ -984,11 +1007,13 @@ export async function create(input: CreateInput): Promise<LspClient> {
       // 服务器不支持 references（MethodNotFound）时跳过校验，信任服务器，
       // 与编辑器行为一致。
       const referencesRequest = () =>
-        connection.sendRequest<{ uri: string }[] | null>("textDocument/references", {
-          textDocument: { uri },
-          position,
-          context: { includeDeclaration: true },
-        });
+        retryOnContentModified(() =>
+          connection.sendRequest<{ uri: string }[] | null>("textDocument/references", {
+            textDocument: { uri },
+            position,
+            context: { includeDeclaration: true },
+          }),
+        );
 
       const toPaths = (locations: { uri: string }[] | null): Set<string> =>
         new Set(
@@ -999,11 +1024,13 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
       const sendRename = async (): Promise<WorkspaceEdit | null> => {
         try {
-          return await connection.sendRequest<WorkspaceEdit | null>("textDocument/rename", {
-            textDocument: { uri },
-            position,
-            newName: request.newName,
-          });
+          return await retryOnContentModified(() =>
+            connection.sendRequest<WorkspaceEdit | null>("textDocument/rename", {
+              textDocument: { uri },
+              position,
+              newName: request.newName,
+            }),
+          );
         } catch (error) {
           if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
             throw notRenameable();
@@ -1016,9 +1043,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
       if (hasPrepareProvider) {
         let prepared: PrepareRenameResponse | null;
         try {
-          prepared = await connection.sendRequest<PrepareRenameResponse | null>(
-            "textDocument/prepareRename",
-            { textDocument: { uri }, position },
+          prepared = await retryOnContentModified(() =>
+            connection.sendRequest<PrepareRenameResponse | null>("textDocument/prepareRename", {
+              textDocument: { uri },
+              position,
+            }),
           );
         } catch (error) {
           if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {

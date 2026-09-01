@@ -622,4 +622,85 @@ describe("lsp client renameSymbol", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("references 前 2 次 ContentModified 后重试成功", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: {
+        ...process.env,
+        MOCK_RENAME_MODE: "ok",
+        MOCK_REFERENCES_MODE: "stable_self",
+        MOCK_CONTENT_MODIFIED: "references:2",
+      },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      const result = await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
+      expect(result.edit.changes?.[pathToFileURL(file).href]?.[0]?.newText).toBe("y");
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rename 第 1 次 ContentModified 后重试成功", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: {
+        ...process.env,
+        MOCK_RENAME_MODE: "ok",
+        MOCK_CONTENT_MODIFIED: "rename:1",
+      },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      const result = await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
+      expect(result.edit.changes?.[pathToFileURL(file).href]?.[0]?.newText).toBe("y");
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("references 持续 ContentModified 超过重试上限后抛错", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: {
+        ...process.env,
+        MOCK_RENAME_MODE: "ok",
+        MOCK_REFERENCES_MODE: "stable_self",
+        MOCK_CONTENT_MODIFIED: "references:always",
+      },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      await expect(
+        client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" }),
+      ).rejects.toThrow();
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -18,9 +18,23 @@
 //                   rename 在 references 调用 ≥2 次后覆盖两者 → 收敛后成功
 //   catch_up_late  references 前 2 次返回 [self]，第 3 次起返回 [self, extra]
 //   stable_self    references 稳定返回 [self]（配合 rename 多报文件，永不追上）
+// env MOCK_CONTENT_MODIFIED 控制 ContentModified(-32801) 响应（逗号分隔 "method:count"，
+// count 为 0 或 "always" 表示一直返回）：
+//   references:2  前 2 次 textDocument/references 返回 ContentModified，之后正常
+//   rename:1      第 1 次 textDocument/rename 返回 ContentModified，之后正常
 const renameMode = process.env.MOCK_RENAME_MODE ?? "";
 const referencesMode = process.env.MOCK_REFERENCES_MODE ?? "";
 let referencesCalls = 0;
+const contentModifiedSpec = Object.fromEntries(
+  (process.env.MOCK_CONTENT_MODIFIED ?? "")
+    .split(",")
+    .filter(Boolean)
+    .map((entry) => {
+      const [method, count] = entry.split(":");
+      return [method, count === "always" ? Infinity : Number(count)];
+    }),
+);
+const contentModifiedSent = new Map();
 const prepareResult = {
   range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
   placeholder: "mockSymbol",
@@ -59,6 +73,17 @@ function send(msg) {
   const body = JSON.stringify(msg);
   const header = `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n`;
   process.stdout.write(header + body);
+}
+
+/** 若该 method 配置了 ContentModified，发送 -32801 并返回 true（调用方应跳过正常响应）。 */
+function sendContentModifiedIfConfigured(method, msg) {
+  const count = contentModifiedSpec[method];
+  if (count === undefined) return false;
+  const sent = contentModifiedSent.get(method) ?? 0;
+  if (sent >= count) return false;
+  contentModifiedSent.set(method, sent + 1);
+  send({ jsonrpc: "2.0", id: msg.id, error: { code: -32801, message: "ContentModified" } });
+  return true;
 }
 
 function handle(msg) {
@@ -158,6 +183,7 @@ function handle(msg) {
   }
   if (msg.method === "textDocument/prepareRename" && renameMode !== "unsupported") {
     if (renameMode === "no_prepare") return;
+    if (sendContentModifiedIfConfigured("prepare", msg)) return;
     send({
       jsonrpc: "2.0",
       id: msg.id,
@@ -166,6 +192,7 @@ function handle(msg) {
     return;
   }
   if (msg.method === "textDocument/references" && referencesMode !== "") {
+    if (sendContentModifiedIfConfigured("references", msg)) return;
     referencesCalls++;
     const selfUri = msg.params.textDocument.uri;
     const extraUri = selfUri.replace(/([^/]+)$/, "extra-$1");
@@ -185,6 +212,7 @@ function handle(msg) {
     return;
   }
   if (msg.method === "textDocument/rename" && renameMode !== "unsupported") {
+    if (sendContentModifiedIfConfigured("rename", msg)) return;
     // stable_mismatch：rename 永远只覆盖 self（校验永不通过）；
     // grow_then_settle：references 调用 ≥2 次后 rename 覆盖两者（收敛后成功）；
     // ok_extra：rename 无条件覆盖两者（配合 catch_up_late 最终成功，
