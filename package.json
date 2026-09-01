@@ -80,7 +80,8 @@
       "src/web/fetch.ts"
     ],
     "skills": [
-      "src/talk/skills"
+      "src/talk/skills",
+      "src/skills"
     ]
   },
   "lint-staged": {
