@@ -19,7 +19,8 @@ import {
   type StatusSnapshot,
 } from "@cortexkit/aft-bridge";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
+import { Value } from "typebox/value";
 
 import { formatDisplayPath, formatSubtitlePath, resolvePathArg } from "../lib/path.js";
 import { type ToolPendant } from "../lib/pendant.js";
@@ -373,31 +374,51 @@ function subscribeBridgeStatus(
   return subscribable.subscribeStatus(listener);
 }
 
-/** 构造进度摘要时提取的数值字段，缺省或非法时忽略。 */
-function snapshotNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
+/**
+ * Rust 侧 status 快照里语义索引构建进度（SemanticHealthComponentSnapshot 的
+ * Building 分支）。上游控制的 schema：只声明真正读取的字段，未声明键忽略。
+ */
+const semanticIndexProgressSchema = Type.Object({
+  status: Type.Literal("building"),
+  stage: Type.Optional(Type.String()),
+  embedded_chunks: Type.Optional(Type.Integer()),
+  total_chunks: Type.Optional(Type.Integer()),
+  current_batch: Type.Optional(Type.Integer()),
+  total_batches: Type.Optional(Type.Integer()),
+});
 
-/** status 快照 → 一行构建进度文本；非 Building 状态返回 undefined（不显示）。 */
+type SemanticIndexProgress = Static<typeof semanticIndexProgressSchema>;
+
+/** status 快照 → 一行构建进度文本；非 Building 或形状不符返回 undefined（不显示）。 */
 export function formatSemanticIndexProgress(snapshot: StatusSnapshot): string | undefined {
-  const semantic = snapshot.semantic_index;
-  if (!semantic || semantic.status !== "building") {
+  const raw = snapshot.semantic_index;
+  if (raw === undefined) {
     return undefined;
   }
-  const stage =
-    typeof semantic.stage === "string" && semantic.stage.length > 0 ? semantic.stage : undefined;
-  const embedded = snapshotNumber(semantic.embedded_chunks);
-  const total = snapshotNumber(semantic.total_chunks);
-  const currentBatch = snapshotNumber(semantic.current_batch);
-  const totalBatches = snapshotNumber(semantic.total_batches);
-
-  const parts = [`语义索引构建中${stage === undefined ? "" : ` (${stage})`}`];
-  if (embedded !== undefined && total !== undefined && total > 0) {
-    const percent = Math.min(100, Math.round((embedded / total) * 100));
-    parts.push(`${embedded}/${total} chunks (${percent}%)`);
+  let progress: SemanticIndexProgress;
+  try {
+    progress = Value.Parse(semanticIndexProgressSchema, raw);
+  } catch {
+    return undefined;
   }
-  if (currentBatch !== undefined && totalBatches !== undefined && totalBatches > 0) {
-    parts.push(`batch ${currentBatch}/${totalBatches}`);
+  const parts = [`语义索引构建中${progress.stage === undefined ? "" : ` (${progress.stage})`}`];
+  if (
+    progress.embedded_chunks !== undefined &&
+    progress.total_chunks !== undefined &&
+    progress.total_chunks > 0
+  ) {
+    const percent = Math.min(
+      100,
+      Math.round((progress.embedded_chunks / progress.total_chunks) * 100),
+    );
+    parts.push(`${progress.embedded_chunks}/${progress.total_chunks} chunks (${percent}%)`);
+  }
+  if (
+    progress.current_batch !== undefined &&
+    progress.total_batches !== undefined &&
+    progress.total_batches > 0
+  ) {
+    parts.push(`batch ${progress.current_batch}/${progress.total_batches}`);
   }
   return parts.join(" · ");
 }

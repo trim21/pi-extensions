@@ -139,7 +139,7 @@ describe("formatSemanticIndexProgress", () => {
     );
   });
 
-  it("ignores non-finite or zero-total chunk numbers", () => {
+  it("ignores zero totals", () => {
     expect(
       formatSemanticIndexProgress(
         building({
@@ -157,5 +157,13 @@ describe("formatSemanticIndexProgress", () => {
     expect(formatSemanticIndexProgress({ semantic_index: { status: "ready" } })).toBeUndefined();
     expect(formatSemanticIndexProgress({ semantic_index: { status: "disabled" } })).toBeUndefined();
     expect(formatSemanticIndexProgress({})).toBeUndefined();
+  });
+
+  it("returns undefined when the snapshot shape mismatches", () => {
+    expect(
+      formatSemanticIndexProgress(
+        building({ stage: "embedding_symbols", embedded_chunks: "6", total_chunks: 12 }),
+      ),
+    ).toBeUndefined();
   });
 });
