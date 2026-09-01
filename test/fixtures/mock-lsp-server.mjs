@@ -16,6 +16,8 @@
 //   stable_mismatch references 稳定返回 [self, extra]，rename 只覆盖 self → 永不完整
 //   grow_then_settle references 第 1 次返回 [self]，第 2 次起返回 [self, extra]；
 //                   rename 在 references 调用 ≥2 次后覆盖两者 → 收敛后成功
+//   catch_up_late  references 前 2 次返回 [self]，第 3 次起返回 [self, extra]
+//   stable_self    references 稳定返回 [self]（配合 rename 多报文件，永不追上）
 const renameMode = process.env.MOCK_RENAME_MODE ?? "";
 const referencesMode = process.env.MOCK_REFERENCES_MODE ?? "";
 let referencesCalls = 0;
@@ -66,7 +68,7 @@ function handle(msg) {
   }
   if (msg.method === "initialize") {
     const capabilities = { textDocumentSync: 1 };
-    if (["ok", "null_prepare", "null_rename"].includes(renameMode)) {
+    if (["ok", "ok_extra", "null_prepare", "null_rename"].includes(renameMode)) {
       capabilities.renameProvider = { prepareProvider: true };
     } else if (renameMode === "no_prepare") {
       capabilities.renameProvider = true;
@@ -167,7 +169,14 @@ function handle(msg) {
     referencesCalls++;
     const selfUri = msg.params.textDocument.uri;
     const extraUri = selfUri.replace(/([^/]+)$/, "extra-$1");
-    const growDone = referencesMode !== "grow_then_settle" || referencesCalls >= 2;
+    const growDone =
+      referencesMode === "stable_self"
+        ? false
+        : referencesMode === "grow_then_settle"
+          ? referencesCalls >= 2
+          : referencesMode === "catch_up_late"
+            ? referencesCalls >= 3
+            : true;
     send({
       jsonrpc: "2.0",
       id: msg.id,
@@ -177,9 +186,11 @@ function handle(msg) {
   }
   if (msg.method === "textDocument/rename" && renameMode !== "unsupported") {
     // stable_mismatch：rename 永远只覆盖 self（校验永不通过）；
-    // grow_then_settle：references 调用 ≥2 次后 rename 覆盖两者（收敛后成功）
+    // grow_then_settle：references 调用 ≥2 次后 rename 覆盖两者（收敛后成功）；
+    // ok_extra：rename 无条件覆盖两者（配合 catch_up_late 最终成功，
+    //           或配合 stable_self 验证 rename 超集永不收敛时抛错）
     const referencesCoverExtra =
-      referencesMode === "grow_then_settle" && referencesCalls >= 2;
+      renameMode === "ok_extra" || (referencesMode === "grow_then_settle" && referencesCalls >= 2);
     const changes = {
       [msg.params.textDocument.uri]: [
         {

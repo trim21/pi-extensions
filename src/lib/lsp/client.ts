@@ -75,14 +75,27 @@ export class RenameNotPossibleError extends Error {}
  */
 export class RenameIncompleteError extends Error {
   readonly missing: readonly string[];
-  constructor(missing: readonly string[]) {
+  readonly extra: readonly string[];
+  constructor(missing: readonly string[], extra: readonly string[] = []) {
+    const parts: string[] = [];
+    if (missing.length > 0) {
+      parts.push(
+        `textDocument/references found the symbol in ${missing.length} file(s) ` +
+          `that the rename edit does not cover (${missing.join(", ")})`,
+      );
+    }
+    if (extra.length > 0) {
+      parts.push(
+        `the rename edit touches ${extra.length} file(s) ` +
+          `that textDocument/references did not report (${extra.join(", ")})`,
+      );
+    }
     super(
-      `LSP rename incomplete: textDocument/references found the symbol in ` +
-        `${missing.length} file(s) that the rename edit does not cover ` +
-        `(${missing.join(", ")}). The server index may still be loading; ` +
-        `nothing was modified, retry shortly.`,
+      `LSP rename incomplete: ${parts.join("; ")}. ` +
+        `The server index may still be loading; nothing was modified, retry shortly.`,
     );
     this.missing = missing;
+    this.extra = extra;
   }
 }
 
@@ -956,14 +969,18 @@ export async function create(input: CreateInput): Promise<LspClient> {
       const notRenameable = () =>
         new RenameNotPossibleError(`LSP server "${input.serverID}" cannot rename at ${at}`);
 
-      // references 前置 + rename 覆盖校验：LSP 没有标准化的"索引完成"信号，
+      // references 前置 + rename 双向校验：LSP 没有标准化的"索引完成"信号，
       // 服务器（如 tsserver）可能在项目加载完成前回答，导致 rename 漏掉
-      // 尚未入索引的文件。对策分两层：
+      // 尚未入索引的文件。对策分三层：
       // 1. 收敛检测：references 连续两次文件集合一致才认为索引稳定，防止
       //    "服务器根本还没发现某文件"时校验形同虚设；
-      // 2. 覆盖校验：references 报告的文件必须都被 rename edit 覆盖，
-      //    不完整时等待重试，预算耗尽仍不完整抛 RenameIncompleteError——
-      //    调用方尚未写盘，整个操作无副作用，可稍后重试。
+      // 2. 覆盖校验（missing）：references 报告的文件必须都被 rename edit
+      //    覆盖，缺失说明服务器索引落后，抛 RenameIncompleteError；
+      // 3. 一致性校验（extra）：rename 触及的文件超出已收敛的 references
+      //    集合，说明两次请求之间项目覆盖在增长（rename 晚于 references，
+      //    索引仍在加载），此时 rename 的结果本身不可信——回到 references
+      //    轮询等重新收敛，再重发 rename 复检；预算耗尽仍不一致时抛
+      //    RenameIncompleteError——调用方尚未写盘，整个操作无副作用。
       // 服务器不支持 references（MethodNotFound）时跳过校验，信任服务器，
       // 与编辑器行为一致。
       const referencesRequest = () =>
@@ -1028,14 +1045,27 @@ export async function create(input: CreateInput): Promise<LspClient> {
       let current = toPaths(locations);
       for (;;) {
         const settled = previous !== undefined && samePaths(previous, current);
-        if (settled || Date.now() >= deadline) {
+        const expired = Date.now() >= deadline;
+        if (settled || expired) {
           const edit = await sendRename();
           if (!edit) throw notRenameable();
-          const missing = [...current].filter((path) => !editFilePaths(edit).has(path));
-          if (missing.length === 0) {
+          const editPaths = editFilePaths(edit);
+          const missing: string[] = [];
+          const extra: string[] = [];
+          for (const path of current) {
+            if (!editPaths.has(path)) missing.push(path);
+          }
+          for (const path of editPaths) {
+            if (!current.has(path)) extra.push(path);
+          }
+          if (missing.length === 0 && extra.length === 0) {
             return placeholder === undefined ? { edit } : { edit, placeholder };
           }
-          throw new RenameIncompleteError(missing);
+          if (expired || missing.length > 0) {
+            throw new RenameIncompleteError(missing, extra);
+          }
+          // 收敛后 rename 仍报出 references 没有的文件：references 快照已过时，
+          // 继续轮询到重新收敛后再重发 rename 复检（预算耗尽则向上抛）。
         }
         previous = current;
         await sleep(renameVerificationTiming.pollMs);

@@ -552,4 +552,74 @@ describe("lsp client renameSymbol", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("rename 超出 references 且 references 随后追上：回到轮询收敛后成功", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: {
+        ...process.env,
+        MOCK_RENAME_MODE: "ok_extra",
+        MOCK_REFERENCES_MODE: "catch_up_late",
+      },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    const savedTiming = { ...renameVerificationTiming };
+    renameVerificationTiming.pollMs = 20;
+    renameVerificationTiming.budgetMs = 200;
+    try {
+      const result = await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
+      const uris = Object.keys(result.edit.changes ?? {});
+      expect(uris).toHaveLength(2);
+      expect(uris).toContain(pathToFileURL(file).href);
+      expect(uris).toContain(pathToFileURL(join(dir, "extra-a.py")).href);
+    } finally {
+      Object.assign(renameVerificationTiming, savedTiming);
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rename 超出 references 且 references 永不追上：预算耗尽抛 RenameIncompleteError", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const proc = spawn(process.execPath, [fixture], {
+      env: {
+        ...process.env,
+        MOCK_RENAME_MODE: "ok_extra",
+        MOCK_REFERENCES_MODE: "stable_self",
+      },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    const savedTiming = { ...renameVerificationTiming };
+    renameVerificationTiming.pollMs = 20;
+    renameVerificationTiming.budgetMs = 200;
+    try {
+      try {
+        await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
+        expect.unreachable("expected renameSymbol to reject");
+      } catch (error) {
+        expect(error).toBeInstanceOf(RenameIncompleteError);
+        expect((error as RenameIncompleteError).message).toContain(join(dir, "extra-a.py"));
+        expect((error as RenameIncompleteError).missing).toEqual([]);
+        expect((error as RenameIncompleteError).extra).toEqual([join(dir, "extra-a.py")]);
+      }
+    } finally {
+      Object.assign(renameVerificationTiming, savedTiming);
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
