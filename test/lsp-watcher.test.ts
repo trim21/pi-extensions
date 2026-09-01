@@ -5,7 +5,7 @@
  * - 去抖合并成单批、忽略规则、超限截断只提示一次
  * - stop() 后不再回调
  */
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,31 @@ import { describe, expect, it } from "vitest";
 import { type FileChange, type WatchOptions, watchWorkspace } from "../src/lib/lsp/watcher.js";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const itLinux = process.platform === "linux" ? it : it.skip;
+
+/** 从 /proc/self/fdinfo 收集所有 inotify watch 的 inode（内核 fdinfo 以十六进制打印）。 */
+async function inotifyWatchedInodes(): Promise<Set<number>> {
+  const inodes = new Set<number>();
+  let entries: string[];
+  try {
+    entries = await readdir("/proc/self/fdinfo");
+  } catch {
+    return inodes;
+  }
+  for (const entry of entries) {
+    let content: string;
+    try {
+      content = await readFile(join("/proc/self/fdinfo", entry), "utf8");
+    } catch {
+      continue;
+    }
+    for (const match of content.matchAll(/ino:([0-9a-f]+)/g)) {
+      inodes.add(Number.parseInt(match[1], 16));
+    }
+  }
+  return inodes;
+}
 
 async function collect(dir: string, options?: WatchOptions) {
   const batches: FileChange[][] = [];
@@ -145,6 +170,88 @@ describe("workspace watcher", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("忽略目录在监听期间新建子树不产生事件，监听器保持运行", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
+    const { watcher, batches } = await collect(dir, { debounceMs: 50, flushMs: 200 });
+    try {
+      // 模拟 git / venv 在监听期间写入忽略目录（含新建子目录与文件）
+      await mkdir(join(dir, "node_modules", "pkg"), { recursive: true });
+      await mkdir(join(dir, ".git"), { recursive: true });
+      await sleep(150);
+      await writeFile(join(dir, "node_modules", "pkg", "x.js"), "x");
+      await writeFile(join(dir, ".git", "index.lock"), "x");
+      await sleep(250);
+      // 非 ignored 路径事件照常投递，证明监听器仍在工作
+      await writeFile(join(dir, "normal.txt"), "x");
+      await sleep(250);
+      await watcher.stop();
+      const all = batches.flat();
+      expect(all.filter((c) => c.path.includes("node_modules"))).toHaveLength(0);
+      expect(all.filter((c) => c.path.includes(".git"))).toHaveLength(0);
+      expect(all).toContainEqual({
+        path: join(dir, "normal.txt"),
+        type: "created",
+        isDirectory: false,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("追加目录形态 ignore 在内核层生效（新建嵌套子树无事件）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
+    const { watcher, batches } = await collect(dir, {
+      debounceMs: 50,
+      flushMs: 200,
+      ignore: ["extra/**"],
+    });
+    try {
+      await mkdir(join(dir, "extra", "inner"), { recursive: true });
+      await sleep(150);
+      await writeFile(join(dir, "extra", "inner", "f.txt"), "x");
+      await writeFile(join(dir, "keep.txt"), "x");
+      await sleep(250);
+      await watcher.stop();
+      const all = batches.flat();
+      expect(all.filter((c) => c.path.includes("extra"))).toHaveLength(0);
+      expect(all).toContainEqual({
+        path: join(dir, "keep.txt"),
+        type: "created",
+        isDirectory: false,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  itLinux(
+    "忽略目录不创建内核 watch（inotify fdinfo inode 断言）",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
+      const ignoredDir = join(dir, "node_modules");
+      const ignoredFile = join(ignoredDir, "a.js");
+      const keepFile = join(dir, "keep.txt");
+      await mkdir(ignoredDir, { recursive: true });
+      await writeFile(ignoredFile, "x");
+      await writeFile(keepFile, "x");
+      const { watcher, batches } = await collect(dir, { debounceMs: 50, flushMs: 200 });
+      try {
+        await sleep(300);
+        const watched = await inotifyWatchedInodes();
+        const inoOf = async (path: string) => (await lstat(path)).ino;
+        expect(watched.has(await inoOf(ignoredFile))).toBe(false);
+        expect(watched.has(await inoOf(ignoredDir))).toBe(false);
+        // sanity：非 ignored 文件确有内核 watch，证明断言管道有效
+        expect(watched.has(await inoOf(keepFile))).toBe(true);
+        expect(batches.flat()).toHaveLength(0);
+      } finally {
+        await watcher.stop();
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+    10_000,
+  );
 
   it("超限截断只提示一次", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));

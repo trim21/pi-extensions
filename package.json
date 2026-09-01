@@ -94,7 +94,7 @@
   },
   "packageManager": "pnpm@11.24.0",
   "engines": {
-    "node": ">=24"
+    "node": ">=24.14"
   },
   "dependencies": {
     "@cortexkit/aft-bridge": "0.54.0",
