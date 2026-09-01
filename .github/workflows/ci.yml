@@ -64,7 +64,14 @@ jobs:
           curl -LsSf https://astral.sh/ruff/install.sh | sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - run: pnpm test
+      # coverage 在两个 Node 版本上都生成并上传，codecov 合并两次报告。
+      - run: pnpm test:coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage/lcov.info
+          fail_ci_if_error: true
 
   # 矩阵 job 的 check context 带矩阵值（`check (24)`、`check (26)` …），直接写进
   # mergify.yml 会随 matrix 变化失效。这里收敛成单个稳定 context 供合并门槛引用。
