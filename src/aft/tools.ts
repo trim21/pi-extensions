@@ -152,7 +152,6 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
           truncated,
           params,
           pendant: {
-            title: "aft_outline",
             subtitle,
           } satisfies ToolPendant,
         },
@@ -224,7 +223,6 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
           truncated,
           params,
           pendant: {
-            title: "aft_zoom",
             subtitle,
             markdown: buildPendantMarkdown({
               title: "aft_zoom",
