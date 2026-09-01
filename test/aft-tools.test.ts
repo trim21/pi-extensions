@@ -3,7 +3,12 @@ import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { buildOutlineSubtitle, buildZoomSubtitle, compactArgs } from "../src/aft/tools.js";
+import {
+  buildOutlineSubtitle,
+  buildZoomSubtitle,
+  compactArgs,
+  formatSemanticIndexProgress,
+} from "../src/aft/tools.js";
 import { resolvePathArg } from "../src/lib/path.js";
 
 describe("compactArgs", () => {
@@ -98,5 +103,59 @@ describe("buildOutlineSubtitle", () => {
     expect(buildOutlineSubtitle(cwd, longPath)).toBe(
       'target="another-long-name/App.module.spec.test.ts"',
     );
+  });
+});
+
+const building = (semantic: Record<string, unknown>): Record<string, unknown> => ({
+  semantic_index: { status: "building", ...semantic },
+});
+
+describe("formatSemanticIndexProgress", () => {
+  it("formats stage, chunk percent and batch", () => {
+    expect(
+      formatSemanticIndexProgress(
+        building({
+          stage: "embedding_symbols",
+          embedded_chunks: 6,
+          total_chunks: 12,
+          current_batch: 2,
+          total_batches: 4,
+        }),
+      ),
+    ).toBe("语义索引构建中 (embedding_symbols) · 6/12 chunks (50%) · batch 2/4");
+  });
+
+  it("caps percent at 100 for reporting overflow", () => {
+    expect(
+      formatSemanticIndexProgress(
+        building({ stage: "embedding_symbols", embedded_chunks: 15, total_chunks: 12 }),
+      ),
+    ).toBe("语义索引构建中 (embedding_symbols) · 15/12 chunks (100%)");
+  });
+
+  it("omits numbers that are absent", () => {
+    expect(formatSemanticIndexProgress(building({ stage: "refreshing_corpus" }))).toBe(
+      "语义索引构建中 (refreshing_corpus)",
+    );
+  });
+
+  it("ignores non-finite or zero-total chunk numbers", () => {
+    expect(
+      formatSemanticIndexProgress(
+        building({
+          stage: "embedding_symbols",
+          embedded_chunks: 3,
+          total_chunks: 0,
+          current_batch: 1,
+          total_batches: 0,
+        }),
+      ),
+    ).toBe("语义索引构建中 (embedding_symbols)");
+  });
+
+  it("returns undefined for non-building semantic status", () => {
+    expect(formatSemanticIndexProgress({ semantic_index: { status: "ready" } })).toBeUndefined();
+    expect(formatSemanticIndexProgress({ semantic_index: { status: "disabled" } })).toBeUndefined();
+    expect(formatSemanticIndexProgress({})).toBeUndefined();
   });
 });

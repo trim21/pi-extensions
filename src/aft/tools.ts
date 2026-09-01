@@ -16,6 +16,7 @@ import {
   coerceTargetParam,
   formatCallgraphSections,
   PLAIN_CALLGRAPH_THEME,
+  type StatusSnapshot,
 } from "@cortexkit/aft-bridge";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -349,6 +350,58 @@ export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): vo
   });
 }
 
+/**
+ * 语义索引进度订阅：索引冷构建期间 Rust 侧每秒推送一次 status_changed 帧
+ * （status_debounce_loop），aft-bridge 广播给 subscribeStatus 监听器。搜索
+ * 请求阻塞等待索引就绪（最长 SEMANTIC_INDEX_WAIT_TIMEOUT_MS）时，把进度
+ * 经 onUpdate 流式显示给用户，而不是无声干等。
+ */
+
+/** `BinaryBridge.subscribeStatus` 的能力探测类型：AftProjectTransport 接口上未暴露。 */
+interface StatusSubscribableBridge {
+  subscribeStatus?(listener: (snapshot: StatusSnapshot) => void): () => void;
+}
+
+function subscribeBridgeStatus(
+  bridge: AftProjectTransport,
+  listener: (snapshot: StatusSnapshot) => void,
+): (() => void) | undefined {
+  const subscribable = bridge as AftProjectTransport & StatusSubscribableBridge;
+  if (typeof subscribable.subscribeStatus !== "function") {
+    return undefined;
+  }
+  return subscribable.subscribeStatus(listener);
+}
+
+/** 构造进度摘要时提取的数值字段，缺省或非法时忽略。 */
+function snapshotNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** status 快照 → 一行构建进度文本；非 Building 状态返回 undefined（不显示）。 */
+export function formatSemanticIndexProgress(snapshot: StatusSnapshot): string | undefined {
+  const semantic = snapshot.semantic_index;
+  if (!semantic || semantic.status !== "building") {
+    return undefined;
+  }
+  const stage =
+    typeof semantic.stage === "string" && semantic.stage.length > 0 ? semantic.stage : undefined;
+  const embedded = snapshotNumber(semantic.embedded_chunks);
+  const total = snapshotNumber(semantic.total_chunks);
+  const currentBatch = snapshotNumber(semantic.current_batch);
+  const totalBatches = snapshotNumber(semantic.total_batches);
+
+  const parts = [`语义索引构建中${stage === undefined ? "" : ` (${stage})`}`];
+  if (embedded !== undefined && total !== undefined && total > 0) {
+    const percent = Math.min(100, Math.round((embedded / total) * 100));
+    parts.push(`${embedded}/${total} chunks (${percent}%)`);
+  }
+  if (currentBatch !== undefined && totalBatches !== undefined && totalBatches > 0) {
+    parts.push(`batch ${currentBatch}/${totalBatches}`);
+  }
+  return parts.join(" · ");
+}
+
 const SearchParams = Type.Object(
   {
     query: Type.String({
@@ -380,7 +433,7 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
     promptSnippet: "Search code by meaning or exact text",
     promptGuidelines: [SEARCH_PROMPT],
     parameters: SearchParams,
-    async execute(_id, params, _signal, _onUpdate, extCtx) {
+    async execute(_id, params, _signal, onUpdate, extCtx) {
       if (typeof params.query !== "string" || params.query.trim().length === 0) {
         throw new Error("'query' must be a non-empty string");
       }
@@ -390,13 +443,29 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
         includeTests: params.includeTests,
       });
 
-      const { text, response } = await callAftTool(bridgeFor(ctx), "search", rawArgs, extCtx, {
-        // 默认 search 传输超时仅 60s，会早于索引等待（600s）触发；覆盖为等待
-        // 上限 + 常规执行预算。超时只说明响应被挤掉而非 bridge 挂死，保留
-        // 常驻的语义索引/LSP 状态。
-        transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
-        keepBridgeOnTimeout: true,
-      });
+      const bridge = bridgeFor(ctx);
+      const stopProgress =
+        onUpdate === undefined
+          ? undefined
+          : subscribeBridgeStatus(bridge, (snapshot) => {
+              const text = formatSemanticIndexProgress(snapshot);
+              if (text !== undefined) {
+                onUpdate({ content: [{ type: "text", text }], details: undefined });
+              }
+            });
+      let response: Record<string, unknown>;
+      let text: string;
+      try {
+        ({ text, response } = await callAftTool(bridge, "search", rawArgs, extCtx, {
+          // 默认 search 传输超时仅 60s，会早于索引等待（600s）触发；覆盖为等待
+          // 上限 + 常规执行预算。超时只说明响应被挤掉而非 bridge 挂死，保留
+          // 常驻的语义索引/LSP 状态。
+          transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
+          keepBridgeOnTimeout: true,
+        }));
+      } finally {
+        stopProgress?.();
+      }
       const truncated = response.truncated === true;
       return {
         content: [{ type: "text", text }],
