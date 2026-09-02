@@ -34,10 +34,6 @@ import { convertLeadingTabsToSpaces, findActualString, preserveQuoteStyle } from
 
 const SAMPLE_BYTES = 4096;
 
-/** 同范围重复读取、文件未变时返回的 stub（对齐 Claude Code 的 file_unchanged）。 */
-export const FILE_UNCHANGED_STUB =
-  "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.";
-
 /** Read 全读时的文件大小上限（对齐 Claude Code 的 256KB）。 */
 const MAX_READ_SIZE_BYTES = 0.25 * 1024 * 1024;
 /** Read 输出 token 粗估上限（对齐 Claude Code 的 25K tokens；无 tokenizer，按 4 字符/token 估算）。 */
@@ -317,21 +313,6 @@ export function registerFileTools(
       const key = await readStateKey(filePath);
       const buffer = await readFile(filePath);
 
-      // 同范围 + checksum 未变 → 返回 stub 而非重发内容（对齐 CC readFileState；
-      // 复用 reads 里的 sha256，比 mtime 可靠，无时间片粒度问题）
-      const previous = state.reads.get(key);
-      if (
-        previous !== undefined &&
-        previous.offset !== undefined &&
-        previous.offset === offset &&
-        previous.limit === limit &&
-        snapshotsEqual(previous, snapshotOf(buffer))
-      ) {
-        return {
-          content: [{ type: "text", text: FILE_UNCHANGED_STUB }],
-          details: { pendant: { subtitle: formatSubtitlePath(ctx.cwd, filePath) } },
-        };
-      }
       if (isBinary(buffer.subarray(0, SAMPLE_BYTES)))
         throw new Error(`Cannot read binary file: ${filePath}`);
       // 全读（limit 未传）时受字节上限约束（对齐 Claude Code）
@@ -349,7 +330,7 @@ export function registerFileTools(
           `File content (${estimatedTokens} tokens) exceeds maximum allowed tokens (${MAX_READ_TOKENS}). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file.`,
         );
       }
-      const snapshot = { ...snapshotOf(buffer), offset, limit };
+      const snapshot = snapshotOf(buffer);
       state.reads.set(key, snapshot);
       // LSP 文件事件通知是后台任务，失败不影响读取（read 不驻留文档）
       void getService()

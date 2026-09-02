@@ -19,11 +19,7 @@ import {
   findSimilarFile,
   suggestPathUnderCwd,
 } from "../src/claude-code/common.js";
-import claudeCodeFileTools, {
-  exactReplace,
-  FILE_UNCHANGED_STUB,
-  formatReadOutput,
-} from "../src/claude-code/files.js";
+import claudeCodeFileTools, { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
 import claudeCodeGlobTool, { globFiles } from "../src/claude-code/glob.js";
 import claudeCodeGrepTool, {
   sortFilesByMtime,
@@ -652,7 +648,7 @@ describe("Read, Edit, and Write", () => {
     expect(result.content[0].text).toBe("0: one\n1: two\n2: ");
   });
 
-  it("dedupes repeated reads of the same range while the file is unchanged", async () => {
+  it("returns full content on repeated reads of the same range", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-read-dedup-"));
     const filePath = join(directory, "note.txt");
     await writeFile(filePath, "one\ntwo\nthree\n", "utf8");
@@ -661,13 +657,9 @@ describe("Read, Edit, and Write", () => {
 
     const first = await call(tools.get("Read")!, { file_path: filePath }, ctx);
     expect(first.content[0].text).toContain("1: one");
-    // 同范围重复读 → stub
     const second = await call(tools.get("Read")!, { file_path: filePath }, ctx);
-    expect(second.content[0].text).toBe(FILE_UNCHANGED_STUB);
-    // 不同范围不 dedup
-    const partial = await call(tools.get("Read")!, { file_path: filePath, limit: 2 }, ctx);
-    expect(partial.content[0].text).toContain("1: one");
-    // 文件被外部修改 → 不 dedup，返回新内容
+    expect(second.content[0].text).toBe(first.content[0].text);
+    // 文件被外部修改 → 返回新内容
     await writeFile(filePath, "changed\n", "utf8");
     const third = await call(tools.get("Read")!, { file_path: filePath }, ctx);
     expect(third.content[0].text).toContain("1: changed");
@@ -686,7 +678,7 @@ describe("Read, Edit, and Write", () => {
       { file_path: filePath, old_string: "one", new_string: "ONE" },
       ctx,
     );
-    // Edit 覆盖了 reads 记录（无 offset/limit）→ 同范围 Read 不 dedup，返回新内容
+    // Edit 覆盖了 reads 记录 → 同范围 Read 返回新内容
     const result = await call(tools.get("Read")!, { file_path: filePath }, ctx);
     expect(result.content[0].text).toContain("1: ONE");
   });
@@ -773,7 +765,7 @@ describe("reads state restore on session_start", () => {
     expect(deserializeReads(undefined)).toEqual(new Map());
   });
 
-  it("accepts snapshots carrying Read dedup range fields", () => {
+  it("accepts legacy snapshots with stale Read range fields", () => {
     expect(
       deserializeReads({
         "/a.txt": { digest: "abc", textEditable: true, offset: 1, limit: 10 },
