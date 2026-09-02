@@ -89,7 +89,8 @@ const SETTINGS_PATH = join(getAgentDir(), "settings.json");
  * implementation file (they share a read-snapshot state); the `tools`
  * allowlist still exposes only the declared subset. The opencode file tools
  * (read/edit/write) likewise share opencode/files.ts (they share the LSP
- * service instance).
+ * service instance); that file also registers the shared `lsp-rename` tool,
+ * which stays hidden unless a subagent declares it.
  */
 const TOOL_EXTENSION_OVERRIDES: Record<string, string> = {
   read: "opencode/files.ts",

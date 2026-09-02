@@ -1,5 +1,6 @@
 // 端到端回归测试：真实 vtsls（tsserver）下的 lsp-rename 工具。
-// 覆盖：跨文件重命名同步更新引用、symbol 缺省时的同名歧义报错、
+// lsp-rename 工具壳由 claude-code / opencode 两个入口共享注册，这里对两个
+// 入口跑同一组场景：跨文件重命名同步更新引用、symbol 缺省时的同名歧义报错、
 // 补 character 后按指定位置执行。
 // 需要 vtsls 在 PATH；二进制缺失时整组跳过。
 // 服务器定义写进临时项目的 .pi/lsp.json，不依赖全局 ~/.pi/agent/lsp.json。
@@ -7,10 +8,12 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
 import claudeCodeFileTools from "../src/claude-code/files.js";
 import { which } from "../src/lib/lsp/bin.js";
+import opencodeFileTools from "../src/opencode/files.js";
 
 const hasVtsls = which("vtsls") !== undefined;
 
@@ -19,9 +22,17 @@ interface RegisteredTool {
   execute: (...args: any[]) => Promise<any>;
 }
 
-function loadFileTools(): Map<string, RegisteredTool> {
+type ToolsetLoader = (pi: ExtensionAPI) => void;
+
+interface ToolsetEntry {
+  load: () => Map<string, RegisteredTool>;
+  /** claude-code 跟踪 read-before-write 状态，rename 结果带 reads 快照。 */
+  tracksReads: boolean;
+}
+
+function loadFileTools(loader: ToolsetLoader): Map<string, RegisteredTool> {
   const tools = new Map<string, RegisteredTool>();
-  claudeCodeFileTools({
+  loader({
     registerTool(tool: RegisteredTool) {
       tools.set(tool.name, tool);
     },
@@ -32,6 +43,11 @@ function loadFileTools(): Map<string, RegisteredTool> {
   } as never);
   return tools;
 }
+
+const ENTRIES: Record<string, ToolsetEntry> = {
+  "claude-code": { load: () => loadFileTools(claudeCodeFileTools), tracksReads: true },
+  opencode: { load: () => loadFileTools(opencodeFileTools), tracksReads: false },
+};
 
 function context(cwd: string) {
   return {
@@ -81,7 +97,7 @@ async function setupProject() {
   return { directory };
 }
 
-describe("lsp-rename + real vtsls", () => {
+describe.each(Object.entries(ENTRIES))("lsp-rename + real vtsls (%s)", (_name, entry) => {
   it.runIf(hasVtsls)(
     "跨文件重命名：定义与引用同步更新，结果附诊断与 reads 快照",
     async () => {
@@ -93,7 +109,7 @@ describe("lsp-rename + real vtsls", () => {
         'export function greet(name: string): string {\n  return "hi " + name;\n}\n',
       );
       await writeFile(mainPath, 'import { greet } from "./lib";\nconsole.log(greet("world"));\n');
-      const tools = loadFileTools();
+      const tools = entry.load();
       const ctx = context(directory);
 
       // 不做预热：renameSymbol 前置的 textDocument/references 请求会阻塞到
@@ -114,7 +130,11 @@ describe("lsp-rename + real vtsls", () => {
       expect(lib).not.toContain("greet");
       expect(main).toContain('import { farewell } from "./lib";');
       expect(main).toContain('farewell("world")');
-      expect(Object.keys(result.details?.reads ?? {})).toHaveLength(2);
+      if (entry.tracksReads) {
+        expect(Object.keys(result.details?.reads ?? {})).toHaveLength(2);
+      } else {
+        expect(result.details?.reads).toBeUndefined();
+      }
     },
     120_000,
   );
@@ -125,7 +145,7 @@ describe("lsp-rename + real vtsls", () => {
       const { directory } = await setupProject();
       const ambPath = join(directory, "amb.ts");
       await writeFile(ambPath, "const item = { item: 1 };\n");
-      const tools = loadFileTools();
+      const tools = entry.load();
       const ctx = context(directory);
 
       // 行内 "item" 既是变量声明又是对象属性，是两个不同的符号；
@@ -158,7 +178,7 @@ describe("lsp-rename + real vtsls", () => {
       const { directory } = await setupProject();
       const mainPath = join(directory, "main.ts");
       await writeFile(mainPath, "const value = 1;\n");
-      const tools = loadFileTools();
+      const tools = entry.load();
       const ctx = context(directory);
 
       await expect(

@@ -1,9 +1,9 @@
 /**
  * Opencode File Tools —— read / edit / write 统一构建点。
  *
- * 三个工具在同一个 registerFileTools(pi, service) 里注册，共享同一个 LSP
- * service 实例（registerLsp 创建的闭包变量），与 claude-code/files.ts 共享
- * read-snapshot state 的方式一致；不再用模块级全局缓存。
+ * read / edit / write 三个工具在同一个 registerFileTools(pi, service) 里注册，
+ * 共享同一个 LSP service 实例（registerLsp 创建的闭包变量）；lsp-rename 的
+ * 工具壳与 claude-code 共享，同样挂进 registerFileTools。
  *
  * 对齐官方 v1（packages/opencode/src/tool/{read,edit,write}.ts）：
  * - read：流式分行（LF / CRLF / CR）、每行 `N: ` 行号前缀、单行 2000
@@ -31,6 +31,7 @@ import { Type } from "typebox";
 
 import { appendLspDiagnosticText } from "../lib/lsp/diagnostic.js";
 import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
+import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { applyEdit, normalizeToLF, stripBom } from "./edit-engine.js";
@@ -696,6 +697,9 @@ export function registerFileTools(pi: ExtensionAPI, service: LspService): void {
   registerReadTool(pi, service);
   registerEditTool(pi, service);
   registerWriteTool(pi, service);
+  // 工具壳与 claude-code 共享（lib/lsp/rename-tool.ts）；opencode 不跟踪
+  // read-before-write 状态，不传 recordReads hook。
+  registerLspRenameTool(pi, service);
 }
 
 /** 独立入口：创建 LSP service（闭包共享给三个工具）并注册。 */
