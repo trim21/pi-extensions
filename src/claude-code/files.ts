@@ -15,6 +15,7 @@ import {
 import { Type } from "typebox";
 
 import { appendLspDiagnosticText } from "../lib/lsp/diagnostic.js";
+import { registerLspInspectTools } from "../lib/lsp/inspect-tool.js";
 import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
@@ -689,6 +690,8 @@ export function registerFileTools(
       return reads;
     },
   });
+  // 只读符号查询工具（find-definition / find-reference / inspect）与 opencode 共享。
+  registerLspInspectTools(pi, service);
 }
 
 /** 会更新 reads state 并随 details 持久化快照的工具名。 */

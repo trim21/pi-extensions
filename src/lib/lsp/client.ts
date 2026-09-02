@@ -20,7 +20,13 @@ import {
   StreamMessageReader,
   StreamMessageWriter,
 } from "vscode-jsonrpc/node";
-import type { Diagnostic as VSCodeDiagnostic, WorkspaceEdit } from "vscode-languageserver-types";
+import type {
+  Diagnostic as VSCodeDiagnostic,
+  Hover,
+  Location as LspLocation,
+  LocationLink,
+  WorkspaceEdit,
+} from "vscode-languageserver-types";
 
 import type { LspServerHandle } from "./adapter.js";
 import { LANGUAGE_EXTENSIONS } from "./language.js";
@@ -71,6 +77,20 @@ const LSP_CONTENT_MODIFIED = -32801;
  * 供调用方在多候选探测时跳过该 client 而不是中断整个操作。
  */
 export class RenameNotPossibleError extends Error {}
+
+/**
+ * 服务器不支持某 LSP 方法（MethodNotFound）。与传输失败区分，供服务层跳过
+ * 该服务器尝试下一个，而不是把整个操作当作失败。
+ */
+export class LspMethodNotSupportedError extends Error {
+  readonly serverID: string;
+  readonly method: string;
+  constructor(serverID: string, method: string) {
+    super(`LSP server "${serverID}" does not support ${method}`);
+    this.serverID = serverID;
+    this.method = method;
+  }
+}
 
 /**
  * rename edit 未覆盖 references 看到的全部文件：服务器索引可能仍在后台加载。
@@ -146,6 +166,48 @@ export interface RenameSymbolResult {
   edit: WorkspaceEdit;
   /** prepareRename 返回的符号当前名；服务器未提供 prepare 时缺省。 */
   placeholder?: string;
+}
+
+/** definition / references / hover 请求的输入（line / character 为 0-based LSP position）。 */
+export interface InspectPositionRequest {
+  path: string;
+  line: number;
+  character: number;
+}
+
+/** definition / references 归一化后的位置（0-based；1-based 格式化由工具层负责）。 */
+export interface InspectLocation {
+  path: string;
+  line: number;
+  character: number;
+}
+
+type DefinitionResult = LspLocation | LspLocation[] | LocationLink | LocationLink[] | null;
+
+/** Location / LocationLink → path + 0-based 坐标；非 file: URI 是服务器的意外行为，跳过。 */
+function toInspectLocations(result: DefinitionResult): InspectLocation[] {
+  if (result === null) return [];
+  const items = Array.isArray(result) ? result : [result];
+  const locations: InspectLocation[] = [];
+  for (const item of items) {
+    if ("targetUri" in item) {
+      if (!item.targetUri.startsWith("file:")) continue;
+      const range = item.targetSelectionRange ?? item.targetRange;
+      locations.push({
+        path: normalize(fileURLToPath(item.targetUri)),
+        line: range.start.line,
+        character: range.start.character,
+      });
+    } else {
+      if (!item.uri.startsWith("file:")) continue;
+      locations.push({
+        path: normalize(fileURLToPath(item.uri)),
+        line: item.range.start.line,
+        character: item.range.start.character,
+      });
+    }
+  }
+  return locations;
 }
 
 export class InitializeError extends Error {
@@ -241,6 +303,21 @@ export interface LspClient {
    * 位置不在符号上 / 服务器不支持 rename 时抛 RenameNotPossibleError。
    */
   renameSymbol(request: RenameSymbolRequest): Promise<RenameSymbolResult>;
+  /**
+   * textDocument/definition：归一化后的定义位置列表（Location / LocationLink
+   * 统一转 path + 0-based 坐标；无结果返回空数组）。
+   */
+  definition(request: InspectPositionRequest): Promise<InspectLocation[]>;
+  /**
+   * textDocument/references：归一化后的引用位置列表（是否含声明处由服务器
+   * 按 includeDeclaration 决定，此处固定包含，对齐 rename 覆盖校验口径）。
+   */
+  references(request: InspectPositionRequest): Promise<InspectLocation[]>;
+  /**
+   * textDocument/hover：服务器返回的 contents 原样透传，不做内容归一化；
+   * 服务器无信息时返回 null（合法应答，非错误）。
+   */
+  hover(request: InspectPositionRequest): Promise<Hover | null>;
   shutdown(): Promise<void>;
 }
 
@@ -922,6 +999,31 @@ export async function create(input: CreateInput): Promise<LspClient> {
     return 0;
   };
 
+  // ── 只读符号查询（definition / references / hover）──────────────────────────
+
+  /** 请求前先同步磁盘内容（didOpen/didChange），保证服务器基于最新文本应答。 */
+  const preparePositionRequest = async (request: InspectPositionRequest) => {
+    const resolvedPath = normalize(
+      isAbsolute(request.path) ? request.path : resolve(input.directory, request.path),
+    );
+    await openDocument({ path: resolvedPath });
+    return {
+      uri: pathToFileURL(resolvedPath).href,
+      position: { line: request.line, character: request.character },
+    };
+  };
+
+  const sendInspectRequest = async <T>(method: string, message: object): Promise<T> => {
+    try {
+      return await retryOnContentModified(() => connection.sendRequest<T>(method, message));
+    } catch (error) {
+      if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
+        throw new LspMethodNotSupportedError(input.serverID, method);
+      }
+      throw error;
+    }
+  };
+
   return {
     root: input.root,
     get serverID() {
@@ -1100,6 +1202,31 @@ export async function create(input: CreateInput): Promise<LspClient> {
         await sleep(renameVerificationTiming.pollMs);
         current = toPaths(await referencesRequest());
       }
+    },
+    async definition(request: InspectPositionRequest): Promise<InspectLocation[]> {
+      const { uri, position } = await preparePositionRequest(request);
+      return toInspectLocations(
+        await sendInspectRequest<DefinitionResult>("textDocument/definition", {
+          textDocument: { uri },
+          position,
+        }),
+      );
+    },
+    async references(request: InspectPositionRequest): Promise<InspectLocation[]> {
+      const { uri, position } = await preparePositionRequest(request);
+      const locations = await sendInspectRequest<LspLocation[] | null>("textDocument/references", {
+        textDocument: { uri },
+        position,
+        context: { includeDeclaration: true },
+      });
+      return toInspectLocations(locations);
+    },
+    async hover(request: InspectPositionRequest): Promise<Hover | null> {
+      const { uri, position } = await preparePositionRequest(request);
+      return await sendInspectRequest<Hover | null>("textDocument/hover", {
+        textDocument: { uri },
+        position,
+      });
     },
     get diagnostics() {
       const result = new Map<string, Diagnostic[]>();

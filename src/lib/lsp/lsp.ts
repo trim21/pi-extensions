@@ -25,7 +25,7 @@ import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding
 import { minimatch } from "minimatch";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
-import type { WorkspaceEdit } from "vscode-languageserver-types";
+import type { Hover, WorkspaceEdit } from "vscode-languageserver-types";
 
 import { type LspServerAdapter } from "./adapter.js";
 import {
@@ -33,6 +33,8 @@ import {
   type CreateInput,
   type Diagnostic,
   type Info as LspClient,
+  type InspectLocation,
+  LspMethodNotSupportedError,
   RenameNotPossibleError,
   WATCH_KIND_CHANGE,
   WATCH_KIND_CREATE,
@@ -242,6 +244,16 @@ interface LspState {
 /** 渲染 LSP status 文本的回调（传入 undefined 表示清除）。 */
 export type StatusRenderer = (text: string | undefined) => void;
 
+export type LspInspectQuery = "definition" | "references" | "hover";
+
+/**
+ * 返回类型与 query 泛型关联：query 为 "hover" 时返回 hover 内容，否则返回
+ * 位置列表。实现内部用 cast 建立关联（TS 无法验证分支与泛型的对应关系）。
+ */
+export type LspInspectResult<Q extends LspInspectQuery = LspInspectQuery> = Q extends "hover"
+  ? { serverID: string; query: "hover"; hover: Hover | null }
+  : { serverID: string; query: "definition" | "references"; locations: InspectLocation[] };
+
 export interface LspRequestOptions {
   notify?: ExtensionUIContext["notify"];
   /** 中止时提前结束诊断等待（已中止时直接跳过诊断）。 */
@@ -288,6 +300,19 @@ export interface LspService {
     newName: string;
     options?: LspRequestOptions;
   }): Promise<{ serverID: string; edit: WorkspaceEdit; placeholder?: string }>;
+  /**
+   * 只读符号查询（definition / references / hover）：只面向 kind 为 "language"
+   * 的服务器，按配置顺序取第一个成功结果；服务器不支持该方法（MethodNotFound）
+   * 时跳过并尝试下一个，全部不支持时抛聚合错误。line / character 为 0-based。
+   */
+  inspect<Q extends LspInspectQuery>(request: {
+    file: string;
+    cwd: string;
+    line: number;
+    character: number;
+    query: Q;
+    options?: LspRequestOptions;
+  }): Promise<LspInspectResult<Q>>;
   shutdownAll(): Promise<void>;
   /** 停止全部服务器并禁用 LSP：之后工具调用不再 spawn，直到 start/reload。 */
   stop(): Promise<void>;
@@ -690,6 +715,56 @@ export function createLspService(
       : new Error(`LSP rename failed on all servers — ${detail}`);
   }
 
+  /** 只读符号查询：与 rename 同款多服务器策略，但 MethodNotFound 是"跳过"而非失败。 */
+  async function inspect<Q extends LspInspectQuery>(request: {
+    file: string;
+    cwd: string;
+    line: number;
+    character: number;
+    query: Q;
+    options?: LspRequestOptions;
+  }): Promise<LspInspectResult<Q>> {
+    const clients = await getClients(
+      request.file,
+      request.cwd,
+      request.options?.notify,
+      (adapter) => adapter.kind !== "linter",
+    );
+    if (clients.length === 0) {
+      throw new Error(
+        `no LSP language server available for ${request.file} (check lsp.json servers and kind)`,
+      );
+    }
+    const failures: { serverID: string; error: unknown }[] = [];
+    for (const client of clients) {
+      const position = { path: request.file, line: request.line, character: request.character };
+      try {
+        if (request.query === "hover") {
+          const hover = await client.hover(position);
+          return { serverID: client.serverID, query: "hover", hover } as LspInspectResult<Q>;
+        }
+        const locations =
+          request.query === "definition"
+            ? await client.definition(position)
+            : await client.references(position);
+        return {
+          serverID: client.serverID,
+          query: request.query,
+          locations,
+        } as LspInspectResult<Q>;
+      } catch (error) {
+        failures.push({ serverID: client.serverID, error });
+      }
+    }
+    const allNotSupported = failures.every((f) => f.error instanceof LspMethodNotSupportedError);
+    const detail = failures
+      .map((f) => `${f.serverID}: ${f.error instanceof Error ? f.error.message : String(f.error)}`)
+      .join("; ");
+    throw allNotSupported
+      ? new LspMethodNotSupportedError("all configured servers", `textDocument/${request.query}`)
+      : new Error(`LSP inspect failed on all servers — ${detail}`);
+  }
+
   /** 关闭全部 client 并清空缓存；closing 置 true 让 in-flight spawn 自行退出。 */
   async function closeAll(): Promise<void> {
     state.closing = true;
@@ -752,6 +827,7 @@ export function createLspService(
     diagnostics,
     lspDiagnosticsForFile,
     rename,
+    inspect,
     shutdownAll,
     stop,
     start,

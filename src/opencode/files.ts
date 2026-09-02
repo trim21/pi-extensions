@@ -30,6 +30,7 @@ import {
 import { Type } from "typebox";
 
 import { appendLspDiagnosticText } from "../lib/lsp/diagnostic.js";
+import { registerLspInspectTools } from "../lib/lsp/inspect-tool.js";
 import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
@@ -700,6 +701,8 @@ export function registerFileTools(pi: ExtensionAPI, service: LspService): void {
   // 工具壳与 claude-code 共享（lib/lsp/rename-tool.ts）；opencode 不跟踪
   // read-before-write 状态，不传 recordReads hook。
   registerLspRenameTool(pi, service);
+  // 只读符号查询工具（find-definition / find-reference / inspect）与 claude-code 共享。
+  registerLspInspectTools(pi, service);
 }
 
 /** 独立入口：创建 LSP service（闭包共享给三个工具）并注册。 */

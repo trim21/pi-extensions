@@ -124,6 +124,9 @@ describe("Claude Code tool registration", () => {
       "Edit",
       "Write",
       "lsp-rename",
+      "lsp-find-definition",
+      "lsp-find-reference",
+      "lsp-inspect",
       "Glob",
       "Grep",
       "Bash",
@@ -1354,7 +1357,15 @@ describe("standalone extension entries (spawn-agent -e loading)", () => {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
       exec: vi.fn(),
     } as never);
-    expect([...tools.keys()]).toEqual(["Read", "Edit", "Write", "lsp-rename"]);
+    expect([...tools.keys()]).toEqual([
+      "Read",
+      "Edit",
+      "Write",
+      "lsp-rename",
+      "lsp-find-definition",
+      "lsp-find-reference",
+      "lsp-inspect",
+    ]);
     // state 恢复依赖 session 事件，独立入口同样注册（与 index.ts 行为一致）
     expect(handlers.has("session_start")).toBe(true);
     expect(handlers.has("session_tree")).toBe(true);
