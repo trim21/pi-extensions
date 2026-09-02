@@ -172,6 +172,45 @@ describe("buildDiffPreview", () => {
     const lines = preview!.split("\n");
     expect(lines.length).toBe(103); // 100 diff lines + truncation note + ``` fences
   });
+
+  // 内容含 ``` 时三反引号围栏会被提前闭合，渲染错乱（上下文行前只有
+  // 一个空格缩进，仍在 CommonMark 闭合围栏允许的缩进范围内）。
+  it("uses a longer fence when the patch contains ``` lines", async () => {
+    await writeFile(TARGET, "```js\nold\n```\n", "utf8");
+
+    const preview = await buildDiffPreview(TARGET, { oldText: "old", newText: "new" });
+
+    expect(preview).toMatchInlineSnapshot(`
+      "\`\`\`\`diff
+      --- target.txt
+      +++ target.txt
+      @@ -1,3 +1,3 @@
+       \`\`\`js
+      -old
+      +new
+       \`\`\`
+
+      \`\`\`\`"
+    `);
+  });
+
+  it("fallback parameter diff also escapes ``` content", async () => {
+    await writeFile(TARGET, "unused\n", "utf8");
+
+    const preview = await buildDiffPreview(TARGET, {
+      oldText: "missing",
+      newText: "```js\nx\n```",
+    });
+
+    expect(preview).toMatchInlineSnapshot(`
+      "\`\`\`\`diff
+      -missing
+      +\`\`\`js
+      +x
+      +\`\`\`
+      \`\`\`\`"
+    `);
+  });
 });
 
 // ── guardWriteAccess ─────────────────────────────────────────────────────────

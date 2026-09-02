@@ -16,6 +16,7 @@ import { throttle } from "lodash-es";
 import { type TObject, Type } from "typebox";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
+import { fenceCodeBlock } from "../lib/markdown.js";
 import { formatDisplayPath } from "../lib/path.js";
 import {
   type CheckboxAction,
@@ -142,12 +143,6 @@ function escapeHtml(text: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
-}
-
-function fenceCodeBlock(code: string): string {
-  const longestRun = Math.max(...(code.match(/`+/g)?.map((match) => match.length) ?? [0]));
-  const fence = "`".repeat(Math.max(3, longestRun + 1));
-  return `${fence}\n${code}\n${fence}`;
 }
 
 /** 进度推送的节流间隔（对齐 pi 内置 bash 工具的 100ms）。 */
