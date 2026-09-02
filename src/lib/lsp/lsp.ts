@@ -18,7 +18,7 @@
 
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { extname, join, normalize, relative, sep } from "node:path";
 
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
@@ -90,12 +90,19 @@ export type LspConfig = Static<typeof lspConfigSchema>;
 
 /** "500" → 500、"5s" → 5000、"1m" → 60000；无效字符串返回 NaN（由 toMs 过滤）。 */
 function parseTimeoutString(value: string): number {
-  const match = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h)?$/.exec(value.trim());
+  // 单位组永远参与匹配（缺省为空串），避免"可选捕获组在类型上不可空"的歧义
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h|)\s*$/.exec(value.trim());
   if (!match) return NaN;
   const amount = Number(match[1]);
-  const unit = match[2] ?? "ms";
-  const factors: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 };
-  return amount * (factors[unit] ?? 1);
+  const factors: Record<string, number | undefined> = {
+    "": 1,
+    ms: 1,
+    s: 1_000,
+    m: 60_000,
+    h: 3_600_000,
+  };
+  const factor = factors[match[2]];
+  return amount * (factor ?? 1);
 }
 
 function toMs(value: number | string | undefined): number | undefined {
@@ -843,71 +850,154 @@ export interface LspServiceOptions {
   globalConfigPath?: string;
 }
 
-/** 创建 LSP service 并注册 pi 的进程级清理生命周期。 */
-export function registerLsp(pi: ExtensionAPI, options?: LspServiceOptions): LspService {
-  const service = createLspService(options?.adapters, options?.globalConfigPath);
-  pi.on?.("session_shutdown", () => service.shutdownAll());
-  // session 开始是最早能拿到本地配置 cwd 的时机：预加载并校验，配置错误立即通知
-  pi.on?.("session_start", (_event, ctx) => {
-    void loadLspConfig(ctx.cwd, options?.globalConfigPath)
-      .then((config) => validateConfig(config, options?.adapters))
-      .catch((error: unknown) => {
-        if (error instanceof Error) ctx.ui.notify?.(error.message, "error");
+export interface LspManagerHooks {
+  /**
+   * session_start 校验通过且存在 enabled 服务器时调用（每实例至多一次）；
+   * LSP 专属工具（rename / inspect 族）在此注册，未配置时保持不可见。
+   */
+  onEnabled: (pi: ExtensionAPI, service: LspService) => void;
+}
+
+export interface LspManager {
+  /**
+   * 文件工具的 service 访问器：永不抛错。disabled / session_start 未运行时
+   * 返回共享 no-op service（诊断与文件事件通知为空操作）。
+   */
+  mustLazyGetService(): LspService;
+  /** 当前会话是否已创建 service（/lsp-stop 后仍为 true，内部 disabled 语义不变）。 */
+  haveEnabledLsp(): boolean;
+}
+
+/**
+ * no-op service 单例：空 adapter 列表 → getClients 永远返回空，任何请求都是
+ * 空操作。globalConfigPath 指向必然不存在的文件——真实全局配置若声明了
+ * `enabled`，createLspService 的建时校验会因空 adapter 集合而抛错。
+ */
+const noopServiceHolder: { service?: LspService } = {};
+function getNoopService(): LspService {
+  noopServiceHolder.service ??= createLspService(
+    [],
+    join(tmpdir(), ".pi-lsp-noop-global-does-not-exist.json"),
+  );
+  return noopServiceHolder.service;
+}
+
+/** 会话配置里生效（未被 enabled 白名单排除、未被 disabled）的服务器数量。 */
+function enabledServerCount(config: LspConfig, adapters?: LspServerAdapter[]): number {
+  const ids = adapters ? adapters.map((adapter) => adapter.id) : Object.keys(config.servers ?? {});
+  return ids.filter((id) => {
+    if (config.enabled && !config.enabled.includes(id)) return false;
+    if (config.disabled?.includes(id)) return false;
+    return true;
+  }).length;
+}
+
+/**
+ * 创建 LSP manager 并注册 pi 会话生命周期：
+ * - session_start（被 pi await）：加载并校验配置；存在 enabled 服务器才创建
+ *   service（进程仍首次工具调用才 spawn）并调用 onEnabled 注册 LSP 工具；
+ *   配置缺失或错误则保持 disabled（错误 notify 后降级，不阻断会话启动）。
+ * - session_shutdown：关闭全部服务器进程。
+ * 文件工具经 mustLazyGetService 访问，在任何状态下都能安全工作。
+ */
+export function createLspManager(
+  pi: ExtensionAPI,
+  hooks: LspManagerHooks,
+  options?: LspServiceOptions,
+): LspManager {
+  let service: LspService | undefined;
+
+  pi.on("session_start", async (_event, ctx) => {
+    // /reload 等路径可能对同一 runner 重发 session_start：先清掉旧实例再建
+    if (service !== undefined) {
+      // 旧实例关闭失败不阻断新会话构建
+      await service.shutdownAll().catch(() => {
+        /* noop */
       });
-    // footer status 显示当前所有 LSP server 状态（无 UI 时不显示）
-    service.attachStatus(
-      ctx.ui?.setStatus
-        ? (text) => ctx.ui.setStatus("lsp", text ? ctx.ui.theme.fg("accent", text) : undefined)
-        : undefined,
-    );
+      service = undefined;
+    }
+    try {
+      const config = await loadLspConfig(ctx.cwd, options?.globalConfigPath);
+      validateConfig(config, options?.adapters);
+      if (enabledServerCount(config, options?.adapters) === 0) return;
+      const next = createLspService(options?.adapters, options?.globalConfigPath);
+      // footer status 显示当前所有 LSP server 状态（无 UI 时不显示）
+      next.attachStatus((text) =>
+        ctx.ui.setStatus("lsp", text ? ctx.ui.theme.fg("accent", text) : undefined),
+      );
+      service = next;
+      hooks.onEnabled(pi, next);
+    } catch (error) {
+      service = undefined;
+      if (error instanceof Error) ctx.ui.notify(error.message, "error");
+    }
   });
+
+  pi.on("session_shutdown", () => {
+    void service?.shutdownAll();
+  });
+
   // agent 生命周期边界显式刷新 status：agent 运行中 LSP server 才被惰性
   // spawn（首次工具调用），start/end 时保证 footer 反映当前实际状态。
-  pi.on?.("agent_start", () => service.refreshStatus());
-  pi.on?.("agent_end", () => service.refreshStatus());
+  pi.on("agent_start", () => service?.refreshStatus());
+  pi.on("agent_end", () => service?.refreshStatus());
 
-  pi.registerCommand?.("lsp-stop", {
+  pi.registerCommand("lsp-stop", {
     description: "Stop all LSP servers and disable LSP until /lsp-start or /lsp-reload",
     handler: async (_args, ctx) => {
+      if (service === undefined) {
+        ctx.ui.notify("LSP not configured: nothing to stop", "warning");
+        return;
+      }
       await service.stop();
-      ctx.ui.notify?.("LSP disabled: all servers stopped", "info");
+      ctx.ui.notify("LSP disabled: all servers stopped", "info");
     },
   });
 
-  pi.registerCommand?.("lsp-start", {
+  pi.registerCommand("lsp-start", {
     description: "Re-enable LSP; servers start on the next tool call",
     handler: (_args, ctx) => {
+      if (service === undefined) {
+        ctx.ui.notify("LSP not configured: nothing to enable", "warning");
+        return Promise.resolve();
+      }
       service.start();
-      ctx.ui.notify?.("LSP enabled: servers will start on the next tool call", "info");
+      ctx.ui.notify("LSP enabled: servers will start on the next tool call", "info");
       return Promise.resolve();
     },
   });
 
-  pi.registerCommand?.("lsp-reload", {
+  pi.registerCommand("lsp-reload", {
     description: "Restart a specific LSP server: /lsp-reload <server-id>",
     getArgumentCompletions: (prefix) =>
-      service
-        .serverIDs()
+      (service?.serverIDs() ?? [])
         .toSorted()
         .filter((id) => id.startsWith(prefix))
         .map((id) => ({ value: id, label: id })),
     handler: async (args, ctx) => {
+      if (service === undefined) {
+        ctx.ui.notify("LSP not configured: nothing to reload", "warning");
+        return;
+      }
       const serverID = args.trim();
       const known = service.serverIDs().toSorted();
       if (!serverID) {
-        ctx.ui.notify?.(
+        ctx.ui.notify(
           `usage: /lsp-reload <server-id>${known.length > 0 ? ` (known: ${known.join(", ")})` : ""}`,
           "warning",
         );
         return;
       }
       await service.reload(serverID);
-      ctx.ui.notify?.(
+      ctx.ui.notify(
         `LSP server "${serverID}" reloaded: will restart on the next tool call`,
         "info",
       );
     },
   });
 
-  return service;
+  return {
+    mustLazyGetService: () => service ?? getNoopService(),
+    haveEnabledLsp: () => service !== undefined,
+  };
 }

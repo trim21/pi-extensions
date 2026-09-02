@@ -24,18 +24,47 @@ interface RegisteredTool {
 
 type ToolsetLoader = (pi: ExtensionAPI) => void;
 
-function loadFileTools(loader: ToolsetLoader): Map<string, RegisteredTool> {
+function loadFileTools(loader: ToolsetLoader): {
+  tools: Map<string, RegisteredTool>;
+  emitSessionStart: (cwd: string) => Promise<void>;
+} {
   const tools = new Map<string, RegisteredTool>();
+  const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
   loader({
     registerTool(tool: RegisteredTool) {
       tools.set(tool.name, tool);
     },
     registerFlag: vi.fn(),
     registerCommand: vi.fn(),
-    on: vi.fn(),
+    on(event: string, handler: (...args: any[]) => unknown) {
+      const list = handlers.get(event) ?? [];
+      list.push(handler);
+      handlers.set(event, list);
+    },
     exec: vi.fn(),
   } as never);
-  return tools;
+  return { tools, emitSessionStart: (cwd: string) => emitSessionStart(handlers, cwd) };
+}
+
+/** 触发 session_start（pi 会 await 该事件）：加载并校验 lsp.json，注册 LSP 工具。 */
+async function emitSessionStart(
+  handlers: Map<string, ((...args: any[]) => unknown)[]>,
+  cwd: string,
+): Promise<void> {
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler(
+      { type: "session_start", reason: "startup" },
+      {
+        cwd,
+        ui: {
+          notify: vi.fn(),
+          setStatus: vi.fn(),
+          theme: { fg: (_k: string, text: string) => text },
+        },
+        sessionManager: { getBranch: () => [] },
+      },
+    );
+  }
 }
 
 const ENTRIES: Record<string, ToolsetLoader> = {
@@ -100,7 +129,8 @@ describe.each(Object.entries(ENTRIES))("lsp-inspect tools + real vtsls (%s)", (_
       try {
         const libPath = join(directory, "lib.ts");
         const mainPath = join(directory, "main.ts");
-        const tools = loadFileTools(loader);
+        const { tools, emitSessionStart } = loadFileTools(loader);
+        await emitSessionStart(directory);
         const ctx = context(directory);
 
         const text = await retryUntil(
@@ -127,7 +157,8 @@ describe.each(Object.entries(ENTRIES))("lsp-inspect tools + real vtsls (%s)", (_
       try {
         const libPath = join(directory, "lib.ts");
         const mainPath = join(directory, "main.ts");
-        const tools = loadFileTools(loader);
+        const { tools, emitSessionStart } = loadFileTools(loader);
+        await emitSessionStart(directory);
         const ctx = context(directory);
 
         // 声明处 + main.ts 的 import 与调用 = 3 处；轮询到 main.ts 入索引
@@ -158,7 +189,8 @@ describe.each(Object.entries(ENTRIES))("lsp-inspect tools + real vtsls (%s)", (_
       const { directory, cleanup } = await setupProject();
       try {
         const libPath = join(directory, "lib.ts");
-        const tools = loadFileTools(loader);
+        const { tools, emitSessionStart } = loadFileTools(loader);
+        await emitSessionStart(directory);
         const ctx = context(directory);
 
         const result = await call(
@@ -183,7 +215,8 @@ describe.each(Object.entries(ENTRIES))("lsp-inspect tools + real vtsls (%s)", (_
       const { directory, cleanup } = await setupProject();
       try {
         const mainPath = join(directory, "amb.ts");
-        const tools = loadFileTools(loader);
+        const { tools, emitSessionStart } = loadFileTools(loader);
+        await emitSessionStart(directory);
         const ctx = context(directory);
 
         await expect(

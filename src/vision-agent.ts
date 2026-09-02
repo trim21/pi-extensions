@@ -276,7 +276,7 @@ export async function callVision(
         messages: [{ role: "user", content, timestamp: Date.now() }],
       },
       {
-        maxTokens: model.maxTokens ?? DEFAULT_MAX_TOKENS,
+        maxTokens: model.maxTokens,
         signal: withTimeout(signal, REQUEST_TIMEOUT_MS),
       },
     );
@@ -290,7 +290,7 @@ export async function callVision(
     throw new Error("API 未返回内容");
   }
   const tokenStr =
-    typeof result.usage?.totalTokens === "number" ? String(result.usage.totalTokens) : "?";
+    typeof result.usage.totalTokens === "number" ? String(result.usage.totalTokens) : "?";
   const labels = loaded.map((l) => l.label).join(", ");
   return `[${labels}]\n${text}\n[模型: ${model.id}, tokens: ${tokenStr}]`;
 }

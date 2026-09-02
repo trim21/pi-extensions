@@ -31,7 +31,7 @@ import { Type } from "typebox";
 
 import { appendLspDiagnosticText } from "../lib/lsp/diagnostic.js";
 import { registerLspInspectTools } from "../lib/lsp/inspect-tool.js";
-import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
+import { createLspManager, type LspService, type LspServiceOptions } from "../lib/lsp/lsp.js";
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
@@ -105,8 +105,8 @@ const IMAGE_SIGNATURES: {
       return (
         startsWithAscii(buf, 0, "BM") &&
         buf.length >= 30 &&
-        (buf[28] ?? 0) === 1 &&
-        [1, 4, 8, 16, 24, 32].includes(buf[28 + 1] ?? 0)
+        buf[28] === 1 &&
+        [1, 4, 8, 16, 24, 32].includes(buf[28 + 1])
       );
     },
     mimeType: "image/bmp",
@@ -295,7 +295,7 @@ async function formatDirectoryEntries(dirPath: string): Promise<string[]> {
   return results;
 }
 
-function registerReadTool(pi: ExtensionAPI, service: LspService): void {
+function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void {
   pi.registerTool({
     name: "read",
     label: "read",
@@ -434,9 +434,11 @@ function registerReadTool(pi: ExtensionAPI, service: LspService): void {
       content = [{ type: "text", text: outputText }];
 
       // opencode: LSP 文件事件通知是后台任务，失败不影响读取（read 不驻留文档）
-      void service.notifyFile(absolutePath, ctx.cwd).catch(() => {
-        // 后台通知失败不影响读取
-      });
+      void getService()
+        .notifyFile(absolutePath, ctx.cwd)
+        .catch(() => {
+          // 后台通知失败不影响读取
+        });
 
       return {
         content,
@@ -462,7 +464,7 @@ const editSchema = Type.Object({
   ),
 });
 
-function registerEditTool(pi: ExtensionAPI, service: LspService): void {
+function registerEditTool(pi: ExtensionAPI, getService: () => LspService): void {
   pi.registerTool({
     name: "edit",
     label: "edit",
@@ -525,7 +527,7 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
               text: diagnosticText,
               errorCount,
               warningCount,
-            } = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
+            } = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
             return [
               "Edit applied successfully.",
               { diff: "", patch: "", firstChangedLine: 0 },
@@ -567,7 +569,7 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
             text: diagnosticText,
             errorCount,
             warningCount,
-          } = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
+          } = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
           return [
             "Edit applied successfully.",
             { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
@@ -615,7 +617,7 @@ export function resolveBom(
   return { bom: sourceBom || nextBom, text };
 }
 
-function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
+function registerWriteTool(pi: ExtensionAPI, getService: () => LspService): void {
   pi.registerTool({
     name: "write",
     label: "write",
@@ -667,7 +669,7 @@ function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
             text: diagnosticText,
             errorCount,
             warningCount,
-          } = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
+          } = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
 
           return [
             "Wrote file successfully.",
@@ -694,19 +696,25 @@ function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
 
 // ── 入口 ─────────────────────────────────────────────────────────────────────
 
-export function registerFileTools(pi: ExtensionAPI, service: LspService): void {
-  registerReadTool(pi, service);
-  registerEditTool(pi, service);
-  registerWriteTool(pi, service);
-  // 工具壳与 claude-code 共享（lib/lsp/rename-tool.ts）；opencode 不跟踪
-  // read-before-write 状态，不传 recordReads hook。
-  registerLspRenameTool(pi, service);
-  // 只读符号查询工具（find-definition / find-reference / inspect）与 claude-code 共享。
-  registerLspInspectTools(pi, service);
+export function registerFileTools(pi: ExtensionAPI, getService: () => LspService): void {
+  registerReadTool(pi, getService);
+  registerEditTool(pi, getService);
+  registerWriteTool(pi, getService);
+  // lsp-rename / inspect 工具由 manager 的 onEnabled 回调注册，不在这里注册。
 }
 
-/** 独立入口：创建 LSP service（闭包共享给三个工具）并注册。 */
-export default function opencodeFileTools(pi: ExtensionAPI): void {
-  const service = registerLsp(pi);
-  registerFileTools(pi, service);
+/** 独立入口：创建 LSP manager（session_start 时按配置启用）并注册文件工具。 */
+export default function opencodeFileTools(pi: ExtensionAPI, options?: LspServiceOptions): void {
+  const manager = createLspManager(
+    pi,
+    {
+      onEnabled: (pi, service) => {
+        registerLspRenameTool(pi, service);
+        registerLspInspectTools(pi, service);
+      },
+    },
+    options,
+  );
+  // 文件工具无条件注册；service 惰性获取，disabled 时为 no-op。
+  registerFileTools(pi, () => manager.mustLazyGetService());
 }

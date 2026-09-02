@@ -1,5 +1,5 @@
 import { mkdtempSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -60,20 +60,48 @@ function loadTools(): Map<string, RegisteredTool> {
 /** 同 loadTools，额外捕获事件 handler（如 session_start）供测试触发。 */
 function loadToolsWithHandlers(): {
   tools: Map<string, RegisteredTool>;
-  handlers: Map<string, (...args: any[]) => unknown>;
+  handlers: Map<string, ((...args: any[]) => unknown)[]>;
 } {
   const tools = new Map<string, RegisteredTool>();
-  const handlers = new Map<string, (...args: any[]) => unknown>();
+  const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
   claudeCodeTools({
     registerTool(tool: RegisteredTool) {
       tools.set(tool.name, tool);
     },
     registerFlag: vi.fn(),
     registerCommand: vi.fn(),
-    on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+    getFlag: vi.fn(),
+    on: (event: string, handler: (...args: any[]) => unknown) => {
+      const list = handlers.get(event) ?? [];
+      list.push(handler);
+      handlers.set(event, list);
+    },
     exec: vi.fn(),
   } as never);
   return { tools, handlers };
+}
+
+/** 依次触发 session_start handlers（manager 装配 + reads 恢复 + bwrap 装配等）。 */
+async function emitSessionStart(
+  handlers: Map<string, ((...args: any[]) => unknown)[]>,
+  ctx: Record<string, unknown>,
+): Promise<void> {
+  const fullCtx = {
+    cwd: process.cwd(),
+    hasUI: true,
+    sessionManager: { getBranch: () => [] },
+    ...ctx,
+    // ui 浅合并默认值：bwrap / lsp 的装配 handler 依赖 setStatus 与 theme.fg
+    ui: {
+      notify: vi.fn(),
+      setStatus: vi.fn(),
+      theme: { fg: (_k: string, text: string) => text },
+      ...(ctx.ui as Record<string, unknown> | undefined),
+    },
+  };
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler({ type: "session_start", reason: "startup" }, fullCtx);
+  }
 }
 
 /** 用注入的 runtime 单独注册 Bash 工具，测试可预置沙箱模式。 */
@@ -123,16 +151,61 @@ describe("Claude Code tool registration", () => {
       "Read",
       "Edit",
       "Write",
-      "lsp-rename",
-      "lsp-find-definition",
-      "lsp-find-reference",
-      "lsp-inspect",
       "Glob",
       "Grep",
       "Bash",
       "TodoWrite",
       "AskUserQuestion",
     ]);
+  });
+
+  it("registers LSP tools only after session_start with a configured lsp.json", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-tools-lsp-"));
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(
+      join(dir, ".pi", "lsp.json"),
+      JSON.stringify({
+        servers: { mock: { include: ["**/*"], bin: "definitely-not-a-real-bin" } },
+      }),
+    );
+    const { tools, handlers } = loadToolsWithHandlers();
+    expect(tools.has("lsp-rename")).toBe(false);
+    expect(tools.has("lsp-inspect")).toBe(false);
+
+    await emitSessionStart(handlers, {
+      cwd: dir,
+      ui: {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        theme: { fg: (_k: string, text: string) => text },
+      },
+      sessionManager: { getBranch: () => [] },
+    });
+
+    expect(tools.has("lsp-rename")).toBe(true);
+    expect(tools.has("lsp-find-definition")).toBe(true);
+    expect(tools.has("lsp-find-reference")).toBe(true);
+    expect(tools.has("lsp-inspect")).toBe(true);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps LSP tools unregistered when lsp.json validation fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-tools-lsp-bad-"));
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(join(dir, ".pi", "lsp.json"), JSON.stringify({ enabled: ["nope"] }));
+    const { tools, handlers } = loadToolsWithHandlers();
+    const notify = vi.fn();
+
+    await emitSessionStart(handlers, {
+      cwd: dir,
+      ui: { notify },
+      sessionManager: { getBranch: () => [] },
+    });
+
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("nope"), "error");
+    expect(tools.has("lsp-rename")).toBe(false);
+    expect(tools.has("lsp-inspect")).toBe(false);
+    await rm(dir, { recursive: true, force: true });
   });
 
   it("uses Claude Code snake_case schemas", () => {
@@ -733,7 +806,15 @@ describe("reads state restore on session_start", () => {
         },
       },
     ];
-    await handlers.get("session_start")!({}, { sessionManager: { getBranch: () => branch } });
+    await emitSessionStart(handlers, {
+      cwd: directory,
+      ui: {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        theme: { fg: (_k: string, text: string) => text },
+      },
+      sessionManager: { getBranch: () => branch },
+    });
 
     // 新进程没有重新 Read，直接 Edit 应成功
     await call(
@@ -762,7 +843,15 @@ describe("reads state restore on session_start", () => {
         },
       },
     ];
-    await handlers.get("session_start")!({}, { sessionManager: { getBranch: () => branch } });
+    await emitSessionStart(handlers, {
+      cwd: directory,
+      ui: {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        theme: { fg: (_k: string, text: string) => text },
+      },
+      sessionManager: { getBranch: () => branch },
+    });
 
     // 进程退出期间文件被外部修改
     await writeFile(filePath, "externally changed and longer\n", "utf8");
@@ -790,7 +879,15 @@ describe("reads state restore on session_start", () => {
         },
       },
     ];
-    await handlers.get("session_start")!({}, { sessionManager: { getBranch: () => readBranch } });
+    await emitSessionStart(handlers, {
+      cwd: directory,
+      ui: {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        theme: { fg: (_k: string, text: string) => text },
+      },
+      sessionManager: { getBranch: () => readBranch },
+    });
     await call(
       tools.get("Edit")!,
       { file_path: filePath, old_string: "world", new_string: "there" },
@@ -799,7 +896,9 @@ describe("reads state restore on session_start", () => {
     expect(await readFile(filePath, "utf8")).toBe("hello there\n");
 
     // rewind：session_tree 切到一个不含该 Read 的分支，记账应被清空重建
-    await handlers.get("session_tree")!({}, { sessionManager: { getBranch: () => [] } });
+    for (const handler of handlers.get("session_tree") ?? []) {
+      await handler({}, { sessionManager: { getBranch: () => [] } });
+    }
     await expect(
       call(tools.get("Write")!, { file_path: filePath, content: "x\n" }, ctx),
     ).rejects.toThrow(/not been read/);
@@ -1199,10 +1298,10 @@ describe("TodoWrite and AskUserQuestion", () => {
         },
       },
     ];
-    await handlers.get("session_start")!(
-      {},
-      { sessionManager: { getBranch: () => branch }, ui: { setWidget } },
-    );
+    await emitSessionStart(handlers, {
+      sessionManager: { getBranch: () => branch },
+      ui: { setWidget, notify: vi.fn() },
+    });
 
     expect(setWidget).toHaveBeenCalledWith("claude-code-todos", [
       "Progress: 0/2 (0%)",
@@ -1226,10 +1325,10 @@ describe("TodoWrite and AskUserQuestion", () => {
         },
       },
     ];
-    await handlers.get("session_start")!(
-      {},
-      { sessionManager: { getBranch: () => branch }, ui: { setWidget } },
-    );
+    await emitSessionStart(handlers, {
+      sessionManager: { getBranch: () => branch },
+      ui: { setWidget, notify: vi.fn() },
+    });
 
     expect(setWidget).not.toHaveBeenCalled();
   });
@@ -1357,16 +1456,8 @@ describe("standalone extension entries (spawn-agent -e loading)", () => {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
       exec: vi.fn(),
     } as never);
-    expect([...tools.keys()]).toEqual([
-      "Read",
-      "Edit",
-      "Write",
-      "lsp-rename",
-      "lsp-find-definition",
-      "lsp-find-reference",
-      "lsp-inspect",
-    ]);
-    // state 恢复依赖 session 事件，独立入口同样注册（与 index.ts 行为一致）
+    expect([...tools.keys()]).toEqual(["Read", "Edit", "Write"]);
+    // state 恢复与 LSP 装配都依赖 session 事件，独立入口同样注册（与 index.ts 一致）
     expect(handlers.has("session_start")).toBe(true);
     expect(handlers.has("session_tree")).toBe(true);
   });

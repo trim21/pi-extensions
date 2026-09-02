@@ -332,8 +332,8 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
             killChild(child.pid);
           };
 
-          child.stdout?.on("data", execOptions.onData);
-          child.stderr?.on("data", execOptions.onData);
+          child.stdout.on("data", execOptions.onData);
+          child.stderr.on("data", execOptions.onData);
           execOptions.signal?.addEventListener("abort", onAbort, { once: true });
 
           child.once("error", (error) => {

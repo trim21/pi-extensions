@@ -150,7 +150,7 @@ export function registerLspRenameTool(
         { result: (typeof successes)[number]["result"]; candidates: typeof candidates }
       >();
       for (const [index, candidate] of candidates.entries()) {
-        const entry = successes[index];
+        const entry = successes.at(index);
         if (!entry) continue;
         const key = canonicalizeEdit(entry.result.edit);
         const group = groups.get(key);
@@ -172,7 +172,7 @@ export function registerLspRenameTool(
           `Ambiguous rename target on line ${params.line} of ${filePath}: several distinct symbols share the name "${params.symbol}". Retry with 'character' (1-based) to pick one:\n${listing}`,
         );
       }
-      const firstGroup = [...groups.values()][0];
+      const firstGroup = [...groups.values()].at(0);
       if (!firstGroup) throw new Error("LSP rename returned no target");
       const { result } = firstGroup;
 

@@ -18,7 +18,7 @@ import { type BashCommand, parseBashCommands } from "./approval-rules.js";
  */
 const ARITY = JSON.parse(readFileSync(new URL("arity.json", import.meta.url), "utf8")) as Record<
   string,
-  number
+  number | undefined
 >;
 
 /**

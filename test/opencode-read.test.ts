@@ -9,7 +9,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import opencodeFileTools, { readLines } from "../src/opencode/files.js";
 
@@ -128,6 +128,8 @@ function loadTool(): Tool {
     registerTool: (def: Tool) => {
       if (def.name === "read") tool = def;
     },
+    on: vi.fn(),
+    registerCommand: vi.fn(),
   } as never);
   return tool!;
 }

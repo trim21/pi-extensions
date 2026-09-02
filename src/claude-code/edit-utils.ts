@@ -73,10 +73,10 @@ function applyCurlySingleQuotes(str: string): string {
   for (let i = 0; i < chars.length; i++) {
     if (chars[i] === "'") {
       // 缩写中的撇号（如 don't）用右花引号，不做开/闭判断
-      const prev = chars[i - 1];
-      const next = chars[i + 1];
-      const prevIsLetter = prev !== undefined && /\p{L}/u.test(prev);
-      const nextIsLetter = next !== undefined && /\p{L}/u.test(next);
+      const prev = i > 0 ? chars[i - 1] : "";
+      const next = i + 1 < chars.length ? chars[i + 1] : "";
+      const prevIsLetter = /\p{L}/u.test(prev);
+      const nextIsLetter = /\p{L}/u.test(next);
       if (prevIsLetter && nextIsLetter) {
         result.push(RIGHT_SINGLE_CURLY_QUOTE);
       } else {

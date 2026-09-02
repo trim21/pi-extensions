@@ -122,12 +122,12 @@ export function runGh(
       timeoutId = setTimeout(() => killProcess("timeout"), timeout);
     }
 
-    proc.stdout?.on("data", (data: Buffer) => {
+    proc.stdout.on("data", (data: Buffer) => {
       const text = data.toString();
       stdout += text;
       combined.push(text);
     });
-    proc.stderr?.on("data", (data: Buffer) => {
+    proc.stderr.on("data", (data: Buffer) => {
       const text = data.toString();
       stderr += text;
       combined.push(text);
@@ -793,7 +793,7 @@ export async function renderStepLog(
   const totalLines = clean.split("\n").length;
   let logToShow = clean;
   let appliedOffset = false;
-  if (offset !== undefined && offset !== null && offset > 1) {
+  if (offset !== undefined && offset > 1) {
     if (offset > totalLines) {
       return {
         content: [
@@ -867,7 +867,7 @@ export async function renderJobLogs(
 ): Promise<CiLogsResult> {
   const { job, offset, limit, full } = params;
 
-  if (!jobs || jobs.length === 0) {
+  if (jobs.length === 0) {
     return {
       content: [{ type: "text", text: `No jobs found for run ${params.runId}` }],
       details: {},
@@ -923,7 +923,7 @@ export async function renderJobLogs(
 
         // Apply offset on the cleaned text, then truncate.
         let logToShow = clean;
-        if (offset !== undefined && offset !== null && offset > 1) {
+        if (offset !== undefined && offset > 1) {
           if (offset > totalLines) {
             steps.push({ name: s.name });
             continue;
@@ -1037,9 +1037,12 @@ export async function writeLogFile(
 
   let content: string;
   let what: string;
-  if (step !== undefined && step !== null) {
+  if (step === undefined) {
+    content = stripAnsi(rawLog);
+    what = `job "${targetJob.name}" (id: ${targetJob.id})`;
+  } else {
     const found = targetJob.steps.find((s) => s.name.toLowerCase() === step.toLowerCase());
-    if (!found) {
+    if (found === undefined) {
       return {
         content: [
           {
@@ -1064,9 +1067,6 @@ export async function writeLogFile(
     }
     content = cleanStepOutput(stepLog);
     what = `step ${found.number} ("${found.name}") of job "${targetJob.name}"`;
-  } else {
-    content = stripAnsi(rawLog);
-    what = `job "${targetJob.name}" (id: ${targetJob.id})`;
   }
 
   const target = resolve(cwd ?? process.cwd(), outputFile);
@@ -1480,7 +1480,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         getJobLog(String(run_id), jobId, effectiveRepo, signal, ctx.cwd, params);
 
       // ── Write the complete log to a file ───────────────────────────────
-      if (output_file !== undefined && output_file !== null && output_file !== "") {
+      if (output_file !== undefined && output_file !== "") {
         const result = await writeLogFile(
           { runId: String(run_id), job, step, outputFile: output_file },
           jobs,
@@ -1492,7 +1492,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       }
 
       // ── Fetch a specific step's logs (requires `job`) ─────────────────
-      if (step !== undefined && step !== null) {
+      if (step !== undefined) {
         onUpdate?.({
           content: [{ type: "text", text: `Fetching job list...` }],
           details: {},

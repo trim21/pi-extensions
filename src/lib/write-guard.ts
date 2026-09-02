@@ -143,7 +143,7 @@ export async function guardWriteAccess(
     throw new Error(`Path "${absolutePath}" is outside workspace. No UI available for approval.`);
   }
 
-  while (true) {
+  for (;;) {
     const diffPreview = opts.change ? await buildDiffPreview(absolutePath, opts.change) : undefined;
     const title =
       `Model requests write access outside workspace:\n\n` +

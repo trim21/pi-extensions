@@ -171,7 +171,7 @@ export default function talk(pi: ExtensionAPI) {
   // ── Lifecycle ──────────────────────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx: ExtensionContext) => {
-    const cwd = ctx.sessionManager.getCwd() ?? ctx.cwd;
+    const cwd = ctx.sessionManager.getCwd();
     const now = Date.now();
     // A fork/branch/resume of a session that joined a group keeps that talk
     // identity (agentId); a fresh session gets the new session id.
@@ -463,13 +463,7 @@ export default function talk(pi: ExtensionAPI) {
 
   pi.registerMessageRenderer<DeliveryDetails>(DELIVERY_TYPE, (message, _options, theme) => {
     const d = message.details;
-    if (
-      !d ||
-      typeof d.id !== "string" ||
-      typeof d.ts !== "number" ||
-      typeof d.body !== "string" ||
-      !d.from
-    ) {
+    if (!d || typeof d.id !== "string" || typeof d.ts !== "number" || typeof d.body !== "string") {
       return; // pre-renderer entries: keep pi's default custom-message box
     }
     const idTail = d.id.slice(-8);

@@ -16,7 +16,7 @@ import { Type } from "typebox";
 
 import { appendLspDiagnosticText } from "../lib/lsp/diagnostic.js";
 import { registerLspInspectTools } from "../lib/lsp/inspect-tool.js";
-import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
+import { createLspManager, type LspService, type LspServiceOptions } from "../lib/lsp/lsp.js";
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import type { ToolPendant } from "../lib/pendant.ts";
@@ -229,7 +229,7 @@ function requireCurrentRead(
 export function registerFileTools(
   pi: ExtensionAPI,
   state: ClaudeCodeState,
-  service: LspService,
+  getService: () => LspService,
 ): void {
   pi.registerTool({
     name: "Read",
@@ -352,9 +352,11 @@ export function registerFileTools(
       const snapshot = { ...snapshotOf(buffer), offset, limit };
       state.reads.set(key, snapshot);
       // LSP 文件事件通知是后台任务，失败不影响读取（read 不驻留文档）
-      void service.notifyFile(filePath, ctx.cwd).catch(() => {
-        // 后台通知失败不影响读取
-      });
+      void getService()
+        .notifyFile(filePath, ctx.cwd)
+        .catch(() => {
+          // 后台通知失败不影响读取
+        });
       return {
         content: [{ type: "text", text: formatted.text }],
         details: {
@@ -444,7 +446,7 @@ export function registerFileTools(
                 text: diagnosticText,
                 errorCount,
                 warningCount,
-              } = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+              } = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
                 notify: (message, level) => ctx.ui.notify(message, level),
                 signal,
               });
@@ -547,7 +549,7 @@ export function registerFileTools(
               text: diagnosticText,
               errorCount,
               warningCount,
-            } = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+            } = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
               notify: (message, level) => ctx.ui.notify(message, level),
             });
             return [
@@ -646,7 +648,7 @@ export function registerFileTools(
               text: diagnosticText,
               errorCount,
               warningCount,
-            } = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+            } = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
               notify: (message, level) => ctx.ui.notify(message, level),
             });
             return [
@@ -675,23 +677,8 @@ export function registerFileTools(
     },
   });
 
-  // lsp-rename 工具壳与 opencode 共享（lib/lsp/rename-tool.ts）；本工具集
-  // 跟踪 read-before-write 状态，rename 落盘的文件要标记为已读并随 details
-  // 持久化（FILE_TOOL_NAMES 的 restoreFileReads 依赖 details.reads）。
-  registerLspRenameTool(pi, service, {
-    recordReads: async (applied) => {
-      const reads: Record<string, FileSnapshot> = {};
-      for (const fileEdit of applied) {
-        const key = await readStateKey(fileEdit.path);
-        const snapshot = snapshotOf(fileEdit.newText);
-        state.reads.set(key, snapshot);
-        reads[key] = snapshot;
-      }
-      return reads;
-    },
-  });
-  // 只读符号查询工具（find-definition / find-reference / inspect）与 opencode 共享。
-  registerLspInspectTools(pi, service);
+  // 只读符号查询工具（find-definition / find-reference / inspect）与 opencode 共享；
+  // 它们由 manager 的 onEnabled 回调注册，不在这里注册。
 }
 
 /** 会更新 reads state 并随 details 持久化快照的工具名。 */
@@ -723,9 +710,33 @@ function restoreFileReads(
  * state 归本文件所有：扩展实例内创建，并随 session 事件从历史分支恢复，
  * 与主进程 index.ts 聚合加载时的行为一致。
  */
-export default function claudeCodeFileTools(pi: ExtensionAPI): void {
-  const service = registerLsp(pi);
+export default function claudeCodeFileTools(pi: ExtensionAPI, options?: LspServiceOptions): void {
   const state = createClaudeCodeState();
+
+  // LSP 专属工具（lsp-rename / inspect 族）仅在 lsp.json 存在 enabled 服务器时
+  // 注册（session_start 校验后）；本工具集跟踪 read-before-write 状态，rename
+  // 落盘的文件要标记为已读并随 details 持久化（restoreFileReads 依赖 details.reads）。
+  const manager = createLspManager(
+    pi,
+    {
+      onEnabled: (pi, service) => {
+        registerLspRenameTool(pi, service, {
+          recordReads: async (applied) => {
+            const reads: Record<string, FileSnapshot> = {};
+            for (const fileEdit of applied) {
+              const key = await readStateKey(fileEdit.path);
+              const snapshot = snapshotOf(fileEdit.newText);
+              state.reads.set(key, snapshot);
+              reads[key] = snapshot;
+            }
+            return reads;
+          },
+        });
+        registerLspInspectTools(pi, service);
+      },
+    },
+    options,
+  );
 
   // 扩展实例在进程启动 / /reload / /new / /resume / /fork 时重建，内存里的
   // 已读记账随之丢失。这里从当前分支的历史工具结果里恢复：digest 是当时的值，
@@ -742,5 +753,6 @@ export default function claudeCodeFileTools(pi: ExtensionAPI): void {
     restoreFileReads(state, ctx.sessionManager);
   });
 
-  registerFileTools(pi, state, service);
+  // 文件工具无条件注册；service 惰性获取，disabled 时为 no-op。
+  registerFileTools(pi, state, () => manager.mustLazyGetService());
 }

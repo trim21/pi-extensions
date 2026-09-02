@@ -34,7 +34,7 @@ function extractGlobBaseDirectory(pattern: string): {
 } {
   const globChars = /[*?[{]/;
   const match = globChars.exec(pattern);
-  if (!match || match.index === undefined) {
+  if (!match) {
     // 无 glob 特殊字符：字面路径，目录部分作为 baseDir
     return { baseDir: dirname(pattern), relativePattern: basename(pattern) };
   }

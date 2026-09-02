@@ -26,18 +26,47 @@ interface RegisteredTool {
   execute: (...args: any[]) => Promise<any>;
 }
 
-function loadFileTools(): Map<string, RegisteredTool> {
+function loadFileTools(): {
+  tools: Map<string, RegisteredTool>;
+  emitSessionStart: (cwd: string) => Promise<void>;
+} {
   const tools = new Map<string, RegisteredTool>();
+  const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
   claudeCodeFileTools({
     registerTool(tool: RegisteredTool) {
       tools.set(tool.name, tool);
     },
     registerFlag: vi.fn(),
     registerCommand: vi.fn(),
-    on: vi.fn(),
+    on(event: string, handler: (...args: any[]) => unknown) {
+      const list = handlers.get(event) ?? [];
+      list.push(handler);
+      handlers.set(event, list);
+    },
     exec: vi.fn(),
   } as never);
-  return tools;
+  return { tools, emitSessionStart: (cwd: string) => emitSessionStart(handlers, cwd) };
+}
+
+/** 触发 session_start（pi 会 await 该事件）：加载并校验 lsp.json，注册 LSP 工具。 */
+async function emitSessionStart(
+  handlers: Map<string, ((...args: any[]) => unknown)[]>,
+  cwd: string,
+): Promise<void> {
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler(
+      { type: "session_start", reason: "startup" },
+      {
+        cwd,
+        ui: {
+          notify: vi.fn(),
+          setStatus: vi.fn(),
+          theme: { fg: (_k: string, text: string) => text },
+        },
+        sessionManager: { getBranch: () => [] },
+      },
+    );
+  }
 }
 
 function context(cwd: string) {
@@ -115,7 +144,8 @@ describe("cc Edit + real pyright/ruff LSP", () => {
     async () => {
       const { directory, filePath } = await setupProject();
 
-      const tools = loadFileTools();
+      const { tools, emitSessionStart } = loadFileTools();
+      await emitSessionStart(directory);
       const ctx = context(directory);
       await call(tools.get("Read")!, { file_path: filePath }, ctx);
       const result = await call(
@@ -143,7 +173,8 @@ describe("cc Edit + real pyright/ruff LSP", () => {
     async () => {
       const { directory, filePath } = await setupProject(["pyright"]);
 
-      const tools = loadFileTools();
+      const { tools, emitSessionStart } = loadFileTools();
+      await emitSessionStart(directory);
       const ctx = context(directory);
       await call(tools.get("Read")!, { file_path: filePath }, ctx);
 
@@ -182,7 +213,8 @@ describe("cc Edit + real pyright/ruff LSP", () => {
     async () => {
       const { directory, filePath } = await setupProject(["pyright"]);
 
-      const tools = loadFileTools();
+      const { tools, emitSessionStart } = loadFileTools();
+      await emitSessionStart(directory);
       const ctx = context(directory);
       await call(tools.get("Read")!, { file_path: filePath }, ctx);
 
@@ -223,7 +255,8 @@ describe("cc Edit + real pyright/ruff LSP", () => {
     "连续 edit 超过 maxOpenDocuments 个文件后，每个 Edit 仍包含其自身诊断",
     async () => {
       const { directory } = await setupProject(["pyright"], 2);
-      const tools = loadFileTools();
+      const { tools, emitSessionStart } = loadFileTools();
+      await emitSessionStart(directory);
       const ctx = context(directory);
 
       for (const name of ["a.py", "b.py", "c.py"]) {
@@ -255,7 +288,8 @@ describe("cc Edit + real pyright/ruff LSP", () => {
       const mainPath = join(directory, "main.py");
       await writeFile(libPath, 'def greet(name: str) -> str:\n    return f"hi {name}"\n');
       await writeFile(mainPath, 'import lib\nprint(lib.greet("world"))\n');
-      const tools = loadFileTools();
+      const { tools, emitSessionStart } = loadFileTools();
+      await emitSessionStart(directory);
       const ctx = context(directory);
 
       // 建立 client 并驻留 main.py（引入自身错误拿到基线诊断）

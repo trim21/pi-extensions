@@ -23,18 +23,47 @@ interface RegisteredTool {
   execute: (...args: any[]) => Promise<any>;
 }
 
-function loadFileTools(): Map<string, RegisteredTool> {
+function loadFileTools(): {
+  tools: Map<string, RegisteredTool>;
+  emitSessionStart: (cwd: string) => Promise<void>;
+} {
   const tools = new Map<string, RegisteredTool>();
+  const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
   claudeCodeFileTools({
     registerTool(tool: RegisteredTool) {
       tools.set(tool.name, tool);
     },
     registerFlag: vi.fn(),
     registerCommand: vi.fn(),
-    on: vi.fn(),
+    on(event: string, handler: (...args: any[]) => unknown) {
+      const list = handlers.get(event) ?? [];
+      list.push(handler);
+      handlers.set(event, list);
+    },
     exec: vi.fn(),
   } as never);
-  return tools;
+  return { tools, emitSessionStart: (cwd: string) => emitSessionStart(handlers, cwd) };
+}
+
+/** 触发 session_start（pi 会 await 该事件）：加载并校验 lsp.json，注册 LSP 工具。 */
+async function emitSessionStart(
+  handlers: Map<string, ((...args: any[]) => unknown)[]>,
+  cwd: string,
+): Promise<void> {
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler(
+      { type: "session_start", reason: "startup" },
+      {
+        cwd,
+        ui: {
+          notify: vi.fn(),
+          setStatus: vi.fn(),
+          theme: { fg: (_k: string, text: string) => text },
+        },
+        sessionManager: { getBranch: () => [] },
+      },
+    );
+  }
 }
 
 function context(cwd: string) {
@@ -106,7 +135,8 @@ describe("cc Edit/Write + real vtsls LSP", () => {
         'export function greet(name: string): string {\n  return "hi " + name;\n}\n',
       );
       await writeFile(mainPath, 'import { greet } from "./lib";\ngreet("world");\n');
-      const tools = loadFileTools();
+      const { tools, emitSessionStart } = loadFileTools();
+      await emitSessionStart(directory);
       const ctx = context(directory);
 
       // 建立 client 并驻留 main.ts（引入自身错误拿到基线诊断）
@@ -155,7 +185,8 @@ describe("cc Edit/Write + real vtsls LSP", () => {
       const { directory } = await setupProject();
       const mainPath = join(directory, "main.ts");
       await writeFile(mainPath, 'const x: number = "not a number";\n');
-      const tools = loadFileTools();
+      const { tools, emitSessionStart } = loadFileTools();
+      await emitSessionStart(directory);
       const ctx = context(directory);
 
       // Edit 触碰文件使其驻留（磁盘本身就有类型错误，Edit 不改内容也行，用无操作替换）

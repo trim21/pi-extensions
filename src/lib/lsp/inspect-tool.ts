@@ -216,7 +216,7 @@ async function probeSymbolCandidates(options: {
   }
   const groups = new Map<string, { output: InspectOutput; candidates: LspPosition[] }>();
   for (const [index, candidate] of candidates.entries()) {
-    const output = outputs[index];
+    const output = outputs.at(index);
     if (!output) continue;
     const group = groups.get(output.text);
     if (group) group.candidates.push(candidate);
@@ -234,7 +234,7 @@ async function probeSymbolCandidates(options: {
       `Ambiguous symbol on line ${options.line} of ${options.filePath}: several distinct symbols share the name "${options.symbol}". Retry with 'character' (1-based) to pick one:\n${listing}`,
     );
   }
-  const first = [...groups.values()][0];
+  const first = [...groups.values()].at(0);
   if (!first) throw new Error("LSP inspect returned no result");
   return first.output;
 }

@@ -16,11 +16,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LspServerAdapter } from "../src/lib/lsp/adapter.js";
 import {
+  createLspManager,
   createLspService,
   filterAdapters,
   loadLspConfig,
   maxOpenDocuments,
-  registerLsp,
   watchOptions,
 } from "../src/lib/lsp/lsp.js";
 import { type FileChange, watchWorkspace } from "../src/lib/lsp/watcher.js";
@@ -200,24 +200,24 @@ describe("lsp config validation", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("session 开始预加载配置：本地 enabled 引用未知 id 时 notify", async () => {
+  it("session 开始预加载配置：本地 enabled 引用未知 id 时 notify 并保持 disabled", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
     await mkdir(join(dir, ".pi"), { recursive: true });
     await writeFile(join(dir, ".pi", "lsp.json"), JSON.stringify({ enabled: ["nope"] }));
     const on = vi.fn();
-    registerLsp({ on } as unknown as ExtensionAPI, {
-      globalConfigPath: join(dir, "no-global.json"),
-    });
+    createLspManager(
+      { on, registerCommand: vi.fn() } as unknown as ExtensionAPI,
+      { onEnabled: vi.fn() },
+      { globalConfigPath: join(dir, "no-global.json") },
+    );
     const call = on.mock.calls.find((c) => c[0] === "session_start");
     const handler = call?.[1] as (
       event: unknown,
       ctx: { cwd: string; ui: { notify: ReturnType<typeof vi.fn> } },
-    ) => void;
+    ) => Promise<void>;
     const notify = vi.fn();
-    handler({}, { cwd: dir, ui: { notify } });
-    await vi.waitFor(() =>
-      expect(notify).toHaveBeenCalledWith(expect.stringContaining("nope"), "error"),
-    );
+    await handler({}, { cwd: dir, ui: { notify } });
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("nope"), "error");
     await rm(dir, { recursive: true, force: true });
   });
 });

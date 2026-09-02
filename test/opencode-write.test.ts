@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import opencodeFileTools, { resolveBom } from "../src/opencode/files.js";
 
@@ -72,6 +72,8 @@ function loadTool(): Tool {
     registerTool: (def: Tool) => {
       if (def.name === "write") tool = def;
     },
+    on: vi.fn(),
+    registerCommand: vi.fn(),
   } as never);
   return tool!;
 }

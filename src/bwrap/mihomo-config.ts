@@ -81,7 +81,9 @@ function parseAllowlistEntry(entry: string): AllowlistEntry {
     const match = /^\[(.+)\](?::(\d+))?$/.exec(entry);
     if (match?.[1] === undefined) throw new Error(`Invalid allowlist entry "${entry}"`);
     host = match[1];
-    port = match[2] === undefined ? undefined : parsePort(match[2]);
+    // 端口组 (?::(\d+))? 可选：无端口时 match[2] 在运行时是 undefined
+    const portPart = match[2] as string | undefined;
+    port = portPart === undefined ? undefined : parsePort(portPart);
   } else {
     const colon = entry.lastIndexOf(":");
     if (colon === -1) {

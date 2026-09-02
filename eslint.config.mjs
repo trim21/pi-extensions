@@ -121,6 +121,7 @@ export default defineConfig(
       "require-await": "off",
       "@typescript-eslint/no-non-null-assertion": "error",
       "@typescript-eslint/require-await": "error",
+      "@typescript-eslint/no-unnecessary-condition": "error",
       "@typescript-eslint/no-unsafe-enum-comparison": "off",
       "@typescript-eslint/restrict-plus-operands": ["error", { skipCompoundAssignments: false }],
       "@typescript-eslint/prefer-optional-chain": "off",

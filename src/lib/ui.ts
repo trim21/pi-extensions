@@ -76,7 +76,7 @@ export async function selectMultiple(
   opts: { signal?: AbortSignal; doneLabel: string },
 ): Promise<string[]> {
   const selected: string[] = [];
-  while (true) {
+  for (;;) {
     const selectedSet = new Set(selected);
     const displayToLabel = new Map<string, string>();
     const round: SelectAction[] = [];
@@ -143,7 +143,7 @@ export async function selectCheckboxActions<T extends string>(
   opts: { signal?: AbortSignal } = {},
 ): Promise<CheckboxActionResult<T> | undefined> {
   const selected: string[] = [];
-  while (true) {
+  for (;;) {
     const selectedSet = new Set(selected);
     const displayToLabel = new Map<string, string>();
     const round: SelectAction[] = [];

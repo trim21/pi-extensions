@@ -25,6 +25,7 @@ import type {
   Hover,
   Location as LspLocation,
   LocationLink,
+  Range,
   WorkspaceEdit,
 } from "vscode-languageserver-types";
 
@@ -192,7 +193,9 @@ function toInspectLocations(result: DefinitionResult): InspectLocation[] {
   for (const item of items) {
     if ("targetUri" in item) {
       if (!item.targetUri.startsWith("file:")) continue;
-      const range = item.targetSelectionRange ?? item.targetRange;
+      const range =
+        (item as Omit<LocationLink, "targetSelectionRange"> & { targetSelectionRange?: Range })
+          .targetSelectionRange ?? item.targetRange;
       locations.push({
         path: normalize(fileURLToPath(item.targetUri)),
         line: range.start.line,
@@ -424,7 +427,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
     new StreamMessageReader(input.server.process.stdout),
     new StreamMessageWriter(input.server.process.stdin),
   );
-  input.server.process.stderr?.resume();
+  input.server.process.stderr.resume();
   /** 连接或服务器进程已关闭；pull 重试循环以此终止，避免无界等待。 */
   let connectionClosed = false;
   input.server.process.once("exit", () => {
@@ -581,7 +584,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
     await connection.sendNotification("workspace/didChangeConfiguration", { settings });
   }
 
-  const files: Record<string, { version: number; text: string }> = {};
+  const files: Record<string, { version: number; text: string } | undefined> = {};
 
   // ── 驻留 LRU ────────────────────────────────────────────────────────────────
 
@@ -823,16 +826,16 @@ export async function create(input: CreateInput): Promise<LspClient> {
     if (timeout <= 0) return Promise.resolve(false);
     return new Promise<boolean>((resolve) => {
       let finished = false;
+      const timer = setTimeout(() => finish(false), timeout);
       const finish = (result: boolean) => {
         if (finished) return;
         finished = true;
-        if (timer) clearTimeout(timer);
+        clearTimeout(timer);
         registrationListeners.delete(listener);
         resolve(result);
       };
       const listener = () => finish(true);
       registrationListeners.add(listener);
-      const timer = setTimeout(() => finish(false), timeout);
     });
   }
 
@@ -846,12 +849,14 @@ export async function create(input: CreateInput): Promise<LspClient> {
     return new Promise<boolean>((resolve) => {
       let finished = false;
       let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutTimer = setTimeout(() => finish(false), request.timeout);
+      const unsub = () => diagnosticListeners.delete(listener);
       const finish = (result: boolean) => {
         if (finished) return;
         finished = true;
         if (debounceTimer) clearTimeout(debounceTimer);
-        if (timeoutTimer) clearTimeout(timeoutTimer);
-        unsub?.();
+        clearTimeout(timeoutTimer);
+        unsub();
         resolve(result);
       };
       const schedule = () => {
@@ -866,13 +871,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
         );
       };
 
-      const timeoutTimer = setTimeout(() => finish(false), request.timeout);
       const listener = (event: { path: string; serverID: string }) => {
         if (event.path !== request.path || event.serverID !== input.serverID) return;
         schedule();
       };
       diagnosticListeners.add(listener);
-      const unsub = () => diagnosticListeners.delete(listener);
       schedule();
     });
   }

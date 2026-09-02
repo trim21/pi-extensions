@@ -105,11 +105,11 @@ export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
   const base = {
     mode: config.mode,
     bwrapPath: config.bwrapPath,
-    writablePaths: config.writablePaths ?? [".", "/tmp"],
+    writablePaths: config.writablePaths,
     extraWritablePaths: config.extraWritablePaths,
-    denyPaths: config.denyPaths ?? [],
-    extraArgs: config.extraArgs ?? [],
-    networkAllowlist: config.networkAllowlist ?? [],
+    denyPaths: config.denyPaths,
+    extraArgs: config.extraArgs,
+    networkAllowlist: config.networkAllowlist,
     mihomoPath: config.mihomoPath,
     slirp4netnsPath: config.slirp4netnsPath,
     approvalRules: config.approvalRules ?? [],
@@ -529,8 +529,8 @@ export function createBwrapBashOperations(
             }, timeout * 1000)
           : undefined;
         const onAbort = () => killChild(child);
-        child.stdout?.on("data", onData);
-        child.stderr?.on("data", onData);
+        child.stdout.on("data", onData);
+        child.stderr.on("data", onData);
         signal?.addEventListener("abort", onAbort, { once: true });
         child.once("error", reject);
         child.once("close", (exitCode) => {

@@ -25,23 +25,55 @@ interface RegisteredTool {
 type ToolsetLoader = (pi: ExtensionAPI) => void;
 
 interface ToolsetEntry {
-  load: () => Map<string, RegisteredTool>;
+  load: () => {
+    tools: Map<string, RegisteredTool>;
+    emitSessionStart: (cwd: string) => Promise<void>;
+  };
   /** claude-code 跟踪 read-before-write 状态，rename 结果带 reads 快照。 */
   tracksReads: boolean;
 }
 
-function loadFileTools(loader: ToolsetLoader): Map<string, RegisteredTool> {
+function loadFileTools(loader: ToolsetLoader): {
+  tools: Map<string, RegisteredTool>;
+  emitSessionStart: (cwd: string) => Promise<void>;
+} {
   const tools = new Map<string, RegisteredTool>();
+  const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
   loader({
     registerTool(tool: RegisteredTool) {
       tools.set(tool.name, tool);
     },
     registerFlag: vi.fn(),
     registerCommand: vi.fn(),
-    on: vi.fn(),
+    on(event: string, handler: (...args: any[]) => unknown) {
+      const list = handlers.get(event) ?? [];
+      list.push(handler);
+      handlers.set(event, list);
+    },
     exec: vi.fn(),
   } as never);
-  return tools;
+  return { tools, emitSessionStart: (cwd: string) => emitSessionStart(handlers, cwd) };
+}
+
+/** 触发 session_start（pi 会 await 该事件）：加载并校验 lsp.json，注册 LSP 工具。 */
+async function emitSessionStart(
+  handlers: Map<string, ((...args: any[]) => unknown)[]>,
+  cwd: string,
+): Promise<void> {
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler(
+      { type: "session_start", reason: "startup" },
+      {
+        cwd,
+        ui: {
+          notify: vi.fn(),
+          setStatus: vi.fn(),
+          theme: { fg: (_k: string, text: string) => text },
+        },
+        sessionManager: { getBranch: () => [] },
+      },
+    );
+  }
 }
 
 const ENTRIES: Record<string, ToolsetEntry> = {
@@ -109,7 +141,8 @@ describe.each(Object.entries(ENTRIES))("lsp-rename + real vtsls (%s)", (_name, e
         'export function greet(name: string): string {\n  return "hi " + name;\n}\n',
       );
       await writeFile(mainPath, 'import { greet } from "./lib";\nconsole.log(greet("world"));\n');
-      const tools = entry.load();
+      const { tools, emitSessionStart } = entry.load();
+      await emitSessionStart(directory);
       const ctx = context(directory);
 
       // 不做预热：renameSymbol 前置的 textDocument/references 请求会阻塞到
@@ -145,7 +178,8 @@ describe.each(Object.entries(ENTRIES))("lsp-rename + real vtsls (%s)", (_name, e
       const { directory } = await setupProject();
       const ambPath = join(directory, "amb.ts");
       await writeFile(ambPath, "const item = { item: 1 };\n");
-      const tools = entry.load();
+      const { tools, emitSessionStart } = entry.load();
+      await emitSessionStart(directory);
       const ctx = context(directory);
 
       // 行内 "item" 既是变量声明又是对象属性，是两个不同的符号；
@@ -178,7 +212,8 @@ describe.each(Object.entries(ENTRIES))("lsp-rename + real vtsls (%s)", (_name, e
       const { directory } = await setupProject();
       const mainPath = join(directory, "main.ts");
       await writeFile(mainPath, "const value = 1;\n");
-      const tools = entry.load();
+      const { tools, emitSessionStart } = entry.load();
+      await emitSessionStart(directory);
       const ctx = context(directory);
 
       await expect(

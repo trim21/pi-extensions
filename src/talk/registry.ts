@@ -164,7 +164,7 @@ function pidAlive(pid: number, pidStart?: number): boolean {
     process.kill(pid, 0);
   } catch (error) {
     // EPERM means the process exists but isn't ours — still alive
-    return (error as NodeJS.ErrnoException)?.code === "EPERM";
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
   if (pidStart === undefined) return true;
   const start = readStartTime(pid);
