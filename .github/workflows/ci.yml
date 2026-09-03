@@ -58,11 +58,13 @@ jobs:
           packages: bubblewrap ripgrep
 
       # lsp-e2e-pyright-ruff.test.ts 需要真实的 pyright / ruff LSP server，
-      # lsp-e2e-vtsls.test.ts / lsp-e2e-rename.test.ts 需要真实的 vtsls
-      # （二进制缺失时对应测试组自动跳过）。
-      - name: Install pyright, ruff and vtsls
+      # lsp-e2e-tsls.test.ts / lsp-e2e-rename.test.ts 需要真实的
+      # typescript-language-server（二进制缺失时对应测试组自动跳过）。
+      # TS 本体由测试经 initializationOptions.tsserver.path 指向仓库的
+      # node_modules/typescript（typescript-language-server 不内置 TS）。
+      - name: Install pyright, ruff and typescript-language-server
         run: |
-          npm install -g pyright @vtsls/language-server
+          npm install -g pyright typescript-language-server
           curl -LsSf https://astral.sh/ruff/install.sh | sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 

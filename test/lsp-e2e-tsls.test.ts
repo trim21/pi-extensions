@@ -1,17 +1,18 @@
-// 端到端回归测试：真实 vtsls（tsserver）下，外部写入者（git pull / 并发 agent）
+// 端到端回归测试：真实 typescript-language-server（tsserver）下，外部写入者（git pull / 并发 agent）
 // 修正错误后，本 agent 后续 pull 诊断是否仍拿到旧结果。
-// 需要 vtsls 在 PATH；二进制缺失时整组跳过。
+// 需要 typescript-language-server 在 PATH；二进制缺失时整组跳过。
 // 服务器定义写进临时项目的 .pi/lsp.json，不依赖全局 ~/.pi/agent/lsp.json。
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
 import claudeCodeFileTools from "../src/claude-code/files.js";
 import { which } from "../src/lib/lsp/bin.js";
 
-const hasVtsls = which("vtsls") !== undefined;
+const hasTls = which("typescript-language-server") !== undefined;
 
 interface RegisteredTool {
   name: string;
@@ -87,11 +88,20 @@ async function call(
   return tool.execute("call-id", params, undefined, undefined, ctx);
 }
 
+// typescript-language-server 不内置 TS：直接用仓库的 tsserver.js 实体
+//（typescript 依赖是 @typescript/typescript6 alias，实体在 .pnpm）作 tsserver.path。
+const REPO_TSSERVER = fileURLToPath(
+  new URL(
+    "../node_modules/.pnpm/typescript@6.0.3/node_modules/typescript/lib/tsserver.js",
+    import.meta.url,
+  ),
+);
+
 const SERVERS = {
   typescript: {
     include: ["**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"],
     rootMarkers: ["pnpm-lock.yaml", "package-lock.json"],
-    bin: "vtsls",
+    bin: "typescript-language-server",
     args: ["--stdio"],
     cwd: "{root}",
     languageIdByExtension: {
@@ -100,11 +110,14 @@ const SERVERS = {
       ".js": "javascript",
       ".jsx": "javascriptreact",
     },
+    initializationOptions: {
+      tsserver: { path: REPO_TSSERVER },
+    },
   },
 };
 
 async function setupProject() {
-  const directory = await mkdtemp(join(tmpdir(), "cc-lsp-e2e-vtsls-"));
+  const directory = await mkdtemp(join(tmpdir(), "cc-lsp-e2e-tsls-"));
   // root marker + tsconfig，避免 tsserver 把临时目录之外的文件当项目根
   await writeFile(join(directory, "package.json"), JSON.stringify({ name: "e2e" }));
   await writeFile(join(directory, "pnpm-lock.yaml"), "");
@@ -123,8 +136,8 @@ async function setupProject() {
   return { directory };
 }
 
-describe("cc Edit/Write + real vtsls LSP", () => {
-  it.runIf(hasVtsls)(
+describe("cc Edit/Write + real typescript-language-server LSP", () => {
+  it.runIf(hasTls)(
     "外部修正被依赖文件后，Edit 上层文件的诊断反映新磁盘状态",
     async () => {
       const { directory } = await setupProject();
@@ -179,7 +192,7 @@ describe("cc Edit/Write + real vtsls LSP", () => {
     120_000,
   );
 
-  it.runIf(hasVtsls)(
+  it.runIf(hasTls)(
     "文件自身被外部改写修正（git pull 覆盖）后，后续 Write 不报旧错误",
     async () => {
       const { directory } = await setupProject();
