@@ -11,7 +11,7 @@
  * 约定：
  *   - 结果文本走 stdout，诊断信息一律以 `# ` 前缀走 stderr，便于分开重定向。
  *   - 语义索引首次构建会阻塞到完成（最长约 10 分钟），与 aft_search 工具行为一致；
- *     等待期间订阅 bridge status，把「语义索引构建中」进度逐条打到 stderr，
+ *     等待期间订阅 bridge status，把「语义索引构建中」进度逐条打到 stderr（无前缀），
  *     --raw-status 改为打印收到的完整 status 快照 JSON（调试字段形状用）。
  *   - 语义搜索未配置（未开 semantic_search 或未配外部 embedding 后端）时警告后
  *     继续跑词法搜索，不像扩展那样直接不注册工具。
@@ -108,7 +108,7 @@ async function search(flags: {
         return;
       }
       const text = formatSemanticIndexProgress(snapshot);
-      if (text !== undefined) diagnose(text);
+      if (text !== undefined) console.error(text);
     });
     try {
       const { text } = await callAftTool(

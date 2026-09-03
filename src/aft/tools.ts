@@ -407,7 +407,8 @@ function subscribeBridgeStatus(
  * Building 分支）。上游控制的 schema：只声明真正读取的字段，未声明键忽略。
  */
 const semanticIndexProgressSchema = Type.Object({
-  status: Type.Literal("building"),
+  // Rust 侧两种状态值：health report 用 "building"，subc 状态推送用 "loading"。
+  status: Type.Union([Type.Literal("building"), Type.Literal("loading")]),
   stage: Type.Optional(Type.String()),
   embedded_chunks: Type.Optional(Type.Integer()),
   total_chunks: Type.Optional(Type.Integer()),
