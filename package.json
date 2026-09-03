@@ -98,7 +98,7 @@
     "node": ">=24.14"
   },
   "dependencies": {
-    "@cortexkit/aft-bridge": "0.54.0",
+    "@cortexkit/aft-bridge": "0.55.0",
     "@mozilla/readability": "^0.6.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "jsonc-parser": "^3.3.1",
@@ -111,6 +111,6 @@
     "web-tree-sitter": "^0.27.0"
   },
   "optionalDependencies": {
-    "@cortexkit/aft-linux-x64": "0.54.0"
+    "@cortexkit/aft-linux-x64": "0.55.0"
   }
 }
