@@ -563,6 +563,7 @@ export default function spawnAgent(pi: ExtensionAPI) {
           details: {
             ...result,
             pendant: {
+              subtitle: result.agent,
               markdown: formatPendantMarkdown(params.task, message),
             } satisfies ToolPendant,
           },
@@ -580,6 +581,7 @@ export default function spawnAgent(pi: ExtensionAPI) {
         details: {
           ...result,
           pendant: {
+            subtitle: result.agent,
             markdown: formatPendantMarkdown(params.task, text),
           } satisfies ToolPendant,
         },
