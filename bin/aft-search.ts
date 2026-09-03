@@ -10,7 +10,9 @@
  *
  * 约定：
  *   - 结果文本走 stdout，诊断信息一律以 `# ` 前缀走 stderr，便于分开重定向。
- *   - 语义索引首次构建会阻塞到完成（最长约 10 分钟），与 aft_search 工具行为一致。
+ *   - 语义索引首次构建会阻塞到完成（最长约 10 分钟），与 aft_search 工具行为一致；
+ *     等待期间订阅 bridge status，把「语义索引构建中」进度逐条打到 stderr，
+ *     --raw-status 改为打印收到的完整 status 快照 JSON（调试字段形状用）。
  *   - 语义搜索未配置（未开 semantic_search 或未配外部 embedding 后端）时警告后
  *     继续跑词法搜索，不像扩展那样直接不注册工具。
  *   - 退出码：成功 0，用法错误 2，执行失败 1（SIGINT/SIGTERM 为 130/143）。
@@ -18,7 +20,11 @@
 
 import { resolve } from "node:path";
 
-import { resolveCortexKitConfigPaths } from "@cortexkit/aft-bridge";
+import {
+  type AftProjectTransport,
+  resolveCortexKitConfigPaths,
+  type StatusSnapshot,
+} from "@cortexkit/aft-bridge";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineCommand, runMain } from "citty";
 
@@ -29,7 +35,7 @@ import {
   shutdownAftPool,
 } from "../src/aft/bridge.js";
 import { loadAftConfig } from "../src/aft/config.js";
-import { compactArgs } from "../src/aft/tools.js";
+import { compactArgs, formatSemanticIndexProgress } from "../src/aft/tools.js";
 import { expandHome } from "../src/lib/path.js";
 
 type AftState = Awaited<ReturnType<typeof createAftState>>;
@@ -51,11 +57,24 @@ function releaseActiveState(): void {
   }
 }
 
+/** `AftProjectTransport.subscribeStatus` 的能力探测：类型接口上未暴露。 */
+function subscribeBridgeStatus(
+  bridge: AftProjectTransport,
+  listener: (snapshot: StatusSnapshot) => void,
+): (() => void) | undefined {
+  const subscribable = bridge as AftProjectTransport & {
+    subscribeStatus?(listener: (snapshot: StatusSnapshot) => void): () => void;
+  };
+  if (typeof subscribable.subscribeStatus !== "function") return undefined;
+  return subscribable.subscribeStatus(listener);
+}
+
 async function search(flags: {
   query: string;
   path?: string;
   topK?: number;
   includeTests?: boolean;
+  rawStatus?: boolean;
 }): Promise<number> {
   const root = resolve(expandHome(flags.path ?? process.cwd()));
 
@@ -81,18 +100,32 @@ async function search(flags: {
     });
     // CLI 没有 session，传空 context（callAftTool 只读 sessionManager）；
     // 超时策略与 aft_search 工具一致：覆盖默认 60s，容纳首次索引构建等待。
-    const { text } = await callAftTool(
-      bridge,
-      "search",
-      rawArgs,
-      {} as unknown as ExtensionContext,
-      {
-        transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
-        keepBridgeOnTimeout: true,
-      },
-    );
-    console.log(text);
-    return 0;
+    // 等待期间订阅 bridge status：语义索引 Building 时把进度打到 stderr，
+    // --raw-status 则打印收到的完整快照（调试真实字段形状用）。
+    const stopProgress = subscribeBridgeStatus(bridge, (snapshot) => {
+      if (flags.rawStatus === true) {
+        diagnose(`status: ${JSON.stringify(snapshot)}`);
+        return;
+      }
+      const text = formatSemanticIndexProgress(snapshot);
+      if (text !== undefined) diagnose(text);
+    });
+    try {
+      const { text } = await callAftTool(
+        bridge,
+        "search",
+        rawArgs,
+        {} as unknown as ExtensionContext,
+        {
+          transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
+          keepBridgeOnTimeout: true,
+        },
+      );
+      console.log(text);
+      return 0;
+    } finally {
+      stopProgress?.();
+    }
   } finally {
     releaseActiveState();
     await state.logger.drain();
@@ -127,6 +160,10 @@ const command = defineCommand({
       type: "boolean",
       description: "包含测试文件（默认排除）",
     },
+    "raw-status": {
+      type: "boolean",
+      description: "把收到的每条 bridge status 快照（完整 JSON）打到 stderr，调试索引进度字段",
+    },
   },
   async run({ args }) {
     let topK: number | undefined;
@@ -143,6 +180,7 @@ const command = defineCommand({
         path: args.path,
         topK,
         includeTests: args["include-tests"] === true,
+        rawStatus: args["raw-status"] === true,
       });
     } catch (error) {
       diagnose(`失败：${error instanceof Error ? error.message : String(error)}`);
