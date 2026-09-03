@@ -29,7 +29,7 @@ interface ToolsetEntry {
     tools: Map<string, RegisteredTool>;
     emitSessionStart: (cwd: string) => Promise<void>;
   };
-  /** claude-code 跟踪 read-before-write 状态，rename 结果带 reads 快照。 */
+  /** claude-code 维护 reads 记账（已读快照），rename 结果带 reads 快照。 */
   tracksReads: boolean;
 }
 

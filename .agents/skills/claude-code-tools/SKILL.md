@@ -1,6 +1,6 @@
 ---
 name: claude-code-tools
-description: "Exact behavior of the Claude Code style tools (Read/Edit/Write/Grep/Glob/Bash/TodoWrite/AskUserQuestion) in the @trim21/personal-pi-extensions package: output formats, matching rules, read-before-write requirements, pagination semantics, and conventions. Load whenever you use these tools or are unsure how they behave."
+description: "Exact behavior of the Claude Code style tools (Read/Edit/Write/Grep/Glob/Bash/TodoWrite/AskUserQuestion) in the @trim21/personal-pi-extensions package: output formats, matching rules, read-state tracking, pagination semantics, and conventions. Load whenever you use these tools or are unsure how they behave."
 ---
 
 # Claude Code Tools Behavior
@@ -24,7 +24,7 @@ The capitalized tools below follow Claude Code behavior with a few deliberate de
 
 ## Edit / Write
 
-- **You must Read a file before editing or overwriting it.** The tool compares a content digest against the last read; after your own Edit/Write the recorded digest is refreshed, so consecutive edits by you are fine. An external change (user edit, linter, another process) triggers `File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.` — re-Read before writing.
+- **Deviation from Claude Code:** a prior Read is _not_ required before editing or overwriting — unread files are written directly. When the file _was_ read, the tool compares a content digest against the last read; after your own Edit/Write the recorded digest is refreshed, so consecutive edits by you are fine. An external change (user edit, linter, another process) to a read file triggers `File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.` — re-Read before writing.
 - **Deviation from Claude Code:** staleness is checked by content digest, not mtime.
 
 ### Edit specifics
@@ -42,7 +42,7 @@ The capitalized tools below follow Claude Code behavior with a few deliberate de
 ### Write specifics
 
 - Creating a new file → `File created successfully at: X`; overwriting an existing file → `The file X has been updated successfully.` (the distinction is reported even though both are one tool).
-- New files need no prior Read; overwriting does.
+- Neither new files nor overwrites of existing files require a prior Read.
 
 ## Grep
 

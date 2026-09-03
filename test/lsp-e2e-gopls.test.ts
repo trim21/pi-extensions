@@ -198,7 +198,7 @@ describe("cc Edit/Write + real gopls LSP", () => {
       // 等 watcher 去抖 + 驻留文档退场（didClose）+ didChangeWatchedFiles
       await new Promise((resolve) => setTimeout(resolve, 3_000));
 
-      // pull 之后重新 Read（read-before-write 守卫 + 触发文件事件）
+      // pull 之后重新 Read（刷新已读快照避免 modified-since-read 拦截 + 触发文件事件）
       await call(tools.get("Read")!, { file_path: mainPath }, ctx);
 
       // 磁盘已干净，再触发一次 Write（内容不变），不应再报旧错误

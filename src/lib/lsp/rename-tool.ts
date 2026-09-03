@@ -5,9 +5,9 @@
  * 这里只负责工具注册与执行编排：按行内候选逐个探测 → canonicalizeEdit 分组
  * 消歧 → expandWorkspaceEdit 内存展开 → 审批 → 写盘 → 诊断。
  *
- * 两个工具集行为一致，唯一差异是 reads 记账：跟踪 read-before-write 状态的
- * 工具集通过 hooks.recordReads 把重命名文件标记为已读并随 details 持久化；
- * 不跟踪该状态的工具集不传 hook。
+ * 两个工具集行为一致，唯一差异是 reads 记账：跟踪已读快照的工具集通过
+ * hooks.recordReads 把重命名文件标记为已读并随 details 持久化；不跟踪
+ * 该状态的工具集不传 hook。
  */
 
 import { readFileSync } from "node:fs";

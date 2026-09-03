@@ -199,8 +199,9 @@ async function readStateKey(filePath: string): Promise<string> {
 }
 
 /**
- * 校验「已读且未变」。key 与 currentContent 由调用方提供：调用方每次工具调用
- * 只 realpath / readFile 一次，避免重复 IO。
+ * 校验「若曾读过则内容未变」。key 与 currentContent 由调用方提供：调用方每次
+ * 工具调用只 realpath / readFile 一次，避免重复 IO。从未读过时直接放行，
+ * 不强制先 Read；存在已读快照时校验文本可编辑且 digest 一致。
  */
 function requireCurrentRead(
   state: ClaudeCodeState,
@@ -209,9 +210,7 @@ function requireCurrentRead(
   currentContent: Uint8Array,
 ): void {
   const readSnapshot = state.reads.get(key);
-  if (!readSnapshot) {
-    throw new Error("File has not been read yet. Read it first before writing to it.");
-  }
+  if (!readSnapshot) return;
   if (!readSnapshot.textEditable) {
     throw new Error(`Cannot edit or overwrite a binary file with a text tool: ${filePath}`);
   }
@@ -356,7 +355,6 @@ export function registerFileTools(
     label: "Edit",
     description: [
       "Performs exact string replacements in files.",
-      "You must use Read on the file before editing it.",
       "old_string must match exactly and must be unique unless replace_all is true.",
       "This tool does not use regular expressions or fuzzy matching.",
     ].join("\n"),
@@ -572,7 +570,7 @@ export function registerFileTools(
     description: [
       "Writes a file to the local filesystem.",
       "This tool overwrites an existing file with the full content provided.",
-      "If the file exists, you must use Read first. Prefer Edit for partial changes.",
+      "Prefer Edit for partial changes.",
     ].join("\n"),
     promptSnippet: "Create or overwrite files",
     promptGuidelines: [WRITE_PROMPT],
@@ -695,8 +693,8 @@ export default function claudeCodeFileTools(pi: ExtensionAPI, options?: LspServi
   const state = createClaudeCodeState();
 
   // LSP 专属工具（lsp-rename / inspect 族）仅在 lsp.json 存在 enabled 服务器时
-  // 注册（session_start 校验后）；本工具集跟踪 read-before-write 状态，rename
-  // 落盘的文件要标记为已读并随 details 持久化（restoreFileReads 依赖 details.reads）。
+  // 注册（session_start 校验后）；本工具集维护 reads 记账，rename 落盘的文件
+  // 要标记为已读并随 details 持久化（restoreFileReads 依赖 details.reads）。
   const manager = createLspManager(
     pi,
     {

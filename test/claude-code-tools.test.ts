@@ -302,23 +302,13 @@ describe("Read, Edit, and Write", () => {
     expect(() => exactReplace("hello", " hello", "x")).toThrow(/not found/);
   });
 
-  it("requires a complete Read before Edit", async () => {
+  it("allows Edit without a prior Read", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-files-"));
     const filePath = join(directory, "note.txt");
     await writeFile(filePath, "hello world\n", "utf8");
     const tools = loadTools();
     const ctx = context(directory);
 
-    await expect(
-      call(
-        tools.get("Edit")!,
-        { file_path: filePath, old_string: "world", new_string: "there" },
-        ctx,
-      ),
-    ).rejects.toThrow(/not been read/);
-
-    const readResult = await call(tools.get("Read")!, { file_path: filePath }, ctx);
-    expect(readResult.details).toMatchObject({ pendant: { subtitle: "./note.txt" } });
     const editResult = await call(
       tools.get("Edit")!,
       { file_path: filePath, old_string: "world", new_string: "there" },
@@ -387,6 +377,15 @@ describe("Read, Edit, and Write", () => {
   it("allows Write to create a new file without a prior Read", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-write-"));
     const filePath = join(directory, "nested", "new.txt");
+    const tools = loadTools();
+    await call(tools.get("Write")!, { file_path: filePath, content: "new\n" }, context(directory));
+    expect(await readFile(filePath, "utf8")).toBe("new\n");
+  });
+
+  it("allows Write to overwrite an existing file without a prior Read", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-write-overwrite-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "old\n", "utf8");
     const tools = loadTools();
     await call(tools.get("Write")!, { file_path: filePath, content: "new\n" }, context(directory));
     expect(await readFile(filePath, "utf8")).toBe("new\n");
@@ -887,13 +886,14 @@ describe("reads state restore on session_start", () => {
     );
     expect(await readFile(filePath, "utf8")).toBe("hello there\n");
 
-    // rewind：session_tree 切到一个不含该 Read 的分支，记账应被清空重建
+    // rewind：session_tree 切到一个不含该 Read 的分支，记账应被清空重建；
+    // 之后文件被外部改动也不应再触发已读快照拦截（若旧快照残留会报 modified）
     for (const handler of handlers.get("session_tree") ?? []) {
       await handler({}, { sessionManager: { getBranch: () => [] } });
     }
-    await expect(
-      call(tools.get("Write")!, { file_path: filePath, content: "x\n" }, ctx),
-    ).rejects.toThrow(/not been read/);
+    await writeFile(filePath, "externally changed after rewind\n", "utf8");
+    await call(tools.get("Write")!, { file_path: filePath, content: "x\n" }, ctx);
+    expect(await readFile(filePath, "utf8")).toBe("x\n");
   });
 });
 
