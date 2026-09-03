@@ -194,10 +194,13 @@ describe("callCallgraphWithBuildRetry", () => {
       })
       .mockResolvedValueOnce({ text: "3 callers", response: {} });
 
-    const { text } = await callCallgraphWithBuildRetry(bridge, { op: "callers" }, extCtx, {
-      budgetMs: 5_000,
-      intervalMs: 1,
-    });
+    const { text } = await callCallgraphWithBuildRetry(
+      bridge,
+      { op: "callers" },
+      extCtx,
+      undefined,
+      { budgetMs: 5_000, intervalMs: 1 },
+    );
 
     expect(text).toBe("3 callers");
     expect(mockCallAftTool).toHaveBeenCalledTimes(2);
@@ -210,10 +213,13 @@ describe("callCallgraphWithBuildRetry", () => {
       response: { code: "callgraph_building" },
     });
 
-    const { response } = await callCallgraphWithBuildRetry(bridge, { op: "callers" }, extCtx, {
-      budgetMs: 30,
-      intervalMs: 5,
-    });
+    const { response } = await callCallgraphWithBuildRetry(
+      bridge,
+      { op: "callers" },
+      extCtx,
+      undefined,
+      { budgetMs: 30, intervalMs: 5 },
+    );
 
     expect(response.code).toBe("callgraph_building");
     expect(mockCallAftTool.mock.calls.length).toBeGreaterThan(1);
@@ -225,10 +231,13 @@ describe("callCallgraphWithBuildRetry", () => {
       response: { code: "symbol_not_found" },
     });
 
-    const { text } = await callCallgraphWithBuildRetry(bridge, { op: "callers" }, extCtx, {
-      budgetMs: 5_000,
-      intervalMs: 1,
-    });
+    const { text } = await callCallgraphWithBuildRetry(
+      bridge,
+      { op: "callers" },
+      extCtx,
+      undefined,
+      { budgetMs: 5_000, intervalMs: 1 },
+    );
 
     expect(text).toBe("symbol_not_found — no such symbol");
     expect(mockCallAftTool).toHaveBeenCalledTimes(1);

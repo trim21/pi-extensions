@@ -126,7 +126,7 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
     promptSnippet: "Output structural outline of a file/directory",
     promptGuidelines: [OUTLINE_PROMPT],
     parameters: OutlineParams,
-    async execute(_id, params, _signal, _onUpdate, extCtx) {
+    async execute(_id, params, signal, _onUpdate, extCtx) {
       const target = coerceTargetParam(params.target);
       if (typeof target !== "string" || target.length === 0) {
         throw new Error("'target' must be a single path (array targets are not supported)");
@@ -145,7 +145,15 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
 
       const subtitle = buildOutlineSubtitle(extCtx.cwd, target);
 
-      const { text, response } = await callAftTool(bridgeFor(ctx), "outline", rawArgs, extCtx);
+      const { text, response } = await callAftTool(
+        bridgeFor(ctx),
+        "outline",
+        rawArgs,
+        extCtx,
+        undefined,
+        undefined,
+        signal,
+      );
       const truncated = response.truncated === true;
       return {
         content: [{ type: "text", text }],
@@ -201,7 +209,7 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
     promptSnippet: "Inspect the full source of a named symbol",
     promptGuidelines: [ZOOM_PROMPT],
     parameters: ZoomParams,
-    async execute(_id, params, _signal, _onUpdate, extCtx) {
+    async execute(_id, params, signal, _onUpdate, extCtx) {
       const rawArgs = compactArgs({
         filePath: resolvePathArg(extCtx.cwd, params.path),
         symbols: params.symbols,
@@ -216,7 +224,15 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
 
       const subtitle = buildZoomSubtitle(extCtx.cwd, params);
 
-      const { text, response } = await callAftTool(bridgeFor(ctx), "zoom", rawArgs, extCtx);
+      const { text, response } = await callAftTool(
+        bridgeFor(ctx),
+        "zoom",
+        rawArgs,
+        extCtx,
+        undefined,
+        undefined,
+        signal,
+      );
       const truncated = response.truncated === true;
       return {
         content: [{ type: "text", text }],
@@ -305,12 +321,16 @@ export async function callCallgraphWithBuildRetry(
   bridge: AftProjectTransport,
   rawArgs: Record<string, unknown>,
   extCtx: ExtensionContext,
+  signal?: AbortSignal,
   timing?: { budgetMs: number; intervalMs: number },
 ): Promise<{ text: string; response: Record<string, unknown> }> {
   const budgetMs = timing?.budgetMs ?? CALLGRAPH_BUILD_RETRY_BUDGET_MS;
   const intervalMs = timing?.intervalMs ?? CALLGRAPH_BUILD_RETRY_INTERVAL_MS;
   const deadline = Date.now() + budgetMs;
   for (;;) {
+    if (signal?.aborted) {
+      throw new Error("callgraph request aborted");
+    }
     const { text, response } = await callAftTool(
       bridge,
       "callgraph",
@@ -318,6 +338,7 @@ export async function callCallgraphWithBuildRetry(
       extCtx,
       undefined,
       CALLGRAPH_SOFT_CODES,
+      signal,
     );
     const code = typeof response.code === "string" ? response.code : "";
     if (code !== "callgraph_building" || Date.now() >= deadline) {
@@ -341,7 +362,7 @@ export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): vo
     promptSnippet: "Call graph and data-flow navigation",
     promptGuidelines: [CALLGRAPH_PROMPT],
     parameters: CallgraphParams,
-    async execute(_id, params, _signal, _onUpdate, extCtx) {
+    async execute(_id, params, signal, _onUpdate, extCtx) {
       const rawArgs = compactArgs({
         op: params.op,
         filePath: resolvePathArg(extCtx.cwd, params.path),
@@ -354,7 +375,12 @@ export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): vo
         includeUnresolved: params.includeUnresolved,
       });
 
-      const { text, response } = await callCallgraphWithBuildRetry(bridgeFor(ctx), rawArgs, extCtx);
+      const { text, response } = await callCallgraphWithBuildRetry(
+        bridgeFor(ctx),
+        rawArgs,
+        extCtx,
+        signal,
+      );
       const out =
         text ||
         formatCallgraphSections(params.op, response, PLAIN_CALLGRAPH_THEME, {
@@ -483,7 +509,7 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
     promptSnippet: "Search code by meaning or exact text",
     promptGuidelines: [SEARCH_PROMPT],
     parameters: SearchParams,
-    async execute(_id, params, _signal, onUpdate, extCtx) {
+    async execute(_id, params, signal, onUpdate, extCtx) {
       if (typeof params.query !== "string" || params.query.trim().length === 0) {
         throw new Error("'query' must be a non-empty string");
       }
@@ -506,13 +532,21 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
       let response: Record<string, unknown>;
       let text: string;
       try {
-        ({ text, response } = await callAftTool(bridge, "search", rawArgs, extCtx, {
-          // 默认 search 传输超时仅 60s，会早于索引等待（600s）触发；覆盖为等待
-          // 上限 + 常规执行预算。超时只说明响应被挤掉而非 bridge 挂死，保留
-          // 常驻的语义索引/LSP 状态。
-          transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
-          keepBridgeOnTimeout: true,
-        }));
+        ({ text, response } = await callAftTool(
+          bridge,
+          "search",
+          rawArgs,
+          extCtx,
+          {
+            // 默认 search 传输超时仅 60s，会早于索引等待（600s）触发；覆盖为等待
+            // 上限 + 常规执行预算。超时只说明响应被挤掉而非 bridge 挂死，保留
+            // 常驻的语义索引/LSP 状态。
+            transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
+            keepBridgeOnTimeout: true,
+          },
+          undefined,
+          signal,
+        ));
       } finally {
         stopProgress?.();
       }

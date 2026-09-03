@@ -150,6 +150,9 @@ export async function createAftPool(
  * 调用 AFT 工具命令并返回 Rust 格式化好的文本。
  * 只读感知工具统一走 toolCall（server 侧 tool_call 分派）。`softCodes` 里的
  * 错误码（如 symbol_not_found）是合法否定答案，不抛错、按文本返回。
+ *
+ * `signal`：宿主取消信号，透传给 bridge 的 abortSignal——standalone transport
+ * 会在 abort 时向 Rust 发 cancel_request（subc route 忽略，靠 route 关闭取消）。
  */
 export async function callAftTool(
   bridge: AftProjectTransport,
@@ -158,12 +161,14 @@ export async function callAftTool(
   extCtx: ExtensionContext,
   options?: BridgeRequestOptions & { preview?: boolean },
   softCodes?: ReadonlySet<string>,
+  signal?: AbortSignal,
 ): Promise<{ text: string; response: Record<string, unknown> }> {
   const timeoutMs = timeoutForCommand(command);
   const sessionId = resolveSessionId(extCtx);
   const sendOptions = {
     ...(timeoutMs !== undefined && { timeoutMs }),
     ...options,
+    ...(signal !== undefined && !options?.abortSignal && { abortSignal: signal }),
   };
   const response = await bridge.toolCall(
     sessionId,
