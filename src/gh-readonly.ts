@@ -38,6 +38,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { createGithubSearch, type GithubSearch, renderHits } from "./lib/github.js";
 import { type ToolPendant } from "./lib/pendant.js";
 import { createSeqState } from "./lib/seq-state.js";
 
@@ -333,52 +334,30 @@ interface ListFilters {
   assignee?: string;
   milestone?: string;
   limit?: number;
+  /** Comma-separated field names for the keyword-search result rows. */
+  fields?: string;
 }
 
 /**
- * Build the `gh` argv for listing or keyword-searching issues/PRs.
+ * Build the `gh` argv for browsing issues/PRs (no keyword search).
  *
- * Keyword searches route through `gh search issues` / `gh search prs`, which rank
- * results by relevance and are the only path that can include closed items.
- * `gh issue list --search` would silently stay on the list's state filter (open
- * by default), so keyword lookups must not use it. Browse calls (no keywords)
- * keep `gh issue list` / `gh pr list` semantics.
- *
- * The state value sets differ between the two command families: `gh issue list`
- * accepts `--state all` and `gh pr list` `--state merged`, while `gh search`
- * only knows `--state open|closed` plus `--merged` for PRs. The shared `state`
- * param is translated here: search defaults to open, `all` means open+closed
- * (no state filter), and `merged` maps to `--merged` for PRs.
+ * Keyword searches no longer go through the `gh` CLI — the octokit-based client
+ * in `./lib/github.ts` handles them with state values (`all`, and `merged` for
+ * PRs) that `gh search` cannot express. Browse calls keep `gh issue list` /
+ * `gh pr list` semantics: `state` is passed through verbatim, since `gh issue
+ * list` accepts open/closed/all and `gh pr list` additionally accepts merged.
  */
 export function listGithubArgs(kind: "issue" | "pr", params: ListFilters): string[] {
-  const { repo, keywords, state, label, author, assignee, milestone, limit } = params;
-
-  const addFilters = (args: string[]) => {
-    if (label) args.push("--label", label);
-    if (author) args.push("--author", author);
-    if (assignee) args.push("--assignee", assignee);
-    if (milestone) args.push("--milestone", milestone);
-    if (limit) args.push("--limit", String(limit));
-    return args;
-  };
-
-  if (keywords) {
-    const args = ["search", kind === "issue" ? "issues" : "prs", ...repoArgs(repo), keywords];
-    if (kind === "pr" && state === "merged") {
-      args.push("--merged");
-    } else if (state && state !== "all") {
-      args.push("--state", state);
-    } else if (!state) {
-      // keep the browse tools' default rather than gh search's implicit
-      // open+closed; pass state="all" to cover closed items
-      args.push("--state", "open");
-    }
-    return addFilters(args);
-  }
+  const { repo, state, label, author, assignee, milestone, limit } = params;
 
   const args = [kind, "list", ...repoArgs(repo)];
   if (state) args.push("--state", state);
-  return addFilters(args);
+  if (label) args.push("--label", label);
+  if (author) args.push("--author", author);
+  if (assignee) args.push("--assignee", assignee);
+  if (milestone) args.push("--milestone", milestone);
+  if (limit) args.push("--limit", String(limit));
+  return args;
 }
 
 async function listGithub(
@@ -387,6 +366,19 @@ async function listGithub(
   ctx: { cwd?: string; signal?: AbortSignal; input?: unknown },
 ): Promise<string> {
   return ghExec(listGithubArgs(kind, params), ctx);
+}
+
+/** Run a keyword search through the octokit client and render the rows. */
+async function searchList(
+  kind: "issue" | "pr",
+  params: ListFilters,
+  githubSearch: GithubSearch,
+): Promise<string> {
+  const hits = await githubSearch.search(kind, params);
+  if (hits.length === 0) {
+    return `(no matching ${kind === "issue" ? "issues" : "pull requests"})`;
+  }
+  return renderHits(hits, { repo: params.repo, fields: params.fields });
 }
 
 // ── CI helpers ───────────────────────────────────────────────────────────────
@@ -1144,6 +1136,8 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     return;
   }
 
+  const githubSearch = createGithubSearch();
+
   // ── read-github-issue ──────────────────────────────────────────────────────
   pi.registerTool({
     name: "read-github-issue",
@@ -1180,25 +1174,36 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     name: "list-github-issues",
     label: "GitHub Issues List",
     description:
-      'List GitHub issues with optional filters and keyword search. When repo is omitted, keyword search runs across GitHub. Keyword results default to open issues — pass state="all" to include closed ones.',
+      'List GitHub issues with optional filters and keyword search. When repo is omitted, keyword search runs across GitHub. Keyword search defaults to open issues — pass state="all" to include closed ones. Set fields to choose the columns of each result row.',
     promptSnippet: "List or search GitHub issues",
     parameters: Type.Object({
       repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
       keywords: Type.Optional(Type.String({ description: "Search keywords (free text)" })),
       state: Type.Optional(
         Type.String({
-          description: "open, closed, all (default: open; with keywords, all covers closed too)",
+          description:
+            "open, closed, all (default: open; all applies to keyword search and covers closed too)",
         }),
       ),
       label: Type.Optional(Type.String({ description: "Filter by label" })),
       author: Type.Optional(Type.String({ description: "Filter by author" })),
-      assignee: Type.Optional(Type.String({ description: "Filter by assignee" })),
+      assignee: Type.Optional(
+        Type.String({ description: "Filter by assignee (@me for yourself)" }),
+      ),
       milestone: Type.Optional(Type.String({ description: "Filter by milestone" })),
-      limit: Type.Optional(Type.Number({ description: "Max results (default 30)" })),
+      limit: Type.Optional(Type.Number({ description: "Max results (default 30, max 100)" })),
+      fields: Type.Optional(
+        Type.String({
+          description:
+            "Comma-separated columns for keyword-search rows (default: number,state,title,labels,updatedAt; adds repo when no repo given). Valid: number,state,title,url,author,labels,milestone,assignees,comments,repo,createdAt,updatedAt,closedAt",
+        }),
+      ),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const result = toToolResult(
-        await listGithub("issue", params, { cwd: ctx.cwd, signal, input: params }),
+        params.keywords
+          ? await searchList("issue", params, githubSearch)
+          : await listGithub("issue", params, { cwd: ctx.cwd, signal, input: params }),
         params,
       );
       result.details.pendant = subtitlePendant(params);
@@ -1242,7 +1247,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     name: "list-github-prs",
     label: "GitHub PRs List",
     description:
-      'List GitHub pull requests with optional filters and keyword search. When repo is omitted, keyword search runs across GitHub. Keyword results default to open PRs — pass state="all" (open + closed) or state="merged" to broaden.',
+      'List GitHub pull requests with optional filters and keyword search. When repo is omitted, keyword search runs across GitHub. Keyword search defaults to open PRs — pass state="merged", state="closed" (merged excluded) or state="all" to broaden. Set fields to choose the columns of each result row.',
     promptSnippet: "List or search GitHub PRs",
     parameters: Type.Object({
       repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
@@ -1250,18 +1255,28 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       state: Type.Optional(
         Type.String({
           description:
-            "open, closed, merged, all (default: open; with keywords, merged and all broaden the search)",
+            "open, closed, merged, all (default: open; all applies to keyword search and covers open + closed + merged)",
         }),
       ),
       label: Type.Optional(Type.String({ description: "Filter by label" })),
       author: Type.Optional(Type.String({ description: "Filter by author" })),
-      assignee: Type.Optional(Type.String({ description: "Filter by assignee" })),
+      assignee: Type.Optional(
+        Type.String({ description: "Filter by assignee (@me for yourself)" }),
+      ),
       milestone: Type.Optional(Type.String({ description: "Filter by milestone" })),
-      limit: Type.Optional(Type.Number({ description: "Max results (default 30)" })),
+      limit: Type.Optional(Type.Number({ description: "Max results (default 30, max 100)" })),
+      fields: Type.Optional(
+        Type.String({
+          description:
+            "Comma-separated columns for keyword-search rows (default: number,state,title,labels,updatedAt; adds repo when no repo given). Valid: number,state,title,url,author,labels,milestone,assignees,comments,repo,createdAt,updatedAt,closedAt,mergedAt",
+        }),
+      ),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const result = toToolResult(
-        await listGithub("pr", params, { cwd: ctx.cwd, signal, input: params }),
+        params.keywords
+          ? await searchList("pr", params, githubSearch)
+          : await listGithub("pr", params, { cwd: ctx.cwd, signal, input: params }),
         params,
       );
       result.details.pendant = subtitlePendant(params);

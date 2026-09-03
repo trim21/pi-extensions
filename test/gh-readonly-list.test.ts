@@ -1,12 +1,9 @@
 /**
- * Tests for the gh-readonly issue/PR list argv builder (`listGithubArgs`).
+ * Tests for the gh-readonly browse argv builder (`listGithubArgs`).
  *
- * Regression: keyword searches used to go through `gh issue list --search` /
- * `gh pr list --search`, whose `--state` filter defaults to open — so searches
- * for reports that had been closed or merged came back empty (see renovate
- * session 2026-09-03: list-github-issues returned only open rows while direct
- * `gh search issues` found the closed issues #3981/#42726/#24539). Keyword
- * searches must therefore route through `gh search issues` / `gh search prs`.
+ * Browse calls (no keywords) keep `gh issue list` / `gh pr list` semantics.
+ * Keyword searches are handled by the octokit-based client in
+ * `src/lib/github.ts` instead — see `test/github-search.test.ts` for that path.
  *
  * Run: npx vitest run test/gh-readonly-list.test.ts
  */
@@ -28,7 +25,7 @@ describe("listGithubArgs browse path (no keywords)", () => {
       "--state",
       "closed",
     ]);
-    // browse keeps the full pr list state set (merged is not a gh search state)
+    // browse keeps the full pr list state set (merged is a gh list value)
     expect(listGithubArgs("pr", { repo: "a/b", state: "merged" })).toEqual([
       "pr",
       "list",
@@ -42,81 +39,12 @@ describe("listGithubArgs browse path (no keywords)", () => {
   it("omits state when browsing defaults are desired", () => {
     expect(listGithubArgs("pr", { repo: "a/b" })).toEqual(["pr", "list", "--repo", "a/b"]);
   });
-});
 
-describe("listGithubArgs keyword search path", () => {
-  it("routes keyword searches through gh search issues with --repo", () => {
-    expect(
-      listGithubArgs("issue", { repo: "renovatebot/renovate", keywords: "autoclosed" }),
-    ).toEqual([
-      "search",
-      "issues",
-      "--repo",
-      "renovatebot/renovate",
-      "autoclosed",
-      "--state",
-      "open",
-    ]);
-  });
-
-  it("searches across GitHub when no repo is given", () => {
-    expect(listGithubArgs("issue", { keywords: "autoclosed" })).toEqual([
-      "search",
-      "issues",
-      "autoclosed",
-      "--state",
-      "open",
-    ]);
-  });
-
-  it("state=all drops the state filter so closed issues are included", () => {
-    expect(listGithubArgs("issue", { repo: "a/b", keywords: "kw", state: "all" })).toEqual([
-      "search",
-      "issues",
-      "--repo",
-      "a/b",
-      "kw",
-    ]);
-  });
-
-  it("state=closed restricts the search to closed issues", () => {
-    expect(listGithubArgs("issue", { repo: "a/b", keywords: "kw", state: "closed" })).toEqual([
-      "search",
-      "issues",
-      "--repo",
-      "a/b",
-      "kw",
-      "--state",
-      "closed",
-    ]);
-  });
-
-  it("maps state=merged to --merged for PR search", () => {
-    expect(listGithubArgs("pr", { repo: "a/b", keywords: "kw", state: "merged" })).toEqual([
-      "search",
-      "prs",
-      "--repo",
-      "a/b",
-      "kw",
-      "--merged",
-    ]);
-  });
-
-  it("maps state=all for PR search to an unfiltered query", () => {
-    expect(listGithubArgs("pr", { repo: "a/b", keywords: "kw", state: "all" })).toEqual([
-      "search",
-      "prs",
-      "--repo",
-      "a/b",
-      "kw",
-    ]);
-  });
-
-  it("appends structured filters after the keywords", () => {
+  it("appends structured filters for browse", () => {
     expect(
       listGithubArgs("issue", {
         repo: "a/b",
-        keywords: "kw",
+        state: "all",
         label: "bug",
         author: "trim21",
         assignee: "@me",
@@ -124,13 +52,12 @@ describe("listGithubArgs keyword search path", () => {
         limit: 10,
       }),
     ).toEqual([
-      "search",
-      "issues",
+      "issue",
+      "list",
       "--repo",
       "a/b",
-      "kw",
       "--state",
-      "open",
+      "all",
       "--label",
       "bug",
       "--author",
@@ -142,5 +69,9 @@ describe("listGithubArgs keyword search path", () => {
       "--limit",
       "10",
     ]);
+  });
+
+  it("searches across GitHub when no repo is given", () => {
+    expect(listGithubArgs("issue", {})).toEqual(["issue", "list"]);
   });
 });

@@ -15,6 +15,7 @@ pi-extensions 是 pi coding-agent 的自定义扩展集合，TypeScript ESM 项�
 - 相对导入必须带 `.js` 后缀（ESM + Node16 moduleResolution），如 `import { x } from "./lib/pendant.js"`。
 - 文件系统访问一律使用 `node:fs/promises`（async API），不要用 `node:fs` 的同步版本；除非在特别必要的同步上下文（如顶层脚本、必须同步的初始化）中才允许例外。
 - 解析 JSON / YAML 等外部数据必须用 typebox schema + `Value.Parse` 做解析与验证（必要时用 `Type.Transform` 做类型转换），不要手写解析和校验代码。
+- 不要用 module 级可变变量（如 `let x: T | undefined` 在模块顶层）维护跨调用状态。需要记住状态（client、缓存、单例等）时，用工厂函数 + 闭包：`createX()` 返回带内部状态的对象/函数，状态由闭包持有，生命周期随创建者。
 - Node 版本要求 `>=24`；`typescript` 通过 npm alias 安装，不要随意改动依赖版本与锁文件。
 
 ## 项目结构
