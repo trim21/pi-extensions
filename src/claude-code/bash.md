@@ -32,3 +32,5 @@ IMPORTANT: Avoid using this tool to run `find`, `grep`, `cat`, `head`, `tail`, `
 - Avoid unnecessary `sleep` commands:
 - Do not sleep between commands that can run immediately — just run them.
 - Do not retry failing commands in a sleep loop — diagnose the root cause.
+
+**do not use `2>&1 | tee test.log`** to reduce command outout, long command are reduced and save to file for future use auto automatically, you will get a file after the command with long output.
