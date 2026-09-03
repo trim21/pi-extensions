@@ -13,8 +13,8 @@
  *   是配置错误：全局配置在扩展加载（createLspService）时抛错，本地配置在
  *   session 开始预加载时通知，工具调用时校验抛错兜底。disabled 中未注册
  *   的 id 直接忽略；
- * - client 按 (root, serverID) 缓存，并发 spawn 去重，启动失败记入 broken
- *   集合（服务实例生命周期内不再重试）；
+ * - client 按 (root, serverID) 缓存，并发 spawn 去重，启动失败记入
+ *   broken（冷却期内跳过，冷却过后下次触碰自动重试）并主动 notify；
  * - 工具只与 touchFile / notifyFile / diagnostics / lspDiagnosticsForFile 四个方法打交道；通知回调按请求传入。
  */
 
@@ -108,6 +108,11 @@ export const configDefaults = {
   },
   maxOpenDocuments: clientDefaults.maxOpenDocuments,
 } as const;
+
+/** 服务器启动失败后自动重试的冷却（ms）；冷却内跳过，之后下次触碰自动重试。 */
+const RETRY_COOLDOWN_MS = 60_000;
+/** 同一服务器启动失败错误通知的最小间隔（ms），冷却重试反复失败时不刷屏。 */
+const NOTIFY_INTERVAL_MS = 5 * 60_000;
 
 /** 生效的工作区监听配置（缺省值已应用）。 */
 export interface EffectiveWatchConfig {
@@ -292,7 +297,10 @@ export function filterAdapters(
 
 interface LspState {
   clients: LspClient[];
-  broken: Set<string>;
+  /** root+serverID → 最近一次启动失败时间；冷却期过后允许自动重试。 */
+  brokenFailAt: Map<string, number>;
+  /** root+serverID → 最近一次启动失败错误通知时间；节流避免反复刷屏。 */
+  brokenNotifiedAt: Map<string, number>;
   spawning: Map<string, Promise<LspClient | undefined>>;
   closing: boolean;
   /** /lsp-stop 置 true：所有工具调用不再 spawn 服务器，直到 start/reload。 */
@@ -380,10 +388,10 @@ export interface LspService {
   shutdownAll(): Promise<void>;
   /** 停止全部服务器并禁用 LSP：之后工具调用不再 spawn，直到 start/reload。 */
   stop(): Promise<void>;
-  /** 解除禁用并清空 broken 缓存；服务器在下次工具调用时惰性启动。 */
+  /** 解除禁用；服务器在下次工具调用时惰性启动（启动失败会按冷却自动重试）。 */
   start(): void;
   /**
-   * 重启指定服务器：关闭其全部 client、清除对应 broken 记录并解除禁用；
+   * 重启指定服务器：关闭其全部 client、清除对应失败记录并解除禁用；
    * 其余服务器不受影响。配置在下次工具调用时重新读取。
    */
   reload(serverID: string): Promise<void>;
@@ -408,10 +416,26 @@ function containsPath(file: string, cwd: string): boolean {
  * 内置默认服务器合并构建。globalConfigPath 供测试注入固定的全局配置
  * 路径，避免被本机 ~/.pi/agent/lsp.json 影响。
  */
+export interface LspServiceStartupOptions {
+  /**
+   * 服务器启动失败后到允许自动重试的冷却时长（ms）。冷却期内该服务器被
+   * 跳过，冷却过后下次触碰匹配文件时自动重试，无需 /lsp-reload。
+   */
+  retryCooldownMs?: number;
+  /** 同一服务器的启动失败错误通知最小间隔（ms），防止反复重试刷屏。 */
+  notifyIntervalMs?: number;
+  /** 会话级通知：启动失败时主动上报，不依赖触发请求恰好携带 notify。 */
+  notify?: ExtensionUIContext["notify"];
+}
+
 export function createLspService(
   adapters?: LspServerAdapter[],
   globalConfigPath?: string,
+  startupOptions?: LspServiceStartupOptions,
 ): LspService {
+  const retryCooldownMs = startupOptions?.retryCooldownMs ?? RETRY_COOLDOWN_MS;
+  const notifyIntervalMs = startupOptions?.notifyIntervalMs ?? NOTIFY_INTERVAL_MS;
+  const sessionNotify = startupOptions?.notify;
   // 扩展加载时校验全局配置（本地配置在 session_start 预加载时校验）
   validateConfig(
     resolveConfig(
@@ -421,7 +445,8 @@ export function createLspService(
   );
   const state: LspState = {
     clients: [],
-    broken: new Set(),
+    brokenFailAt: new Map(),
+    brokenNotifiedAt: new Map(),
     spawning: new Map(),
     closing: false,
     disabled: false,
@@ -558,6 +583,33 @@ export function createLspService(
     notify?: ExtensionUIContext["notify"],
     adapterFilter?: (adapter: LspServerAdapter) => boolean,
   ): Promise<LspClient[]> {
+    /**
+     * 记录一次启动失败：进入 broken（冷却期内跳过）、渲染 status，并按节流
+     * 间隔主动 notify。错误上报优先走会话级 sessionNotify——不依赖触发请求
+     * 恰好携带 notify（否则 Read warm-up 等静默通道会把失败吞掉）；未注入
+     * 会话通知时退回请求级 notify 兜底。
+     */
+    function reportStartupFailure(
+      key: string,
+      serverID: string,
+      root: string,
+      cause: string,
+    ): void {
+      const now = Date.now();
+      state.brokenFailAt.set(key, now);
+      state.servers.set(key, { serverID, root, state: "broken" });
+      updateStatusText();
+      const reporter = sessionNotify ?? notify;
+      const lastNotified = state.brokenNotifiedAt.get(key);
+      if (reporter && (lastNotified === undefined || now - lastNotified >= notifyIntervalMs)) {
+        state.brokenNotifiedAt.set(key, now);
+        reporter(
+          `LSP server "${serverID}" failed to start for ${root}: ${cause}. ` +
+            `Fix the issue or run /lsp-reload ${serverID} to retry now.`,
+          "error",
+        );
+      }
+    }
     if (state.closing || state.disabled) return [];
     if (!containsPath(file, cwd)) return [];
     const config = await loadLspConfig(cwd, globalConfigPath);
@@ -584,7 +636,12 @@ export function createLspService(
       const root = await adapter.findRoot(file, cwd);
       if (!root) continue;
       const key = root + adapter.id;
-      if (state.broken.has(key)) continue;
+      const failedAt = state.brokenFailAt.get(key);
+      if (failedAt !== undefined) {
+        if (Date.now() - failedAt < retryCooldownMs) continue;
+        // 冷却已过：允许重试；重试成功后下面会清除 broken 记录
+        state.brokenFailAt.delete(key);
+      }
 
       const existing = state.clients.find((c) => c.root === root && c.serverID === adapter.id);
       if (existing) {
@@ -603,13 +660,7 @@ export function createLspService(
         try {
           const handle = await adapter.spawn(root, cwd);
           if (!handle) {
-            state.broken.add(key);
-            state.servers.set(key, { serverID: adapter.id, root, state: "broken" });
-            updateStatusText();
-            notify?.(
-              `LSP server "${adapter.id}" is not available for ${root} (binary not found)`,
-              "error",
-            );
+            reportStartupFailure(key, adapter.id, root, "binary not found");
             return;
           }
           const client = await create({
@@ -635,18 +686,18 @@ export function createLspService(
           state.clients.push(client);
           state.clientExtensions.set(client, adapter.extensions);
           state.servers.set(key, { serverID: adapter.id, root, state: "running" });
+          // 启动成功：清除失败记录，之后若再次失败会立即重新上报
+          state.brokenFailAt.delete(key);
+          state.brokenNotifiedAt.delete(key);
           updateStatusText();
           void ensureWatcher(cwd, notify);
           return client;
         } catch (error) {
-          state.broken.add(key);
-          state.servers.set(key, { serverID: adapter.id, root, state: "broken" });
-          updateStatusText();
-          notify?.(
-            `LSP server "${adapter.id}" failed to start for ${root}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-            "error",
+          reportStartupFailure(
+            key,
+            adapter.id,
+            root,
+            error instanceof Error ? error.message : String(error),
           );
           return;
         }
@@ -845,7 +896,8 @@ export function createLspService(
     });
     state.clients = [];
     state.clientExtensions.clear();
-    state.broken.clear();
+    state.brokenFailAt.clear();
+    state.brokenNotifiedAt.clear();
     state.servers.clear();
     await stopWatcher();
     updateStatusText();
@@ -866,7 +918,8 @@ export function createLspService(
   function start(): void {
     state.closing = false;
     state.disabled = false;
-    state.broken.clear();
+    state.brokenFailAt.clear();
+    state.brokenNotifiedAt.clear();
     updateStatusText();
   }
 
@@ -880,7 +933,8 @@ export function createLspService(
     for (const client of targets) state.clientExtensions.delete(client);
     for (const [key, server] of state.servers) {
       if (server.serverID !== serverID) continue;
-      state.broken.delete(key);
+      state.brokenFailAt.delete(key);
+      state.brokenNotifiedAt.delete(key);
       state.servers.delete(key);
     }
     if (state.clients.length === 0) await stopWatcher();
@@ -985,7 +1039,10 @@ export function createLspManager(
       const config = await loadLspConfig(ctx.cwd, options?.globalConfigPath);
       validateConfig(config, options?.adapters);
       if (enabledServerCount(config, options?.adapters) === 0) return;
-      const next = createLspService(options?.adapters, options?.globalConfigPath);
+      const next = createLspService(options?.adapters, options?.globalConfigPath, {
+        // 会话级通知：任何通道触发的启动失败都主动上报（不只依赖请求方 notify）
+        notify: (message, level) => ctx.ui.notify(message, level),
+      });
       // footer status 显示当前所有 LSP server 状态（无 UI 时不显示）
       next.attachStatus((text) =>
         ctx.ui.setStatus("lsp", text ? ctx.ui.theme.fg("accent", text) : undefined),

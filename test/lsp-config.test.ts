@@ -545,10 +545,10 @@ describe("lsp config integration", () => {
     const notify = vi.fn();
     await service.touchFile(file, dir, undefined, { notify });
     expect(notify).toHaveBeenCalledWith(
-      `LSP server "a" failed to start for ${dir}: spawn ENOENT`,
+      `LSP server "a" failed to start for ${dir}: spawn ENOENT. Fix the issue or run /lsp-reload a to retry now.`,
       "error",
     );
-    // 启动失败记入 broken：第二次不再 spawn，也不重复通知
+    // 启动失败进入冷却：第二次不 spawn，也不重复通知
     await service.touchFile(file, dir);
     expect(notify).toHaveBeenCalledOnce();
     await rm(dir, { recursive: true, force: true });
@@ -572,7 +572,7 @@ describe("lsp config integration", () => {
     const notify = vi.fn();
     await service.touchFile(file, dir, undefined, { notify });
     expect(notify).toHaveBeenCalledWith(
-      `LSP server "a" is not available for ${dir} (binary not found)`,
+      `LSP server "a" failed to start for ${dir}: binary not found. Fix the issue or run /lsp-reload a to retry now.`,
       "error",
     );
     await rm(dir, { recursive: true, force: true });
@@ -594,6 +594,112 @@ describe("lsp config integration", () => {
 
     const service = createLspService([adapter], join(dir, "no-global.json"));
     await expect(service.touchFile(file, dir)).resolves.toBeUndefined();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("notifies startup failure via session notify even when the request carries none", async () => {
+    // Read warm-up 等通道不带请求级 notify；配置会话通知后启动失败仍必须主动上报，
+    // 不能静默 broken（否则用户开着 session 却不知道 TS server 是坏的）。
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+
+    const adapter: LspServerAdapter = {
+      id: "a",
+      extensions: [".py"],
+      findRoot: async () => dir,
+      spawn: async () => {
+        throw new Error("boom");
+      },
+    };
+
+    const sessionNotify = vi.fn();
+    const service = createLspService([adapter], join(dir, "no-global.json"), {
+      notify: sessionNotify,
+    });
+    await service.touchFile(file, dir); // 不传 options.notify
+    expect(sessionNotify).toHaveBeenCalledOnce();
+    expect(sessionNotify).toHaveBeenCalledWith(
+      expect.stringContaining(`LSP server "a" failed to start for ${dir}: boom`),
+      "error",
+    );
+    await service.shutdownAll();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("retries after cooldown and recovers without /lsp-reload", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+
+    let healthy = false;
+    const spawn = vi.fn(async () => {
+      if (!healthy) throw new Error("boom");
+      return { process: spawnProcess(process.execPath, [fixture]) };
+    });
+    const adapter: LspServerAdapter = {
+      id: "a",
+      extensions: [".py"],
+      findRoot: async () => dir,
+      spawn,
+    };
+
+    const sessionNotify = vi.fn();
+    const service = createLspService([adapter], join(dir, "no-global.json"), {
+      notify: sessionNotify,
+      retryCooldownMs: 40,
+      notifyIntervalMs: 40,
+    });
+    const statuses: (string | undefined)[] = [];
+    service.attachStatus((text) => {
+      statuses.push(text);
+    });
+
+    await service.touchFile(file, dir); // 失败：broken + 通知一次
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(sessionNotify).toHaveBeenCalledOnce();
+
+    // 修好（用户装了二进制 / 补了 typescript）后冷却过期，下次触碰自动重试成功
+    healthy = true;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await service.touchFile(file, dir);
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(statuses.at(-1)).toContain("a");
+    expect(statuses.at(-1)).not.toContain("unavailable");
+    // 恢复不再通知（成功路径静默）
+    expect(sessionNotify).toHaveBeenCalledOnce();
+
+    await service.shutdownAll();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("throttles repeated failure notifications across cooldown retries", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+
+    const adapter: LspServerAdapter = {
+      id: "a",
+      extensions: [".py"],
+      findRoot: async () => dir,
+      spawn: async () => {
+        throw new Error("boom");
+      },
+    };
+
+    const sessionNotify = vi.fn();
+    const service = createLspService([adapter], join(dir, "no-global.json"), {
+      notify: sessionNotify,
+      retryCooldownMs: 40, // 冷却短：会反复重试
+      notifyIntervalMs: 60_000, // 通知节流长：反复失败不刷屏
+    });
+
+    await service.touchFile(file, dir);
+    await new Promise((resolve) => setTimeout(resolve, 80)); // 过冷却，重试又失败
+    await service.touchFile(file, dir);
+    expect(sessionNotify).toHaveBeenCalledOnce(); // 节流期内不重复报
+
+    await service.shutdownAll();
     await rm(dir, { recursive: true, force: true });
   });
 });
