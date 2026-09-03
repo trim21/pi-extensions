@@ -266,6 +266,19 @@ interface ServerCapabilities {
   [key: string]: unknown;
 }
 
+/**
+ * create 的直连缺省（单一来源）：lsp.ts 的 resolveConfig 解析超时/LRU 时引用
+ * 同一组数值，保证配置层缺省与直连调用方取值一致。
+ */
+export const clientDefaults = {
+  diagnosticsDebounceMs: 150,
+  diagnosticsDocumentWaitTimeoutMs: 5_000,
+  diagnosticsFullWaitTimeoutMs: 10_000,
+  diagnosticsRequestTimeoutMs: 3_000,
+  initializeTimeoutMs: 45_000,
+  maxOpenDocuments: 32,
+} as const;
+
 export interface CreateInput {
   serverID: string;
   server: LspServerHandle;
@@ -416,12 +429,15 @@ function stopProcess(process: LspServerHandle["process"]): Promise<void> {
 }
 
 export async function create(input: CreateInput): Promise<LspClient> {
-  const diagnosticsDebounceMs = input.diagnosticsDebounceMs ?? 150;
-  const diagnosticsDocumentWaitTimeoutMs = input.diagnosticsDocumentWaitTimeoutMs ?? 5_000;
-  const diagnosticsFullWaitTimeoutMs = input.diagnosticsFullWaitTimeoutMs ?? 10_000;
-  const diagnosticsRequestTimeoutMs = input.diagnosticsRequestTimeoutMs ?? 3_000;
-  const initializeTimeoutMs = input.initializeTimeoutMs ?? 45_000;
-  const maxOpenDocuments = input.maxOpenDocuments ?? 32;
+  const diagnosticsDebounceMs = input.diagnosticsDebounceMs ?? clientDefaults.diagnosticsDebounceMs;
+  const diagnosticsDocumentWaitTimeoutMs =
+    input.diagnosticsDocumentWaitTimeoutMs ?? clientDefaults.diagnosticsDocumentWaitTimeoutMs;
+  const diagnosticsFullWaitTimeoutMs =
+    input.diagnosticsFullWaitTimeoutMs ?? clientDefaults.diagnosticsFullWaitTimeoutMs;
+  const diagnosticsRequestTimeoutMs =
+    input.diagnosticsRequestTimeoutMs ?? clientDefaults.diagnosticsRequestTimeoutMs;
+  const initializeTimeoutMs = input.initializeTimeoutMs ?? clientDefaults.initializeTimeoutMs;
+  const maxOpenDocuments = input.maxOpenDocuments ?? clientDefaults.maxOpenDocuments;
 
   const connection = createMessageConnection(
     new StreamMessageReader(input.server.process.stdout),

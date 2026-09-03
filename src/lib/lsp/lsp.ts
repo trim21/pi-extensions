@@ -5,7 +5,9 @@
  *   闭包变量，不做成模块级全局；
  * - 配置来源：全局 `~/.pi/agent/lsp.json` + 本地 `<cwd>/.pi/lsp.json`
  *   （本地覆盖全局）：`servers` 按 id 合并（同名 id 整体覆盖、新增 id，全局
- *   其余服务器保留），`enabled`/`disabled` 白名单与各超时参数继续生效；
+ *   其余服务器保留），`watch` 按字段合并（本地逐字段覆盖、`ignore` 取并集）；
+ *   合并结果解析为 `ResolvedLspConfig`（缺省值应用、超时换算为 ms、白名单转
+ *   Set），消费方不接触"未配置"歧义；
  *   没有内置默认服务器，所有服务器均须在配置里定义；
  *   配置在每个工具的调用 cwd 下惰性读取；enabled 引用不存在的服务器 id
  *   是配置错误：全局配置在扩展加载（createLspService）时抛错，本地配置在
@@ -29,8 +31,8 @@ import type { Hover, WorkspaceEdit } from "vscode-languageserver-types";
 
 import { type LspServerAdapter } from "./adapter.js";
 import {
+  clientDefaults,
   create,
-  type CreateInput,
   type Diagnostic,
   type Info as LspClient,
   type InspectLocation,
@@ -41,27 +43,32 @@ import {
   WATCH_KIND_DELETE,
 } from "./client.js";
 import { report } from "./diagnostic.js";
-import { createAdapters, mergeServerRecords, serverConfigSchema } from "./server-config.js";
+import {
+  createAdapters,
+  mergeServerRecords,
+  type ServerConfig,
+  serverConfigSchema,
+} from "./server-config.js";
 import { type FileChange, watchWorkspace, type WorkspaceWatcher } from "./watcher.js";
 
-/** 超时值：number（毫秒，>=1）或字符串（"500"、"5s"、"1m"），Parse 后由 toMs 统一换算。 */
+/** 超时值：number（毫秒，>=1）或字符串（"500"、"5s"、"1m"），换算发生在 resolveConfig。 */
 const timeoutValue = Type.Union([Type.Number({ minimum: 1 }), Type.String()]);
 
 /** lsp.json 顶层 `watch` 段：工作区文件监听配置。 */
 const watchConfigSchema = Type.Object({
-  /** 是否启用工作区文件监听（缺省 true）。 */
+  /** 是否启用工作区文件监听。 */
   enabled: Type.Optional(Type.Boolean()),
-  /** 事件去抖时长（ms，缺省 300），沿用 timeoutValue 字符串写法。 */
+  /** 事件去抖时长（ms，沿用 timeoutValue 字符串写法）。 */
   debounceMs: Type.Optional(timeoutValue),
-  /** 单批事件上限（缺省 500），超出截断并提示一次。 */
+  /** 单批事件上限，超出截断并提示一次。 */
   maxBatch: Type.Optional(Type.Number({ minimum: 1 })),
   /** 追加忽略 glob（相对工作区根的 POSIX 路径）。 */
   ignore: Type.Optional(Type.Array(Type.String())),
 });
 
-/** lsp.json 的配置项（全局与本地同构）。 */
+/** lsp.json 的配置项（全局与本地同构；只描述用户可写的原始形态，缺省见 configDefaults）。 */
 const lspConfigSchema = Type.Object({
-  /** 配置文件版本（当前 1）；未知版本会被 typebox 严格校验拒绝并回退空配置。 */
+  /** 配置文件版本（当前 1）；未知版本会被 typebox 严格校验拒绝。 */
   version: Type.Optional(Type.Number()),
   /** 配置驱动的语言服务器定义（id → 配置）；无内置默认，全部在此定义。 */
   servers: Type.Optional(Type.Record(Type.String(), serverConfigSchema)),
@@ -69,26 +76,69 @@ const lspConfigSchema = Type.Object({
   enabled: Type.Optional(Type.Array(Type.String())),
   /** 从启用集中排除的服务器 id（缺省 = 无）。 */
   disabled: Type.Optional(Type.Array(Type.String())),
-  /** 工作区文件监听配置（缺省全部字段用 watcher 默认值）。 */
+  /** 工作区文件监听配置（缺省全部字段见 configDefaults.watch）。 */
   watch: Type.Optional(watchConfigSchema),
-  /** 驻留文档上限（LRU 容量，缺省 32）。 */
+  /** 驻留文档上限（LRU 容量），超过时淘汰最久未使用并 didClose。 */
   maxOpenDocuments: Type.Optional(Type.Number({ minimum: 1 })),
-  /** push 诊断去抖（ms，缺省 150）。 */
+  /** push 诊断去抖（ms）。 */
   diagnosticsDebounceMs: Type.Optional(timeoutValue),
-  /** document 模式诊断等待上限（ms，缺省 5_000）。 */
+  /** document 模式诊断等待上限（ms）。 */
   diagnosticsDocumentWaitTimeoutMs: Type.Optional(timeoutValue),
-  /** full 模式诊断等待上限（ms，缺省 10_000）。 */
+  /** full 模式诊断等待上限（ms）。 */
   diagnosticsFullWaitTimeoutMs: Type.Optional(timeoutValue),
-  /** 单次 pull 诊断请求超时（ms，缺省 3_000）。 */
+  /** 单次 pull 诊断请求超时（ms）。 */
   diagnosticsRequestTimeoutMs: Type.Optional(timeoutValue),
-  /** 服务器 initialize 握手超时（ms，缺省 45_000）。 */
+  /** 服务器 initialize 握手超时（ms）。 */
   initializeTimeoutMs: Type.Optional(timeoutValue),
 });
 
-/** 配置值；超时字段为原始写法（number 或字符串），换算发生在 timeoutOptions。 */
+/** 配置值（单文件解析结果）；超时字段为原始写法（number 或字符串），换算在 resolveConfig。 */
 export type LspConfig = Static<typeof lspConfigSchema>;
 
-/** "500" → 500、"5s" → 5000、"1m" → 60000；无效字符串返回 NaN（由 toMs 过滤）。 */
+/**
+ * 解析期缺省（单一来源）。超时/LRU 与 client.create 共用 clientDefaults；
+ * watch 无 client 对应项，数值在此集中。
+ */
+export const configDefaults = {
+  watch: {
+    enabled: true,
+    debounceMs: 300,
+    flushMs: 1_000,
+    maxBatch: 500,
+  },
+  maxOpenDocuments: clientDefaults.maxOpenDocuments,
+} as const;
+
+/** 生效的工作区监听配置（缺省值已应用）。 */
+export interface EffectiveWatchConfig {
+  enabled: boolean;
+  debounceMs: number;
+  flushMs: number;
+  maxBatch: number;
+  ignore: string[];
+}
+
+/** 全局 + 本地合并并解析后的生效配置：所有字段为确定值，无"未配置"歧义。 */
+export interface ResolvedLspConfig {
+  /** 合并后的服务器定义（未配置任何服务器时为空表）。 */
+  servers: Record<string, ServerConfig>;
+  /** enabled 白名单（undefined = 全部启用）。 */
+  enabled: Set<string> | undefined;
+  /** 从启用集中排除的服务器 id（undefined = 无排除）。 */
+  disabled: Set<string> | undefined;
+  /** 工作区监听配置（缺省值已应用）。 */
+  watch: EffectiveWatchConfig;
+  /** 驻留文档 LRU 容量。 */
+  maxOpenDocuments: number;
+  /** 以下超时均为换算后的毫秒数（缺省见 configDefaults / clientDefaults）。 */
+  diagnosticsDebounceMs: number;
+  diagnosticsDocumentWaitTimeoutMs: number;
+  diagnosticsFullWaitTimeoutMs: number;
+  diagnosticsRequestTimeoutMs: number;
+  initializeTimeoutMs: number;
+}
+
+/** "500" → 500、"5s" → 5000、"1m" → 60000；无效字符串返回 NaN（由调用方兜底缺省）。 */
 function parseTimeoutString(value: string): number {
   // 单位组永远参与匹配（缺省为空串），避免"可选捕获组在类型上不可空"的歧义
   const match = /^(\d+(?:\.\d+)?)(ms|s|m|h|)\s*$/.exec(value.trim());
@@ -105,65 +155,51 @@ function parseTimeoutString(value: string): number {
   return amount * (factor ?? 1);
 }
 
+/** 时长字段换算为 ms：number 原样、字符串按 parseTimeoutString；无效值返回 undefined。 */
 function toMs(value: number | string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const ms = typeof value === "number" ? value : parseTimeoutString(value);
   return Number.isFinite(ms) && ms > 0 ? ms : undefined;
 }
 
-/** 从配置里取超时字段（缺省 undefined，create 用自身默认值）。 */
-function timeoutOptions(
-  config: LspConfig,
-): Pick<
-  CreateInput,
-  | "diagnosticsDebounceMs"
-  | "diagnosticsDocumentWaitTimeoutMs"
-  | "diagnosticsFullWaitTimeoutMs"
-  | "diagnosticsRequestTimeoutMs"
-  | "initializeTimeoutMs"
-> {
+/** 把合并后的原始配置解析为生效配置：应用 configDefaults 缺省、字符串时长换算、白名单转 Set。 */
+export function resolveConfig(raw: LspConfig): ResolvedLspConfig {
   return {
-    diagnosticsDebounceMs: toMs(config.diagnosticsDebounceMs),
-    diagnosticsDocumentWaitTimeoutMs: toMs(config.diagnosticsDocumentWaitTimeoutMs),
-    diagnosticsFullWaitTimeoutMs: toMs(config.diagnosticsFullWaitTimeoutMs),
-    diagnosticsRequestTimeoutMs: toMs(config.diagnosticsRequestTimeoutMs),
-    initializeTimeoutMs: toMs(config.initializeTimeoutMs),
+    servers: raw.servers ?? {},
+    enabled: raw.enabled === undefined ? undefined : new Set(raw.enabled),
+    disabled: raw.disabled === undefined ? undefined : new Set(raw.disabled),
+    watch: {
+      enabled: raw.watch?.enabled ?? configDefaults.watch.enabled,
+      debounceMs: toMs(raw.watch?.debounceMs) ?? configDefaults.watch.debounceMs,
+      flushMs: configDefaults.watch.flushMs,
+      maxBatch: raw.watch?.maxBatch ?? configDefaults.watch.maxBatch,
+      ignore: raw.watch?.ignore ?? [],
+    },
+    maxOpenDocuments: raw.maxOpenDocuments ?? configDefaults.maxOpenDocuments,
+    diagnosticsDebounceMs: toMs(raw.diagnosticsDebounceMs) ?? clientDefaults.diagnosticsDebounceMs,
+    diagnosticsDocumentWaitTimeoutMs:
+      toMs(raw.diagnosticsDocumentWaitTimeoutMs) ?? clientDefaults.diagnosticsDocumentWaitTimeoutMs,
+    diagnosticsFullWaitTimeoutMs:
+      toMs(raw.diagnosticsFullWaitTimeoutMs) ?? clientDefaults.diagnosticsFullWaitTimeoutMs,
+    diagnosticsRequestTimeoutMs:
+      toMs(raw.diagnosticsRequestTimeoutMs) ?? clientDefaults.diagnosticsRequestTimeoutMs,
+    initializeTimeoutMs: toMs(raw.initializeTimeoutMs) ?? clientDefaults.initializeTimeoutMs,
   };
 }
 
-/** 生效的工作区监听配置（应用缺省值）。 */
-export interface EffectiveWatchConfig {
-  enabled: boolean;
-  debounceMs: number;
-  flushMs: number;
-  maxBatch: number;
-  ignore: string[];
+/** 文件不存在的读取错误（ENOENT），其余错误原样抛出。 */
+function isMissingFile(error: unknown): boolean {
+  return (error as { code?: unknown }).code === "ENOENT";
 }
 
-/** lsp.json 的 `watch` 段 + 缺省值；debounceMs 字符串时长在此换算。 */
-export function watchOptions(config: LspConfig): EffectiveWatchConfig {
-  const watch = config.watch;
-  return {
-    enabled: watch?.enabled ?? true,
-    debounceMs: toMs(watch?.debounceMs) ?? 300,
-    flushMs: 1_000,
-    maxBatch: watch?.maxBatch ?? 500,
-    ignore: watch?.ignore ?? [],
-  };
-}
-
-/** 驻留文档 LRU 容量（缺省 32）。 */
-export function maxOpenDocuments(config: LspConfig): number {
-  return config.maxOpenDocuments ?? 32;
-}
-
-/** 读取并解析单个配置文件；文件不存在或解析失败时返回空配置。 */
+/** 读取并解析单个配置文件；文件不存在视为空配置，JSON / typebox 校验错误直接抛出。 */
 async function readConfigFile(filePath: string): Promise<LspConfig> {
   try {
     const raw = await readFile(filePath, "utf8");
     return Value.Parse(lspConfigSchema, JSON.parse(raw) as unknown);
-  } catch {
-    return {};
+  } catch (error) {
+    if (isMissingFile(error)) return {};
+    throw error;
   }
 }
 
@@ -172,8 +208,9 @@ function readConfigFileSync(filePath: string): LspConfig {
   try {
     const raw = readFileSync(filePath, "utf8");
     return Value.Parse(lspConfigSchema, JSON.parse(raw) as unknown);
-  } catch {
-    return {};
+  } catch (error) {
+    if (isMissingFile(error)) return {};
+    throw error;
   }
 }
 
@@ -182,11 +219,11 @@ function readConfigFileSync(filePath: string): LspConfig {
  * servers），否则抛配置错误（避免白名单静默失效）。disabled 中未注册的 id
  * 直接忽略。
  */
-function validateConfig(config: LspConfig, adapters?: LspServerAdapter[]): void {
+function validateConfig(config: ResolvedLspConfig, adapters?: LspServerAdapter[]): void {
   const available = new Set(
-    adapters ? adapters.map((adapter) => adapter.id) : Object.keys(config.servers ?? {}),
+    adapters ? adapters.map((adapter) => adapter.id) : Object.keys(config.servers),
   );
-  const unknown = (config.enabled ?? []).filter((id) => !available.has(id));
+  const unknown = config.enabled === undefined ? [] : [...config.enabled.difference(available)];
   if (unknown.length > 0) {
     const list = [...available].toSorted().join(", ") || "none";
     throw new Error(
@@ -195,26 +232,46 @@ function validateConfig(config: LspConfig, adapters?: LspServerAdapter[]): void 
   }
 }
 
+/** 合并 watch 段：全局为基底、本地逐字段覆盖；ignore 取并集去重（全局在前）。两边都未配置时返回 undefined，调用方据此省略 watch 键。 */
+function mergeWatch(
+  globalWatch: LspConfig["watch"],
+  localWatch: LspConfig["watch"],
+): LspConfig["watch"] {
+  if (!globalWatch && !localWatch) return undefined;
+  return {
+    ...globalWatch,
+    ...localWatch,
+    ignore: [...new Set([...(globalWatch?.ignore ?? []), ...(localWatch?.ignore ?? [])])],
+  };
+}
+
 /**
- * 合并后的生效配置：全局 `~/.pi/agent/lsp.json` 为基底，本地
- * `<cwd>/.pi/lsp.json` 覆盖——顶层标量字段（enabled/disabled、超时等）本地
- * 直接替换；`servers` 按 id 合并（同名 id 整体覆盖、新增 id，全局其余服务器
- * 保留）。
+ * 合并全局与本地两份原始配置（纯函数，供 loadLspConfig 与针对性测试使用）：
+ * 全局为基底、本地逐字段覆盖；`servers` 按 id 合并（同名 id 整体覆盖、新增 id，
+ * 全局其余服务器保留）；`watch` 按字段合并（本地逐字段覆盖、缺省用全局，
+ * `ignore` 取并集去重）。
  */
-export async function loadLspConfig(
-  cwd: string,
-  globalConfigPath: string = join(homedir(), ".pi", "agent", "lsp.json"),
-): Promise<LspConfig> {
-  const [globalConfig, localConfig] = await Promise.all([
-    readConfigFile(globalConfigPath),
-    readConfigFile(join(cwd, ".pi", "lsp.json")),
-  ]);
+export function mergeConfig(globalConfig: LspConfig, localConfig: LspConfig): LspConfig {
   const servers = mergeServerRecords(globalConfig.servers, localConfig.servers);
+  const watch = mergeWatch(globalConfig.watch, localConfig.watch);
   return {
     ...globalConfig,
     ...localConfig,
     ...(servers && { servers }),
+    ...(watch && { watch }),
   };
+}
+
+/** 读取全局 + 本地配置，合并并解析为生效配置。 */
+export async function loadLspConfig(
+  cwd: string,
+  globalConfigPath: string = join(homedir(), ".pi", "agent", "lsp.json"),
+): Promise<ResolvedLspConfig> {
+  const [globalConfig, localConfig] = await Promise.all([
+    readConfigFile(globalConfigPath),
+    readConfigFile(join(cwd, ".pi", "lsp.json")),
+  ]);
+  return resolveConfig(mergeConfig(globalConfig, localConfig));
 }
 
 /**
@@ -223,12 +280,12 @@ export async function loadLspConfig(
  */
 export function filterAdapters(
   adapters: LspServerAdapter[],
-  config: LspConfig,
+  config: ResolvedLspConfig,
 ): LspServerAdapter[] {
   validateConfig(config, adapters);
   return adapters.filter((adapter) => {
-    if (config.enabled && !config.enabled.includes(adapter.id)) return false;
-    if (config.disabled?.includes(adapter.id)) return false;
+    if (config.enabled && !config.enabled.has(adapter.id)) return false;
+    if (config.disabled?.has(adapter.id)) return false;
     return true;
   });
 }
@@ -357,7 +414,9 @@ export function createLspService(
 ): LspService {
   // 扩展加载时校验全局配置（本地配置在 session_start 预加载时校验）
   validateConfig(
-    readConfigFileSync(globalConfigPath ?? join(homedir(), ".pi", "agent", "lsp.json")),
+    resolveConfig(
+      readConfigFileSync(globalConfigPath ?? join(homedir(), ".pi", "agent", "lsp.json")),
+    ),
     adapters,
   );
   const state: LspState = {
@@ -443,7 +502,7 @@ export function createLspService(
   async function ensureWatcher(cwd: string, notify?: ExtensionUIContext["notify"]): Promise<void> {
     if (state.closing || state.disabled) return;
     const config = await loadLspConfig(cwd, globalConfigPath);
-    const watch = watchOptions(config);
+    const watch = config.watch;
     if (!watch.enabled) return;
     if (watcher && watcherCwd === cwd) return;
     await stopWatcher();
@@ -502,7 +561,13 @@ export function createLspService(
     if (state.closing || state.disabled) return [];
     if (!containsPath(file, cwd)) return [];
     const config = await loadLspConfig(cwd, globalConfigPath);
-    const timeout = timeoutOptions(config);
+    const timeout = {
+      diagnosticsDebounceMs: config.diagnosticsDebounceMs,
+      diagnosticsDocumentWaitTimeoutMs: config.diagnosticsDocumentWaitTimeoutMs,
+      diagnosticsFullWaitTimeoutMs: config.diagnosticsFullWaitTimeoutMs,
+      diagnosticsRequestTimeoutMs: config.diagnosticsRequestTimeoutMs,
+      initializeTimeoutMs: config.initializeTimeoutMs,
+    };
     const active = filterAdapters(adapters ?? createAdapters(config.servers), config);
     const extension = extname(file) || file;
     const result: LspClient[] = [];
@@ -556,7 +621,7 @@ export function createLspService(
             initializeTimeoutMs: adapter.startupTimeoutMs ?? timeout.initializeTimeoutMs,
             diagnosticsDocumentWaitTimeoutMs:
               adapter.diagnosticsWaitMs ?? timeout.diagnosticsDocumentWaitTimeoutMs,
-            maxOpenDocuments: maxOpenDocuments(config),
+            maxOpenDocuments: config.maxOpenDocuments,
           });
           if (state.closing || state.disabled) {
             await client.shutdown();
@@ -883,11 +948,11 @@ function getNoopService(): LspService {
 }
 
 /** 会话配置里生效（未被 enabled 白名单排除、未被 disabled）的服务器数量。 */
-function enabledServerCount(config: LspConfig, adapters?: LspServerAdapter[]): number {
-  const ids = adapters ? adapters.map((adapter) => adapter.id) : Object.keys(config.servers ?? {});
+function enabledServerCount(config: ResolvedLspConfig, adapters?: LspServerAdapter[]): number {
+  const ids = adapters ? adapters.map((adapter) => adapter.id) : Object.keys(config.servers);
   return ids.filter((id) => {
-    if (config.enabled && !config.enabled.includes(id)) return false;
-    if (config.disabled?.includes(id)) return false;
+    if (config.enabled && !config.enabled.has(id)) return false;
+    if (config.disabled?.has(id)) return false;
     return true;
   }).length;
 }

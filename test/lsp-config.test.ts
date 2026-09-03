@@ -1,7 +1,8 @@
 /**
  * lsp.json 配置测试（全局 ~/.pi/agent/lsp.json + 本地 <cwd>/.pi/lsp.json）：
- * - loadLspConfig 解析 / 全局本地合并 / 字段校验
- * - filterAdapters 白名单 / 排除过滤
+ * - mergeConfig / resolveConfig 纯函数（全局/本地合并 → ResolvedLspConfig，结果用 inline snapshot）
+ * - loadLspConfig 文件 IO：缺失视为空配置、解析失败直接抛错
+ * - filterAdapters 白名单与排除过滤
  * - 集成：配置过滤后未启用的 adapter 不 spawn（mock stdio LSP server 走真实握手）
  * - service watcher：注入 fake watcher 断言启停时机与 fan-out 过滤
  */
@@ -20,8 +21,8 @@ import {
   createLspService,
   filterAdapters,
   loadLspConfig,
-  maxOpenDocuments,
-  watchOptions,
+  mergeConfig,
+  resolveConfig,
 } from "../src/lib/lsp/lsp.js";
 import { type FileChange, watchWorkspace } from "../src/lib/lsp/watcher.js";
 
@@ -59,125 +60,321 @@ function mockAdapter(
   };
 }
 
-describe("loadLspConfig", () => {
-  it("解析本地配置：超时支持 number 和带单位的字符串", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
-    await mkdir(join(dir, ".pi"), { recursive: true });
-    await writeFile(
-      join(dir, ".pi", "lsp.json"),
-      JSON.stringify({
+describe("mergeConfig + resolveConfig", () => {
+  it("解析配置：超时支持 number 和带单位的字符串，结果换算为 ms", () => {
+    expect(
+      resolveConfig({
         enabled: ["pyright"],
         initializeTimeoutMs: 10_000,
         diagnosticsDebounceMs: "5s",
       }),
-    );
-    expect(await loadLspConfig(dir, join(dir, "global.json"))).toEqual({
-      enabled: ["pyright"],
-      initializeTimeoutMs: 10_000,
-      diagnosticsDebounceMs: "5s", // 原始写法保留，换算在 timeoutOptions
-    });
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it("全局为基底、本地逐字段覆盖", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
-    const globalFile = join(dir, "global.json");
-    await writeFile(
-      globalFile,
-      JSON.stringify({
-        enabled: ["typescript", "pyright"],
-        disabled: ["clangd"],
-        diagnosticsDocumentWaitTimeoutMs: 3_000,
-        initializeTimeoutMs: 60_000,
-      }),
-    );
-    await mkdir(join(dir, ".pi"), { recursive: true });
-    await writeFile(
-      join(dir, ".pi", "lsp.json"),
-      JSON.stringify({ disabled: ["ruff"], initializeTimeoutMs: 10_000 }),
-    );
-
-    expect(await loadLspConfig(dir, globalFile)).toEqual({
-      enabled: ["typescript", "pyright"],
-      disabled: ["ruff"], // 本地覆盖全局
-      diagnosticsDocumentWaitTimeoutMs: 3_000, // 全局保留
-      initializeTimeoutMs: 10_000, // 本地覆盖
-    });
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it("servers 全局与本地按 id 合并（同名 id 整体覆盖、新增 id，全局其余保留）", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
-    const globalFile = join(dir, "global.json");
-    await writeFile(
-      globalFile,
-      JSON.stringify({
-        servers: {
-          a: { bin: "/global/a", args: ["--x"] },
-          b: { bin: "/global/b" },
+    ).toMatchInlineSnapshot(`
+      {
+        "diagnosticsDebounceMs": 5000,
+        "diagnosticsDocumentWaitTimeoutMs": 5000,
+        "diagnosticsFullWaitTimeoutMs": 10000,
+        "diagnosticsRequestTimeoutMs": 3000,
+        "disabled": undefined,
+        "enabled": Set {
+          "pyright",
         },
-      }),
-    );
-    await mkdir(join(dir, ".pi"), { recursive: true });
-    await writeFile(
-      join(dir, ".pi", "lsp.json"),
-      JSON.stringify({
-        servers: {
-          a: { bin: "/local/a" }, // 整体覆盖全局 a（args 不保留）
-          c: { bin: "/local/c" }, // 新增 id
+        "initializeTimeoutMs": 10000,
+        "maxOpenDocuments": 32,
+        "servers": {},
+        "watch": {
+          "debounceMs": 300,
+          "enabled": true,
+          "flushMs": 1000,
+          "ignore": [],
+          "maxBatch": 500,
         },
-      }),
-    );
+      }
+    `);
+  });
 
-    expect(await loadLspConfig(dir, globalFile)).toEqual({
-      servers: {
-        a: { bin: "/local/a" },
-        b: { bin: "/global/b" }, // 本地未提及，全局保留
-        c: { bin: "/local/c" },
-      },
-    });
+  it("全局为基底、本地逐字段覆盖", () => {
+    expect(
+      resolveConfig(
+        mergeConfig(
+          {
+            enabled: ["typescript", "pyright"],
+            disabled: ["clangd"],
+            diagnosticsDocumentWaitTimeoutMs: 3_000,
+            initializeTimeoutMs: 60_000,
+          },
+          { disabled: ["ruff"], initializeTimeoutMs: 10_000 },
+        ),
+      ),
+    ).toMatchInlineSnapshot(`
+      {
+        "diagnosticsDebounceMs": 150,
+        "diagnosticsDocumentWaitTimeoutMs": 3000,
+        "diagnosticsFullWaitTimeoutMs": 10000,
+        "diagnosticsRequestTimeoutMs": 3000,
+        "disabled": Set {
+          "ruff",
+        },
+        "enabled": Set {
+          "typescript",
+          "pyright",
+        },
+        "initializeTimeoutMs": 10000,
+        "maxOpenDocuments": 32,
+        "servers": {},
+        "watch": {
+          "debounceMs": 300,
+          "enabled": true,
+          "flushMs": 1000,
+          "ignore": [],
+          "maxBatch": 500,
+        },
+      }
+    `);
+  });
+
+  it("servers 全局与本地按 id 合并（同名 id 整体覆盖、新增 id，全局其余保留）", () => {
+    expect(
+      resolveConfig(
+        mergeConfig(
+          {
+            servers: {
+              a: { bin: "/global/a", args: ["--x"] },
+              b: { bin: "/global/b" },
+            },
+          },
+          {
+            servers: {
+              a: { bin: "/local/a" }, // 整体覆盖全局 a（args 不保留）
+              c: { bin: "/local/c" }, // 新增 id
+            },
+          },
+        ),
+      ),
+    ).toMatchInlineSnapshot(`
+      {
+        "diagnosticsDebounceMs": 150,
+        "diagnosticsDocumentWaitTimeoutMs": 5000,
+        "diagnosticsFullWaitTimeoutMs": 10000,
+        "diagnosticsRequestTimeoutMs": 3000,
+        "disabled": undefined,
+        "enabled": undefined,
+        "initializeTimeoutMs": 45000,
+        "maxOpenDocuments": 32,
+        "servers": {
+          "a": {
+            "bin": "/local/a",
+          },
+          "b": {
+            "bin": "/global/b",
+          },
+          "c": {
+            "bin": "/local/c",
+          },
+        },
+        "watch": {
+          "debounceMs": 300,
+          "enabled": true,
+          "flushMs": 1000,
+          "ignore": [],
+          "maxBatch": 500,
+        },
+      }
+    `);
+  });
+
+  it("本地未写 servers 时全局 servers 保留", () => {
+    expect(resolveConfig(mergeConfig({ servers: { a: { bin: "/global/a" } } }, { enabled: ["a"] })))
+      .toMatchInlineSnapshot(`
+      {
+        "diagnosticsDebounceMs": 150,
+        "diagnosticsDocumentWaitTimeoutMs": 5000,
+        "diagnosticsFullWaitTimeoutMs": 10000,
+        "diagnosticsRequestTimeoutMs": 3000,
+        "disabled": undefined,
+        "enabled": Set {
+          "a",
+        },
+        "initializeTimeoutMs": 45000,
+        "maxOpenDocuments": 32,
+        "servers": {
+          "a": {
+            "bin": "/global/a",
+          },
+        },
+        "watch": {
+          "debounceMs": 300,
+          "enabled": true,
+          "flushMs": 1000,
+          "ignore": [],
+          "maxBatch": 500,
+        },
+      }
+    `);
+  });
+
+  it("本地未写 watch 段时全局 watch（含 ignore）保留", () => {
+    expect(
+      resolveConfig(
+        mergeConfig(
+          { enabled: ["pyright"], watch: { ignore: ["**/.git/**"] } },
+          { enabled: ["typescript"] },
+        ),
+      ),
+    ).toMatchInlineSnapshot(`
+      {
+        "diagnosticsDebounceMs": 150,
+        "diagnosticsDocumentWaitTimeoutMs": 5000,
+        "diagnosticsFullWaitTimeoutMs": 10000,
+        "diagnosticsRequestTimeoutMs": 3000,
+        "disabled": undefined,
+        "enabled": Set {
+          "typescript",
+        },
+        "initializeTimeoutMs": 45000,
+        "maxOpenDocuments": 32,
+        "servers": {},
+        "watch": {
+          "debounceMs": 300,
+          "enabled": true,
+          "flushMs": 1000,
+          "ignore": [
+            "**/.git/**",
+          ],
+          "maxBatch": 500,
+        },
+      }
+    `);
+  });
+
+  it("watch 本地与全局按字段合并：本地逐字段覆盖，ignore 取并集去重（全局在前）", () => {
+    expect(
+      resolveConfig(
+        mergeConfig(
+          {
+            watch: {
+              debounceMs: "1s",
+              maxBatch: 200,
+              ignore: ["**/.git/**", "**/node_modules/**"],
+            },
+          },
+          {
+            watch: { enabled: false, maxBatch: 100, ignore: ["**/node_modules/**", "**/dist/**"] },
+          },
+        ),
+      ),
+    ).toMatchInlineSnapshot(`
+      {
+        "diagnosticsDebounceMs": 150,
+        "diagnosticsDocumentWaitTimeoutMs": 5000,
+        "diagnosticsFullWaitTimeoutMs": 10000,
+        "diagnosticsRequestTimeoutMs": 3000,
+        "disabled": undefined,
+        "enabled": undefined,
+        "initializeTimeoutMs": 45000,
+        "maxOpenDocuments": 32,
+        "servers": {},
+        "watch": {
+          "debounceMs": 1000,
+          "enabled": false,
+          "flushMs": 1000,
+          "ignore": [
+            "**/.git/**",
+            "**/node_modules/**",
+            "**/dist/**",
+          ],
+          "maxBatch": 100,
+        },
+      }
+    `);
+  });
+
+  it("watch 与 maxOpenDocuments 可配置：debounceMs 字符串时长换算成 ms", () => {
+    expect(
+      resolveConfig({
+        watch: { enabled: false, debounceMs: "5s", maxBatch: 100, ignore: ["**/*.log"] },
+        maxOpenDocuments: 8,
+      }),
+    ).toMatchInlineSnapshot(`
+      {
+        "diagnosticsDebounceMs": 150,
+        "diagnosticsDocumentWaitTimeoutMs": 5000,
+        "diagnosticsFullWaitTimeoutMs": 10000,
+        "diagnosticsRequestTimeoutMs": 3000,
+        "disabled": undefined,
+        "enabled": undefined,
+        "initializeTimeoutMs": 45000,
+        "maxOpenDocuments": 8,
+        "servers": {},
+        "watch": {
+          "debounceMs": 5000,
+          "enabled": false,
+          "flushMs": 1000,
+          "ignore": [
+            "**/*.log",
+          ],
+          "maxBatch": 100,
+        },
+      }
+    `);
+  });
+
+  it("未配置任何字段时解析为完整缺省配置", () => {
+    expect(resolveConfig({})).toMatchInlineSnapshot(`
+      {
+        "diagnosticsDebounceMs": 150,
+        "diagnosticsDocumentWaitTimeoutMs": 5000,
+        "diagnosticsFullWaitTimeoutMs": 10000,
+        "diagnosticsRequestTimeoutMs": 3000,
+        "disabled": undefined,
+        "enabled": undefined,
+        "initializeTimeoutMs": 45000,
+        "maxOpenDocuments": 32,
+        "servers": {},
+        "watch": {
+          "debounceMs": 300,
+          "enabled": true,
+          "flushMs": 1000,
+          "ignore": [],
+          "maxBatch": 500,
+        },
+      }
+    `);
+  });
+});
+
+describe("loadLspConfig 文件 IO", () => {
+  it("配置文件缺失时按空配置解析", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    expect(await loadLspConfig(dir, join(dir, "nope.json"))).toEqual(resolveConfig({}));
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("本地未写 servers 时全局 servers 保留", async () => {
+  it("配置文件解析失败（非法 JSON / 类型不符）时直接抛错", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
-    const globalFile = join(dir, "global.json");
-    await writeFile(
-      globalFile,
-      JSON.stringify({
-        servers: { a: { bin: "/global/a" } },
-      }),
-    );
+    const globalFile = join(dir, "nope.json");
     await mkdir(join(dir, ".pi"), { recursive: true });
-    await writeFile(join(dir, ".pi", "lsp.json"), JSON.stringify({ enabled: ["a"] }));
 
-    expect(await loadLspConfig(dir, globalFile)).toEqual({
-      servers: { a: { bin: "/global/a" } },
-      enabled: ["a"],
-    });
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it("缺配置文件或解析失败时返回空配置（全部启用）", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
-    expect(await loadLspConfig(dir, join(dir, "nope.json"))).toEqual({});
-
-    await mkdir(join(dir, ".pi"), { recursive: true });
     await writeFile(join(dir, ".pi", "lsp.json"), "not json");
-    expect(await loadLspConfig(dir, join(dir, "nope.json"))).toEqual({});
+    await expect(loadLspConfig(dir, globalFile)).rejects.toThrow();
 
-    // typebox 严格验证：字段类型不符 / number 小于 1 都会使整个配置解析失败
+    // typebox 严格验证：字段类型不符 / number 小于 1 都直接抛错
     await writeFile(
       join(dir, ".pi", "lsp.json"),
       JSON.stringify({ enabled: 42, initializeTimeoutMs: -1 }),
     );
-    expect(await loadLspConfig(dir, join(dir, "nope.json"))).toEqual({});
+    await expect(loadLspConfig(dir, globalFile)).rejects.toThrow();
+
+    await writeFile(
+      join(dir, ".pi", "lsp.json"),
+      JSON.stringify({ watch: { maxBatch: 0 }, maxOpenDocuments: 0 }),
+    );
+    await expect(loadLspConfig(dir, globalFile)).rejects.toThrow();
 
     await writeFile(
       join(dir, ".pi", "lsp.json"),
       JSON.stringify({ enabled: ["pyright", 1, null], disabled: ["ruff", {}] }),
     );
-    expect(await loadLspConfig(dir, join(dir, "nope.json"))).toEqual({});
+    await expect(loadLspConfig(dir, globalFile)).rejects.toThrow();
     await rm(dir, { recursive: true, force: true });
   });
 });
@@ -222,87 +419,44 @@ describe("lsp config validation", () => {
   });
 });
 
-describe("watch config", () => {
-  it("未配置 watch 时应用缺省值：enabled true / debounce 300 / maxOpenDocuments 32", () => {
-    expect(watchOptions({})).toEqual({
-      enabled: true,
-      debounceMs: 300,
-      flushMs: 1_000,
-      maxBatch: 500,
-      ignore: [],
-    });
-    expect(maxOpenDocuments({})).toBe(32);
-  });
-
-  it("watch 字段与 maxOpenDocuments 可配置，debounceMs 字符串时长换算", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
-    await mkdir(join(dir, ".pi"), { recursive: true });
-    await writeFile(
-      join(dir, ".pi", "lsp.json"),
-      JSON.stringify({
-        watch: {
-          enabled: false,
-          debounceMs: "5s",
-          maxBatch: 100,
-          ignore: ["**/*.log"],
-        },
-        maxOpenDocuments: 8,
-      }),
-    );
-    const config = await loadLspConfig(dir, join(dir, "no-global.json"));
-    expect(watchOptions(config)).toEqual({
-      enabled: false,
-      debounceMs: 5_000,
-      flushMs: 1_000,
-      maxBatch: 100,
-      ignore: ["**/*.log"],
-    });
-    expect(maxOpenDocuments(config)).toBe(8);
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it("非法值被 typebox 拒绝：整份配置解析失败回退空配置", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
-    await mkdir(join(dir, ".pi"), { recursive: true });
-    await writeFile(
-      join(dir, ".pi", "lsp.json"),
-      JSON.stringify({ watch: { maxBatch: 0 }, maxOpenDocuments: 0 }),
-    );
-    expect(await loadLspConfig(dir, join(dir, "no-global.json"))).toEqual({});
-    await rm(dir, { recursive: true, force: true });
-  });
-});
-
 describe("filterAdapters", () => {
   const adapters = [plainAdapter("a"), plainAdapter("b"), plainAdapter("c")];
 
   it("无配置时全部启用", () => {
-    expect(filterAdapters(adapters, {}).map((a) => a.id)).toEqual(["a", "b", "c"]);
+    expect(filterAdapters(adapters, resolveConfig({})).map((a) => a.id)).toEqual(["a", "b", "c"]);
   });
 
   it("enabled 白名单只保留列出的", () => {
-    expect(filterAdapters(adapters, { enabled: ["a", "b"] }).map((a) => a.id)).toEqual(["a", "b"]);
+    expect(
+      filterAdapters(adapters, resolveConfig({ enabled: ["a", "b"] })).map((a) => a.id),
+    ).toEqual(["a", "b"]);
   });
 
   it("disabled 排除列出的", () => {
-    expect(filterAdapters(adapters, { disabled: ["c"] }).map((a) => a.id)).toEqual(["a", "b"]);
+    expect(filterAdapters(adapters, resolveConfig({ disabled: ["c"] })).map((a) => a.id)).toEqual([
+      "a",
+      "b",
+    ]);
   });
 
   it("enabled 与 disabled 同时作用", () => {
     expect(
-      filterAdapters(adapters, { enabled: ["a", "b", "c"], disabled: ["b"] }).map((a) => a.id),
+      filterAdapters(adapters, resolveConfig({ enabled: ["a", "b", "c"], disabled: ["b"] })).map(
+        (a) => a.id,
+      ),
     ).toEqual(["a", "c"]);
   });
 
   it("enabled 引用不存在的服务器 id 时抛错", () => {
-    expect(() => filterAdapters(adapters, { enabled: ["a", "nope"] })).toThrow(/nope/);
+    expect(() => filterAdapters(adapters, resolveConfig({ enabled: ["a", "nope"] }))).toThrow(
+      /nope/,
+    );
   });
 
   it("disabled 引用不存在的服务器 id 时忽略", () => {
-    expect(filterAdapters(adapters, { disabled: ["nope", "c"] }).map((a) => a.id)).toEqual([
-      "a",
-      "b",
-    ]);
+    expect(
+      filterAdapters(adapters, resolveConfig({ disabled: ["nope", "c"] })).map((a) => a.id),
+    ).toEqual(["a", "b"]);
   });
 });
 
