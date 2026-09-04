@@ -1039,14 +1039,29 @@ export function createLspManager(
       const config = await loadLspConfig(ctx.cwd, options?.globalConfigPath);
       validateConfig(config, options?.adapters);
       if (enabledServerCount(config, options?.adapters) === 0) return;
+      // 下面两个闭包被 service 长期持有，可能在会话被替换或 reload 后仍触发
+      // （session_shutdown 清理、后台 watcher 错误、in-flight spawn 失败），
+      // 而旧 ctx 已被 pi 标记 stale，ctx.ui getter 会直接抛错。UI 写入是尽力
+      // 而为的上报，stale 时静默跳过——抛错逃逸会变成 unhandled rejection，
+      // pi 会因此整个退出。
       const next = createLspService(options?.adapters, options?.globalConfigPath, {
         // 会话级通知：任何通道触发的启动失败都主动上报（不只依赖请求方 notify）
-        notify: (message, level) => ctx.ui.notify(message, level),
+        notify: (message, level) => {
+          try {
+            ctx.ui.notify(message, level);
+          } catch {
+            /* 旧会话 ctx 已失效或 UI 不可用：通知无处可去 */
+          }
+        },
       });
       // footer status 显示当前所有 LSP server 状态（无 UI 时不显示）
-      next.attachStatus((text) =>
-        ctx.ui.setStatus("lsp", text ? ctx.ui.theme.fg("accent", text) : undefined),
-      );
+      next.attachStatus((text) => {
+        try {
+          ctx.ui.setStatus("lsp", text ? ctx.ui.theme.fg("accent", text) : undefined);
+        } catch {
+          /* 旧会话 ctx 已失效：footer 不再属于本 service */
+        }
+      });
       service = next;
       hooks.onEnabled(pi, next);
     } catch (error) {
@@ -1056,7 +1071,11 @@ export function createLspManager(
   });
 
   pi.on("session_shutdown", () => {
-    void service?.shutdownAll();
+    // 关停阶段 UI 已不可用（可能恰逢会话替换、旧 ctx 已 stale），清理失败
+    // 无处上报，静默吞掉以避免 unhandled rejection 致 pi 退出
+    void service?.shutdownAll().catch(() => {
+      /* noop */
+    });
   });
 
   // agent 生命周期边界显式刷新 status：agent 运行中 LSP server 才被惰性

@@ -21,6 +21,7 @@ import {
   createLspService,
   filterAdapters,
   loadLspConfig,
+  type LspService,
   mergeConfig,
   resolveConfig,
 } from "../src/lib/lsp/lsp.js";
@@ -415,6 +416,82 @@ describe("lsp config validation", () => {
     const notify = vi.fn();
     await handler({}, { cwd: dir, ui: { notify } });
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("nope"), "error");
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe("session 替换后旧 ctx 失效（stale ctx）", () => {
+  // pi 在会话替换 / reload 后把旧 ctx 标记 stale，ctx.ui getter 直接抛错；
+  // LSP service 持有的闭包（status 渲染、sessionNotify）可能在此之后触发。
+  const STALE_ERROR = new Error("This extension ctx is stale after session replacement or reload.");
+
+  function staleCtx(cwd: string): { cwd: string; ui: never } {
+    return {
+      cwd,
+      get ui(): never {
+        throw STALE_ERROR;
+      },
+    };
+  }
+
+  it("session_shutdown 触发 shutdownAll 不产生 unhandled rejection", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-stale-"));
+    const globalFile = join(dir, "global.json");
+    await writeFile(globalFile, JSON.stringify({ servers: { pyright: {} } }));
+    const on = vi.fn();
+    const onEnabled = vi.fn();
+    createLspManager(
+      { on, registerCommand: vi.fn() } as unknown as ExtensionAPI,
+      { onEnabled },
+      { adapters: [plainAdapter("pyright")], globalConfigPath: globalFile },
+    );
+    const start = on.mock.calls.find((c) => c[0] === "session_start")?.[1] as (
+      event: unknown,
+      ctx: unknown,
+    ) => Promise<void>;
+    const shutdown = on.mock.calls.find((c) => c[0] === "session_shutdown")?.[1] as () => void;
+    await start({}, staleCtx(dir));
+    expect(onEnabled).toHaveBeenCalledOnce();
+
+    // 修复前 shutdownAll 内 updateStatusText 访问 stale ctx.ui 抛错，
+    // 被 void 丢弃成 unhandled rejection（pi 因此整个退出）
+    shutdown();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("stale ctx 下 spawn 失败的 notify 与 status 渲染不向外抛错", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-stale-"));
+    await writeFile(join(dir, "a.py"), "x = 1\n");
+    const globalFile = join(dir, "global.json");
+    await writeFile(globalFile, JSON.stringify({ servers: { pyright: {} } }));
+    const failingAdapter: LspServerAdapter = {
+      id: "pyright",
+      extensions: [".py"],
+      findRoot: async () => dir,
+      spawn: async () => {
+        return;
+      },
+    };
+    const on = vi.fn();
+    const onEnabled = vi.fn();
+    createLspManager(
+      { on, registerCommand: vi.fn() } as unknown as ExtensionAPI,
+      { onEnabled },
+      { adapters: [failingAdapter], globalConfigPath: globalFile },
+    );
+    const start = on.mock.calls.find((c) => c[0] === "session_start")?.[1] as (
+      event: unknown,
+      ctx: unknown,
+    ) => Promise<void>;
+    await start({}, staleCtx(dir));
+    const service = onEnabled.mock.calls[0]?.[1] as LspService;
+
+    // spawn 失败 → reportStartupFailure：updateStatusText + sessionNotify 都触碰 stale ctx，
+    // 修复前 touchFile 直接 reject
+    await expect(service.touchFile(join(dir, "a.py"), dir)).resolves.toBeUndefined();
+
     await rm(dir, { recursive: true, force: true });
   });
 });
