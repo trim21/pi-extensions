@@ -231,8 +231,10 @@ describe("workspace watcher", () => {
       const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
       const ignoredDir = join(dir, "node_modules");
       const ignoredFile = join(ignoredDir, "a.js");
-      const keepFile = join(dir, "keep.txt");
+      const keepDir = join(dir, "keep");
+      const keepFile = join(keepDir, "a.txt");
       await mkdir(ignoredDir, { recursive: true });
+      await mkdir(keepDir, { recursive: true });
       await writeFile(ignoredFile, "x");
       await writeFile(keepFile, "x");
       const { watcher, batches } = await collect(dir, { debounceMs: 50, flushMs: 200 });
@@ -242,8 +244,8 @@ describe("workspace watcher", () => {
         const inoOf = async (path: string) => (await lstat(path)).ino;
         expect(watched.has(await inoOf(ignoredFile))).toBe(false);
         expect(watched.has(await inoOf(ignoredDir))).toBe(false);
-        // sanity：非 ignored 文件确有内核 watch，证明断言管道有效
-        expect(watched.has(await inoOf(keepFile))).toBe(true);
+        // sanity：非 ignored 子目录确有内核 watch，证明断言管道有效
+        expect(watched.has(await inoOf(keepDir))).toBe(true);
         expect(batches.flat()).toHaveLength(0);
       } finally {
         await watcher.stop();
@@ -257,8 +259,9 @@ describe("workspace watcher", () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
     let truncated = 0;
     const { watcher, batches } = await collect(dir, {
-      debounceMs: 50,
-      flushMs: 200,
+      // parcel inotify 后端按块投递（实测 ~5ms / ~55ms 两批），去抖窗口须覆盖块间隔
+      debounceMs: 100,
+      flushMs: 300,
       maxBatch: 3,
       onTruncated: () => {
         truncated += 1;

@@ -1,25 +1,29 @@
 /**
- * 工作区文件监听器：单个递归 fs.watch + 去抖批量回调。
+ * 工作区文件监听器：@parcel/watcher 事件源 + 去抖批量回调。
  *
- * - 事件源用 `node:fs/promises` 的 `watch(dir, { recursive: true, signal })`，
- *   不引入 chokidar（与仓库"FS 一律用 node:fs/promises"约定一致）；
- * - create / delete / rename 在底层都表现为 `rename`，内容改动为 `change`，
- *   故 LSP 的 created / changed / deleted 类型由 `lstat` 判定；
+ * - 事件源用 @parcel/watcher（原生实现，Linux 正确管理 inotify 生命周期，
+ *   忽略目录不建 watch，事件已区分 create / update / delete），
+ *   映射为 LSP 的 created / changed / deleted；
+ * - parcel 不报告目标是否目录：非删除事件用 lstat 学习已知目录集合并丢弃
+ *   目录事件；删除事件据此标记 isDirectory，由上层对驻留文档补 deleted；
  * - 尾部去抖（缺省 300ms）合并短时洪峰，最长 flushMs（缺省 1s）强制清批；
  * - 内置忽略 `node_modules` / `.git` / `dist` / `build` / `.venv` / `venv` /
- *   `target` / `coverage`，配置可追加；
- * - 忽略列表同时下传给 `fs.watch` 的 `ignore` 选项做内核层排除（Node >= 24.14 /
- *   26 的 recursive watch 对命中路径不创建 inotify watch，避免大型 `.git` 等
- *   子树耗尽 watch 配额导致 ENOSPC 崩溃）；运行环境不支持时静默回退为事件层过滤；
+ *   `target` / `coverage`，配置可追加；忽略列表下传 parcel 的 `ignore`
+ *   选项做后端层排除（忽略目录不递归、不建 watch），事件层再用 minimatch
+ *   过滤一遍兜底语义差异；
  * - 单批超过 maxBatch（缺省 500）截断并回调 onTruncated 提示一次；
- * - 目录事件默认丢弃；目录被删除时上报（isDirectory: true），由上层对其中
- *   的驻留文档补 deleted 事件。监听器启动或运行期失败时调用 onError 降级，
- *   不抛错。
+ * - 目录事件默认丢弃；目录被删除时上报（isDirectory: true）。监听器启动或
+ *   运行期失败时调用 onError 降级，不抛错。
  */
 
-import { lstat, watch, type WatchOptions as FsWatchOptions } from "node:fs/promises";
-import { join, normalize, relative, sep } from "node:path";
+import { lstat } from "node:fs/promises";
+import { normalize, relative, sep } from "node:path";
 
+import {
+  type AsyncSubscription,
+  type Event as ParcelWatcherEvent,
+  subscribe,
+} from "@parcel/watcher";
 import { minimatch } from "minimatch";
 
 export type FileChangeType = "created" | "changed" | "deleted";
@@ -69,34 +73,6 @@ function isIgnored(path: string, dir: string, patterns: string[]): boolean {
 }
 
 /**
- * 为内核层 `fs.watch` 的 `ignore` 选项派生 pattern：为每条「目录内容」形态的
- * glob（尾部为通配目录段）追加「目录本身」形态并去重——Node 内部按相对路径
- * 对每个子项逐一匹配，只给内容形态时忽略目录本身仍会建 watch。
- *
- * 与事件层 minimatch 的语义差异（Node 内部 matcher 固定 `matchBase: true`、
- * `nonegate: true`）：无斜杠 pattern 按 basename 匹配任意层级，`!` 否定在
- * 内核层不生效。内核层只会少产生事件，差异部分仍由事件层兜底。
- */
-function kernelIgnorePatterns(patterns: readonly string[]): string[] {
-  const derived = new Set<string>();
-  for (const pattern of patterns) {
-    derived.add(pattern);
-    if (pattern.endsWith("/**")) derived.add(pattern.slice(0, -3));
-  }
-  return [...derived];
-}
-
-/**
- * `ignore` 选项的运行时支持始于 Node 24.14 / 26，@types/node 24.x 尚未声明；
- * 同时需剔除 fs 模块 WatchOptions.encoding 中的 "buffer" 字面量，否则不可赋给
- * fs/promises watch 返回 string filename 的重载。
- */
-type FsWatchOptionsWithIgnore = Omit<FsWatchOptions, "encoding"> & {
-  encoding?: BufferEncoding;
-  ignore?: readonly string[];
-};
-
-/**
  * 启动对 dir 的递归监听。onBatch 收到去抖合并后的批次；stop 后不再回调。
  * 返回的 promise 只在监听器无法建立（目录不存在等）时 reject——运行期
  * 错误一律走 onError 降级。
@@ -109,11 +85,13 @@ export function watchWorkspace(
   const debounceMs = options?.debounceMs ?? 300;
   const flushMs = options?.flushMs ?? 1_000;
   const maxBatch = options?.maxBatch ?? 500;
-  const ignorePatterns = kernelIgnorePatterns([...DEFAULT_IGNORE, ...(options?.ignore ?? [])]);
-  const abort = new AbortController();
+  const ignorePatterns = [...DEFAULT_IGNORE, ...(options?.ignore ?? [])];
 
-  // 从 stat 成功事件学习已知目录，目录被删除时据此标记 isDirectory
+  // 从非删除事件学习已知目录，目录被删除时据此标记 isDirectory
   const seenDirectories = new Set<string>();
+
+  let stopped = false;
+  let subscription: AsyncSubscription | undefined;
 
   let pending: FileChange[] = [];
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -139,17 +117,14 @@ export function watchWorkspace(
   };
 
   const push = (change: FileChange): void => {
+    if (stopped) return;
     if (pending.length === 0) maxTimer = setTimeout(flush, flushMs);
     pending.push(change);
     if (flushTimer) clearTimeout(flushTimer);
     flushTimer = setTimeout(flush, debounceMs);
   };
 
-  const classify = async (
-    filename: string,
-    eventType: "rename" | "change",
-  ): Promise<FileChange | undefined> => {
-    const path = normalize(join(dir, filename));
+  const classify = async (path: string, type: FileChangeType): Promise<FileChange | undefined> => {
     if (path === dir) return undefined;
     let isDirectory = false;
     let exists = true;
@@ -161,50 +136,65 @@ export function watchWorkspace(
       exists = false;
       if (seenDirectories.delete(path)) isDirectory = true;
     }
-    if (eventType === "change") {
-      if (!exists) return { path, type: "deleted", isDirectory };
-      if (isDirectory) return undefined;
-      return { path, type: "changed", isDirectory };
-    }
-    // rename：创建 / 删除 / 移入移出
+    if (type === "deleted") return { path, type, isDirectory };
+    // 事件与 lstat 之间的竞态：目标已消失按删除处理
     if (!exists) return { path, type: "deleted", isDirectory };
     if (isDirectory) return undefined;
-    return { path, type: "created", isDirectory };
+    return { path, type, isDirectory };
   };
 
-  const consumer = (async () => {
-    try {
-      const watchOptions: FsWatchOptionsWithIgnore = {
-        recursive: true,
-        signal: abort.signal,
-        ignore: ignorePatterns,
-      };
-      const iterator = watch(dir, watchOptions);
-      for await (const event of iterator) {
-        if (!event.filename) continue;
-        const change = await classify(
-          event.filename,
-          event.eventType === "change" ? "change" : "rename",
-        );
+  const handleError = (error: unknown): void => {
+    if (stopped) return;
+    options?.onError?.(`workspace watcher failed for ${dir}: ${String(error)}`);
+  };
+
+  const handleEvents = (error: Error | null, events: ParcelWatcherEvent[]): void => {
+    if (error) {
+      handleError(error);
+      return;
+    }
+    void (async () => {
+      for (const event of events) {
+        if (stopped) return;
+        const path = normalize(event.path);
+        const type: FileChangeType =
+          event.type === "create" ? "created" : event.type === "update" ? "changed" : "deleted";
+        const change = await classify(path, type);
         if (!change) continue;
         if (isIgnored(change.path, dir, ignorePatterns)) continue;
         push(change);
       }
+    })();
+  };
+
+  async function startSubscription(): Promise<void> {
+    try {
+      subscription = await subscribe(dir, handleEvents, { ignore: ignorePatterns });
+      if (stopped) {
+        await subscription.unsubscribe();
+        subscription = undefined;
+      }
     } catch (error) {
-      if (abort.signal.aborted) return;
-      options?.onError?.(`workspace watcher failed for ${dir}: ${String(error)}`);
+      handleError(error);
     }
-  })();
+  }
+
+  const started = startSubscription();
 
   // 目录不存在 / 无权限等启动期问题在这里暴露，让调用方可以降级
   return lstat(dir).then(() => ({
     async stop(): Promise<void> {
-      abort.abort();
-      try {
-        await consumer;
-      } catch {
-        // 监听器已因 abort 正常退出
+      stopped = true;
+      clearTimers();
+      if (subscription) {
+        try {
+          await subscription.unsubscribe();
+        } catch {
+          // 订阅已失败或重复 stop
+        }
+        subscription = undefined;
       }
+      await started;
     },
   }));
 }

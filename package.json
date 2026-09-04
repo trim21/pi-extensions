@@ -100,6 +100,7 @@
   "dependencies": {
     "@cortexkit/aft-bridge": "0.55.0",
     "@mozilla/readability": "^0.6.0",
+    "@parcel/watcher": "^2.6.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "jsonc-parser": "^3.3.1",
     "linkedom": "^0.18.0",
