@@ -11,6 +11,7 @@ import {
   buildZoomSubtitle,
   callCallgraphWithBuildRetry,
   compactArgs,
+  createSemanticIndexProgressFormatter,
   formatSemanticIndexProgress,
 } from "../src/aft/tools.js";
 import { resolvePathArg } from "../src/lib/path.js";
@@ -174,6 +175,78 @@ describe("formatSemanticIndexProgress", () => {
         building({ stage: "embedding_symbols", embedded_chunks: "6", total_chunks: 12 }),
       ),
     ).toBeUndefined();
+  });
+});
+
+function createFormatter() {
+  let now = 0;
+  return {
+    advance: (ms: number) => {
+      now += ms;
+    },
+    format: createSemanticIndexProgressFormatter({ now: () => now }),
+  };
+}
+
+describe("createSemanticIndexProgressFormatter", () => {
+  it("extrapolates remaining time from the sliding window", () => {
+    const { advance, format } = createFormatter();
+    expect(format(building({ stage: "embedding", embedded_chunks: 0, total_chunks: 1000 }))).toBe(
+      "语义索引构建中 (embedding) · 0/1000 chunks (0%)",
+    );
+    advance(10_000);
+    expect(format(building({ stage: "embedding", embedded_chunks: 100, total_chunks: 1000 }))).toBe(
+      "语义索引构建中 (embedding) · 100/1000 chunks (10%) · 剩余约 1m30s",
+    );
+  });
+
+  it("hides eta until the sample window is long enough", () => {
+    const { advance, format } = createFormatter();
+    format(building({ embedded_chunks: 0, total_chunks: 100 }));
+    advance(1_000);
+    expect(format(building({ embedded_chunks: 50, total_chunks: 100 }))).toBe(
+      "语义索引构建中 · 50/100 chunks (50%)",
+    );
+  });
+
+  it("recomputes eta against a new total without resetting samples", () => {
+    const { advance, format } = createFormatter();
+    format(building({ embedded_chunks: 0, total_chunks: 100 }));
+    advance(10_000);
+    format(building({ embedded_chunks: 50, total_chunks: 100 }));
+    advance(1_000);
+    // total 增长只改分母：批次速率稳定，保留样本、用新 total 重算剩余时间。
+    expect(format(building({ embedded_chunks: 55, total_chunks: 200 }))).toBe(
+      "语义索引构建中 · 55/200 chunks (28%) · 剩余约 30s",
+    );
+  });
+
+  it("resets samples when the stage changes", () => {
+    const { advance, format } = createFormatter();
+    format(building({ stage: "embedding", embedded_chunks: 0, total_chunks: 100 }));
+    advance(10_000);
+    format(building({ stage: "embedding", embedded_chunks: 50, total_chunks: 100 }));
+    advance(1_000);
+    expect(format(building({ stage: "merging", embedded_chunks: 55, total_chunks: 100 }))).toBe(
+      "语义索引构建中 (merging) · 55/100 chunks (55%)",
+    );
+  });
+
+  it("resets samples when embedded chunks regress", () => {
+    const { advance, format } = createFormatter();
+    format(building({ stage: "embedding", embedded_chunks: 0, total_chunks: 100 }));
+    advance(10_000);
+    format(building({ stage: "embedding", embedded_chunks: 50, total_chunks: 100 }));
+    advance(10_000);
+    expect(format(building({ stage: "embedding", embedded_chunks: 40, total_chunks: 100 }))).toBe(
+      "语义索引构建中 (embedding) · 40/100 chunks (40%)",
+    );
+  });
+
+  it("returns undefined for non-building snapshots", () => {
+    const { format } = createFormatter();
+    expect(format({ semantic_index: { status: "ready" } })).toBeUndefined();
+    expect(format({})).toBeUndefined();
   });
 });
 

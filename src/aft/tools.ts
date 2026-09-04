@@ -444,18 +444,20 @@ const semanticIndexProgressSchema = Type.Object({
 
 type SemanticIndexProgress = Static<typeof semanticIndexProgressSchema>;
 
-/** status 快照 → 一行构建进度文本；非 Building 或形状不符返回 undefined（不显示）。 */
-export function formatSemanticIndexProgress(snapshot: StatusSnapshot): string | undefined {
+/** 解析快照里的语义索引构建进度；非 Building 或形状不符返回 undefined（不显示）。 */
+function parseSemanticIndexProgress(snapshot: StatusSnapshot): SemanticIndexProgress | undefined {
   const raw = snapshot.semantic_index;
   if (raw === undefined) {
     return undefined;
   }
-  let progress: SemanticIndexProgress;
   try {
-    progress = Value.Parse(semanticIndexProgressSchema, raw);
+    return Value.Parse(semanticIndexProgressSchema, raw);
   } catch {
     return undefined;
   }
+}
+
+function semanticIndexProgressParts(progress: SemanticIndexProgress): string[] {
   const parts = [`语义索引构建中${progress.stage === undefined ? "" : ` (${progress.stage})`}`];
   if (
     progress.embedded_chunks !== undefined &&
@@ -475,7 +477,97 @@ export function formatSemanticIndexProgress(snapshot: StatusSnapshot): string | 
   ) {
     parts.push(`batch ${progress.current_batch}/${progress.total_batches}`);
   }
-  return parts.join(" · ");
+  return parts;
+}
+
+/** status 快照 → 一行构建进度文本（不含 ETA）。 */
+export function formatSemanticIndexProgress(snapshot: StatusSnapshot): string | undefined {
+  const progress = parseSemanticIndexProgress(snapshot);
+  if (progress === undefined) {
+    return undefined;
+  }
+  return semanticIndexProgressParts(progress).join(" · ");
+}
+
+/** eta 速率估计的滑动窗口：只看最近这段时间的样本，丢弃更早的。 */
+const ETA_WINDOW_MS = 15_000;
+/** 样本跨度过短时速率噪声太大（快照约每秒一条），不显示 ETA。 */
+const ETA_MIN_WINDOW_MS = 3_000;
+/** 滑动窗口里最多保留的样本数，防快照异常密集时无界增长。 */
+const ETA_MAX_SAMPLES = 30;
+
+interface EtaSample {
+  readonly at: number;
+  readonly embedded: number;
+  readonly stage: string | undefined;
+}
+
+function formatEta(ms: number): string {
+  // 取整到 5s 粒度，避免给出虚假的精确感。
+  const seconds = Math.max(5, Math.round(ms / 1000 / 5) * 5);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest === 0 ? `${minutes}m` : `${minutes}m${rest}s`;
+}
+
+/**
+ * 带剩余时间估计的进度格式化器。基于快照序列做滑动窗口速率外推
+ * （embedding 批次速率受远端 API 波动影响并非线性，窗口越近越准）。
+ * total_chunks / total_batches 变化只影响分母，批次处理速率不变，
+ * 直接用新 total 重算 ETA，不清空样本；仅 stage 变化（换工作内容）或
+ * embedded 回退（watcher 重建）时重置。工厂 + 闭包持有状态：每次
+ * 工具调用 / CLI 运行创建独立实例。
+ */
+export function createSemanticIndexProgressFormatter(options?: {
+  now?: () => number;
+}): (snapshot: StatusSnapshot) => string | undefined {
+  const now = options?.now ?? Date.now;
+  let samples: EtaSample[] = [];
+
+  return (snapshot: StatusSnapshot): string | undefined => {
+    const progress = parseSemanticIndexProgress(snapshot);
+    if (progress === undefined) {
+      return undefined;
+    }
+    const parts = semanticIndexProgressParts(progress);
+
+    const { embedded_chunks: embedded, total_chunks: total, stage } = progress;
+    const last = samples.at(-1);
+    if (last !== undefined && last.stage !== stage) {
+      samples = [];
+    }
+    if (embedded !== undefined && total !== undefined && total > 0) {
+      if (last !== undefined && embedded < last.embedded) {
+        samples = [];
+      }
+      const at = now();
+      samples.push({ at, embedded, stage });
+      samples = samples.filter((sample) => at - sample.at <= ETA_WINDOW_MS);
+      if (samples.length > ETA_MAX_SAMPLES) {
+        samples = samples.slice(-ETA_MAX_SAMPLES);
+      }
+    }
+
+    const first = samples.at(0);
+    const current = samples.at(-1);
+    if (
+      first !== undefined &&
+      current !== undefined &&
+      total !== undefined &&
+      first !== current &&
+      current.at - first.at >= ETA_MIN_WINDOW_MS
+    ) {
+      const rate = (current.embedded - first.embedded) / (current.at - first.at);
+      const remaining = total - current.embedded;
+      if (rate > 0 && remaining > 0) {
+        parts.push(`剩余约 ${formatEta(remaining / rate)}`);
+      }
+    }
+    return parts.join(" · ");
+  };
 }
 
 const SearchParams = Type.Object(
@@ -520,11 +612,12 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
       });
 
       const bridge = bridgeFor(ctx);
+      const formatProgress = createSemanticIndexProgressFormatter();
       const stopProgress =
         onUpdate === undefined
           ? undefined
           : subscribeBridgeStatus(bridge, (snapshot) => {
-              const text = formatSemanticIndexProgress(snapshot);
+              const text = formatProgress(snapshot);
               if (text !== undefined) {
                 onUpdate({ content: [{ type: "text", text }], details: undefined });
               }

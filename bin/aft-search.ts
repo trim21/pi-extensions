@@ -35,7 +35,7 @@ import {
   shutdownAftPool,
 } from "../src/aft/bridge.js";
 import { loadAftConfig } from "../src/aft/config.js";
-import { compactArgs, formatSemanticIndexProgress } from "../src/aft/tools.js";
+import { compactArgs, createSemanticIndexProgressFormatter } from "../src/aft/tools.js";
 import { expandHome } from "../src/lib/path.js";
 
 type AftState = Awaited<ReturnType<typeof createAftState>>;
@@ -100,14 +100,15 @@ async function search(flags: {
     });
     // CLI 没有 session，传空 context（callAftTool 只读 sessionManager）；
     // 超时策略与 aft_search 工具一致：覆盖默认 60s，容纳首次索引构建等待。
-    // 等待期间订阅 bridge status：语义索引 Building 时把进度打到 stderr，
-    // --raw-status 则打印收到的完整快照（调试真实字段形状用）。
+    // 等待期间订阅 bridge status：语义索引 Building 时把进度（含剩余时间估计）
+    // 打到 stderr，--raw-status 则打印收到的完整快照（调试真实字段形状用）。
+    const formatProgress = createSemanticIndexProgressFormatter();
     const stopProgress = subscribeBridgeStatus(bridge, (snapshot) => {
       if (flags.rawStatus === true) {
         diagnose(`status: ${JSON.stringify(snapshot)}`);
         return;
       }
-      const text = formatSemanticIndexProgress(snapshot);
+      const text = formatProgress(snapshot);
       if (text !== undefined) console.error(text);
     });
     try {
