@@ -110,4 +110,51 @@ describe("LSP stop/start/reload", () => {
 
     await service.shutdownAll();
   });
+
+  it("reloadAll restarts every server and re-reads config", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-commands-"));
+    await writeFile(join(dir, "a.py"), "x = 1\n");
+    const globalFile = join(dir, "global.json");
+    await writeFile(globalFile, JSON.stringify({ disabled: ["a", "b"] }));
+    const a = countingAdapter("a");
+    const b = countingAdapter("b");
+    const service = createLspService([a.adapter, b.adapter], globalFile);
+
+    // 配置禁用：不 spawn
+    await service.touchFile(join(dir, "a.py"), dir);
+    expect(a.spawns()).toBe(0);
+    expect(b.spawns()).toBe(0);
+
+    // 改盘上配置解除禁用：同 cwd 缓存生效，仍不 spawn
+    await writeFile(globalFile, JSON.stringify({}));
+    await service.touchFile(join(dir, "a.py"), dir);
+    expect(a.spawns()).toBe(0);
+
+    // reloadAll 清缓存并解除禁用：两个服务器都会在下次触碰启动
+    await service.reloadAll();
+    await service.touchFile(join(dir, "a.py"), dir);
+    expect(a.spawns()).toBe(1);
+    expect(b.spawns()).toBe(1);
+
+    await service.shutdownAll();
+  });
+
+  it("reloadAll re-enables LSP after stop", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-commands-"));
+    await writeFile(join(dir, "a.py"), "x = 1\n");
+    const a = countingAdapter("a");
+    const service = createLspService([a.adapter], join(dir, "no-global.json"));
+    await service.touchFile(join(dir, "a.py"), dir);
+    expect(a.spawns()).toBe(1);
+
+    await service.stop();
+    await service.touchFile(join(dir, "a.py"), dir);
+    expect(a.spawns()).toBe(1);
+
+    await service.reloadAll();
+    await service.touchFile(join(dir, "a.py"), dir);
+    expect(a.spawns()).toBe(2);
+
+    await service.shutdownAll();
+  });
 });

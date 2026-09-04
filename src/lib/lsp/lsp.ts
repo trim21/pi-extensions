@@ -425,9 +425,14 @@ export interface LspService {
   start(): void;
   /**
    * 重启指定服务器：关闭其全部 client、清除对应失败记录并解除禁用；
-   * 其余服务器不受影响。配置在下次工具调用时重新读取。
+   * 其余服务器不受影响。配置缓存失效，下次工具调用按当前 cwd 重新读盘。
    */
   reload(serverID: string): Promise<void>;
+  /**
+   * 重启全部服务器（/lsp-reload 无参）：关闭所有 client、清空失败记录并
+   * 解除禁用；配置缓存失效，下次工具调用重新读盘。
+   */
+  reloadAll(): Promise<void>;
   /** 已知服务器 id（running 或 broken 的去重集合），供命令补全与提示。 */
   serverIDs(): string[];
   /** 注入 status 渲染回调；传入 undefined 表示不再渲染。 */
@@ -997,6 +1002,24 @@ export function createLspService(
     updateStatusText();
   }
 
+  async function reloadAll(): Promise<void> {
+    state.closing = true;
+    state.config = undefined;
+    state.configCwd = undefined;
+    await Promise.all(state.clients.map((client) => client.shutdown())).catch(() => {
+      // 个别进程退出失败不阻止清理流程
+    });
+    state.clients = [];
+    state.clientExtensions.clear();
+    state.brokenFailAt.clear();
+    state.brokenNotifiedAt.clear();
+    state.servers.clear();
+    await stopWatcher();
+    state.closing = false;
+    state.disabled = false;
+    updateStatusText();
+  }
+
   function serverIDs(): string[] {
     return [...new Set([...state.servers.values()].map((server) => server.serverID))];
   }
@@ -1012,6 +1035,7 @@ export function createLspService(
     stop,
     start,
     reload,
+    reloadAll,
     serverIDs,
     attachStatus,
     refreshStatus: updateStatusText,
@@ -1172,7 +1196,8 @@ export function createLspManager(
   });
 
   pi.registerCommand("lsp-reload", {
-    description: "Restart a specific LSP server: /lsp-reload <server-id>",
+    description:
+      "Restart LSP servers: /lsp-reload <server-id> for one, no argument reloads config and restarts all",
     getArgumentCompletions: (prefix) =>
       (service?.serverIDs() ?? [])
         .toSorted()
@@ -1184,12 +1209,10 @@ export function createLspManager(
         return;
       }
       const serverID = args.trim();
-      const known = service.serverIDs().toSorted();
       if (!serverID) {
-        ctx.ui.notify(
-          `usage: /lsp-reload <server-id>${known.length > 0 ? ` (known: ${known.join(", ")})` : ""}`,
-          "warning",
-        );
+        // 无参：重读配置并重启全部服务器
+        await service.reloadAll();
+        ctx.ui.notify("LSP reloaded: all servers will restart on the next tool call", "info");
         return;
       }
       await service.reload(serverID);
