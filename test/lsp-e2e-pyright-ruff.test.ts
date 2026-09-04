@@ -93,18 +93,14 @@ async function call(
 const SERVERS = {
   pyright: {
     include: ["**/*.py", "**/*.pyi"],
-    rootMarkers: ["pyproject.toml", "pyrightconfig.json"],
     bin: "pyright-langserver",
     args: ["--stdio"],
-    cwd: "{root}",
     languageIdByExtension: { ".py": "python", ".pyi": "python" },
   },
   ruff: {
     include: ["**/*.py", "**/*.pyi"],
-    rootMarkers: ["pyproject.toml", "ruff.toml", ".ruff.toml"],
     bin: "ruff",
     args: ["server"],
-    cwd: "{root}",
     languageIdByExtension: { ".py": "python", ".pyi": "python" },
   },
 };

@@ -37,24 +37,22 @@ function plainAdapter(id: string, extensions: readonly string[] = []): LspServer
   return {
     id,
     extensions,
-    findRoot: async () => "",
     spawn: async () => {
       return;
     },
   };
 }
 
-/** 集成测试用：findRoot 指向 root，spawn 启动 mock stdio LSP server。 */
-function mockAdapter(
-  id: string,
-  root: string,
-): { adapter: LspServerAdapter; spawn: ReturnType<typeof vi.fn> } {
+/** 集成测试用：spawn 启动 mock stdio LSP server（root 即调用 cwd）。 */
+function mockAdapter(id: string): {
+  adapter: LspServerAdapter;
+  spawn: ReturnType<typeof vi.fn>;
+} {
   const spawn = vi.fn(async () => ({ process: spawnProcess(process.execPath, [fixture]) }));
   return {
     adapter: {
       id,
       extensions: [".py"],
-      findRoot: async () => root,
       spawn,
     },
     spawn,
@@ -378,6 +376,34 @@ describe("loadLspConfig 文件 IO", () => {
     await expect(loadLspConfig(dir, globalFile)).rejects.toThrow();
     await rm(dir, { recursive: true, force: true });
   });
+
+  it("schema 外的未知字段经 onWarning 上报（顶层 / watch / server 逐个定位）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const globalFile = join(dir, "global.json");
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(globalFile, JSON.stringify({ legacyTopLevel: 1 }));
+    await writeFile(
+      join(dir, ".pi", "lsp.json"),
+      JSON.stringify({
+        watch: { debounceMs: 100, nope: true },
+        servers: {
+          pyright: { bin: "x", rootMarkers: ["pyproject.toml"] },
+          ruff: { bin: "y", cwd: "{root}" },
+        },
+      }),
+    );
+    const warnings: string[] = [];
+    await loadLspConfig(dir, globalFile, (message) => {
+      warnings.push(message);
+    });
+    expect(warnings).toEqual([
+      `${globalFile}: unknown field "legacyTopLevel" ignored`,
+      `${join(dir, ".pi", "lsp.json")} watch: unknown field "nope" ignored`,
+      `${join(dir, ".pi", "lsp.json")} (server "pyright"): unknown field "rootMarkers" ignored`,
+      `${join(dir, ".pi", "lsp.json")} (server "ruff"): unknown field "cwd" ignored`,
+    ]);
+    await rm(dir, { recursive: true, force: true });
+  });
 });
 
 describe("lsp config validation", () => {
@@ -469,7 +495,6 @@ describe("session 替换后旧 ctx 失效（stale ctx）", () => {
     const failingAdapter: LspServerAdapter = {
       id: "pyright",
       extensions: [".py"],
-      findRoot: async () => dir,
       spawn: async () => {
         return;
       },
@@ -552,7 +577,6 @@ describe("lsp config integration", () => {
     const adapter: LspServerAdapter = {
       id: "a",
       extensions: [".py"],
-      findRoot: async () => dir,
       spawn,
     };
 
@@ -574,8 +598,8 @@ describe("lsp config integration", () => {
     const file = join(dir, "x.py");
     await writeFile(file, "x = 1\n");
 
-    const a = mockAdapter("a", dir);
-    const b = mockAdapter("b", dir);
+    const a = mockAdapter("a");
+    const b = mockAdapter("b");
 
     const service = createLspService([a.adapter, b.adapter], join(dir, "no-global.json"));
     await service.touchFile(file, dir);
@@ -592,8 +616,8 @@ describe("lsp config integration", () => {
     const file = join(dir, "x.py");
     await writeFile(file, "x = 1\n");
 
-    const a = mockAdapter("a", dir);
-    const b = mockAdapter("b", dir);
+    const a = mockAdapter("a");
+    const b = mockAdapter("b");
 
     const service = createLspService([a.adapter, b.adapter], join(dir, "no-global.json"));
     await service.touchFile(file, dir);
@@ -612,7 +636,6 @@ describe("lsp config integration", () => {
     const adapter: LspServerAdapter = {
       id: "a",
       extensions: [".py"],
-      findRoot: async () => dir,
       spawn: async () => {
         throw boom;
       },
@@ -639,7 +662,6 @@ describe("lsp config integration", () => {
     const adapter: LspServerAdapter = {
       id: "a",
       extensions: [".py"],
-      findRoot: async () => dir,
       spawn: async () => {
         return;
       },
@@ -663,7 +685,6 @@ describe("lsp config integration", () => {
     const adapter: LspServerAdapter = {
       id: "a",
       extensions: [".py"],
-      findRoot: async () => dir,
       spawn: async () => {
         throw new Error("boom");
       },
@@ -684,7 +705,6 @@ describe("lsp config integration", () => {
     const adapter: LspServerAdapter = {
       id: "a",
       extensions: [".py"],
-      findRoot: async () => dir,
       spawn: async () => {
         throw new Error("boom");
       },
@@ -717,7 +737,6 @@ describe("lsp config integration", () => {
     const adapter: LspServerAdapter = {
       id: "a",
       extensions: [".py"],
-      findRoot: async () => dir,
       spawn,
     };
 
@@ -758,7 +777,6 @@ describe("lsp config integration", () => {
     const adapter: LspServerAdapter = {
       id: "a",
       extensions: [".py"],
-      findRoot: async () => dir,
       spawn: async () => {
         throw new Error("boom");
       },
@@ -778,6 +796,63 @@ describe("lsp config integration", () => {
 
     await service.shutdownAll();
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it("配置按 cwd 缓存：修改配置文件后 touchFile 不重读，reload 后重新读盘", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const globalFile = join(dir, "global.json");
+    await writeFile(globalFile, JSON.stringify({ disabled: ["a"] }));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+    const a = mockAdapter("a");
+    const service = createLspService([a.adapter], globalFile);
+    try {
+      await service.touchFile(file, dir);
+      expect(a.spawn).not.toHaveBeenCalled();
+
+      // 同一 cwd 内配置已缓存：改盘上的文件不生效
+      await writeFile(globalFile, JSON.stringify({}));
+      await service.touchFile(file, dir);
+      expect(a.spawn).not.toHaveBeenCalled();
+
+      // reload 清缓存：下次工具调用重新读盘，新配置生效
+      await service.reload("a");
+      await service.touchFile(file, dir);
+      expect(a.spawn).toHaveBeenCalledOnce();
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cwd 变化时重新读盘（本地 .pi/lsp.json 按新 cwd 加载）", async () => {
+    const dir1 = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const dir2 = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file1 = join(dir1, "x.py");
+    const file2 = join(dir2, "x.py");
+    await writeFile(file1, "x = 1\n");
+    await writeFile(file2, "x = 1\n");
+    await mkdir(join(dir2, ".pi"), { recursive: true });
+    await writeFile(join(dir2, ".pi", "lsp.json"), JSON.stringify({ disabled: ["a"] }));
+
+    const a = mockAdapter("a");
+    const service = createLspService([a.adapter], join(dir1, "no-global.json"));
+    try {
+      await service.touchFile(file1, dir1);
+      expect(a.spawn).toHaveBeenCalledOnce();
+
+      // dir2 的本地配置禁用了 a：cwd 变化触发重读，不再 spawn
+      await service.touchFile(file2, dir2);
+      expect(a.spawn).toHaveBeenCalledOnce();
+
+      // 回到 dir1：缓存里是 dir1 的配置（未禁用），但 client 已存在，不重复 spawn
+      await service.touchFile(file1, dir1);
+      expect(a.spawn).toHaveBeenCalledOnce();
+    } finally {
+      await service.shutdownAll();
+      await rm(dir1, { recursive: true, force: true });
+      await rm(dir2, { recursive: true, force: true });
+    }
   });
 });
 
@@ -829,8 +904,8 @@ describe("lsp service watcher", () => {
       adapter: {
         id,
         extensions: options?.extensions ?? [".py"],
-        findRoot: async (file: string) =>
-          file === root || file.startsWith(root + "/") ? root : undefined,
+        // 绝对路径 workingDir：root 恒等于该目录，与 cwd 无关
+        workingDir: root,
         spawn,
       } satisfies LspServerAdapter,
       notifications,

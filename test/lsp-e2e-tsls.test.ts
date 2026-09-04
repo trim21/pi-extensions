@@ -100,10 +100,8 @@ const REPO_TSSERVER = fileURLToPath(
 const SERVERS = {
   typescript: {
     include: ["**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"],
-    rootMarkers: ["pnpm-lock.yaml", "package-lock.json"],
     bin: "typescript-language-server",
     args: ["--stdio"],
-    cwd: "{root}",
     languageIdByExtension: {
       ".ts": "typescript",
       ".tsx": "typescriptreact",

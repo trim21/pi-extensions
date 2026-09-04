@@ -9,7 +9,8 @@
  *   合并结果解析为 `ResolvedLspConfig`（缺省值应用、超时换算为 ms、白名单转
  *   Set），消费方不接触"未配置"歧义；
  *   没有内置默认服务器，所有服务器均须在配置里定义；
- *   配置在每个工具的调用 cwd 下惰性读取；enabled 引用不存在的服务器 id
+ *   配置在 session_start 预读并按 cwd 缓存，cwd 变化或 /lsp-reload 时重读；
+ *   schema 外的未知字段以 warning 上报。enabled 引用不存在的服务器 id
  *   是配置错误：全局配置在扩展加载（createLspService）时抛错，本地配置在
  *   session 开始预加载时通知，工具调用时校验抛错兜底。disabled 中未注册
  *   的 id 直接忽略；
@@ -29,7 +30,7 @@ import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import type { Hover, WorkspaceEdit } from "vscode-languageserver-types";
 
-import { type LspServerAdapter } from "./adapter.js";
+import { type LspServerAdapter, serverRoot } from "./adapter.js";
 import {
   clientDefaults,
   create,
@@ -45,6 +46,7 @@ import {
 import { report } from "./diagnostic.js";
 import {
   createAdapters,
+  matchesInclude,
   mergeServerRecords,
   type ServerConfig,
   serverConfigSchema,
@@ -197,11 +199,35 @@ function isMissingFile(error: unknown): boolean {
   return (error as { code?: unknown }).code === "ENOENT";
 }
 
+/**
+ * 收集 schema 之外的未知字段警告（typebox 不校验 additionalProperties，
+ * 未知键会静默存活在解析结果里，这里显式报告避免配置写错无感知）。
+ */
+function unknownFieldWarnings(config: LspConfig, filePath: string): string[] {
+  const warnings: string[] = [];
+  const check = (record: object, known: Record<string, unknown>, scope: string): void => {
+    for (const key of Object.keys(record)) {
+      if (!(key in known)) warnings.push(`${filePath}${scope}: unknown field "${key}" ignored`);
+    }
+  };
+  check(config, lspConfigSchema.properties, "");
+  if (config.watch) check(config.watch, watchConfigSchema.properties, " watch");
+  for (const [id, server] of Object.entries(config.servers ?? {})) {
+    check(server, serverConfigSchema.properties, ` (server "${id}")`);
+  }
+  return warnings;
+}
+
 /** 读取并解析单个配置文件；文件不存在视为空配置，JSON / typebox 校验错误直接抛出。 */
-async function readConfigFile(filePath: string): Promise<LspConfig> {
+async function readConfigFile(
+  filePath: string,
+  onWarning?: (message: string) => void,
+): Promise<LspConfig> {
   try {
     const raw = await readFile(filePath, "utf8");
-    return Value.Parse(lspConfigSchema, JSON.parse(raw) as unknown);
+    const config = Value.Parse(lspConfigSchema, JSON.parse(raw) as unknown);
+    for (const message of unknownFieldWarnings(config, filePath)) onWarning?.(message);
+    return config;
   } catch (error) {
     if (isMissingFile(error)) return {};
     throw error;
@@ -209,10 +235,12 @@ async function readConfigFile(filePath: string): Promise<LspConfig> {
 }
 
 /** 同步版 readConfigFile（扩展加载时校验全局配置用）。 */
-function readConfigFileSync(filePath: string): LspConfig {
+function readConfigFileSync(filePath: string, onWarning?: (message: string) => void): LspConfig {
   try {
     const raw = readFileSync(filePath, "utf8");
-    return Value.Parse(lspConfigSchema, JSON.parse(raw) as unknown);
+    const config = Value.Parse(lspConfigSchema, JSON.parse(raw) as unknown);
+    for (const message of unknownFieldWarnings(config, filePath)) onWarning?.(message);
+    return config;
   } catch (error) {
     if (isMissingFile(error)) return {};
     throw error;
@@ -267,14 +295,15 @@ export function mergeConfig(globalConfig: LspConfig, localConfig: LspConfig): Ls
   };
 }
 
-/** 读取全局 + 本地配置，合并并解析为生效配置。 */
+/** 读取全局 + 本地配置，合并并解析为生效配置；未知字段警告经 onWarning 上报。 */
 export async function loadLspConfig(
   cwd: string,
   globalConfigPath: string = join(homedir(), ".pi", "agent", "lsp.json"),
+  onWarning?: (message: string) => void,
 ): Promise<ResolvedLspConfig> {
   const [globalConfig, localConfig] = await Promise.all([
-    readConfigFile(globalConfigPath),
-    readConfigFile(join(cwd, ".pi", "lsp.json")),
+    readConfigFile(globalConfigPath, onWarning),
+    readConfigFile(join(cwd, ".pi", "lsp.json"), onWarning),
   ]);
   return resolveConfig(mergeConfig(globalConfig, localConfig));
 }
@@ -311,6 +340,10 @@ interface LspState {
   cwd: string | undefined;
   /** client → adapter 扩展名集合，fan-out 时按扩展名过滤。 */
   clientExtensions: Map<LspClient, readonly string[]>;
+  /** 缓存的生效配置（configCwd 一致时复用；cwd 变化或 reload 后重读）。 */
+  config: ResolvedLspConfig | undefined;
+  /** config 的加载 cwd。 */
+  configCwd: string | undefined;
 }
 
 /** 渲染 LSP status 文本的回调（传入 undefined 表示清除）。 */
@@ -426,6 +459,10 @@ export interface LspServiceStartupOptions {
   notifyIntervalMs?: number;
   /** 会话级通知：启动失败时主动上报，不依赖触发请求恰好携带 notify。 */
   notify?: ExtensionUIContext["notify"];
+  /** session_start 预读的生效配置：直接注入缓存，避免首个工具调用重复读盘。 */
+  initialConfig?: ResolvedLspConfig;
+  /** initialConfig 对应的 cwd。 */
+  initialCwd?: string;
 }
 
 export function createLspService(
@@ -453,9 +490,22 @@ export function createLspService(
     servers: new Map(),
     cwd: undefined,
     clientExtensions: new Map(),
+    config: startupOptions?.initialConfig,
+    configCwd: startupOptions?.initialCwd,
   };
 
   let renderStatus: StatusRenderer | undefined;
+
+  /** 配置缓存：同一 cwd 内复用；cwd 变化或 reload 清缓存后重读。 */
+  async function currentConfig(cwd: string): Promise<ResolvedLspConfig> {
+    if (state.config && state.configCwd === cwd) return state.config;
+    const config = await loadLspConfig(cwd, globalConfigPath, (message) =>
+      sessionNotify?.(message, "warning"),
+    );
+    state.config = config;
+    state.configCwd = cwd;
+    return config;
+  }
 
   // ── 工作区文件监听（watcher）───────────────────────────────────────────────
 
@@ -526,7 +576,7 @@ export function createLspService(
   /** 首个 client 建立 / 会话 cwd 变化时（重）建监听器；watch.enabled: false 时不启动。 */
   async function ensureWatcher(cwd: string, notify?: ExtensionUIContext["notify"]): Promise<void> {
     if (state.closing || state.disabled) return;
-    const config = await loadLspConfig(cwd, globalConfigPath);
+    const config = await currentConfig(cwd);
     const watch = config.watch;
     if (!watch.enabled) return;
     if (watcher && watcherCwd === cwd) return;
@@ -612,7 +662,7 @@ export function createLspService(
     }
     if (state.closing || state.disabled) return [];
     if (!containsPath(file, cwd)) return [];
-    const config = await loadLspConfig(cwd, globalConfigPath);
+    const config = await currentConfig(cwd);
     const timeout = {
       diagnosticsDebounceMs: config.diagnosticsDebounceMs,
       diagnosticsDocumentWaitTimeoutMs: config.diagnosticsDocumentWaitTimeoutMs,
@@ -633,8 +683,9 @@ export function createLspService(
     for (const adapter of active) {
       if (adapterFilter && !adapterFilter(adapter)) continue;
       if (adapter.extensions.length > 0 && !adapter.extensions.includes(extension)) continue;
-      const root = await adapter.findRoot(file, cwd);
-      if (!root) continue;
+      const root = serverRoot(adapter.workingDir, cwd);
+      if (!containsPath(file, root)) continue;
+      if (!matchesInclude(adapter.include ?? [], file, root, cwd)) continue;
       const key = root + adapter.id;
       const failedAt = state.brokenFailAt.get(key);
       if (failedAt !== undefined) {
@@ -925,6 +976,9 @@ export function createLspService(
 
   async function reload(serverID: string): Promise<void> {
     state.closing = true;
+    // 配置缓存失效：下次工具调用按当前 cwd 重新读盘，让配置修改生效
+    state.config = undefined;
+    state.configCwd = undefined;
     const targets = state.clients.filter((client) => client.serverID === serverID);
     await Promise.all(targets.map((client) => client.shutdown())).catch(() => {
       // 个别进程退出失败不阻止清理流程
@@ -1036,7 +1090,13 @@ export function createLspManager(
       service = undefined;
     }
     try {
-      const config = await loadLspConfig(ctx.cwd, options?.globalConfigPath);
+      const config = await loadLspConfig(ctx.cwd, options?.globalConfigPath, (message) => {
+        try {
+          ctx.ui.notify(message, "warning");
+        } catch {
+          /* 旧会话 ctx 已失效：通知无处可去 */
+        }
+      });
       validateConfig(config, options?.adapters);
       if (enabledServerCount(config, options?.adapters) === 0) return;
       // 下面两个闭包被 service 长期持有，可能在会话被替换或 reload 后仍触发
@@ -1053,6 +1113,9 @@ export function createLspManager(
             /* 旧会话 ctx 已失效或 UI 不可用：通知无处可去 */
           }
         },
+        // session_start 已读盘的配置直接注入缓存，首个工具调用无需重复读盘
+        initialConfig: config,
+        initialCwd: ctx.cwd,
       });
       // footer status 显示当前所有 LSP server 状态（无 UI 时不显示）
       next.attachStatus((text) => {

@@ -1,14 +1,13 @@
 /**
  * LSP 服务器插件契约：每个语言服务器一个 adapter class，向管理器提供统一接口。
  *
- * - findRoot 返回 undefined 表示该文件不应启用此服务器（目录外 / 无项目标记）；
+ * - root 由管理器按 workingDir 计算（缺省调用 cwd）；文件必须位于 root 之内
+ *   且命中 include（未配置时全匹配）才会由该服务器处理；
  * - spawn 返回 undefined 表示服务器不可用（二进制未安装）。
  */
 
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { dirname, join } from "node:path";
-
-import { exists, walkUp } from "./bin.js";
+import { resolve } from "node:path";
 
 export interface LspServerHandle {
   process: ChildProcessWithoutNullStreams;
@@ -29,27 +28,21 @@ export interface LspServerAdapter {
   readonly kind?: ServerKind;
   /** 关联的文件扩展名（含点，小写）；空数组表示匹配所有文件。 */
   readonly extensions: readonly string[];
+  /**
+   * 文件 glob（相对 root 或调用 cwd）；缺省/空 = 匹配所有文件。
+   * 过滤在管理器的 client 匹配阶段完成，adapter 不再持有 findRoot。
+   */
+  readonly include?: readonly string[];
+  /** 服务器工作目录（即 LSP root）：绝对路径或相对调用 cwd 的路径；缺省即 cwd。 */
+  readonly workingDir?: string;
   /** per-server initialize 握手超时（ms）；缺省用全局配置 / client 默认。 */
   readonly startupTimeoutMs?: number;
   /** per-server 诊断等待时长（ms）；缺省用全局配置 / client 默认。 */
   readonly diagnosticsWaitMs?: number;
-  findRoot(file: string, cwd: string): Promise<string | undefined>;
   spawn(root: string, cwd: string): Promise<LspServerHandle | undefined>;
 }
 
-/**
- * 从文件所在目录向上（到 cwd）找项目标记文件；找不到时返回 cwd（opencode 的
- * NearestRoot 宽松语义，保证项目内文件至少有一个 root）。
- */
-export function nearestRoot(
-  markers: readonly string[],
-  file: string,
-  cwd: string,
-): Promise<string> {
-  for (const dir of walkUp(dirname(file), cwd)) {
-    for (const marker of markers) {
-      if (exists(join(dir, marker))) return Promise.resolve(dir);
-    }
-  }
-  return Promise.resolve(cwd);
+/** 计算服务器 root：workingDir 未配置时即调用 cwd，否则相对 cwd 解析（绝对路径原样）。 */
+export function serverRoot(workingDir: string | undefined, cwd: string): string {
+  return workingDir === undefined ? cwd : resolve(cwd, workingDir);
 }

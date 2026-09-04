@@ -90,10 +90,8 @@ async function call(
 const SERVERS = {
   go: {
     include: ["**/*.go"],
-    rootMarkers: ["go.mod", "go.work"],
     bin: "gopls",
     args: ["serve"],
-    cwd: "{root}",
     languageIdByExtension: { ".go": "go" },
   },
 };

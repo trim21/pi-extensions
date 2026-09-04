@@ -11,16 +11,12 @@ import { createLspService } from "../src/lib/lsp/lsp.js";
 
 const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
 
-function countingAdapter(
-  id: string,
-  root: string,
-): { adapter: LspServerAdapter; spawns: () => number } {
+function countingAdapter(id: string): { adapter: LspServerAdapter; spawns: () => number } {
   let count = 0;
   return {
     adapter: {
       id,
       extensions: [".py"],
-      findRoot: async () => root,
       spawn: async () => {
         count++;
         return { process: spawnProcess(process.execPath, [fixture]) };
@@ -34,7 +30,7 @@ describe("LSP stop/start/reload", () => {
   it("stop disables spawning, start re-enables it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-commands-"));
     await writeFile(join(dir, "a.py"), "x = 1\n");
-    const { adapter, spawns } = countingAdapter("pyright", dir);
+    const { adapter, spawns } = countingAdapter("pyright");
     const service = createLspService([adapter], join(dir, "no-global.json"));
     const statuses: (string | undefined)[] = [];
     service.attachStatus((text) => {
@@ -63,8 +59,8 @@ describe("LSP stop/start/reload", () => {
   it("reload restarts only the named server", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-commands-"));
     await writeFile(join(dir, "a.py"), "x = 1\n");
-    const pyright = countingAdapter("pyright", dir);
-    const ruff = countingAdapter("ruff", dir);
+    const pyright = countingAdapter("pyright");
+    const ruff = countingAdapter("ruff");
     const service = createLspService([pyright.adapter, ruff.adapter], join(dir, "no-global.json"));
     const statuses: (string | undefined)[] = [];
     service.attachStatus((text) => {
@@ -94,7 +90,6 @@ describe("LSP stop/start/reload", () => {
     const adapter: LspServerAdapter = {
       id: "pyright",
       extensions: [".py"],
-      findRoot: async () => dir,
       spawn: async () =>
         fail ? undefined : { process: spawnProcess(process.execPath, [fixture]) },
     };

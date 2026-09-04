@@ -1,11 +1,14 @@
 /**
- * 配置驱动的 LSP 服务器：一份 JSON 配置定义一个语言服务器（bin/args/rootMarkers/
+ * 配置驱动的 LSP 服务器：一份 JSON 配置定义一个语言服务器（bin/args/workingDir/
  * languageId/超时等），替代为每个语言写一个 adapter class。
  *
  * 配置文件沿用 lsp.json（全局 ~/.pi/agent/lsp.json + 本地 <cwd>/.pi/lsp.json）：
  * 顶层 `servers` 是 id → 配置的 record，全局与本地按 id 合并（同名 id 整体
  * 覆盖、新增 id、全局其余保留），之后受顶层 enabled/disabled 列表过滤。
  * 没有内置默认服务器：未配置 servers 时不启动任何服务器。
+ *
+ * 不做向上查找项目根的猜测：root 即调用 cwd（或 per-server workingDir），
+ * 文件归属由「文件位于 root 之内」+ include glob 判定。
  *
  * executable 发现统一由用户配置：bin 支持绝对路径 / 项目工作区
  * （node_modules/.bin、.venv/bin、venv/bin）/ PATH，不再内置各语言的
@@ -20,12 +23,7 @@ import { promisify } from "node:util";
 import { minimatch } from "minimatch";
 import { type Static, Type } from "typebox";
 
-import {
-  type LspServerAdapter,
-  type LspServerHandle,
-  nearestRoot,
-  type ServerKind,
-} from "./adapter.js";
+import { type LspServerAdapter, type LspServerHandle, type ServerKind } from "./adapter.js";
 import { exists, findBinaryInWorkspace, which } from "./bin.js";
 import { spawnProcess } from "./launch.js";
 
@@ -34,13 +32,14 @@ export const serverConfigSchema = Type.Object({
   include: Type.Optional(Type.Array(Type.String())),
   /** 服务器类型：language（真语言服务器，缺省）或 linter（只实现 LSP 协议的 lint）。 */
   kind: Type.Optional(Type.Union([Type.Literal("language"), Type.Literal("linter")])),
-  /** 项目根标记文件（从文件目录向上查找）；缺省用调用 cwd 作为根。 */
-  rootMarkers: Type.Optional(Type.Array(Type.String())),
+  /**
+   * 服务器工作目录（即 LSP root）：绝对路径或相对调用 cwd 的路径；缺省即 cwd。
+   * 文件必须位于该目录内才会由本服务器处理；spawn 工作目录与 rootUri 均用它。
+   */
+  workingDir: Type.Optional(Type.String()),
   /** 可执行文件：绝对路径、相对调用 cwd 的路径，或名字（项目工作区优先，PATH 兜底）。 */
   bin: Type.Optional(Type.String()),
   args: Type.Optional(Type.Array(Type.String())),
-  /** 启动工作目录，支持 {root} / {cwd} 模板；缺省 {root}。 */
-  cwd: Type.Optional(Type.String()),
   /**
    * 追加到子进程的环境变量。string 值支持 {root} / {cwd} 模板与 ${VAR} 引用；
    * {sh: [...]} 在启动时执行命令（argv 直接执行、不经 shell），stdout trim 后作为值，
@@ -173,7 +172,7 @@ async function resolveBinary(bin: string, root: string, cwd: string): Promise<st
  * 支持 `!` 否定模式排除；多 pattern 数组拆开判断（任意 positive 命中且
  * 不被任何 negative 排除），避免库对混合数组的语义差异。
  */
-function matchesInclude(
+export function matchesInclude(
   patterns: readonly string[],
   file: string,
   root: string,
@@ -196,11 +195,13 @@ function matchesInclude(
   return candidates.some((candidate) => matches(candidate));
 }
 
-/** 由配置构建的通用 adapter；include 精确过滤在 findRoot 完成，extensions 不设扩展名过滤。 */
+/** 由配置构建的通用 adapter；include 过滤在 lsp.ts 的 client 匹配阶段完成，extensions 不设扩展名过滤。 */
 export class ConfigAdapter implements LspServerAdapter {
   readonly id: string;
   readonly kind: ServerKind;
   readonly extensions: readonly string[] = [];
+  readonly include: readonly string[];
+  readonly workingDir: string | undefined;
   readonly startupTimeoutMs: number | undefined;
   readonly diagnosticsWaitMs: number | undefined;
   readonly config: ServerConfig;
@@ -209,15 +210,10 @@ export class ConfigAdapter implements LspServerAdapter {
     this.id = id;
     this.config = config;
     this.kind = config.kind ?? "language";
+    this.include = config.include ?? [];
+    this.workingDir = config.workingDir;
     this.startupTimeoutMs = config.startupTimeoutMs;
     this.diagnosticsWaitMs = config.diagnosticsWaitMs;
-  }
-
-  findRoot(file: string, cwd: string): Promise<string | undefined> {
-    const root = nearestRoot(this.config.rootMarkers ?? [], file, cwd);
-    return root.then((resolved) =>
-      matchesInclude(this.config.include ?? [], file, resolved, cwd) ? resolved : undefined,
-    );
   }
 
   async spawn(root: string, cwd: string): Promise<LspServerHandle | undefined> {
@@ -225,11 +221,10 @@ export class ConfigAdapter implements LspServerAdapter {
     if (!bin) return undefined;
     const resolved = await resolveBinary(bin, root, cwd);
     if (!resolved) return undefined;
-    const spawnCwd = resolveTemplate(this.config.cwd ?? "{root}", root, cwd);
     const env = await resolveEnv(this.config.env, root, cwd);
     return {
       process: spawnProcess(resolved, this.config.args ?? [], {
-        cwd: spawnCwd,
+        cwd: root,
         env,
       }),
       initialization: interpolateEnvDeep(this.config.initializationOptions, {
