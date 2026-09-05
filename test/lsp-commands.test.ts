@@ -11,12 +11,15 @@ import { createLspService } from "../src/lib/lsp/lsp.js";
 
 const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
 
-function countingAdapter(id: string): { adapter: LspServerAdapter; spawns: () => number } {
+function countingAdapter(
+  id: string,
+  extensions: string[] = [".py"],
+): { adapter: LspServerAdapter; spawns: () => number } {
   let count = 0;
   return {
     adapter: {
       id,
-      extensions: [".py"],
+      extensions,
       spawn: async () => {
         count++;
         return { process: spawnProcess(process.execPath, [fixture]) };
@@ -72,13 +75,36 @@ describe("LSP stop/start/reload", () => {
     expect(ruff.spawns()).toBe(1);
     expect(service.serverIDs().toSorted()).toEqual(["pyright", "ruff"]);
 
+    // 此前运行中的 pyright 立即重启，不等下一次工具调用；ruff 不受影响
     await service.reload("pyright");
+    expect(pyright.spawns()).toBe(2);
+    expect(ruff.spawns()).toBe(1);
+    expect(statuses.at(-1)).toContain("pyright");
     expect(statuses.at(-1)).toContain("ruff");
-    expect(statuses.at(-1)).not.toContain("pyright");
 
     await service.touchFile(join(dir, "a.py"), dir);
     expect(pyright.spawns()).toBe(2);
     expect(ruff.spawns()).toBe(1);
+
+    await service.shutdownAll();
+  });
+
+  it("reload leaves servers that were not running lazy", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-commands-"));
+    await writeFile(join(dir, "a.py"), "x = 1\n");
+    const pyright = countingAdapter("pyright");
+    // ruff 只匹配 .ts：触碰 .py 文件时它不会启动
+    const ruff = countingAdapter("ruff", [".ts"]);
+    const service = createLspService([pyright.adapter, ruff.adapter], join(dir, "no-global.json"));
+
+    // 只有 pyright 匹配 .py；ruff 从未运行，reload 后保持惰性
+    await service.touchFile(join(dir, "a.py"), dir);
+    expect(pyright.spawns()).toBe(1);
+    expect(ruff.spawns()).toBe(0);
+
+    const restarted = await service.reload("ruff");
+    expect(restarted).toEqual([]);
+    expect(ruff.spawns()).toBe(0);
 
     await service.shutdownAll();
   });
@@ -130,11 +156,54 @@ describe("LSP stop/start/reload", () => {
     await service.touchFile(join(dir, "a.py"), dir);
     expect(a.spawns()).toBe(0);
 
-    // reloadAll 清缓存并解除禁用：两个服务器都会在下次触碰启动
+    // reloadAll 清缓存并解除禁用：没有运行中的服务器，保持惰性，下次触碰启动
     await service.reloadAll();
     await service.touchFile(join(dir, "a.py"), dir);
     expect(a.spawns()).toBe(1);
     expect(b.spawns()).toBe(1);
+
+    await service.shutdownAll();
+  });
+
+  it("reloadAll immediately restarts running servers without a tool call", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-commands-"));
+    await writeFile(join(dir, "a.py"), "x = 1\n");
+    const a = countingAdapter("a");
+    const b = countingAdapter("b");
+    const service = createLspService([a.adapter, b.adapter], join(dir, "no-global.json"));
+
+    await service.touchFile(join(dir, "a.py"), dir);
+    expect(a.spawns()).toBe(1);
+    expect(b.spawns()).toBe(1);
+
+    // 无需再触碰文件：运行中的服务器立即重启
+    const restarted = await service.reloadAll();
+    expect(restarted.toSorted()).toEqual(["a", "b"]);
+    expect(a.spawns()).toBe(2);
+    expect(b.spawns()).toBe(2);
+
+    await service.shutdownAll();
+  });
+
+  it("reloadAll respawns from the new config: removed servers stay down", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-commands-"));
+    await writeFile(join(dir, "a.py"), "x = 1\n");
+    const globalFile = join(dir, "global.json");
+    await writeFile(globalFile, JSON.stringify({}));
+    const a = countingAdapter("a");
+    const service = createLspService([a.adapter], globalFile);
+
+    await service.touchFile(join(dir, "a.py"), dir);
+    expect(a.spawns()).toBe(1);
+
+    // 盘上配置禁用 a：reloadAll 重读配置后不再重启它
+    await writeFile(globalFile, JSON.stringify({ disabled: ["a"] }));
+    const restarted = await service.reloadAll();
+    expect(restarted).toEqual([]);
+    expect(a.spawns()).toBe(1);
+
+    await service.touchFile(join(dir, "a.py"), dir);
+    expect(a.spawns()).toBe(1);
 
     await service.shutdownAll();
   });

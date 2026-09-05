@@ -425,14 +425,17 @@ export interface LspService {
   start(): void;
   /**
    * 重启指定服务器：关闭其全部 client、清除对应失败记录并解除禁用；
-   * 其余服务器不受影响。配置缓存失效，下次工具调用按当前 cwd 重新读盘。
+   * 其余服务器不受影响。配置缓存失效并立即重读盘上配置：此前运行中的该
+   * 服务器若仍存在于新配置则马上重启，未在运行的服务器保持惰性。
+   * 返回成功重启的 server id。
    */
-  reload(serverID: string): Promise<void>;
+  reload(serverID: string): Promise<string[]>;
   /**
    * 重启全部服务器（/lsp-reload 无参）：关闭所有 client、清空失败记录并
-   * 解除禁用；配置缓存失效，下次工具调用重新读盘。
+   * 解除禁用；配置缓存失效并立即重读盘上配置，此前运行中的服务器若仍存在
+   * 于新配置则马上重启。返回成功重启的 server id。
    */
-  reloadAll(): Promise<void>;
+  reloadAll(): Promise<string[]>;
   /** 已知服务器 id（running 或 broken 的去重集合），供命令补全与提示。 */
   serverIDs(): string[];
   /** 注入 status 渲染回调；传入 undefined 表示不再渲染。 */
@@ -632,49 +635,115 @@ export function createLspService(
     updateStatusText();
   }
 
+  /**
+   * 记录一次启动失败：进入 broken（冷却期内跳过）、渲染 status，并按节流
+   * 间隔主动 notify。错误上报优先走会话级 sessionNotify——不依赖触发请求
+   * 恰好携带 notify（否则 Read warm-up 等静默通道会把失败吞掉）；未注入
+   * 会话通知时退回请求级 notify 兜底。
+   */
+  function reportStartupFailure(
+    key: string,
+    serverID: string,
+    root: string,
+    cause: string,
+    notify?: ExtensionUIContext["notify"],
+  ): void {
+    const now = Date.now();
+    state.brokenFailAt.set(key, now);
+    state.servers.set(key, { serverID, root, state: "broken" });
+    updateStatusText();
+    const reporter = sessionNotify ?? notify;
+    const lastNotified = state.brokenNotifiedAt.get(key);
+    if (reporter && (lastNotified === undefined || now - lastNotified >= notifyIntervalMs)) {
+      state.brokenNotifiedAt.set(key, now);
+      reporter(
+        `LSP server "${serverID}" failed to start for ${root}: ${cause}. ` +
+          `Fix the issue or run /lsp-reload ${serverID} to retry now.`,
+        "error",
+      );
+    }
+  }
+
+  /**
+   * spawn 指定 adapter 并注册 client：同一 key 的 in-flight spawn 复用其结果，
+   * 失败进 broken（节流上报，返回 undefined），成功后注册 client / extensions /
+   * status 并确保 watcher 运行。供 getClients 与 reload 后的立即重启共用。
+   */
+  async function startClient(
+    adapter: LspServerAdapter,
+    root: string,
+    cwd: string,
+    config: ResolvedLspConfig,
+    notify?: ExtensionUIContext["notify"],
+  ): Promise<LspClient | undefined> {
+    const key = root + adapter.id;
+    const inflight = state.spawning.get(key);
+    if (inflight) return inflight;
+    const task = (async () => {
+      try {
+        const handle = await adapter.spawn(root, cwd);
+        if (!handle) {
+          reportStartupFailure(key, adapter.id, root, "binary not found", notify);
+          return;
+        }
+        const client = await create({
+          serverID: adapter.id,
+          server: handle,
+          root,
+          directory: cwd,
+          diagnosticsDebounceMs: config.diagnosticsDebounceMs,
+          diagnosticsDocumentWaitTimeoutMs:
+            adapter.diagnosticsWaitMs ?? config.diagnosticsDocumentWaitTimeoutMs,
+          diagnosticsFullWaitTimeoutMs: config.diagnosticsFullWaitTimeoutMs,
+          diagnosticsRequestTimeoutMs: config.diagnosticsRequestTimeoutMs,
+          initializeTimeoutMs: adapter.startupTimeoutMs ?? config.initializeTimeoutMs,
+          maxOpenDocuments: config.maxOpenDocuments,
+        });
+        if (state.closing || state.disabled) {
+          await client.shutdown();
+          return;
+        }
+        const duplicate = state.clients.find((c) => c.root === root && c.serverID === adapter.id);
+        if (duplicate) {
+          await client.shutdown();
+          return duplicate;
+        }
+        state.clients.push(client);
+        state.clientExtensions.set(client, adapter.extensions);
+        state.servers.set(key, { serverID: adapter.id, root, state: "running" });
+        // 启动成功：清除失败记录，之后若再次失败会立即重新上报
+        state.brokenFailAt.delete(key);
+        state.brokenNotifiedAt.delete(key);
+        updateStatusText();
+        void ensureWatcher(cwd, notify);
+        return client;
+      } catch (error) {
+        reportStartupFailure(
+          key,
+          adapter.id,
+          root,
+          error instanceof Error ? error.message : String(error),
+          notify,
+        );
+        return;
+      }
+    })();
+    state.spawning.set(key, task);
+    void task.finally(() => {
+      if (state.spawning.get(key) === task) state.spawning.delete(key);
+    });
+    return task;
+  }
+
   async function getClients(
     file: string,
     cwd: string,
     notify?: ExtensionUIContext["notify"],
     adapterFilter?: (adapter: LspServerAdapter) => boolean,
   ): Promise<LspClient[]> {
-    /**
-     * 记录一次启动失败：进入 broken（冷却期内跳过）、渲染 status，并按节流
-     * 间隔主动 notify。错误上报优先走会话级 sessionNotify——不依赖触发请求
-     * 恰好携带 notify（否则 Read warm-up 等静默通道会把失败吞掉）；未注入
-     * 会话通知时退回请求级 notify 兜底。
-     */
-    function reportStartupFailure(
-      key: string,
-      serverID: string,
-      root: string,
-      cause: string,
-    ): void {
-      const now = Date.now();
-      state.brokenFailAt.set(key, now);
-      state.servers.set(key, { serverID, root, state: "broken" });
-      updateStatusText();
-      const reporter = sessionNotify ?? notify;
-      const lastNotified = state.brokenNotifiedAt.get(key);
-      if (reporter && (lastNotified === undefined || now - lastNotified >= notifyIntervalMs)) {
-        state.brokenNotifiedAt.set(key, now);
-        reporter(
-          `LSP server "${serverID}" failed to start for ${root}: ${cause}. ` +
-            `Fix the issue or run /lsp-reload ${serverID} to retry now.`,
-          "error",
-        );
-      }
-    }
     if (state.closing || state.disabled) return [];
     if (!containsPath(file, cwd)) return [];
     const config = await currentConfig(cwd);
-    const timeout = {
-      diagnosticsDebounceMs: config.diagnosticsDebounceMs,
-      diagnosticsDocumentWaitTimeoutMs: config.diagnosticsDocumentWaitTimeoutMs,
-      diagnosticsFullWaitTimeoutMs: config.diagnosticsFullWaitTimeoutMs,
-      diagnosticsRequestTimeoutMs: config.diagnosticsRequestTimeoutMs,
-      initializeTimeoutMs: config.initializeTimeoutMs,
-    };
     const active = filterAdapters(adapters ?? createAdapters(config.servers), config);
     const extension = extname(file) || file;
     const result: LspClient[] = [];
@@ -705,65 +774,7 @@ export function createLspService(
         continue;
       }
 
-      const inflight = state.spawning.get(key);
-      if (inflight) {
-        const client = await inflight;
-        if (client) result.push(client);
-        continue;
-      }
-
-      const task = (async () => {
-        try {
-          const handle = await adapter.spawn(root, cwd);
-          if (!handle) {
-            reportStartupFailure(key, adapter.id, root, "binary not found");
-            return;
-          }
-          const client = await create({
-            serverID: adapter.id,
-            server: handle,
-            root,
-            directory: cwd,
-            ...timeout,
-            initializeTimeoutMs: adapter.startupTimeoutMs ?? timeout.initializeTimeoutMs,
-            diagnosticsDocumentWaitTimeoutMs:
-              adapter.diagnosticsWaitMs ?? timeout.diagnosticsDocumentWaitTimeoutMs,
-            maxOpenDocuments: config.maxOpenDocuments,
-          });
-          if (state.closing || state.disabled) {
-            await client.shutdown();
-            return;
-          }
-          const duplicate = state.clients.find((c) => c.root === root && c.serverID === adapter.id);
-          if (duplicate) {
-            await client.shutdown();
-            return duplicate;
-          }
-          state.clients.push(client);
-          state.clientExtensions.set(client, adapter.extensions);
-          state.servers.set(key, { serverID: adapter.id, root, state: "running" });
-          // 启动成功：清除失败记录，之后若再次失败会立即重新上报
-          state.brokenFailAt.delete(key);
-          state.brokenNotifiedAt.delete(key);
-          updateStatusText();
-          void ensureWatcher(cwd, notify);
-          return client;
-        } catch (error) {
-          reportStartupFailure(
-            key,
-            adapter.id,
-            root,
-            error instanceof Error ? error.message : String(error),
-          );
-          return;
-        }
-      })();
-      state.spawning.set(key, task);
-      void task.finally(() => {
-        if (state.spawning.get(key) === task) state.spawning.delete(key);
-      });
-
-      const client = await task;
+      const client = await startClient(adapter, root, cwd, config, notify);
       if (client) result.push(client);
     }
 
@@ -979,9 +990,43 @@ export function createLspService(
     updateStatusText();
   }
 
-  async function reload(serverID: string): Promise<void> {
+  /**
+   * reload 后立即重启此前运行中的服务器，不再等下一次工具调用。只重启新配置
+   * 中仍存在且启用的 server；无运行记录（如 /lsp-stop 之后）或配置重读失败时
+   * 不动，保持惰性 spawn。返回成功重启的 server id。
+   */
+  async function respawnRunning(serverIDs: readonly string[]): Promise<string[]> {
+    const cwd = state.cwd;
+    if (!cwd) return [];
+    let config: ResolvedLspConfig;
+    try {
+      config = await currentConfig(cwd);
+    } catch (error) {
+      sessionNotify?.(
+        `LSP reload: re-reading config failed, servers will start on the next tool call: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        "warning",
+      );
+      return [];
+    }
+    const active = filterAdapters(adapters ?? createAdapters(config.servers), config);
+    const restarted = await Promise.all(
+      serverIDs.map(async (serverID): Promise<string | undefined> => {
+        const adapter = active.find((candidate) => candidate.id === serverID);
+        if (!adapter) return;
+        const root = serverRoot(adapter.workingDir, cwd);
+        const client = await startClient(adapter, root, cwd, config);
+        return client ? serverID : undefined;
+      }),
+    );
+    return restarted.filter((id): id is string => id !== undefined);
+  }
+
+  async function reload(serverID: string): Promise<string[]> {
+    const wasRunning = state.clients.some((client) => client.serverID === serverID);
     state.closing = true;
-    // 配置缓存失效：下次工具调用按当前 cwd 重新读盘，让配置修改生效
+    // 配置缓存失效：立即重读盘上配置，让配置修改生效
     state.config = undefined;
     state.configCwd = undefined;
     const targets = state.clients.filter((client) => client.serverID === serverID);
@@ -1000,9 +1045,12 @@ export function createLspService(
     state.closing = false;
     state.disabled = false;
     updateStatusText();
+    if (!wasRunning) return [];
+    return respawnRunning([serverID]);
   }
 
-  async function reloadAll(): Promise<void> {
+  async function reloadAll(): Promise<string[]> {
+    const runningIDs = [...new Set(state.clients.map((client) => client.serverID))];
     state.closing = true;
     state.config = undefined;
     state.configCwd = undefined;
@@ -1018,6 +1066,7 @@ export function createLspService(
     state.closing = false;
     state.disabled = false;
     updateStatusText();
+    return respawnRunning(runningIDs);
   }
 
   function serverIDs(): string[] {
@@ -1211,13 +1260,20 @@ export function createLspManager(
       const serverID = args.trim();
       if (!serverID) {
         // 无参：重读配置并重启全部服务器
-        await service.reloadAll();
-        ctx.ui.notify("LSP reloaded: all servers will restart on the next tool call", "info");
+        const restarted = await service.reloadAll();
+        ctx.ui.notify(
+          restarted.length > 0
+            ? `LSP reloaded: ${restarted.toSorted().join(", ")} restarted`
+            : "LSP reloaded: servers will restart on the next tool call",
+          "info",
+        );
         return;
       }
-      await service.reload(serverID);
+      const restarted = await service.reload(serverID);
       ctx.ui.notify(
-        `LSP server "${serverID}" reloaded: will restart on the next tool call`,
+        restarted.length > 0
+          ? `LSP server "${serverID}" reloaded`
+          : `LSP server "${serverID}" reloaded: will restart on the next tool call`,
         "info",
       );
     },
