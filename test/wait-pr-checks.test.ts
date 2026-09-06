@@ -1,11 +1,13 @@
 /**
  * Tests for `wait-github-pr-checks`.
  *
- * After `gh pr checks --watch` exits, the tool ignores gh's exit code (gh uses
- * exit 1 for failed checks and exit 8 for pending — neither is a reliable
- * signal) and instead fetches all workflow jobs of the PR's head commit via the
- * Actions API. It reports FAILED with the failed jobs' details when any job did
- * not succeed, PASSED otherwise.
+ * The tool polls `gh pr checks --json` each round (streaming a GitHub-UI-like
+ * table via onUpdate), then fetches all workflow jobs of the PR's head commit
+ * via the Actions API. It reports FAILED with the failed jobs' details when
+ * any job did not succeed, PASSED otherwise.
+ *
+ * In JSON mode gh exits 0 whenever it could fetch the checks — completion is
+ * judged from the `bucket` field, not the exit code.
  *
  * Run: npx vitest run test/wait-pr-checks.test.ts
  */
@@ -20,7 +22,32 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import registerTools from "../src/gh-readonly.js";
+import registerTools, { pollPrChecks, renderPrChecksTable } from "../src/gh-readonly.js";
+
+interface CheckFixture {
+  name: string;
+  state: string;
+  bucket: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  link: string | null;
+  workflow: string | null;
+}
+
+function check(overrides: Partial<CheckFixture>): CheckFixture {
+  return {
+    name: "build",
+    state: "SUCCESS",
+    bucket: "pass",
+    startedAt: "2026-09-05T03:12:01Z",
+    completedAt: "2026-09-05T03:15:09Z",
+    link: "https://github.com/owner/repo/actions/runs/5/job/10",
+    workflow: "CI",
+    ...overrides,
+  };
+}
+
+const checksJson = (checks: CheckFixture[]): string => JSON.stringify(checks);
 
 class FakeChildProcess extends EventEmitter {
   killed = false;
@@ -45,7 +72,8 @@ interface ToolDef {
     _id: string,
     params: { number: number | string; repo?: string; fail_fast?: boolean },
     signal: AbortSignal | undefined,
-    _onUpdate: unknown,
+    onUpdate:
+      ((msg: { content: { type: "text"; text: string }[]; details: unknown }) => void) | undefined,
     ctx: { cwd?: string },
   ) => Promise<{
     content: { type: "text"; text: string }[];
@@ -72,8 +100,8 @@ function getWaitExecutor(): ToolDef["execute"] {
 // gh-readonly 在 Windows 上整体禁用（见 gh-readonly.ts），executor 测试只属于
 // 非 Windows 平台；guard 避免模块加载时在 win32 上调用扩展工厂。
 const exec = process.platform === "win32" ? undefined : getWaitExecutor();
-const call = () =>
-  exec!("id", { number: 1, repo: "owner/repo" }, undefined, undefined, { cwd: undefined });
+const call = (onUpdate?: ToolDef["execute"] extends (...args: infer A) => unknown ? A[3] : never) =>
+  exec!("id", { number: 1, repo: "owner/repo" }, undefined, onUpdate, { cwd: undefined });
 
 /** Queue a fake `gh` invocation whose output is resolved on the next tick. */
 function queueGh(outputs: { code: number; stdout: string }[]): void {
@@ -95,10 +123,149 @@ beforeEach(() => {
   spawnMock.mockReturnValue(new FakeChildProcess());
 });
 
-describe.skipIf(process.platform === "win32")("wait-github-pr-checks", () => {
-  it("reports PASSED when all jobs succeed, regardless of gh watch exit code", async () => {
+describe("renderPrChecksTable", () => {
+  it("renders a GitHub-UI-like table with name, workflow, status, started time and elapsed", () => {
+    const now = Date.parse("2026-09-05T03:16:00Z");
+    const text = renderPrChecksTable({
+      prNumber: 7,
+      round: 2,
+      checks: [
+        check({}),
+        check({
+          name: "e2e",
+          state: "PENDING",
+          bucket: "pending",
+          startedAt: "2026-09-05T03:15:30Z",
+          completedAt: null,
+          link: null,
+        }),
+        check({
+          name: "lint",
+          state: "SKIPPING",
+          bucket: "skipping",
+          startedAt: null,
+          completedAt: null,
+          link: null,
+          workflow: null,
+        }),
+      ],
+      now,
+    });
+
+    expect(text).toContain("PR #7 checks — round 2: 2/3 complete");
+    // completed check: started clock + full duration (188s)
+    expect(text).toContain("✅ [build](https://github.com/owner/repo/actions/runs/5/job/10)");
+    expect(text).toContain("| CI | pass |");
+    expect(text).toContain("3m08s");
+    // pending check: started clock + time-so-far (30s), no link
+    expect(text).toContain("🔄 e2e");
+    expect(text).toContain("| pending |");
+    expect(text).toContain("30s");
+    // never-started check: dashes, no workflow
+    expect(text).toContain("⏭️ lint");
+    expect(text).toContain("| — | — |");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("pollPrChecks", () => {
+  it("re-polls while checks are pending and emits a table each round", async () => {
     queueGh([
-      { code: 0, stdout: "" }, // gh pr checks --watch
+      {
+        code: 0,
+        stdout: checksJson([check({ bucket: "pending", state: "PENDING", completedAt: null })]),
+      },
+      { code: 0, stdout: checksJson([check({})]) },
+    ]);
+    const updates: string[] = [];
+
+    await pollPrChecks({
+      prNumber: 1,
+      repo: "owner/repo",
+      failFast: false,
+      intervalMs: 1,
+      onUpdate: (msg) => {
+        for (const part of msg.content) {
+          updates.push(part.text);
+        }
+      },
+    });
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(updates).toHaveLength(2);
+    expect(updates[0]).toContain("round 1");
+    expect(updates[0]).toContain("pending");
+    expect(updates[1]).toContain("round 2");
+    expect(updates[1]).toContain("pass");
+  });
+
+  it("stops immediately on a fail-fast failure even when checks are pending", async () => {
+    queueGh([
+      {
+        code: 0,
+        stdout: checksJson([
+          check({ name: "broken", bucket: "fail", state: "FAILURE" }),
+          check({ bucket: "pending", state: "PENDING", completedAt: null }),
+        ]),
+      },
+    ]);
+
+    await pollPrChecks({
+      prNumber: 1,
+      repo: "owner/repo",
+      failFast: true,
+      intervalMs: 1,
+      onUpdate: undefined,
+    });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops at the deadline even when checks are still pending", async () => {
+    queueGh([
+      {
+        code: 0,
+        stdout: checksJson([check({ bucket: "pending", state: "PENDING", completedAt: null })]),
+      },
+    ]);
+
+    await pollPrChecks({
+      prNumber: 1,
+      repo: "owner/repo",
+      failFast: false,
+      intervalMs: 60_000,
+      deadlineMs: 0,
+    });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns without polling again when gh exits non-zero (e.g. no checks reported)", async () => {
+    queueGh([{ code: 1, stdout: "" }]);
+
+    await expect(
+      pollPrChecks({ prNumber: 1, repo: "owner/repo", failFast: false, intervalMs: 1 }),
+    ).resolves.toBeUndefined();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws when the poll process is killed (abort)", async () => {
+    const ac = new AbortController();
+    const promise = pollPrChecks({
+      prNumber: 1,
+      repo: "owner/repo",
+      failFast: false,
+      signal: ac.signal,
+    });
+    ac.abort();
+
+    await expect(promise).rejects.toThrow(/was aborted/);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("wait-github-pr-checks", () => {
+  it("reports PASSED when all jobs succeed, regardless of gh checks exit code", async () => {
+    queueGh([
+      { code: 0, stdout: checksJson([check({}), check({ name: "test" })]) }, // pr checks --json poll
       {
         code: 0,
         stdout: JSON.stringify({ headRefOid: "abc123def456" }), // gh pr view
@@ -130,9 +297,9 @@ describe.skipIf(process.platform === "win32")("wait-github-pr-checks", () => {
     expect(result.details).toMatchObject({ status: "success", totalJobs: 2 });
   });
 
-  it("reports FAILED with failed job details when any job fails (gh watch exits 1)", async () => {
+  it("reports FAILED with failed job details when any job fails", async () => {
     queueGh([
-      { code: 1, stdout: "" }, // gh pr checks --watch: exit 1 = SilentError (checks failed)
+      { code: 1, stdout: "" }, // pr checks poll errors (e.g. no checks) → fall through to API
       {
         code: 0,
         stdout: JSON.stringify({ headRefOid: "abc123def456" }),
@@ -178,7 +345,7 @@ describe.skipIf(process.platform === "win32")("wait-github-pr-checks", () => {
 
   it("treats a non-success conclusion (cancelled) as not succeeded", async () => {
     queueGh([
-      { code: 0, stdout: "" },
+      { code: 0, stdout: checksJson([check({})]) },
       { code: 0, stdout: JSON.stringify({ headRefOid: "abc123def456" }) },
       {
         code: 0,
@@ -205,7 +372,27 @@ describe.skipIf(process.platform === "win32")("wait-github-pr-checks", () => {
     expect(result.details).toMatchObject({ status: "failure" });
   });
 
-  it("throws when the watch process is killed (timeout/abort)", async () => {
+  it("streams a checks table via onUpdate before the final report", async () => {
+    queueGh([
+      { code: 0, stdout: checksJson([check({})]) },
+      { code: 0, stdout: JSON.stringify({ headRefOid: "abc123def456" }) },
+      {
+        code: 0,
+        stdout: JSON.stringify({ total_count: 0, workflow_runs: [] }),
+      },
+    ]);
+    const updates: string[] = [];
+
+    const result = await call((msg) => {
+      for (const part of msg.content) updates.push(part.text);
+    });
+
+    expect(updates.some((t) => t.includes("Watching CI checks for PR #1"))).toBe(true);
+    expect(updates.some((t) => t.includes("round 1") && t.includes("build"))).toBe(true);
+    expect(result.content[0].text).toContain("No workflow runs found");
+  });
+
+  it("throws when the poll process is killed (timeout/abort)", async () => {
     const ac = new AbortController();
     const promise = exec!("id", { number: 1, repo: "owner/repo" }, ac.signal, undefined, {
       cwd: undefined,

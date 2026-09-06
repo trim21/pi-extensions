@@ -35,7 +35,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { createGithubSearch, type GithubSearch, renderHits } from "./lib/github.js";
@@ -265,6 +265,23 @@ const workflowRunSchema = Type.Object({
 });
 
 const workflowRunsSchema = Type.Object({ workflow_runs: Type.Array(workflowRunSchema) });
+
+/**
+ * One entry of `gh pr checks --json`. In JSON mode gh exits 0 once it could
+ * fetch the checks (real errors still exit non-zero); pass/fail/pending is
+ * only conveyed by the `bucket` field, never by the exit code.
+ */
+const prCheckSchema = Type.Object({
+  name: Type.String(),
+  state: Type.String(),
+  bucket: Type.String(),
+  startedAt: Type.Union([Type.String(), Type.Null()]),
+  completedAt: Type.Union([Type.String(), Type.Null()]),
+  link: Type.Union([Type.String(), Type.Null()]),
+  workflow: Type.Union([Type.String(), Type.Null()]),
+});
+
+type PrCheck = Static<typeof prCheckSchema>;
 
 function truncate(
   text: string,
@@ -1111,6 +1128,174 @@ export async function writeLogFile(
   };
 }
 
+// ── pr checks watch (pure rendering + poll loop) ────────────────────────────
+
+const PR_CHECKS_JSON_FIELDS = "name,state,bucket,startedAt,completedAt,link,workflow";
+const CHECKS_POLL_INTERVAL_MS = 30_000;
+const CHECKS_WATCH_DEADLINE_MS = 600_000;
+
+function bucketIcon(bucket: string): string {
+  switch (bucket) {
+    case "pass": {
+      return "✅";
+    }
+    case "fail": {
+      return "❌";
+    }
+    case "skipping": {
+      return "⏭️";
+    }
+    case "cancel": {
+      return "🚫";
+    }
+    default: {
+      return "🔄";
+    }
+  }
+}
+
+function formatClock(ms: number): string {
+  const date = new Date(ms);
+  return [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((n) => String(n).padStart(2, "0"))
+    .join(":");
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function formatDuration(totalSeconds: number): string {
+  const seconds = Math.floor(totalSeconds);
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}h${pad2(m)}m${pad2(s)}s`;
+  if (m > 0) return `${m}m${pad2(s)}s`;
+  return `${s}s`;
+}
+
+/**
+ * Render one polling round of `gh pr checks` like the GitHub web UI: check
+ * name, workflow, status, start time and elapsed (total duration when the
+ * check completed, time-so-far while still pending). Pure — no network.
+ */
+export function renderPrChecksTable(options: {
+  prNumber: number | string;
+  round: number;
+  checks: readonly PrCheck[];
+  now: number;
+}): string {
+  const { prNumber, round, checks, now } = options;
+  const completed = checks.filter((c) => c.bucket !== "pending").length;
+
+  const rows = checks.map((check) => {
+    const name = check.link ? `[${check.name}](${check.link})` : check.name;
+    let elapsed = "—";
+    if (check.startedAt) {
+      const startMs = Date.parse(check.startedAt);
+      const endMs = check.completedAt ? Date.parse(check.completedAt) : now;
+      elapsed = formatDuration(Math.max(0, (endMs - startMs) / 1000));
+    }
+    const cells = [
+      `${bucketIcon(check.bucket)} ${name}`,
+      check.workflow ?? "—",
+      check.bucket,
+      check.startedAt ? formatClock(Date.parse(check.startedAt)) : "—",
+      elapsed,
+    ];
+    return `| ${cells.join(" | ")} |`;
+  });
+  const body = rows.length > 0 ? rows.join("\n") : "| _no checks reported_ | — | — | — | — |";
+
+  return (
+    `### PR #${prNumber} checks — round ${round}: ${completed}/${checks.length} complete\n\n` +
+    `| Check | Workflow | Status | Started | Elapsed |\n` +
+    `|---|---|---|---|---|\n` +
+    body
+  );
+}
+
+function sleepInterruptibly(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("aborted while waiting for the next checks poll"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+export interface PollPrChecksOptions {
+  prNumber: number | string;
+  repo?: string;
+  failFast: boolean;
+  cwd?: string;
+  signal?: AbortSignal;
+  /** Test overrides. */
+  intervalMs?: number;
+  deadlineMs?: number;
+  onUpdate?: (msg: CiLogsResult) => void;
+}
+
+/**
+ * Poll `gh pr checks --json` until no check is pending (or a fail-fast
+ * failure, or the deadline), emitting a GitHub-UI-like table via `onUpdate`
+ * each round. In JSON mode gh exits 0 whenever it could fetch the checks —
+ * completion is judged from the `bucket` field, not the exit code. A non-zero
+ * exit (no checks reported, auth, network) is not fatal here: the caller
+ * proceeds to the Actions API verification, which either produces the final
+ * report or surfaces the error.
+ */
+export async function pollPrChecks(options: PollPrChecksOptions): Promise<void> {
+  const { prNumber, repo, failFast, cwd, signal, onUpdate } = options;
+  const intervalMs = options.intervalMs ?? CHECKS_POLL_INTERVAL_MS;
+  const deadlineMs = options.deadlineMs ?? CHECKS_WATCH_DEADLINE_MS;
+  const args = [
+    "pr",
+    "checks",
+    String(prNumber),
+    ...repoArgs(repo),
+    "--json",
+    PR_CHECKS_JSON_FIELDS,
+  ];
+
+  const watchStart = Date.now();
+  for (let round = 1; ; round++) {
+    const result = await runGh(args, { cwd, signal });
+    if (result.killed) {
+      throw new Error(
+        result.reason === "timeout" ? "gh pr checks poll timed out" : "gh pr checks was aborted",
+      );
+    }
+    if (result.code !== 0) {
+      return;
+    }
+    const checks: PrCheck[] = Value.Parse(Type.Array(prCheckSchema), JSON.parse(result.stdout));
+
+    onUpdate?.({
+      content: [
+        { type: "text", text: renderPrChecksTable({ prNumber, round, checks, now: Date.now() }) },
+      ],
+      details: {},
+    });
+
+    const hasPending = checks.some((c) => c.bucket === "pending");
+    if (!hasPending) return;
+    if (failFast && checks.some((c) => c.bucket === "fail")) return;
+    if (Date.now() - watchStart >= deadlineMs) return;
+    await sleepInterruptibly(intervalMs, signal);
+  }
+}
+
 // ── tools ────────────────────────────────────────────────────────────────────
 
 export default function ghReadonlyTools(pi: ExtensionAPI) {
@@ -1667,6 +1852,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     label: "Watch GitHub PR Checks",
     description:
       "Watch CI status checks for a PR until they complete. Blocks until all checks finish or one fails. " +
+      "Each polling round streams a GitHub-UI-like check table (name, workflow, status, started, elapsed) via onUpdate. " +
       "Use this when you need to wait for CI to complete and see the final result.",
     promptSnippet: "Watch and wait for GitHub PR CI checks to complete",
     parameters: Type.Object({
@@ -1685,21 +1871,17 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         details: {},
       });
 
-      const args = ["pr", "checks", String(number), ...repoArgs(repo), "--watch"];
-      if (fail_fast) args.push("--fail-fast");
-
-      // gh 的退出码语义不可靠：checks 失败时返回 exit 1（SilentError），挂起时
-      // 返回 exit 8（PendingError），且失败详情只在非结构化的 stdout 表格里。
-      // 因此 watch 退出后直接用 Actions API 抓取该 PR head 提交关联的所有
+      // 轮询 `gh pr checks --json`（每轮经 onUpdate 流式输出 GitHub Web UI 风格
+      // 的检查表），结束后再用 Actions API 抓取该 PR head 提交关联的所有
       // workflow job，以 job 的真实 conclusion 为准判断成功/失败。
-      const result = await runGh(args, { cwd: ctx.cwd, signal, timeout: 600_000 });
-      if (result.killed) {
-        throw new Error(
-          result.reason === "timeout"
-            ? "gh pr checks --watch timed out after 10 minutes"
-            : "gh pr checks --watch was aborted",
-        );
-      }
+      await pollPrChecks({
+        prNumber: number,
+        repo,
+        failFast: fail_fast === true,
+        cwd: ctx.cwd,
+        signal,
+        onUpdate,
+      });
 
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
       const prOut = await ghExec(
