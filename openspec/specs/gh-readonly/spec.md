@@ -83,7 +83,7 @@ GitHub 只读工具集：以系统 `gh` CLI 为后端查询 issue / PR / CI / re
 #### Scenario: 阻塞等待
 
 - **WHEN** 调用 `wait-github-pr-checks` 或 `watch-github-run`
-- **THEN** 阻塞等待完成（600 秒超时）；watch 结束后用 API 核验实际结果，不信 gh 退出码
+- **THEN** 阻塞等待完成；`wait-github-pr-checks` 每轮轮询经 onUpdate 流式输出 GitHub Web UI 风格的 checks 表格；等待结束后用 API 核验实际结果，不信 gh 退出码
 
 ## Implementation
 
@@ -94,7 +94,7 @@ GitHub 只读工具集：以系统 `gh` CLI 为后端查询 issue / PR / CI / re
 - **错误契约**：非零退出抛 `GhError`，消息带调用输入与输出上下文，标注 `(command timed out)` / `(command aborted)` / `spawn failed`；被 kill 的进程退出码记为失败而非成功。
 - **repo 缺省**：未指定 `repo` 时用当前目录解析（`gh repo view --json nameWithOwner`）。
 - **CI 日志**：`read-github-ci-logs` 基于 `##[group]Run <name>` 深度 1 锚点解析 step（复合 action 内部 step 被吸收），清洗时间戳 / ANSI / group 标记；日志按 runId:jobId 磁盘缓存到 `~/.cache/pi/ci-logs/`，同一 job 的请求经 `createSeqState` 串行化。
-- **等待工具**：`wait-github-pr-checks`（`gh pr checks --watch`，600s 超时）watch 退出后用 API 核验实际结论（`pr view --json headRefOid` → `actions/runs` → jobs），不信 gh 退出码。
+- **等待工具**：`wait-github-pr-checks` 轮询 `gh pr checks --json`（30s 间隔、600s 截止；`--json` 模式下 gh 拿到 checks 后恒为 exit 0，完成与否按 `bucket` 字段判定而非退出码；`fail_fast` 在任一 check bucket=fail 时提前结束），每轮经 onUpdate 流式输出检查表；轮询结束后用 API 核验实际结论（`pr view --json headRefOid` → `actions/runs` → jobs）。`watch-github-run` 仍为单次 `gh run watch`。
 - 无重试逻辑；`read-github-pr-comments` 的 `reviews=true` 并行调 `gh api` 拿 reviews + comments。
 
 涉及文件：`src/gh-readonly.ts`。
