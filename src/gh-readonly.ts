@@ -1134,86 +1134,30 @@ const PR_CHECKS_JSON_FIELDS = "name,state,bucket,startedAt,completedAt,link,work
 const CHECKS_POLL_INTERVAL_MS = 30_000;
 const CHECKS_WATCH_DEADLINE_MS = 600_000;
 
-function bucketIcon(bucket: string): string {
-  switch (bucket) {
-    case "pass": {
-      return "✅";
-    }
-    case "fail": {
-      return "❌";
-    }
-    case "skipping": {
-      return "⏭️";
-    }
-    case "cancel": {
-      return "🚫";
-    }
-    default: {
-      return "🔄";
-    }
-  }
-}
-
-function formatClock(ms: number): string {
-  const date = new Date(ms);
-  return [date.getHours(), date.getMinutes(), date.getSeconds()]
-    .map((n) => String(n).padStart(2, "0"))
-    .join(":");
-}
-
-function pad2(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
-function formatDuration(totalSeconds: number): string {
-  const seconds = Math.floor(totalSeconds);
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h > 0) return `${h}h${pad2(m)}m${pad2(s)}s`;
-  if (m > 0) return `${m}m${pad2(s)}s`;
-  return `${s}s`;
-}
-
 /**
- * Render one polling round of `gh pr checks` like the GitHub web UI: check
- * name, workflow, status, start time and elapsed (total duration when the
- * check completed, time-so-far while still pending). Pure — no network.
+ * Render one polling round of `gh pr checks` as a compact bullet list of the
+ * checks still in flight: running ones first (`- [>]`), queued ones after
+ * (`- [ ]`). Completed checks are hidden — the header already reports the
+ * completion count. Pure — no network.
  */
-export function renderPrChecksTable(options: {
+export function renderPrChecksList(options: {
   prNumber: number | string;
   round: number;
   checks: readonly PrCheck[];
-  now: number;
 }): string {
-  const { prNumber, round, checks, now } = options;
+  const { prNumber, round, checks } = options;
   const completed = checks.filter((c) => c.bucket !== "pending").length;
 
-  const rows = checks.map((check) => {
+  const pending = checks.filter((c) => c.bucket === "pending");
+  const ordered = [...pending.filter((c) => c.startedAt), ...pending.filter((c) => !c.startedAt)];
+  const lines = ordered.map((check) => {
     const name = check.link ? `[${check.name}](${check.link})` : check.name;
-    let elapsed = "—";
-    if (check.startedAt) {
-      const startMs = Date.parse(check.startedAt);
-      const endMs = check.completedAt ? Date.parse(check.completedAt) : now;
-      elapsed = formatDuration(Math.max(0, (endMs - startMs) / 1000));
-    }
-    const cells = [
-      `${bucketIcon(check.bucket)} ${name}`,
-      check.workflow ?? "—",
-      check.bucket,
-      check.startedAt ? formatClock(Date.parse(check.startedAt)) : "—",
-      elapsed,
-    ];
-    return `| ${cells.join(" | ")} |`;
+    return `- [${check.startedAt ? ">" : " "}] ${name}`;
   });
-  const body = rows.length > 0 ? rows.join("\n") : "| _no checks reported_ | — | — | — | — |";
+  const body =
+    checks.length === 0 ? "- _no checks reported_" : lines.length > 0 ? lines.join("\n") : "";
 
-  return (
-    `### PR #${prNumber} checks — round ${round}: ${completed}/${checks.length} complete\n\n` +
-    `| Check | Workflow | Status | Started | Elapsed |\n` +
-    `|---|---|---|---|---|\n` +
-    body
-  );
+  return `### PR #${prNumber} checks — round ${round}: ${completed}/${checks.length} complete${body ? `\n\n${body}` : ""}`;
 }
 
 function sleepInterruptibly(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -1248,8 +1192,9 @@ export interface PollPrChecksOptions {
 
 /**
  * Poll `gh pr checks --json` until no check is pending (or a fail-fast
- * failure, or the deadline), emitting a GitHub-UI-like table via `onUpdate`
- * each round. In JSON mode gh exits 0 whenever it could fetch the checks —
+ * failure, or the deadline), emitting a compact list of in-flight checks via
+ * `onUpdate` each round. In JSON mode gh exits 0 whenever it could fetch the
+ * checks —
  * completion is judged from the `bucket` field, not the exit code. A non-zero
  * exit (no checks reported, auth, network) is not fatal here: the caller
  * proceeds to the Actions API verification, which either produces the final
@@ -1282,9 +1227,7 @@ export async function pollPrChecks(options: PollPrChecksOptions): Promise<void> 
     const checks: PrCheck[] = Value.Parse(Type.Array(prCheckSchema), JSON.parse(result.stdout));
 
     onUpdate?.({
-      content: [
-        { type: "text", text: renderPrChecksTable({ prNumber, round, checks, now: Date.now() }) },
-      ],
+      content: [{ type: "text", text: renderPrChecksList({ prNumber, round, checks }) }],
       details: {},
     });
 
@@ -1852,7 +1795,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     label: "Watch GitHub PR Checks",
     description:
       "Watch CI status checks for a PR until they complete. Blocks until all checks finish or one fails. " +
-      "Each polling round streams a GitHub-UI-like check table (name, workflow, status, started, elapsed) via onUpdate. " +
+      "Each polling round streams a compact bullet list of the checks still in flight via onUpdate. " +
       "Use this when you need to wait for CI to complete and see the final result.",
     promptSnippet: "Watch and wait for GitHub PR CI checks to complete",
     parameters: Type.Object({

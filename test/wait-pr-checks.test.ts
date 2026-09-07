@@ -1,10 +1,10 @@
 /**
  * Tests for `wait-github-pr-checks`.
  *
- * The tool polls `gh pr checks --json` each round (streaming a GitHub-UI-like
- * table via onUpdate), then fetches all workflow jobs of the PR's head commit
- * via the Actions API. It reports FAILED with the failed jobs' details when
- * any job did not succeed, PASSED otherwise.
+ * The tool polls `gh pr checks --json` each round (streaming a compact bullet
+ * list of in-flight checks via onUpdate), then fetches all workflow jobs of
+ * the PR's head commit via the Actions API. It reports FAILED with the failed
+ * jobs' details when any job did not succeed, PASSED otherwise.
  *
  * In JSON mode gh exits 0 whenever it could fetch the checks — completion is
  * judged from the `bucket` field, not the exit code.
@@ -22,7 +22,7 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import registerTools, { pollPrChecks, renderPrChecksTable } from "../src/gh-readonly.js";
+import registerTools, { pollPrChecks, renderPrChecksList } from "../src/gh-readonly.js";
 
 interface CheckFixture {
   name: string;
@@ -123,10 +123,9 @@ beforeEach(() => {
   spawnMock.mockReturnValue(new FakeChildProcess());
 });
 
-describe("renderPrChecksTable", () => {
-  it("renders a GitHub-UI-like table with name, workflow, status, started time and elapsed", () => {
-    const now = Date.parse("2026-09-05T03:16:00Z");
-    const text = renderPrChecksTable({
+describe("renderPrChecksList", () => {
+  it("lists running checks first, queued after, and hides completed ones", () => {
+    const text = renderPrChecksList({
       prNumber: 7,
       round: 2,
       checks: [
@@ -148,27 +147,56 @@ describe("renderPrChecksTable", () => {
           link: null,
           workflow: null,
         }),
+        check({
+          name: "queued",
+          state: "QUEUED",
+          bucket: "pending",
+          startedAt: null,
+          completedAt: null,
+          link: null,
+          workflow: null,
+        }),
       ],
-      now,
     });
 
-    expect(text).toContain("PR #7 checks — round 2: 2/3 complete");
-    // completed check: started clock + full duration (188s)
-    expect(text).toContain("✅ [build](https://github.com/owner/repo/actions/runs/5/job/10)");
-    expect(text).toContain("| CI | pass |");
-    expect(text).toContain("3m08s");
-    // pending check: started clock + time-so-far (30s), no link
-    expect(text).toContain("🔄 e2e");
-    expect(text).toContain("| pending |");
-    expect(text).toContain("30s");
-    // never-started check: dashes, no workflow
-    expect(text).toContain("⏭️ lint");
-    expect(text).toContain("| — | — |");
+    expect(text).toContain("PR #7 checks — round 2: 2/4 complete");
+    const lines = text.split("\n").filter((l) => l.startsWith("- ["));
+    expect(lines).toEqual(["- [>] e2e", "- [ ] queued"]);
+    // completed and skipped checks are hidden
+    expect(text).not.toContain("build");
+    expect(text).not.toContain("lint");
+  });
+
+  it("renders a link for checks that have one and omits the body when all checks are complete", () => {
+    const allComplete = renderPrChecksList({ prNumber: 7, round: 2, checks: [check({})] });
+    expect(allComplete).toBe("### PR #7 checks — round 2: 1/1 complete");
+    expect(allComplete).not.toContain("- [");
+
+    const linked = renderPrChecksList({
+      prNumber: 7,
+      round: 1,
+      checks: [
+        check({
+          name: "e2e",
+          state: "PENDING",
+          bucket: "pending",
+          startedAt: "2026-09-05T03:15:30Z",
+          completedAt: null,
+        }),
+      ],
+    });
+    expect(linked).toContain("- [>] [e2e](https://github.com/owner/repo/actions/runs/5/job/10)");
+  });
+
+  it("marks an empty check list as no checks reported", () => {
+    const text = renderPrChecksList({ prNumber: 7, round: 1, checks: [] });
+    expect(text).toContain("PR #7 checks — round 1: 0/0 complete");
+    expect(text).toContain("- _no checks reported_");
   });
 });
 
 describe.skipIf(process.platform === "win32")("pollPrChecks", () => {
-  it("re-polls while checks are pending and emits a table each round", async () => {
+  it("re-polls while checks are pending and emits a list each round", async () => {
     queueGh([
       {
         code: 0,
@@ -193,9 +221,12 @@ describe.skipIf(process.platform === "win32")("pollPrChecks", () => {
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(updates).toHaveLength(2);
     expect(updates[0]).toContain("round 1");
-    expect(updates[0]).toContain("pending");
+    expect(updates[0]).toContain(
+      "- [>] [build](https://github.com/owner/repo/actions/runs/5/job/10)",
+    );
     expect(updates[1]).toContain("round 2");
-    expect(updates[1]).toContain("pass");
+    expect(updates[1]).toContain("1/1 complete");
+    expect(updates[1]).not.toContain("- [");
   });
 
   it("stops immediately on a fail-fast failure even when checks are pending", async () => {
@@ -372,9 +403,15 @@ describe.skipIf(process.platform === "win32")("wait-github-pr-checks", () => {
     expect(result.details).toMatchObject({ status: "failure" });
   });
 
-  it("streams a checks table via onUpdate before the final report", async () => {
+  it("streams a checks list via onUpdate before the final report", async () => {
     queueGh([
-      { code: 0, stdout: checksJson([check({})]) },
+      {
+        code: 0,
+        stdout: checksJson([
+          check({ name: "unit", bucket: "fail", state: "FAILURE" }),
+          check({ name: "build", bucket: "pending", state: "PENDING", completedAt: null }),
+        ]),
+      },
       { code: 0, stdout: JSON.stringify({ headRefOid: "abc123def456" }) },
       {
         code: 0,
@@ -383,12 +420,18 @@ describe.skipIf(process.platform === "win32")("wait-github-pr-checks", () => {
     ]);
     const updates: string[] = [];
 
-    const result = await call((msg) => {
-      for (const part of msg.content) updates.push(part.text);
-    });
+    const result = await exec!(
+      "id",
+      { number: 1, repo: "owner/repo", fail_fast: true },
+      undefined,
+      (msg: { content: { type: "text"; text: string }[] }) => {
+        for (const part of msg.content) updates.push(part.text);
+      },
+      { cwd: undefined },
+    );
 
     expect(updates.some((t) => t.includes("Watching CI checks for PR #1"))).toBe(true);
-    expect(updates.some((t) => t.includes("round 1") && t.includes("build"))).toBe(true);
+    expect(updates.some((t) => t.includes("round 1") && t.includes("- [>] [build]("))).toBe(true);
     expect(result.content[0].text).toContain("No workflow runs found");
   });
 
