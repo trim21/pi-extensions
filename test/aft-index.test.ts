@@ -10,13 +10,14 @@ vi.mock("../src/aft/bridge.js", () => ({
   shutdownAftPool: vi.fn(),
   callAftTool: vi.fn(),
   resolveSessionId: vi.fn(() => "session-test"),
+  findBinary: vi.fn(),
 }));
 
 vi.mock("../src/aft/config.js", () => ({
   loadAftConfig: vi.fn(),
 }));
 
-import { createAftState } from "../src/aft/bridge.js";
+import { createAftState, findBinary } from "../src/aft/bridge.js";
 import { type AftReadConfig, loadAftConfig, type SemanticRemote } from "../src/aft/config.js";
 import aftExtension from "../src/aft/index.js";
 
@@ -46,15 +47,22 @@ interface Surface {
   startError: unknown;
 }
 
-async function registerWith(config: Partial<AftReadConfig>, poolError?: Error): Promise<Surface> {
+const RESOLVED_BINARY = "/usr/local/bin/aft";
+
+async function registerWith(
+  config: Partial<AftReadConfig>,
+  options?: { poolError?: Error; binary?: string | null },
+): Promise<Surface> {
+  const binary = options?.binary === undefined ? RESOLVED_BINARY : options.binary;
+  vi.mocked(findBinary).mockResolvedValue(binary as unknown as string);
   vi.mocked(loadAftConfig).mockReturnValue({
     enabled: true,
     semanticSearch: false,
     semanticRemote: undefined,
     ...config,
   });
-  if (poolError) {
-    vi.mocked(createAftState).mockRejectedValue(poolError);
+  if (options?.poolError) {
+    vi.mocked(createAftState).mockRejectedValue(options.poolError);
   } else {
     vi.mocked(createAftState).mockResolvedValue({
       logger: {
@@ -102,6 +110,7 @@ async function registerWith(config: Partial<AftReadConfig>, poolError?: Error): 
 describe("aft tool surface", () => {
   beforeEach(() => {
     vi.mocked(createAftState).mockReset();
+    vi.mocked(findBinary).mockReset();
     vi.mocked(loadAftConfig).mockReset();
     // 扩展会往 process 挂 beforeExit 兜底关闭 bridge；本文件只测注册决策，
     // 逐个用例真挂会撑爆默认 10 个 listener 上限。
@@ -138,12 +147,31 @@ describe("aft tool surface", () => {
   it("keeps tools registered and surfaces the init error from session_start", async () => {
     const { names, notices, startError } = await registerWith(
       {},
-      new Error("AFT binary not found"),
+      { poolError: new Error("bridge spawn failed") },
     );
     expect(names.toSorted()).toEqual(ALWAYS_REGISTERED.toSorted());
     expect(startError).toBeInstanceOf(Error);
-    expect((startError as Error).message).toContain("AFT binary not found");
+    expect((startError as Error).message).toContain("bridge spawn failed");
     expect(notices).toEqual([]);
+  });
+
+  it("registers nothing and warns when the aft binary is missing", async () => {
+    const { names, notices } = await registerWith({}, { binary: null });
+    expect(names).toEqual([]);
+    expect(notices.join("\n")).toContain("AFT binary not found");
+    expect(createAftState).not.toHaveBeenCalled();
+  });
+
+  it("passes the resolved binary path to createAftState", async () => {
+    const { names, notices } = await registerWith({});
+    expect(names).toContain("aft_outline");
+    expect(notices).toEqual([]);
+    expect(createAftState).toHaveBeenCalledWith(
+      process.cwd(),
+      "session-test",
+      RESOLVED_BINARY,
+      undefined,
+    );
   });
 
   it.each(NEVER_REGISTERED)("never registers %s", async (name) => {

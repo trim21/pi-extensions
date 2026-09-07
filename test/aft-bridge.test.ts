@@ -1,22 +1,15 @@
 import type { ConfigTier } from "@cortexkit/aft-bridge";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const {
-  createAftTransportPool,
-  findBinary,
-  readConfigTiers,
-  inlineUserConfigTier,
-  setActiveLogger,
-} = vi.hoisted(() => ({
-  createAftTransportPool: vi.fn(),
-  findBinary: vi.fn(),
-  readConfigTiers: vi.fn(),
-  inlineUserConfigTier: vi.fn(),
-  setActiveLogger: vi.fn(),
-}));
+const { createAftTransportPool, readConfigTiers, inlineUserConfigTier, setActiveLogger } =
+  vi.hoisted(() => ({
+    createAftTransportPool: vi.fn(),
+    readConfigTiers: vi.fn(),
+    inlineUserConfigTier: vi.fn(),
+    setActiveLogger: vi.fn(),
+  }));
 
 vi.mock("@cortexkit/aft-bridge", () => ({
-  findBinary: () => findBinary(),
   createAftTransportPool: (options: unknown) => createAftTransportPool(options),
   resolveCortexKitConfigPaths: (cwd: string) => ({
     userConfigPath: `${cwd}/aft.jsonc`,
@@ -40,6 +33,7 @@ import type { SemanticRemote } from "../src/aft/config.js";
 import { createAftLogger } from "../src/aft/logger.js";
 
 const PROJECT = "/tmp/aft-bridge-test-project";
+const BINARY = "/usr/local/bin/aft";
 
 interface PoolOptions {
   poolOptions: { childEnv: Record<string, string> };
@@ -47,7 +41,7 @@ interface PoolOptions {
 }
 
 async function poolOptionsFor(semantic?: SemanticRemote): Promise<PoolOptions> {
-  await createAftPool(PROJECT, createAftLogger(), semantic);
+  await createAftPool(PROJECT, createAftLogger(), BINARY, semantic);
   return createAftTransportPool.mock.calls[0][0] as PoolOptions;
 }
 
@@ -64,7 +58,6 @@ function remote(overrides: Partial<SemanticRemote>): SemanticRemote {
 describe("createAftPool", () => {
   beforeEach(() => {
     createAftTransportPool.mockReset();
-    findBinary.mockReset();
     readConfigTiers.mockReset();
     inlineUserConfigTier.mockReset();
     setActiveLogger.mockReset();
@@ -72,7 +65,6 @@ describe("createAftPool", () => {
       setConfigureOverride: vi.fn(),
       shutdown: vi.fn(),
     });
-    findBinary.mockResolvedValue("/usr/local/bin/aft");
     readConfigTiers.mockReturnValue([{ tier: "user", source: "aft.jsonc", doc: "{}" }]);
     inlineUserConfigTier.mockImplementation(
       (config: Record<string, unknown>, source?: string) =>

@@ -31,6 +31,7 @@ import { defineCommand, runMain } from "citty";
 import {
   callAftTool,
   createAftState,
+  findBinary,
   SEMANTIC_INDEX_WAIT_TIMEOUT_MS,
   shutdownAftPool,
 } from "../src/aft/bridge.js";
@@ -89,7 +90,15 @@ async function search(flags: {
     );
   }
 
-  const state = await createAftState(root, undefined, cfg.semanticRemote);
+  const binaryPath = await findBinary();
+  if (!binaryPath) {
+    diagnose(
+      "找不到 aft 二进制：请安装 npm 平台包（@cortexkit/aft-<platform>）、`cargo install agent-file-tools`，或把 `aft` 放进 PATH。",
+    );
+    return 1;
+  }
+
+  const state = await createAftState(root, undefined, binaryPath, cfg.semanticRemote);
   activeState.current = state;
   try {
     const bridge = state.pool.pool.getBridge(root);

@@ -1,9 +1,9 @@
 /**
  * AFT bridge 管理：二进制解析、transport pool 生命周期、工具调用封装。
  *
- * 依赖 @cortexkit/aft-bridge（官方协议的 JS 客户端）：findBinary 的解析顺序是
- * 缓存 → npm 平台包（@cortexkit/aft-<platform>，随 npm 镜像分发，无运行时网络）
- * → PATH → cargo → GitHub release 兜底；内网部署只要保证平台包版本与
+ * 依赖 @cortexkit/aft-bridge（官方协议的 JS 客户端）：二进制解析由入口在
+ * session_start 用 findBinary 完成（缓存 → npm 平台包 → PATH → cargo →
+ * GitHub release 兜底），本模块只接收解析结果；内网部署只要保证平台包版本与
  * aft-bridge 锁一致就不会走到最后的网络下载。
  */
 
@@ -12,7 +12,6 @@ import {
   type AftTransportPool,
   type BridgeRequestOptions,
   createAftTransportPool,
-  findBinary,
   inlineUserConfigTier,
   readConfigTiers,
   resolveCortexKitConfigPaths,
@@ -25,28 +24,14 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SemanticRemote } from "./config.js";
 import { type AftLogger, createAftLogger } from "./logger.js";
 
+export { findBinary } from "@cortexkit/aft-bridge";
+
 /** Pi 会话 ID：Rust 侧用它做 session 作用域（undo/checkpoint），感知工具可留空。 */
 export function resolveSessionId(extCtx: ExtensionContext): string | undefined {
   const manager = (extCtx as unknown as { sessionManager?: { getSessionId?: () => string } })
     .sessionManager;
   const id = manager?.getSessionId?.();
   return typeof id === "string" && id.length > 0 ? id : undefined;
-}
-
-/**
- * 解析 aft 二进制；失败时抛出（调用方决定是否降级不注册工具）。
- * 不带版本参数：findBinary 内部用 @cortexkit/aft-bridge 自身版本作为匹配基准，
- * 与 npm 平台包（@cortexkit/aft-<platform>）精确对齐，避免手动读 package.json
- * （其 exports 不暴露 ./package.json）。
- */
-export async function resolveAftBinary(): Promise<string> {
-  const path = await findBinary();
-  if (!path) {
-    throw new Error(
-      "AFT binary not found. Install via npm platform package (@cortexkit/aft-<platform>), cargo install agent-file-tools, or place `aft` on PATH.",
-    );
-  }
-  return path;
 }
 
 export interface AftPool {
@@ -65,10 +50,11 @@ export interface AftState {
 export async function createAftState(
   cwd: string,
   sessionId: string | undefined,
+  binaryPath: string,
   semantic?: SemanticRemote,
 ): Promise<AftState> {
   const logger = createAftLogger(sessionId);
-  const pool = await createAftPool(cwd, logger, semantic);
+  const pool = await createAftPool(cwd, logger, binaryPath, semantic);
   return { logger, pool };
 }
 
@@ -91,6 +77,7 @@ export const SEMANTIC_API_KEY_ENV = "AFT_SEMANTIC_API_KEY";
 
 /**
  * 创建 transport pool。每个项目根一个常驻 aft 进程，跨 session 共享。
+ * `binaryPath` 由入口在 session_start 解析好传入（含 auto-download 兜底）。
  *
  * `semantic` 决定 embedding 密钥如何送达子进程：aft 只从配置里读 `api_key_env`
  * 这个「变量名」，再自己 `env::var` 取值，所以提供值时必须连带把名字告诉它。
@@ -99,12 +86,12 @@ export const SEMANTIC_API_KEY_ENV = "AFT_SEMANTIC_API_KEY";
 export async function createAftPool(
   cwd: string,
   logger: AftLogger,
+  binaryPath: string,
   semantic?: SemanticRemote,
 ): Promise<AftPool> {
   // 必须在任何 bridge 代码运行前注册：不设 logger 时 aft-bridge 会把 child
   // stderr / 生命周期日志 fallback 到 console.error，raw 输出打进 pi 的 stderr 破坏 TUI。
   setActiveLogger(logger);
-  const binaryPath = await resolveAftBinary();
   const paths = resolveCortexKitConfigPaths(cwd);
   const childEnv: Record<string, string> = {
     // Rust 侧 semantic_search 在索引 Building 时阻塞等待构建完成
