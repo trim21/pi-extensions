@@ -213,10 +213,39 @@ function toInspectLocations(result: DefinitionResult): InspectLocation[] {
   return locations;
 }
 
+/** stderr 尾部保留上限（字符）：足够容纳启动失败的最后报错，又不撑爆通知。 */
+const STDERR_TAIL_CHARS = 4_000;
+
+/** 展开 Error 的 cause 链为一条 message；流包装错误只包一层，逐层展开即可还原根因。 */
+function errorChainMessage(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const parts: string[] = [];
+  let current: unknown = error;
+  while (current instanceof Error && current.message && !parts.includes(current.message)) {
+    parts.push(current.message);
+    current = current.cause;
+  }
+  if (typeof current === "string" || typeof current === "number") parts.push(String(current));
+  return parts.join(": ");
+}
+
+/** 拼装握手失败的完整原因：错误链 + 进程退出状态 + stderr 尾部。 */
+function describeStartupFailure(
+  error: unknown,
+  exitDescription: string | undefined,
+  stderrTail: string,
+): string {
+  const parts = [errorChainMessage(error)];
+  if (exitDescription) parts.push(`server ${exitDescription}`);
+  const stderr = stderrTail.trim();
+  if (stderr) parts.push(`stderr: ${stderr}`);
+  return parts.join("; ");
+}
+
 export class InitializeError extends Error {
   readonly serverID: string;
-  constructor(serverID: string, cause: unknown) {
-    super(`Failed to initialize LSP server ${serverID}`, { cause });
+  constructor(serverID: string, cause: unknown, detail?: string) {
+    super(`Failed to initialize LSP server ${serverID}${detail ? `: ${detail}` : ""}`, { cause });
     this.serverID = serverID;
   }
 }
@@ -443,11 +472,19 @@ export async function create(input: CreateInput): Promise<LspClient> {
     new StreamMessageReader(input.server.process.stdout),
     new StreamMessageWriter(input.server.process.stdin),
   );
-  input.server.process.stderr.resume();
+  // stderr 平时只在尾部保留少量内容（避免子进程大量输出撑爆内存）；
+  // 握手失败时随错误输出，服务器 panic / 参数错误等启动原因由此还原。
+  let stderrTail = "";
+  input.server.process.stderr.setEncoding("utf8");
+  input.server.process.stderr.on("data", (chunk: string) => {
+    stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_CHARS);
+  });
   /** 连接或服务器进程已关闭；pull 重试循环以此终止，避免无界等待。 */
   let connectionClosed = false;
-  input.server.process.once("exit", () => {
+  let exitDescription: string | undefined;
+  input.server.process.once("exit", (code, signal) => {
     connectionClosed = true;
+    exitDescription = code === null ? `killed by signal ${signal}` : `exited with code ${code}`;
   });
   connection.onDispose(() => {
     connectionClosed = true;
@@ -582,7 +619,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
     connection.end();
     connection.dispose();
     await stopProcess(input.server.process);
-    throw new InitializeError(input.serverID, error);
+    throw new InitializeError(
+      input.serverID,
+      error,
+      describeStartupFailure(error, exitDescription, stderrTail),
+    );
   });
 
   const syncKind = getSyncKind(initialized.capabilities);

@@ -703,4 +703,42 @@ describe("lsp client renameSymbol", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("服务器启动即退出时，initialize 失败信息包含退出码与 stderr 尾部", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-test-"));
+    const proc = spawn(process.execPath, [
+      "-e",
+      String.raw`process.stderr.write("bad arguments\n"); process.exit(101)`,
+    ]);
+    const error = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+      initializeTimeoutMs: 500,
+    }).catch((error_: unknown) => error_);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("exited with code 101");
+    expect((error as Error).message).toContain("stderr: bad arguments");
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("initialize 超时时，失败信息包含超时原因与 stderr 尾部", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-test-"));
+    const proc = spawn(process.execPath, [
+      "-e",
+      String.raw`process.stderr.write("loading indexes...\n"); setTimeout(() => {}, 10_000)`,
+    ]);
+    const error = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+      initializeTimeoutMs: 300,
+    }).catch((error_: unknown) => error_);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("Timeout after 300ms");
+    expect((error as Error).message).toContain("stderr: loading indexes...");
+    await rm(dir, { recursive: true, force: true });
+  });
 });
