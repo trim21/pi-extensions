@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readlink } from "node:fs/promises";
+import { mkdir, readFile, readlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,8 +25,8 @@ export interface NetworkStackOptions {
   readonly mihomoPath: string;
   readonly slirp4netnsPath: string;
   /**
-   * holder（unshare + mihomo）输出透传。默认只用于就绪探测、内容丢弃，
-   * 因此启动失败时只剩 "exited before mihomo started"，诊断需要它。
+   * holder（unshare + mihomo）输出透传。输出同时始终写入诊断缓冲，启动
+   * 失败时落盘到 agent-dir/tmp 并把路径附进错误信息，没有它也能拿到死因。
    */
   readonly onHolderOutput?: (chunk: string) => void;
 }
@@ -45,6 +45,38 @@ export interface NetworkStackExecOptions {
 }
 
 const NAMESERVER_PATTERN = /^\s*nameserver\s+(\S+)/;
+
+/**
+ * 启动失败时把收集到的子进程完整 stdout/stderr 与错误本身落盘到
+ * agent-dir/tmp，返回日志路径；写入失败（如目录不可写）静默返回 undefined，
+ * 不掩盖原错误。日志不进工具结果文本：holder 输出可能很长且与命令无关，
+ * 只回路径。
+ */
+async function writeFailureLog(
+  error: unknown,
+  logs: readonly string[],
+): Promise<string | undefined> {
+  const sections = logs.map(
+    (log, index) => `## child ${index}\n${log.length > 0 ? log : "(no output captured)"}`,
+  );
+  const content = [
+    `# ${new Date().toISOString()}`,
+    "",
+    error instanceof Error ? (error.stack ?? error.message) : String(error),
+    "",
+    ...sections,
+    "",
+  ].join("\n");
+  const dir = join(getAgentDir(), "tmp");
+  const path = join(dir, `bwrap-netstack-${randomUUID()}.log`);
+  try {
+    await mkdir(dir, { recursive: true });
+    await writeFile(path, content);
+    return path;
+  } catch {
+    return undefined;
+  }
+}
 // 构建产物 holder.js（esbuild 编译）：node 对 node_modules 下的 .ts 拒绝 type stripping，
 // 扩展从 npm 包加载时 holder.ts 落在 node_modules 下，直接运行会 ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING
 const HOLDER_PATH = fileURLToPath(new URL("holder.js", import.meta.url));
@@ -113,7 +145,10 @@ async function waitForNewUserns(pid: number, timeoutMs = 5000): Promise<void> {
   throw new Error("Timed out waiting for sandbox network namespace");
 }
 
-/** 监听 holder 的 stdout/stderr（mihomo 日志透传），以 "Tun adapter listening" 作为就绪标志。 */
+/**
+ * 监听 holder 的 stdout/stderr（mihomo 日志透传），以 "Tun adapter listening" 作为就绪标志。
+ * holder 提前退出的情形由 startNetworkStack 统一注册的 exit 监听兜底。
+ */
 function waitForMihomoStarted(holder: ChildProcess, timeoutMs = 20000): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -139,12 +174,6 @@ function waitForMihomoStarted(holder: ChildProcess, timeoutMs = 20000): Promise<
         });
       }
     }
-    holder.once("exit", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(`Sandbox holder exited before mihomo started (code ${code})`));
-    });
   });
 }
 
@@ -162,15 +191,26 @@ function killChild(pid: number | undefined): void {
 }
 
 /**
- * 额外转发子进程输出给诊断回调（就绪探测的监听器不受影响）。
+ * 额外转发子进程输出给诊断回调（就绪探测的监听器不受影响），并把全部输出
+ * 收进 collect：启动失败时落盘，否则没有别的渠道能看到 holder 的真实死因。
  * 注册 error 监听器后 spawn 失败（如 unshare 缺失）不再以未捕获异常结束进程。
  */
-function forwardOutput(child: ChildProcess, onOutput: ((chunk: string) => void) | undefined): void {
-  if (!onOutput) return;
-  const write = (chunk: Buffer): void => onOutput(chunk.toString());
+function forwardOutput(
+  child: ChildProcess,
+  onOutput: ((chunk: string) => void) | undefined,
+  collect: string[],
+): void {
+  const write = (chunk: Buffer): void => {
+    const text = chunk.toString();
+    collect.push(text);
+    onOutput?.(text);
+  };
   child.stdout?.on("data", write);
   child.stderr?.on("data", write);
-  child.once("error", (error) => onOutput(String(error)));
+  child.once("error", (error) => {
+    collect.push(String(error));
+    onOutput?.(String(error));
+  });
 }
 
 export interface NetworkStack {
@@ -218,6 +258,8 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
 
   let holder: ChildProcess | undefined;
   let slirp: ChildProcess | undefined;
+  const holderLog: string[] = [];
+  const slirpLog: string[] = [];
   try {
     // unshare -p --fork：node 成为 pid namespace 的 init，任何方式退出（含 SIGKILL）
     // 内核都会清理 pid ns 内全部进程（mihomo），ns 引用随之归零；
@@ -247,12 +289,34 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
         stdio: ["pipe", "pipe", "pipe", "pipe"],
       },
     );
-    forwardOutput(holder, holderOutput);
-    if (holder.pid === undefined) {
-      throw new Error("Failed to start network namespace holder");
+    forwardOutput(holder, holderOutput, holderLog);
+    let holderPid = holder.pid;
+    if (holderPid === undefined) {
+      // spawn 失败（如 unshare 缺失）：error 事件异步到达，等一拍让它落进诊断缓冲
+      await new Promise((resolve) => setImmediate(resolve));
+      holderPid = holder.pid;
+      if (holderPid === undefined) {
+        throw new Error("Failed to start network namespace holder");
+      }
     }
-    const holderPid = holder.pid;
-    await waitForNewUserns(holderPid);
+    // holder 提前退出是启动失败最常见的形态（unshare 被拒、node 崩溃、mihomo 起
+    // 不来）：立即注册 exit 监听并参与后续所有等待的 race，避免「进程秒死却被
+    // 呈现为 5s/20s 超时」。stop() 正常杀 holder 也走这里，下方 catch 防
+    // unhandled rejection。
+    const { promise: holderExited, reject: rejectHolderExited } = Promise.withResolvers<never>();
+    holder.once("exit", (code) => {
+      rejectHolderExited(new Error(`Sandbox holder exited before mihomo started (code ${code})`));
+    });
+    // stop() 正常终止 holder 也会 reject：吞掉，防 unhandled rejection
+    // eslint-disable-next-line unicorn/no-useless-undefined
+    holderExited.catch(() => undefined);
+    // race 输掉的 promise 之后仍可能迟到 reject（如 userns 轮询到点才超时），
+    // 补 no-op catch 防止 unhandled rejection 让进程崩溃
+    const usernsReady = waitForNewUserns(holderPid);
+    await Promise.race([usernsReady, holderExited]).finally(() => {
+      // eslint-disable-next-line unicorn/no-useless-undefined
+      usernsReady.catch(() => undefined);
+    });
 
     // slirp4netns 提供 egress，必须在宿主 netns 启动：它的 egress socket 决定出站
     // 视角，留在沙盒 netns 里会被 mihomo 的 TUN 策略路由 + dns-hijack 自劫持成环
@@ -285,12 +349,16 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
       ],
       { stdio: ["ignore", "pipe", "pipe", exitReadFd] },
     );
-    forwardOutput(slirp, holderOutput);
+    forwardOutput(slirp, holderOutput, slirpLog);
     if (slirp.pid === undefined) {
       throw new Error("Failed to start slirp4netns");
     }
 
-    await waitForMihomoStarted(holder);
+    const mihomoReady = waitForMihomoStarted(holder);
+    await Promise.race([mihomoReady, holderExited]).finally(() => {
+      // eslint-disable-next-line unicorn/no-useless-undefined
+      mihomoReady.catch(() => undefined);
+    });
 
     const state: NetworkStackState = { holderPid, slirpPid: slirp.pid };
     const stack: NetworkStack = {
@@ -393,6 +461,12 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
       for (const pid of children) {
         killProcess(pid, "SIGKILL");
       }
+    }
+    const logPath = await writeFailureLog(error, [holderLog.join(""), slirpLog.join("")]);
+    if (logPath !== undefined && error instanceof Error) {
+      throw new Error(`${error.message}\n(sandbox startup diagnostics: ${logPath})`, {
+        cause: error,
+      });
     }
     throw error;
   }
