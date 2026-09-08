@@ -19,6 +19,7 @@
  *   - list-github-releases: List releases
  *   - read-github-release: Get release details
  *   - wait-github-pr-checks: Watch PR CI checks
+ *   - wait-github-commit-checks: Watch CI checks of a commit (no PR required)
  *   - watch-github-run: Watch a workflow run
  *
  * Install:
@@ -241,6 +242,15 @@ export async function ghExec(
 
 function repoArgs(repo?: string): string[] {
   return repo ? ["--repo", repo] : [];
+}
+
+/** Split `OWNER/REPO`; throws when the name doesn't have exactly one slash. */
+function splitRepo(nameWithOwner: string): { owner: string; repo: string } {
+  const slash = nameWithOwner.indexOf("/");
+  if (slash <= 0 || slash === nameWithOwner.length - 1 || nameWithOwner.includes("/", slash + 1)) {
+    throw new Error(`invalid repository: ${nameWithOwner} (expected OWNER/REPO)`);
+  }
+  return { owner: nameWithOwner.slice(0, slash), repo: nameWithOwner.slice(slash + 1) };
 }
 
 // ── runtime validation schemas for JSON.parse results ───────────────────────
@@ -1207,11 +1217,12 @@ export function checkDisplayName(check: MergedCheck): string {
  * Pure — no network.
  */
 export function renderPrChecksList(options: {
-  prNumber: number | string;
+  /** Report subject, e.g. `PR #7` or `commit 5a7c407`. */
+  subject: string;
   round: number;
   checks: readonly MergedCheck[];
 }): string {
-  const { prNumber, round, checks } = options;
+  const { subject, round, checks } = options;
   const completed = checks.filter((c) => c.bucket !== "pending").length;
 
   const pending = checks.filter((c) => c.bucket === "pending");
@@ -1225,7 +1236,7 @@ export function renderPrChecksList(options: {
   const body =
     checks.length === 0 ? "- _no checks reported_" : lines.length > 0 ? lines.join("\n") : "";
 
-  return `PR #${prNumber} checks — round ${round}: ${completed}/${checks.length} complete${body ? `\n\n${body}` : ""}`;
+  return `${subject} checks — round ${round}: ${completed}/${checks.length} complete${body ? `\n\n${body}` : ""}`;
 }
 
 function sleepInterruptibly(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -1255,12 +1266,19 @@ export interface ChecksPollResult {
 }
 
 export interface PollPrChecksOptions {
-  prNumber: number | string;
+  /** Report subject for progress lines, e.g. `PR #7` or `commit 5a7c407`. */
+  subject: string;
   owner: string;
   repo: string;
   headSha: string;
   failFast: boolean;
   checks: GithubChecksClient;
+  /**
+   * When set, only check runs triggered by this workflow event (e.g. push)
+   * are judged; commit statuses have an unknown trigger event and are
+   * excluded. Unset means all checks of the commit.
+   */
+  event?: string;
   /** Owned by the caller; the poll loop observes it but never aborts it. */
   signal: AbortSignal;
   /** Test overrides. */
@@ -1281,7 +1299,7 @@ export interface PollPrChecksOptions {
  * when no round ever succeeded by the deadline is the last error thrown.
  */
 export async function pollPrChecks(options: PollPrChecksOptions): Promise<ChecksPollResult> {
-  const { prNumber, owner, repo, headSha, failFast, checks, signal, onUpdate } = options;
+  const { subject, owner, repo, headSha, failFast, checks, signal, onUpdate } = options;
   const intervalMs = options.intervalMs ?? CHECKS_POLL_INTERVAL_MS;
   const deadlineMs = options.deadlineMs ?? CHECKS_WATCH_DEADLINE_MS;
 
@@ -1299,9 +1317,12 @@ export async function pollPrChecks(options: PollPrChecksOptions): Promise<Checks
       ]);
       everSucceeded = true;
       lastChecks = mergeChecks(statuses, runs);
+      if (options.event) {
+        lastChecks = lastChecks.filter((c) => c.event === options.event);
+      }
       onUpdate?.({
         content: [
-          { type: "text", text: renderPrChecksList({ prNumber, round, checks: lastChecks }) },
+          { type: "text", text: renderPrChecksList({ subject, round, checks: lastChecks }) },
         ],
         details: {},
       });
@@ -1351,14 +1372,15 @@ export interface ChecksVerdict {
  * display-only enrichment. Pure — no network.
  */
 export function renderChecksVerdict(options: {
-  prNumber: number | string;
+  /** Report subject, e.g. `PR #123` or `commit 5a7c407`. */
+  subject: string;
   poll: ChecksPollResult;
   /** All Actions jobs of the head commit; failed/incomplete ones are listed. */
   actionJobs?: readonly ActionJob[];
   /** Set when the Actions job fetch failed; the verdict stays untouched. */
   enrichmentError?: string;
 }): ChecksVerdict {
-  const { prNumber, poll, actionJobs, enrichmentError } = options;
+  const { subject, poll, actionJobs, enrichmentError } = options;
   const totalChecks = poll.checks.length;
   const failed = poll.checks.filter((c) => c.bucket === "fail");
   const pending = poll.checks.filter((c) => c.bucket === "pending");
@@ -1366,7 +1388,7 @@ export function renderChecksVerdict(options: {
   if (failed.length === 0 && poll.outcome === "completed") {
     return {
       status: "success",
-      text: `## PR #${prNumber} CI Checks - PASSED\n\nAll ${totalChecks} check(s) passed.`,
+      text: `## ${subject} CI Checks - PASSED\n\nAll ${totalChecks} check(s) passed.`,
       failedJobs: [],
     };
   }
@@ -1400,7 +1422,7 @@ export function renderChecksVerdict(options: {
     return {
       status: "failure",
       text:
-        `## PR #${prNumber} CI Checks - FAILED\n\n` +
+        `## ${subject} CI Checks - FAILED\n\n` +
         `${failed.length} of ${totalChecks} check(s) failed:\n\n${lines.join("\n")}`,
       failedJobs,
     };
@@ -1413,7 +1435,7 @@ export function renderChecksVerdict(options: {
   return {
     status: "pending",
     text:
-      `## PR #${prNumber} CI Checks - STILL IN FLIGHT\n\n` +
+      `## ${subject} CI Checks - STILL IN FLIGHT\n\n` +
       `${pending.length} of ${totalChecks} check(s) still incomplete after ~${waitedMinutes}m:\n\n` +
       (pendingLines.length > 0 ? pendingLines.join("\n") : "- _no checks reported_"),
     failedJobs: [],
@@ -1447,6 +1469,69 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
 
   const githubSearch = createGithubSearch();
   const githubChecks = createGithubChecks();
+
+  /**
+   * Shared wait core of `wait-github-pr-checks` and
+   * `wait-github-commit-checks`: poll the commit's checks, enrich FAILED
+   * reports with Actions job details (display-only), render the verdict.
+   * The caller resolves repo/headSha; `subject` formats the report header.
+   */
+  async function waitChecksReport(options: {
+    subject: string;
+    owner: string;
+    repo: string;
+    headSha: string;
+    failFast: boolean;
+    event?: string;
+    signal: AbortSignal | undefined;
+    onUpdate: ((msg: CiLogsResult) => void) | undefined;
+    params: unknown;
+    pendant?: ToolPendant;
+  }) {
+    const { subject, owner, repo, headSha, failFast, event, signal, onUpdate, params, pendant } =
+      options;
+
+    // 轮询层要求非空 signal；框架可能不给时构造一个占位的（从不取消）。
+    const pollSignal = signal ?? new AbortController().signal;
+
+    const poll = await pollPrChecks({
+      subject,
+      owner,
+      repo,
+      headSha,
+      failFast,
+      event,
+      checks: githubChecks,
+      signal: pollSignal,
+      onUpdate,
+    });
+
+    // Actions job 详情只做展示补充，不影响判定（判定来自 checks bucket，
+    // 覆盖 Azure 等外部 CI）。抓取失败时降级为提示，不推翻结论。
+    let actionJobs: readonly ActionJob[] | undefined;
+    let enrichmentError: string | undefined;
+    if (poll.checks.some((c) => c.bucket === "fail")) {
+      try {
+        actionJobs = await githubChecks.actionJobs(owner, repo, headSha, pollSignal);
+      } catch (error) {
+        enrichmentError =
+          error instanceof Error ? error.message : "Actions job details unavailable";
+      }
+    }
+
+    const verdict = renderChecksVerdict({ subject, poll, actionJobs, enrichmentError });
+    return {
+      content: [{ type: "text" as const, text: verdict.text }],
+      details: {
+        status: verdict.status,
+        totalChecks: poll.checks.length,
+        checks: poll.checks,
+        failedJobs: verdict.failedJobs,
+        input: params,
+        ...(pendant && { pendant }),
+      },
+    };
+  }
 
   // ── read-github-issue ──────────────────────────────────────────────────────
   pi.registerTool({
@@ -1999,12 +2084,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       });
 
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-      const slash = effectiveRepo.indexOf("/");
-      if (slash <= 0 || slash === effectiveRepo.length - 1) {
-        throw new Error(`invalid repository: ${effectiveRepo} (expected OWNER/REPO)`);
-      }
-      const owner = effectiveRepo.slice(0, slash);
-      const repoName = effectiveRepo.slice(slash + 1);
+      const { owner, repo: repoName } = splitRepo(effectiveRepo);
 
       const prOut = await ghExec(
         ["pr", "view", String(number), "--repo", effectiveRepo, "--json", "headRefOid"],
@@ -2012,45 +2092,75 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       );
       const { headRefOid } = Value.Parse(prHeadSchema, JSON.parse(prOut));
 
-      // 轮询层要求非空 signal；框架可能不给时构造一个占位的（从不取消）。
-      const pollSignal = signal ?? new AbortController().signal;
-
-      const poll = await pollPrChecks({
-        prNumber: number,
+      return waitChecksReport({
+        subject: `PR #${number}`,
         owner,
         repo: repoName,
         headSha: headRefOid,
         failFast: fail_fast === true,
-        checks: githubChecks,
-        signal: pollSignal,
+        signal,
         onUpdate,
+        params,
+        pendant,
+      });
+    },
+  });
+
+  // ── wait-github-commit-checks ──────────────────────────────────────────────
+  pi.registerTool({
+    name: "wait-github-commit-checks",
+    label: "Watch GitHub Commit Checks",
+    description:
+      "Watch CI status checks for a commit until they complete — no pull request required. " +
+      "Same semantics as wait-github-pr-checks: returns when any check fails (immediately under fail_fast) " +
+      "or all checks pass/skip; on timeout the still-in-flight snapshot is returned. " +
+      "With `event`, only check runs triggered by that workflow event (e.g. push) are judged; " +
+      "commit statuses have an unknown trigger event and are excluded under a filter. " +
+      "Use this to wait for the runs a commit's push triggered, or for checks on an arbitrary ref.",
+    promptSnippet: "Watch and wait for GitHub commit CI checks to complete",
+    parameters: Type.Object({
+      commit: Type.Union([Type.Number(), Type.String()], {
+        description:
+          "Commit to wait for: full or partial SHA, branch name, or tag name (resolved to the commit's SHA)",
+      }),
+      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+      event: Type.Optional(
+        Type.String({
+          description:
+            "Only judge check runs triggered by this workflow event (e.g. push, pull_request)",
+        }),
+      ),
+      fail_fast: Type.Optional(
+        Type.Boolean({ description: "Exit immediately when any check fails (default: false)" }),
+      ),
+    }),
+    async execute(_id, params, signal, onUpdate, ctx) {
+      const { commit, repo, event, fail_fast } = params;
+
+      const pendant = subtitlePendant(params, "commit");
+      onUpdate?.({
+        content: [{ type: "text", text: `Watching CI checks for commit ${commit}...` }],
+        details: {},
       });
 
-      // Actions job 详情只做展示补充，不影响判定（判定来自 checks bucket，
-      // 覆盖 Azure 等外部 CI）。抓取失败时降级为提示，不推翻结论。
-      let actionJobs: readonly ActionJob[] | undefined;
-      let enrichmentError: string | undefined;
-      if (poll.checks.some((c) => c.bucket === "fail")) {
-        try {
-          actionJobs = await githubChecks.actionJobs(owner, repoName, headRefOid, pollSignal);
-        } catch (error) {
-          enrichmentError =
-            error instanceof Error ? error.message : "Actions job details unavailable";
-        }
-      }
+      const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+      const { owner, repo: repoName } = splitRepo(effectiveRepo);
 
-      const verdict = renderChecksVerdict({ prNumber: number, poll, actionJobs, enrichmentError });
-      return {
-        content: [{ type: "text", text: verdict.text }],
-        details: {
-          status: verdict.status,
-          totalChecks: poll.checks.length,
-          checks: poll.checks,
-          failedJobs: verdict.failedJobs,
-          input: params,
-          ...(pendant && { pendant }),
-        },
-      };
+      const pollSignal = signal ?? new AbortController().signal;
+      const sha = await githubChecks.headSha(owner, repoName, String(commit), pollSignal);
+
+      return waitChecksReport({
+        subject: `commit ${sha.slice(0, 7)}`,
+        owner,
+        repo: repoName,
+        headSha: sha,
+        failFast: fail_fast === true,
+        event,
+        signal,
+        onUpdate,
+        params,
+        pendant,
+      });
     },
   });
 

@@ -187,7 +187,7 @@ describe("mergeChecks", () => {
 describe("renderPrChecksList", () => {
   it("lists running checks first, queued after, and hides completed ones", () => {
     const text = renderPrChecksList({
-      prNumber: 7,
+      subject: "PR #7",
       round: 2,
       checks: [
         merged({}),
@@ -206,12 +206,12 @@ describe("renderPrChecksList", () => {
   });
 
   it("renders a link for checks that have one and omits the body when all checks are complete", () => {
-    const allComplete = renderPrChecksList({ prNumber: 7, round: 2, checks: [merged({})] });
+    const allComplete = renderPrChecksList({ subject: "PR #7", round: 2, checks: [merged({})] });
     expect(allComplete).toBe("PR #7 checks — round 2: 1/1 complete");
     expect(allComplete).not.toContain("- [");
 
     const linked = renderPrChecksList({
-      prNumber: 7,
+      subject: "PR #7",
       round: 1,
       checks: [merged({ name: "e2e", bucket: "pending", startedAt: "2026-09-05T03:15:30Z" })],
     });
@@ -220,7 +220,7 @@ describe("renderPrChecksList", () => {
 
   it("labels checks with their distinct trigger events like the GitHub UI", () => {
     const text = renderPrChecksList({
-      prNumber: 7,
+      subject: "PR #7",
       round: 1,
       checks: [
         merged({
@@ -246,7 +246,7 @@ describe("renderPrChecksList", () => {
   });
 
   it("marks an empty check list as no checks reported", () => {
-    const text = renderPrChecksList({ prNumber: 7, round: 1, checks: [] });
+    const text = renderPrChecksList({ subject: "PR #7", round: 1, checks: [] });
     expect(text).toContain("PR #7 checks — round 1: 0/0 complete");
     expect(text).toContain("- _no checks reported_");
   });
@@ -257,7 +257,7 @@ function pollOptions(
   overrides: Partial<Parameters<typeof pollPrChecks>[0]> = {},
 ): Parameters<typeof pollPrChecks>[0] {
   return {
-    prNumber: 1,
+    subject: "PR #1",
     owner: "owner",
     repo: "repo",
     headSha: HEAD_OID,
@@ -321,6 +321,25 @@ describe("pollPrChecks", () => {
     expect(client.checkRuns).toHaveBeenCalledTimes(1);
     expect(result.outcome).toBe("fail_fast");
     expect(result.checks).toHaveLength(2);
+  });
+
+  it("judges only check runs matching the event filter, excluding statuses", async () => {
+    const client = fakeClient({
+      statuses: () => Promise.resolve([status({ context: "linux_64_", state: "pending" })]),
+      checkRuns: () =>
+        Promise.resolve([
+          run({ name: "build", event: "push", conclusion: "failure" }),
+          run({ name: "build", event: "pull_request", status: "in_progress", conclusion: null }),
+        ]),
+    });
+
+    const result = await pollPrChecks({ ...pollOptions(client), event: "push" });
+
+    // the pull_request run and the status are out of scope: the filtered set
+    // has no pending checks, so the push failure alone completes the wait
+    expect(result.outcome).toBe("completed");
+    expect(result.checks).toHaveLength(1);
+    expect(result.checks[0]).toMatchObject({ name: "build", event: "push", bucket: "fail" });
   });
 
   it("completes when every check is pass or skipped", async () => {
@@ -414,7 +433,7 @@ const poll = (overrides: Partial<ChecksPollResult>): ChecksPollResult => ({
 describe("renderChecksVerdict", () => {
   it("reports PASSED when every check completed without failures", () => {
     const verdict = renderChecksVerdict({
-      prNumber: 1,
+      subject: "PR #1",
       poll: poll({
         checks: [merged({}), merged({ name: "lint", bucket: "skipped", link: null })],
       }),
@@ -427,7 +446,7 @@ describe("renderChecksVerdict", () => {
 
   it("reports FAILED from the checks buckets, enriched with failed Actions jobs", () => {
     const verdict = renderChecksVerdict({
-      prNumber: 1,
+      subject: "PR #1",
       poll: poll({
         outcome: "fail_fast",
         checks: [
@@ -468,7 +487,7 @@ describe("renderChecksVerdict", () => {
 
   it("treats a missing Actions job conclusion (in progress) as not succeeded", () => {
     const verdict = renderChecksVerdict({
-      prNumber: 1,
+      subject: "PR #1",
       poll: poll({
         outcome: "fail_fast",
         checks: [merged({ name: "build", bucket: "fail" })],
@@ -484,7 +503,7 @@ describe("renderChecksVerdict", () => {
 
   it("keeps the FAILED verdict when the Actions job enrichment fails", () => {
     const verdict = renderChecksVerdict({
-      prNumber: 1,
+      subject: "PR #1",
       poll: poll({
         outcome: "fail_fast",
         checks: [merged({ name: "build", bucket: "fail" })],
@@ -499,7 +518,7 @@ describe("renderChecksVerdict", () => {
 
   it("reports the in-flight snapshot as pending on timeout instead of a verdict", () => {
     const verdict = renderChecksVerdict({
-      prNumber: 1,
+      subject: "PR #1",
       poll: poll({
         outcome: "timeout",
         elapsedMs: 600_000,
@@ -520,7 +539,7 @@ describe("renderChecksVerdict", () => {
 
   it("marks a timeout with no checks ever reported", () => {
     const verdict = renderChecksVerdict({
-      prNumber: 1,
+      subject: "PR #1",
       poll: poll({ outcome: "timeout", elapsedMs: 600_000 }),
     });
 

@@ -367,6 +367,8 @@ export interface GithubChecksClient {
     headSha: string,
     signal: AbortSignal,
   ): Promise<readonly ActionJob[]>;
+  /** Resolve a SHA, branch name, or tag name to the commit's full SHA. */
+  headSha(owner: string, repo: string, ref: string, signal: AbortSignal): Promise<string>;
 }
 
 /**
@@ -470,6 +472,13 @@ export function createGithubChecks(): GithubChecksClient {
         }
       }
       return jobs;
+    },
+
+    async headSha(owner, repo, ref, signal) {
+      const { data } = await api.call((octokit) =>
+        octokit.rest.repos.getCommit({ owner, repo, ref, request: { signal } }),
+      );
+      return data.sha;
     },
   };
 }
