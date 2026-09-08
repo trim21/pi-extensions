@@ -243,16 +243,18 @@ function describeHttpError(status: number | undefined): string {
   return `GitHub API error${status === undefined ? "" : ` (HTTP ${status})`}`;
 }
 
-export interface GithubSearch {
-  search(kind: SearchKind, params: SearchParams): Promise<SearchHit[]>;
+export interface GithubApi {
+  /** Run an octokit request; retries once with a fresh token on 401. */
+  call<T>(fn: (octokit: Octokit) => Promise<T>): Promise<T>;
 }
 
 /**
- * Create a search client. The octokit instance (and its auth token) is cached
- * in the returned closure, so repeated searches reuse the same client without
- * module-level state.
+ * Create a shared octokit accessor. The client (and its auth token) is cached
+ * in the returned closure, so repeated calls reuse the same client without
+ * module-level state. A stale cached token can produce 401s; the cache is
+ * dropped and the request retried once in that case.
  */
-export function createGithubSearch(): GithubSearch {
+export function createGithubApi(): GithubApi {
   let client: Octokit | undefined;
 
   async function getClient(): Promise<Octokit> {
@@ -261,34 +263,213 @@ export function createGithubSearch(): GithubSearch {
   }
 
   return {
-    async search(kind, params) {
-      const limit = Math.min(Math.max(params.limit ?? 30, 1), 100);
-      const effective = { ...params, limit };
-
+    async call(fn) {
       for (let attempt = 0; ; attempt += 1) {
         try {
-          const octokit = await getClient();
-          if (effective.assignee === "@me") {
-            const { data } = await octokit.rest.users.getAuthenticated();
-            effective.assignee = data.login;
-          }
-          const q = buildSearchQuery(kind, effective);
-          const { data } = await octokit.rest.search.issuesAndPullRequests({
-            q,
-            per_page: limit,
-          });
-          return data.items.map((item) => normalize(item as unknown as RawSearchItem));
+          return await fn(await getClient());
         } catch (error) {
           const status = (error as { status?: number }).status;
-          // A stale cached token can produce 401s; drop the cache and retry once.
           if (status === 401 && attempt === 0 && client) {
             client = undefined;
             continue;
           }
-          const message = (error as { message?: string }).message ?? String(error);
-          throw new GithubSearchError(`${describeHttpError(status)}: ${message}`, params, status);
+          throw error;
         }
       }
+    },
+  };
+}
+
+export interface GithubSearch {
+  search(kind: SearchKind, params: SearchParams): Promise<SearchHit[]>;
+}
+
+/**
+ * Create a search client backed by a cached octokit instance.
+ */
+export function createGithubSearch(): GithubSearch {
+  const api = createGithubApi();
+
+  return {
+    async search(kind, params) {
+      const limit = Math.min(Math.max(params.limit ?? 30, 1), 100);
+      const effective = { ...params, limit };
+
+      try {
+        const octokit = await api.call(async (client) => {
+          if (effective.assignee === "@me") {
+            const { data } = await client.rest.users.getAuthenticated();
+            effective.assignee = data.login;
+          }
+          return client;
+        });
+        const q = buildSearchQuery(kind, effective);
+        const { data } = await octokit.rest.search.issuesAndPullRequests({
+          q,
+          per_page: limit,
+        });
+        return data.items.map((item) => normalize(item as unknown as RawSearchItem));
+      } catch (error) {
+        const status = (error as { status?: number }).status;
+        const message = (error as { message?: string }).message ?? String(error);
+        throw new GithubSearchError(`${describeHttpError(status)}: ${message}`, params, status);
+      }
+    },
+  };
+}
+
+/** One entry of the combined status API for a commit (classic commit status). */
+export interface CommitStatus {
+  readonly context: string;
+  readonly state: string;
+  readonly targetUrl: string | null;
+}
+
+/** One check run of the check-runs API for a commit (GitHub Actions, GitHub Apps). */
+export interface CheckRun {
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly startedAt: string | null;
+  readonly url: string | null;
+  /** Triggering workflow event (push, pull_request, ...); null when unknown. */
+  readonly event: string | null;
+}
+
+/** One Actions job flattened with its workflow run metadata. */
+export interface ActionJob {
+  readonly runId: number;
+  readonly runName: string;
+  readonly runUrl: string;
+  readonly jobId: number;
+  readonly jobName: string;
+  readonly conclusion: string | null;
+  readonly jobUrl?: string;
+}
+
+export interface GithubChecksClient {
+  statuses(
+    owner: string,
+    repo: string,
+    ref: string,
+    signal: AbortSignal,
+  ): Promise<readonly CommitStatus[]>;
+  checkRuns(
+    owner: string,
+    repo: string,
+    ref: string,
+    signal: AbortSignal,
+  ): Promise<readonly CheckRun[]>;
+  /** All Actions jobs across the workflow runs of one head commit. */
+  actionJobs(
+    owner: string,
+    repo: string,
+    headSha: string,
+    signal: AbortSignal,
+  ): Promise<readonly ActionJob[]>;
+}
+
+/**
+ * Create a client for PR CI checks, backed by a cached octokit instance.
+ * Covers both check sources GitHub exposes for a commit — classic commit
+ * statuses (Azure DevOps, Jenkins, ...) and check runs (GitHub Actions,
+ * GitHub Apps) — so external CI is visible to the caller.
+ */
+const ACTIONS_RUN_URL_RE = /\/actions\/runs\/(\d+)/;
+export function createGithubChecks(): GithubChecksClient {
+  const api = createGithubApi();
+
+  return {
+    async statuses(owner, repo, ref, signal) {
+      const { data } = await api.call((octokit) =>
+        octokit.rest.repos.getCombinedStatusForRef({ owner, repo, ref, request: { signal } }),
+      );
+      return data.statuses.map((status) => ({
+        context: status.context,
+        state: status.state,
+        targetUrl: status.target_url,
+      }));
+    },
+
+    async checkRuns(owner, repo, ref, signal) {
+      const runs = await api.call((octokit) =>
+        octokit.paginate(octokit.rest.checks.listForRef, {
+          owner,
+          repo,
+          ref,
+          per_page: 100,
+          request: { signal },
+        }),
+      );
+      // The check run object itself carries no event field. Its details_url
+      // contains the workflow run id, and every run of this commit (push and
+      // pull_request events alike) shows up under actions/runs?head_sha=, so
+      // one extra request resolves run id -> event for the suffix display.
+      const runIds = new Set(
+        runs
+          .map((run) => ACTIONS_RUN_URL_RE.exec(run.details_url ?? "")?.[1])
+          .filter((id): id is string => id !== undefined),
+      );
+      const events = new Map<string, string>();
+      if (runIds.size > 0) {
+        const { data } = await api.call((octokit) =>
+          octokit.rest.actions.listWorkflowRunsForRepo({
+            owner,
+            repo,
+            head_sha: ref,
+            per_page: 100,
+            request: { signal },
+          }),
+        );
+        for (const run of data.workflow_runs) {
+          const id = String(run.id);
+          if (runIds.has(id)) events.set(id, run.event);
+        }
+      }
+      return runs.map((run) => ({
+        name: run.name,
+        status: run.status,
+        conclusion: run.conclusion,
+        startedAt: run.started_at,
+        url: run.html_url ?? run.details_url ?? null,
+        event: events.get(ACTIONS_RUN_URL_RE.exec(run.details_url ?? "")?.[1] ?? "") ?? null,
+      }));
+    },
+
+    async actionJobs(owner, repo, headSha, signal) {
+      const { data } = await api.call((octokit) =>
+        octokit.rest.actions.listWorkflowRunsForRepo({
+          owner,
+          repo,
+          head_sha: headSha,
+          per_page: 100,
+          request: { signal },
+        }),
+      );
+      const jobs: ActionJob[] = [];
+      for (const run of data.workflow_runs) {
+        const { data: jobsData } = await api.call((octokit) =>
+          octokit.rest.actions.listJobsForWorkflowRun({
+            owner,
+            repo,
+            run_id: run.id,
+            per_page: 100,
+            request: { signal },
+          }),
+        );
+        for (const job of jobsData.jobs) {
+          jobs.push({
+            runId: run.id,
+            runName: run.name ?? "",
+            runUrl: run.html_url,
+            jobId: job.id,
+            jobName: job.name,
+            conclusion: job.conclusion,
+            ...(job.html_url && { jobUrl: job.html_url }),
+          });
+        }
+      }
+      return jobs;
     },
   };
 }

@@ -35,10 +35,19 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 
-import { createGithubSearch, type GithubSearch, renderHits } from "./lib/github.js";
+import {
+  type ActionJob,
+  type CheckRun,
+  type CommitStatus,
+  createGithubChecks,
+  createGithubSearch,
+  type GithubChecksClient,
+  type GithubSearch,
+  renderHits,
+} from "./lib/github.js";
 import { type ToolPendant } from "./lib/pendant.js";
 import { createSeqState } from "./lib/seq-state.js";
 
@@ -257,31 +266,6 @@ const jobRunSchema = Type.Object({
 const jobsResponseSchema = Type.Object({ jobs: Type.Array(jobRunSchema) });
 
 const prHeadSchema = Type.Object({ headRefOid: Type.String() });
-
-const workflowRunSchema = Type.Object({
-  id: Type.Number(),
-  name: Type.String(),
-  html_url: Type.String(),
-});
-
-const workflowRunsSchema = Type.Object({ workflow_runs: Type.Array(workflowRunSchema) });
-
-/**
- * One entry of `gh pr checks --json`. In JSON mode gh exits 0 once it could
- * fetch the checks (real errors still exit non-zero); pass/fail/pending is
- * only conveyed by the `bucket` field, never by the exit code.
- */
-const prCheckSchema = Type.Object({
-  name: Type.String(),
-  state: Type.String(),
-  bucket: Type.String(),
-  startedAt: Type.Union([Type.String(), Type.Null()]),
-  completedAt: Type.Union([Type.String(), Type.Null()]),
-  link: Type.Union([Type.String(), Type.Null()]),
-  workflow: Type.Union([Type.String(), Type.Null()]),
-});
-
-type PrCheck = Static<typeof prCheckSchema>;
 
 function truncate(
   text: string,
@@ -1130,20 +1114,102 @@ export async function writeLogFile(
 
 // ── pr checks watch (pure rendering + poll loop) ────────────────────────────
 
-const PR_CHECKS_JSON_FIELDS = "name,state,bucket,startedAt,completedAt,link,workflow";
 const CHECKS_POLL_INTERVAL_MS = 30_000;
 const CHECKS_WATCH_DEADLINE_MS = 600_000;
 
+export type CheckBucket = "pass" | "skipped" | "fail" | "pending";
+
 /**
- * Render one polling round of `gh pr checks` as a compact bullet list of the
- * checks still in flight: running ones first (`- [>]`), queued ones after
- * (`- [ ]`). Completed checks are hidden — the header already reports the
- * completion count. Pure — no network.
+ * One judged CI check of a commit: a single commit status or check run, kept
+ * distinct — same-named checks from different sources (push vs pull_request
+ * events, status vs check run channels) stay separate entries, like the
+ * GitHub checks UI.
+ */
+export interface MergedCheck {
+  readonly name: string;
+  readonly bucket: CheckBucket;
+  readonly startedAt: string | null;
+  readonly link: string | null;
+  /** Triggering workflow event (push, pull_request, ...); null when unknown. */
+  readonly event: string | null;
+}
+
+function statusBucket(state: string): CheckBucket {
+  if (state === "success") return "pass";
+  if (state === "failure" || state === "error") return "fail";
+  // pending, expected, and anything unknown must not end the wait
+  return "pending";
+}
+
+function checkRunBucket(run: CheckRun): CheckBucket {
+  if (run.status !== "completed" || run.conclusion === null) return "pending";
+  switch (run.conclusion) {
+    case "success": {
+      return "pass";
+    }
+    case "skipped":
+    case "neutral":
+    case "stale":
+    case "action_required": {
+      // awaiting maintainer approval: it will never run, so waiting for it is
+      // meaningless — treat like skipped
+      return "skipped";
+    }
+    case "failure":
+    case "timed_out":
+    case "cancelled":
+    case "startup_failure": {
+      return "fail";
+    }
+    default: {
+      return "pending";
+    }
+  }
+}
+
+/**
+ * Judge the commit's statuses and check runs into individual checks, keeping
+ * same-named entries distinct so the wait verdict (any fail / all
+ * pass-or-skipped across every entry) can never lose a failure. Pure — no
+ * network.
+ */
+export function mergeChecks(
+  statuses: readonly CommitStatus[],
+  checkRuns: readonly CheckRun[],
+): MergedCheck[] {
+  return [
+    ...statuses.map((status) => ({
+      name: status.context,
+      bucket: statusBucket(status.state),
+      startedAt: null,
+      link: status.targetUrl,
+      event: null,
+    })),
+    ...checkRuns.map((run) => ({
+      name: run.name,
+      bucket: checkRunBucket(run),
+      startedAt: run.startedAt,
+      link: run.url,
+      event: run.event,
+    })),
+  ];
+}
+
+/** Display name of a check; the trigger event is labelled like the GitHub UI (`build (pull_request)`). */
+export function checkDisplayName(check: MergedCheck): string {
+  return check.event ? `${check.name} (${check.event})` : check.name;
+}
+
+/**
+ * Render one polling round as a compact bullet list of the checks still in
+ * flight: running ones first (`- [>]`), queued ones after (`- [ ]`). Completed
+ * checks are hidden — the header already reports the completion count.
+ * Pure — no network.
  */
 export function renderPrChecksList(options: {
   prNumber: number | string;
   round: number;
-  checks: readonly PrCheck[];
+  checks: readonly MergedCheck[];
 }): string {
   const { prNumber, round, checks } = options;
   const completed = checks.filter((c) => c.bucket !== "pending").length;
@@ -1151,13 +1217,15 @@ export function renderPrChecksList(options: {
   const pending = checks.filter((c) => c.bucket === "pending");
   const ordered = [...pending.filter((c) => c.startedAt), ...pending.filter((c) => !c.startedAt)];
   const lines = ordered.map((check) => {
-    const name = check.link ? `[${check.name}](${check.link})` : check.name;
+    const name = check.link
+      ? `[${checkDisplayName(check)}](${check.link})`
+      : checkDisplayName(check);
     return `- [${check.startedAt ? ">" : " "}] ${name}`;
   });
   const body =
     checks.length === 0 ? "- _no checks reported_" : lines.length > 0 ? lines.join("\n") : "";
 
-  return `### PR #${prNumber} checks — round ${round}: ${completed}/${checks.length} complete${body ? `\n\n${body}` : ""}`;
+  return `PR #${prNumber} checks — round ${round}: ${completed}/${checks.length} complete${body ? `\n\n${body}` : ""}`;
 }
 
 function sleepInterruptibly(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -1178,12 +1246,23 @@ function sleepInterruptibly(ms: number, signal: AbortSignal | undefined): Promis
   });
 }
 
+export type ChecksPollOutcome = "completed" | "fail_fast" | "timeout";
+
+export interface ChecksPollResult {
+  readonly outcome: ChecksPollOutcome;
+  readonly checks: readonly MergedCheck[];
+  readonly elapsedMs: number;
+}
+
 export interface PollPrChecksOptions {
   prNumber: number | string;
-  repo?: string;
+  owner: string;
+  repo: string;
+  headSha: string;
   failFast: boolean;
-  cwd?: string;
-  signal?: AbortSignal;
+  checks: GithubChecksClient;
+  /** Owned by the caller; the poll loop observes it but never aborts it. */
+  signal: AbortSignal;
   /** Test overrides. */
   intervalMs?: number;
   deadlineMs?: number;
@@ -1191,52 +1270,154 @@ export interface PollPrChecksOptions {
 }
 
 /**
- * Poll `gh pr checks --json` until no check is pending (or a fail-fast
- * failure, or the deadline), emitting a compact list of in-flight checks via
- * `onUpdate` each round. In JSON mode gh exits 0 whenever it could fetch the
- * checks —
- * completion is judged from the `bucket` field, not the exit code. A non-zero
- * exit (no checks reported, auth, network) is not fatal here: the caller
- * proceeds to the Actions API verification, which either produces the final
- * report or surfaces the error.
+ * Poll the commit's combined-status and check-runs APIs until the wait
+ * semantics are met: return on any failure (immediately under fail-fast) or
+ * when every check is complete (pass/skipped). Emits a compact list of
+ * in-flight checks via `onUpdate` each round.
+ *
+ * A failed round (network, auth) does not end the wait — the error is kept
+ * and polling continues, so a transient blip or a CI system that has not
+ * reported anything yet cannot be mistaken for a completed check set. Only
+ * when no round ever succeeded by the deadline is the last error thrown.
  */
-export async function pollPrChecks(options: PollPrChecksOptions): Promise<void> {
-  const { prNumber, repo, failFast, cwd, signal, onUpdate } = options;
+export async function pollPrChecks(options: PollPrChecksOptions): Promise<ChecksPollResult> {
+  const { prNumber, owner, repo, headSha, failFast, checks, signal, onUpdate } = options;
   const intervalMs = options.intervalMs ?? CHECKS_POLL_INTERVAL_MS;
   const deadlineMs = options.deadlineMs ?? CHECKS_WATCH_DEADLINE_MS;
-  const args = [
-    "pr",
-    "checks",
-    String(prNumber),
-    ...repoArgs(repo),
-    "--json",
-    PR_CHECKS_JSON_FIELDS,
-  ];
 
   const watchStart = Date.now();
+  let lastChecks: readonly MergedCheck[] = [];
+  let lastError: unknown;
+  let everSucceeded = false;
+
   for (let round = 1; ; round++) {
-    const result = await runGh(args, { cwd, signal });
-    if (result.killed) {
-      throw new Error(
-        result.reason === "timeout" ? "gh pr checks poll timed out" : "gh pr checks was aborted",
-      );
+    if (signal.aborted) throw new Error("PR checks polling was aborted");
+    try {
+      const [statuses, runs] = await Promise.all([
+        checks.statuses(owner, repo, headSha, signal),
+        checks.checkRuns(owner, repo, headSha, signal),
+      ]);
+      everSucceeded = true;
+      lastChecks = mergeChecks(statuses, runs);
+      onUpdate?.({
+        content: [
+          { type: "text", text: renderPrChecksList({ prNumber, round, checks: lastChecks }) },
+        ],
+        details: {},
+      });
+      if (lastChecks.every((c) => c.bucket !== "pending")) {
+        return { outcome: "completed", checks: lastChecks, elapsedMs: Date.now() - watchStart };
+      }
+      if (failFast && lastChecks.some((c) => c.bucket === "fail")) {
+        return { outcome: "fail_fast", checks: lastChecks, elapsedMs: Date.now() - watchStart };
+      }
+    } catch (error) {
+      // 不用 if (signal.aborted)：循环顶部的同名字段检查把它收窄成 false，
+      // TS 会在 catch 里维持这个收窄。
+      signal.throwIfAborted();
+      lastError = error;
     }
-    if (result.code !== 0) {
-      return;
+    if (Date.now() - watchStart >= deadlineMs) {
+      if (!everSucceeded) {
+        const message = lastError instanceof Error ? lastError.message : String(lastError);
+        throw new Error(`PR checks polling failed before any round succeeded: ${message}`);
+      }
+      return { outcome: "timeout", checks: lastChecks, elapsedMs: Date.now() - watchStart };
     }
-    const checks: PrCheck[] = Value.Parse(Type.Array(prCheckSchema), JSON.parse(result.stdout));
-
-    onUpdate?.({
-      content: [{ type: "text", text: renderPrChecksList({ prNumber, round, checks }) }],
-      details: {},
-    });
-
-    const hasPending = checks.some((c) => c.bucket === "pending");
-    if (!hasPending) return;
-    if (failFast && checks.some((c) => c.bucket === "fail")) return;
-    if (Date.now() - watchStart >= deadlineMs) return;
     await sleepInterruptibly(intervalMs, signal);
   }
+}
+
+/** One Actions job that did not succeed, for the FAILED report details. */
+export interface FailedActionJob {
+  readonly runId: number;
+  readonly runName: string;
+  readonly runUrl: string;
+  readonly jobId: number;
+  readonly jobName: string;
+  readonly conclusion: string;
+  readonly jobUrl?: string;
+}
+
+export interface ChecksVerdict {
+  readonly status: "success" | "failure" | "pending";
+  readonly text: string;
+  readonly failedJobs: readonly FailedActionJob[];
+}
+
+/**
+ * Turn a poll result into the final report. Verdict comes from the checks
+ * buckets alone (so external CI such as Azure counts); Actions jobs are
+ * display-only enrichment. Pure — no network.
+ */
+export function renderChecksVerdict(options: {
+  prNumber: number | string;
+  poll: ChecksPollResult;
+  /** All Actions jobs of the head commit; failed/incomplete ones are listed. */
+  actionJobs?: readonly ActionJob[];
+  /** Set when the Actions job fetch failed; the verdict stays untouched. */
+  enrichmentError?: string;
+}): ChecksVerdict {
+  const { prNumber, poll, actionJobs, enrichmentError } = options;
+  const totalChecks = poll.checks.length;
+  const failed = poll.checks.filter((c) => c.bucket === "fail");
+  const pending = poll.checks.filter((c) => c.bucket === "pending");
+
+  if (failed.length === 0 && poll.outcome === "completed") {
+    return {
+      status: "success",
+      text: `## PR #${prNumber} CI Checks - PASSED\n\nAll ${totalChecks} check(s) passed.`,
+      failedJobs: [],
+    };
+  }
+
+  if (failed.length > 0) {
+    const failedJobs: FailedActionJob[] = (actionJobs ?? [])
+      .filter((j) => !j.conclusion || FAILED_JOB_CONCLUSIONS.has(j.conclusion))
+      .map((j) => ({
+        runId: j.runId,
+        runName: j.runName,
+        runUrl: j.runUrl,
+        jobId: j.jobId,
+        jobName: j.jobName,
+        conclusion: j.conclusion ?? "in_progress",
+        ...(j.jobUrl && { jobUrl: j.jobUrl }),
+      }));
+
+    const lines = failed.map(
+      (c) =>
+        `- ${statusIcon("failure")} **${checkDisplayName(c)}**${c.link ? ` — [view check](${c.link})` : ""}`,
+    );
+    for (const j of failedJobs) {
+      lines.push(
+        `  - ${statusIcon(j.conclusion)} job **${j.jobName}** (${j.conclusion}) — [job #${j.jobId}](${j.jobUrl ?? j.runUrl})`,
+        `    - workflow: [${j.runName} (#${j.runId})](${j.runUrl})`,
+      );
+    }
+    if (enrichmentError) lines.push(`  - _Actions job details unavailable: ${enrichmentError}_`);
+    if (pending.length > 0) lines.push(`\n_${pending.length} other check(s) still in flight._`);
+
+    return {
+      status: "failure",
+      text:
+        `## PR #${prNumber} CI Checks - FAILED\n\n` +
+        `${failed.length} of ${totalChecks} check(s) failed:\n\n${lines.join("\n")}`,
+      failedJobs,
+    };
+  }
+
+  const waitedMinutes = Math.max(1, Math.round(poll.elapsedMs / 60_000));
+  const pendingLines = pending.map(
+    (c) => `- [${c.startedAt ? ">" : " "}] ${c.link ? `[${c.name}](${c.link})` : c.name}`,
+  );
+  return {
+    status: "pending",
+    text:
+      `## PR #${prNumber} CI Checks - STILL IN FLIGHT\n\n` +
+      `${pending.length} of ${totalChecks} check(s) still incomplete after ~${waitedMinutes}m:\n\n` +
+      (pendingLines.length > 0 ? pendingLines.join("\n") : "- _no checks reported_"),
+    failedJobs: [],
+  };
 }
 
 // ── tools ────────────────────────────────────────────────────────────────────
@@ -1265,6 +1446,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
   }
 
   const githubSearch = createGithubSearch();
+  const githubChecks = createGithubChecks();
 
   // ── read-github-issue ──────────────────────────────────────────────────────
   pi.registerTool({
@@ -1794,8 +1976,10 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     name: "wait-github-pr-checks",
     label: "Watch GitHub PR Checks",
     description:
-      "Watch CI status checks for a PR until they complete. Blocks until all checks finish or one fails. " +
-      "Each polling round streams a compact bullet list of the checks still in flight via onUpdate. " +
+      "Watch CI status checks for a PR until they complete. Blocks until all checks pass (or are skipped) or one fails. " +
+      "Covers both commit statuses (Azure DevOps, Jenkins, ...) and GitHub Actions check runs. " +
+      "Each polling round streams a compact bullet list of the checks still in flight via onUpdate; " +
+      "on timeout the still-in-flight snapshot is returned instead of a verdict. " +
       "Use this when you need to wait for CI to complete and see the final result.",
     promptSnippet: "Watch and wait for GitHub PR CI checks to complete",
     parameters: Type.Object({
@@ -1814,120 +1998,58 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         details: {},
       });
 
-      // 轮询 `gh pr checks --json`（每轮经 onUpdate 流式输出 GitHub Web UI 风格
-      // 的检查表），结束后再用 Actions API 抓取该 PR head 提交关联的所有
-      // workflow job，以 job 的真实 conclusion 为准判断成功/失败。
-      await pollPrChecks({
-        prNumber: number,
-        repo,
-        failFast: fail_fast === true,
-        cwd: ctx.cwd,
-        signal,
-        onUpdate,
-      });
-
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+      const slash = effectiveRepo.indexOf("/");
+      if (slash <= 0 || slash === effectiveRepo.length - 1) {
+        throw new Error(`invalid repository: ${effectiveRepo} (expected OWNER/REPO)`);
+      }
+      const owner = effectiveRepo.slice(0, slash);
+      const repoName = effectiveRepo.slice(slash + 1);
+
       const prOut = await ghExec(
         ["pr", "view", String(number), "--repo", effectiveRepo, "--json", "headRefOid"],
         { cwd: ctx.cwd, signal, input: params },
       );
       const { headRefOid } = Value.Parse(prHeadSchema, JSON.parse(prOut));
 
-      onUpdate?.({
-        content: [{ type: "text", text: `Fetching workflow jobs for PR #${number}...` }],
-        details: {},
+      // 轮询层要求非空 signal；框架可能不给时构造一个占位的（从不取消）。
+      const pollSignal = signal ?? new AbortController().signal;
+
+      const poll = await pollPrChecks({
+        prNumber: number,
+        owner,
+        repo: repoName,
+        headSha: headRefOid,
+        failFast: fail_fast === true,
+        checks: githubChecks,
+        signal: pollSignal,
+        onUpdate,
       });
 
-      const runsOut = await ghExec(
-        ["api", `/repos/${effectiveRepo}/actions/runs?head_sha=${headRefOid}&per_page=100`],
-        { cwd: ctx.cwd, signal, input: params },
-      );
-      const { workflow_runs } = Value.Parse(workflowRunsSchema, JSON.parse(runsOut));
-
-      const failedJobs: {
-        runId: number;
-        runName: string;
-        runUrl: string;
-        jobId: number;
-        jobName: string;
-        conclusion: string;
-        jobUrl?: string;
-      }[] = [];
-      let totalJobs = 0;
-
-      for (const run of workflow_runs) {
-        const jobsOut = await ghExec(
-          ["api", `/repos/${effectiveRepo}/actions/runs/${run.id}/jobs?per_page=100`],
-          { cwd: ctx.cwd, signal, input: params },
-        );
-        const { jobs } = Value.Parse(jobsResponseSchema, JSON.parse(jobsOut));
-        totalJobs += jobs.length;
-
-        for (const job of jobs) {
-          if (!job.conclusion || FAILED_JOB_CONCLUSIONS.has(job.conclusion)) {
-            failedJobs.push({
-              runId: run.id,
-              runName: run.name,
-              runUrl: run.html_url,
-              jobId: job.id,
-              jobName: job.name,
-              conclusion: job.conclusion ?? "in_progress",
-              jobUrl: job.html_url,
-            });
-          }
+      // Actions job 详情只做展示补充，不影响判定（判定来自 checks bucket，
+      // 覆盖 Azure 等外部 CI）。抓取失败时降级为提示，不推翻结论。
+      let actionJobs: readonly ActionJob[] | undefined;
+      let enrichmentError: string | undefined;
+      if (poll.checks.some((c) => c.bucket === "fail")) {
+        try {
+          actionJobs = await githubChecks.actionJobs(owner, repoName, headRefOid, pollSignal);
+        } catch (error) {
+          enrichmentError =
+            error instanceof Error ? error.message : "Actions job details unavailable";
         }
       }
 
-      if (totalJobs === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `## PR #${number} CI Checks\n\nNo workflow runs found for head commit ${headRefOid.slice(0, 7)}.`,
-            },
-          ],
-          details: {
-            status: "no-jobs",
-            totalJobs: 0,
-            input: params,
-            ...(pendant && { pendant }),
-          },
-        };
-      }
-
-      if (failedJobs.length > 0) {
-        const lines = failedJobs.map(
-          (j) =>
-            `- ${statusIcon(j.conclusion)} **${j.jobName}** (${j.conclusion}) — [job #${j.jobId}](${j.jobUrl ?? j.runUrl})\n` +
-            `  - workflow: [${j.runName} (#${j.runId})](${j.runUrl})`,
-        );
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `## PR #${number} CI Checks - FAILED\n\n` +
-                `${failedJobs.length} of ${totalJobs} job(s) did not succeed:\n\n${lines.join("\n")}`,
-            },
-          ],
-          details: {
-            status: "failure",
-            totalJobs,
-            failedJobs,
-            input: params,
-            ...(pendant && { pendant }),
-          },
-        };
-      }
-
+      const verdict = renderChecksVerdict({ prNumber: number, poll, actionJobs, enrichmentError });
       return {
-        content: [
-          {
-            type: "text",
-            text: `## PR #${number} CI Checks - PASSED\n\nAll ${totalJobs} job(s) succeeded.`,
-          },
-        ],
-        details: { status: "success", totalJobs, input: params, ...(pendant && { pendant }) },
+        content: [{ type: "text", text: verdict.text }],
+        details: {
+          status: verdict.status,
+          totalChecks: poll.checks.length,
+          checks: poll.checks,
+          failedJobs: verdict.failedJobs,
+          input: params,
+          ...(pendant && { pendant }),
+        },
       };
     },
   });
