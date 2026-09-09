@@ -18,7 +18,7 @@ import { resolvePathArg } from "../src/lib/path.js";
 
 vi.mock("../src/aft/bridge.js", () => ({
   callAftTool: vi.fn(),
-  SEMANTIC_INDEX_WAIT_TIMEOUT_MS: 600_000,
+  SEMANTIC_INDEX_WAIT_TIMEOUT_MS: 3_600_000,
 }));
 
 describe("compactArgs", () => {

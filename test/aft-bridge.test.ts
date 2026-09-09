@@ -77,7 +77,7 @@ describe("createAftPool", () => {
     expect(poolOptions.childEnv).toMatchObject({
       AFT_CALLGRAPH_BUILD_WAIT_MS: String(CALLGRAPH_BUILD_WAIT_MS),
       AFT_WAIT_FOR_SEMANTIC_READY: "1",
-      AFT_WAIT_FOR_SEMANTIC_READY_MS: "600000",
+      AFT_WAIT_FOR_SEMANTIC_READY_MS: "3600000",
     });
   });
 

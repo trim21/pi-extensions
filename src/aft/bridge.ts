@@ -59,7 +59,7 @@ export async function createAftState(
 }
 
 /** semantic_search 等待索引构建完成的上限（与 Rust 侧 AFT_WAIT_FOR_SEMANTIC_READY_MS 一致）。 */
-export const SEMANTIC_INDEX_WAIT_TIMEOUT_MS = 600_000;
+export const SEMANTIC_INDEX_WAIT_TIMEOUT_MS = 3_600_000;
 
 /**
  * 调用图存储未就绪时查询侧的内联等待窗口。Rust 侧默认 0（纯异步：立即返回
