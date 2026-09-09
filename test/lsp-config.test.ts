@@ -317,6 +317,21 @@ describe("mergeConfig + resolveConfig", () => {
     `);
   });
 
+  it("workingDir 与 rootMarkers 同时配置是配置错误", () => {
+    expect(() =>
+      resolveConfig({ servers: { a: { bin: "x", workingDir: "sdk/a", rootMarkers: ["go.mod"] } } }),
+    ).toThrow('lsp.json: server "a": workingDir and rootMarkers are mutually exclusive');
+    expect(() =>
+      resolveConfig({ servers: { a: { bin: "x", workingDir: "sdk/a", rootMarkers: [] } } }),
+    ).toThrow("mutually exclusive");
+    expect(() =>
+      resolveConfig({ servers: { a: { bin: "x", rootMarkers: ["go.mod"] } } }),
+    ).not.toThrow();
+    expect(() =>
+      resolveConfig({ servers: { a: { bin: "x", workingDir: "sdk/a" } } }),
+    ).not.toThrow();
+  });
+
   it("未配置任何字段时解析为完整缺省配置", () => {
     expect(resolveConfig({})).toMatchInlineSnapshot(`
       {
@@ -387,7 +402,7 @@ describe("loadLspConfig 文件 IO", () => {
       JSON.stringify({
         watch: { debounceMs: 100, nope: true },
         servers: {
-          pyright: { bin: "x", rootMarkers: ["pyproject.toml"] },
+          pyright: { bin: "x", legacyServerField: ["pyproject.toml"] },
           ruff: { bin: "y", cwd: "{root}" },
         },
       }),
@@ -399,7 +414,7 @@ describe("loadLspConfig 文件 IO", () => {
     expect(warnings).toEqual([
       `${globalFile}: unknown field "legacyTopLevel" ignored`,
       `${join(dir, ".pi", "lsp.json")} watch: unknown field "nope" ignored`,
-      `${join(dir, ".pi", "lsp.json")} (server "pyright"): unknown field "rootMarkers" ignored`,
+      `${join(dir, ".pi", "lsp.json")} (server "pyright"): unknown field "legacyServerField" ignored`,
       `${join(dir, ".pi", "lsp.json")} (server "ruff"): unknown field "cwd" ignored`,
     ]);
     await rm(dir, { recursive: true, force: true });

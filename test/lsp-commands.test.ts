@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,6 +87,46 @@ describe("LSP stop/start/reload", () => {
     expect(ruff.spawns()).toBe(1);
 
     await service.shutdownAll();
+  });
+
+  it("reload restarts every root of a multi-root server", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-commands-"));
+    const a = join(dir, "packages", "a");
+    const b = join(dir, "packages", "b");
+    await mkdir(a, { recursive: true });
+    await mkdir(b, { recursive: true });
+    await writeFile(join(a, "pyproject.toml"), "");
+    await writeFile(join(b, "pyproject.toml"), "");
+    await writeFile(join(a, "x.py"), "x = 1\n");
+    await writeFile(join(b, "y.py"), "y = 1\n");
+    const roots: string[] = [];
+    const adapter: LspServerAdapter = {
+      id: "mock",
+      extensions: [".py"],
+      rootMarkers: ["pyproject.toml"],
+      spawn: async (root) => {
+        roots.push(root);
+        return { process: spawnProcess(process.execPath, [fixture]) };
+      },
+    };
+    const service = createLspService([adapter], join(dir, "no-global.json"));
+    try {
+      await service.touchFile(join(a, "x.py"), dir);
+      await service.touchFile(join(b, "y.py"), dir);
+      expect(roots).toEqual([a, b]);
+
+      // 两个 root 的实例都重启，不只恢复一个
+      const restarted = await service.reload("mock");
+      expect(restarted).toEqual(["mock"]);
+      expect(roots).toEqual([a, b, a, b]);
+
+      // 重载后实例仍在缓存中：再次触碰不再 spawn
+      await service.touchFile(join(a, "x.py"), dir);
+      expect(roots).toEqual([a, b, a, b]);
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("reload leaves servers that were not running lazy", async () => {

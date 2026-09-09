@@ -2,7 +2,7 @@
  * 配置驱动 LSP 服务器测试（server-config.ts）：
  * - serverConfigSchema 解析（含未知键透传，不因此拒绝整份配置）
  * - mergeServerRecords 覆盖 / 新增 / 保留
- * - serverRoot：root 计算（workingDir 相对 cwd 解析 / 缺省即 cwd）
+ * - serverRoot：root 计算（rootMarkers 向上定位 / workingDir 相对 cwd 解析 / 缺省即 cwd）
  * - matchesInclude：include glob（相对 root/cwd）、`!` 否定排除
  * - ConfigAdapter.spawn：bin 解析（绝对路径 / 项目工作区 / PATH）、
  *   initialization / settings / languageIds 分离
@@ -84,12 +84,30 @@ describe("serverConfigSchema", () => {
     expect(() => parse({ bin: "x", kind: "formatter" })).toThrow();
     expect(() => parse({ bin: "x", kind: 42 })).toThrow();
   });
+
+  it("rootMarkers 解析为字符串数组，空串标记与非数组被拒绝", () => {
+    expect(parse({ bin: "x", rootMarkers: ["pyproject.toml", "setup.py"] }).rootMarkers).toEqual([
+      "pyproject.toml",
+      "setup.py",
+    ]);
+    expect(() => parse({ bin: "x", rootMarkers: [""] })).toThrow();
+    expect(() => parse({ bin: "x", rootMarkers: "pyproject.toml" })).toThrow();
+  });
 });
 
 describe("ConfigAdapter.kind", () => {
   it("缺省为 language，显式配置透传", () => {
     expect(new ConfigAdapter("a", parse({ bin: "x" })).kind).toBe("language");
     expect(new ConfigAdapter("b", parse({ bin: "x", kind: "linter" })).kind).toBe("linter");
+  });
+});
+
+describe("ConfigAdapter.rootMarkers", () => {
+  it("缺省为空数组，显式配置透传", () => {
+    expect(new ConfigAdapter("a", parse({ bin: "x" })).rootMarkers).toEqual([]);
+    expect(
+      new ConfigAdapter("b", parse({ bin: "x", rootMarkers: ["go.mod"] })).rootMarkers,
+    ).toEqual(["go.mod"]);
   });
 });
 
@@ -114,12 +132,87 @@ describe("mergeServerRecords", () => {
 
 describe("serverRoot", () => {
   it("workingDir 未配置时 root 即调用 cwd", () => {
-    expect(serverRoot(undefined, "/ws")).toBe("/ws");
+    expect(serverRoot({}, "/ws/x.py", "/ws")).toBe("/ws");
   });
 
   it("workingDir 相对路径按 cwd 解析，绝对路径原样", () => {
-    expect(serverRoot("sdk/python", "/ws")).toBe(join("/ws", "sdk/python"));
-    expect(serverRoot("/abs/root", "/ws")).toBe("/abs/root");
+    expect(serverRoot({ workingDir: "sdk/python" }, "/ws/x.py", "/ws")).toBe(
+      join("/ws", "sdk/python"),
+    );
+    expect(serverRoot({ workingDir: "/abs/root" }, "/ws/x.py", "/ws")).toBe("/abs/root");
+  });
+
+  it("rootMarkers：cwd 未命中时取路径上最外层（最靠近 cwd）的标记目录", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await mkdir(join(dir, "packages", "a", "src"), { recursive: true });
+      await writeFile(join(dir, "packages", "a", "pyproject.toml"), "");
+      const file = join(dir, "packages", "a", "src", "x.py");
+      expect(serverRoot({ rootMarkers: ["pyproject.toml"] }, file, dir)).toBe(
+        join(dir, "packages", "a"),
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rootMarkers：cwd 命中标记时 root 恒为 cwd（子目录标记不生效）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await mkdir(join(dir, "packages", "a", "src"), { recursive: true });
+      await writeFile(join(dir, "pyproject.toml"), "");
+      await writeFile(join(dir, "packages", "a", "pyproject.toml"), "");
+      const file = join(dir, "packages", "a", "src", "x.py");
+      expect(serverRoot({ rootMarkers: ["pyproject.toml"] }, file, dir)).toBe(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rootMarkers：嵌套项目取最外层命中的标记目录", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await mkdir(join(dir, "proj", "sub", "src"), { recursive: true });
+      await writeFile(join(dir, "proj", "package.json"), "");
+      await writeFile(join(dir, "proj", "sub", "package.json"), "");
+      const file = join(dir, "proj", "sub", "src", "x.ts");
+      expect(serverRoot({ rootMarkers: ["package.json"] }, file, dir)).toBe(join(dir, "proj"));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rootMarkers：目录名标记（.git）同样命中", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await mkdir(join(dir, "repo", ".git"), { recursive: true });
+      const file = join(dir, "repo", "x.py");
+      expect(serverRoot({ rootMarkers: [".git"] }, file, dir)).toBe(join(dir, "repo"));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rootMarkers：全部未命中回退 cwd", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await mkdir(join(dir, "src"), { recursive: true });
+      const file = join(dir, "src", "x.py");
+      expect(serverRoot({ rootMarkers: ["pyproject.toml"] }, file, dir)).toBe(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rootMarkers：cwd 之外的路径回退 cwd（搜索不越界）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await writeFile(join(dir, "pyproject.toml"), "");
+      expect(serverRoot({ rootMarkers: ["pyproject.toml"] }, join(dir, "x.py"), dir)).toBe(dir);
+      expect(serverRoot({ rootMarkers: ["pyproject.toml"] }, "/elsewhere/x.py", dir)).toBe(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -439,6 +532,42 @@ describe("config servers integration", () => {
       const all = await service.diagnostics();
       expect(all).toHaveProperty(inner);
       expect(all).not.toHaveProperty(outer);
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rootMarkers：子项目各自定位 root，同一服务器产生多个实例", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const a = join(dir, "packages", "a");
+    const b = join(dir, "packages", "b");
+    await mkdir(a, { recursive: true });
+    await mkdir(b, { recursive: true });
+    await writeFile(join(a, "pyproject.toml"), "");
+    await writeFile(join(b, "pyproject.toml"), "");
+    const fileA = join(a, "x.py");
+    const fileB = join(b, "y.py");
+    await writeFile(fileA, "x = 1\n");
+    await writeFile(fileB, "y = 1\n");
+    const adapter = new ConfigAdapter(
+      "mock",
+      parse({
+        include: ["**/*.py"],
+        rootMarkers: ["pyproject.toml"],
+        bin: process.execPath,
+        args: [fixture],
+        languageIdByExtension: { ".py": "python" },
+      }),
+    );
+    const spawn = vi.spyOn(adapter, "spawn");
+    const service = createLspService([adapter], join(dir, "no-global.json"));
+    try {
+      const reportA = await service.lspDiagnosticsForFile(fileA, dir);
+      const reportB = await service.lspDiagnosticsForFile(fileB, dir);
+      expect(reportA.text).toContain("mock error message");
+      expect(reportB.text).toContain("mock error message");
+      expect(spawn.mock.calls.map(([root]) => root).toSorted()).toEqual([a, b].toSorted());
     } finally {
       await service.shutdownAll();
       await rm(dir, { recursive: true, force: true });

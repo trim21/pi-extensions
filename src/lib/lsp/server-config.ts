@@ -7,8 +7,9 @@
  * 覆盖、新增 id、全局其余保留），之后受顶层 enabled/disabled 列表过滤。
  * 没有内置默认服务器：未配置 servers 时不启动任何服务器。
  *
- * 不做向上查找项目根的猜测：root 即调用 cwd（或 per-server workingDir），
- * 文件归属由「文件位于 root 之内」+ include glob 判定。
+ * root 定位：per-server `rootMarkers` 从调用 cwd 沿文件路径向下找第一个含标记的
+ * 目录（未命中回退 cwd），或固定 `workingDir`（两者互斥，同时配置报错）；文件归属
+ * 由「文件位于 root 之内」+ include glob 判定。
  *
  * executable 发现统一由用户配置：bin 支持绝对路径 / 项目工作区
  * （node_modules/.bin、.venv/bin、venv/bin）/ PATH，不再内置各语言的
@@ -33,8 +34,15 @@ export const serverConfigSchema = Type.Object({
   /** 服务器类型：language（真语言服务器，缺省）或 linter（只实现 LSP 协议的 lint）。 */
   kind: Type.Optional(Type.Union([Type.Literal("language"), Type.Literal("linter")])),
   /**
+   * 项目根标记文件名（精确匹配，目录名亦可）：从调用 cwd 沿文件路径向下逐级查找，
+   * 第一个含任一标记的目录即 root（cwd 自身命中即 cwd），未命中回退 cwd；
+   * 与 workingDir 互斥。
+   */
+  rootMarkers: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+  /**
    * 服务器工作目录（即 LSP root）：绝对路径或相对调用 cwd 的路径；缺省即 cwd。
    * 文件必须位于该目录内才会由本服务器处理；spawn 工作目录与 rootUri 均用它。
+   * 与 rootMarkers 互斥。
    */
   workingDir: Type.Optional(Type.String()),
   /** 可执行文件：绝对路径、相对调用 cwd 的路径，或名字（项目工作区优先，PATH 兜底）。 */
@@ -202,6 +210,7 @@ export class ConfigAdapter implements LspServerAdapter {
   readonly extensions: readonly string[] = [];
   readonly include: readonly string[];
   readonly workingDir: string | undefined;
+  readonly rootMarkers: readonly string[];
   readonly startupTimeoutMs: number | undefined;
   readonly diagnosticsWaitMs: number | undefined;
   readonly config: ServerConfig;
@@ -212,6 +221,7 @@ export class ConfigAdapter implements LspServerAdapter {
     this.kind = config.kind ?? "language";
     this.include = config.include ?? [];
     this.workingDir = config.workingDir;
+    this.rootMarkers = config.rootMarkers ?? [];
     this.startupTimeoutMs = config.startupTimeoutMs;
     this.diagnosticsWaitMs = config.diagnosticsWaitMs;
   }

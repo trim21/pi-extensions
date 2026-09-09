@@ -169,10 +169,22 @@ function toMs(value: number | string | undefined): number | undefined {
   return Number.isFinite(ms) && ms > 0 ? ms : undefined;
 }
 
-/** 把合并后的原始配置解析为生效配置：应用 configDefaults 缺省、字符串时长换算、白名单转 Set。 */
+/**
+ * 把合并后的原始配置解析为生效配置：应用 configDefaults 缺省、字符串时长换算、
+ * 白名单转 Set；per-server 的 workingDir / rootMarkers 互斥校验在此完成
+ * （配置解析期抛错，与 enabled 白名单校验同层）。
+ */
 export function resolveConfig(raw: LspConfig): ResolvedLspConfig {
+  const servers = raw.servers ?? {};
+  for (const [id, server] of Object.entries(servers)) {
+    if (server.workingDir !== undefined && server.rootMarkers !== undefined) {
+      throw new Error(
+        `lsp.json: server "${id}": workingDir and rootMarkers are mutually exclusive`,
+      );
+    }
+  }
   return {
-    servers: raw.servers ?? {},
+    servers,
     enabled: raw.enabled === undefined ? undefined : new Set(raw.enabled),
     disabled: raw.disabled === undefined ? undefined : new Set(raw.disabled),
     watch: {
@@ -757,7 +769,7 @@ export function createLspService(
     for (const adapter of active) {
       if (adapterFilter && !adapterFilter(adapter)) continue;
       if (adapter.extensions.length > 0 && !adapter.extensions.includes(extension)) continue;
-      const root = serverRoot(adapter.workingDir, cwd);
+      const root = serverRoot(adapter, file, cwd);
       if (!containsPath(file, root)) continue;
       if (!matchesInclude(adapter.include ?? [], file, root, cwd)) continue;
       const key = root + adapter.id;
@@ -991,11 +1003,14 @@ export function createLspService(
   }
 
   /**
-   * reload 后立即重启此前运行中的服务器，不再等下一次工具调用。只重启新配置
-   * 中仍存在且启用的 server；无运行记录（如 /lsp-stop 之后）或配置重读失败时
-   * 不动，保持惰性 spawn。返回成功重启的 server id。
+   * reload 后立即重启此前运行中的 (server, root) 实例，不再等下一次工具调用。
+   * 只重启新配置中仍存在且启用的 server；无运行记录（如 /lsp-stop 之后）或
+   * 配置重读失败时不动，保持惰性 spawn。root 沿用重载前的值（reload 没有文件
+   * 上下文，标记文件的变化留给下一次触碰自然生效）。返回成功重启的 server id。
    */
-  async function respawnRunning(serverIDs: readonly string[]): Promise<string[]> {
+  async function respawnRunning(
+    running: readonly { serverID: string; root: string }[],
+  ): Promise<string[]> {
     const cwd = state.cwd;
     if (!cwd) return [];
     let config: ResolvedLspConfig;
@@ -1011,25 +1026,25 @@ export function createLspService(
       return [];
     }
     const active = filterAdapters(adapters ?? createAdapters(config.servers), config);
+    const unique = new Map(running.map((item) => [`${item.root}\0${item.serverID}`, item]));
     const restarted = await Promise.all(
-      serverIDs.map(async (serverID): Promise<string | undefined> => {
+      [...unique.values()].map(async ({ serverID, root }): Promise<string | undefined> => {
         const adapter = active.find((candidate) => candidate.id === serverID);
         if (!adapter) return;
-        const root = serverRoot(adapter.workingDir, cwd);
         const client = await startClient(adapter, root, cwd, config);
         return client ? serverID : undefined;
       }),
     );
-    return restarted.filter((id): id is string => id !== undefined);
+    return [...new Set(restarted.filter((id): id is string => id !== undefined))];
   }
 
   async function reload(serverID: string): Promise<string[]> {
-    const wasRunning = state.clients.some((client) => client.serverID === serverID);
+    const targets = state.clients.filter((client) => client.serverID === serverID);
+    const running = targets.map((client) => ({ serverID: client.serverID, root: client.root }));
     state.closing = true;
     // 配置缓存失效：立即重读盘上配置，让配置修改生效
     state.config = undefined;
     state.configCwd = undefined;
-    const targets = state.clients.filter((client) => client.serverID === serverID);
     await Promise.all(targets.map((client) => client.shutdown())).catch(() => {
       // 个别进程退出失败不阻止清理流程
     });
@@ -1045,12 +1060,15 @@ export function createLspService(
     state.closing = false;
     state.disabled = false;
     updateStatusText();
-    if (!wasRunning) return [];
-    return respawnRunning([serverID]);
+    if (running.length === 0) return [];
+    return respawnRunning(running);
   }
 
   async function reloadAll(): Promise<string[]> {
-    const runningIDs = [...new Set(state.clients.map((client) => client.serverID))];
+    const running = state.clients.map((client) => ({
+      serverID: client.serverID,
+      root: client.root,
+    }));
     state.closing = true;
     state.config = undefined;
     state.configCwd = undefined;
@@ -1066,7 +1084,7 @@ export function createLspService(
     state.closing = false;
     state.disabled = false;
     updateStatusText();
-    return respawnRunning(runningIDs);
+    return respawnRunning(running);
   }
 
   function serverIDs(): string[] {
