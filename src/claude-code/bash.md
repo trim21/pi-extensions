@@ -18,7 +18,7 @@ IMPORTANT: Avoid using this tool to run `find`, `grep`, `cat`, `head`, `tail`, `
 - Communication: Output text directly (NOT echo/printf)
   While the Bash tool can do similar things, it's better to use the built-in tools as they provide a better user experience and make it easier to review tool calls and give permission.
 
-- You may specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). By default, your command will timeout after 120000ms (2 minutes).
+- You may specify an optional timeout in milliseconds (up to 7200000ms / 2 hours). By default, your command will timeout after 120000ms (2 minutes).
 - Prever to use workdir argument over `cd ...`
 - When issuing multiple commands:
 - If the commands are independent and can run in parallel, make multiple Bash tool calls in a single message. Example: if you need to run "git status" and "git diff", send a single message with two Bash tool calls in parallel.

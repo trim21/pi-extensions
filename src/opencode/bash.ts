@@ -8,7 +8,7 @@ import { BashInterruptedError, type BwrapRuntime, createBwrapRuntime } from "../
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-const MAX_TIMEOUT_MS = 600_000;
+const MAX_TIMEOUT_MS = 7_200_000;
 
 /** 对齐上游 opencode 的截断提示文案（tools/BashTool/bash.ts）。 */
 const CAPTURE_TRUNCATED_NOTICE = "[output capture truncated at the in-memory safety limit]";
@@ -46,7 +46,7 @@ export default function opencodeBash(
     description: [
       "Executes a given bash command synchronously and returns its output.",
       "The default working directory is the current directory; use workdir to run elsewhere.",
-      "timeout is in milliseconds, defaults to 120000, and may not exceed 600000.",
+      "timeout is in milliseconds, defaults to 120000, and may not exceed 7200000.",
       "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
     ].join("\n"),
     promptSnippet: "execute bash command",
@@ -65,8 +65,7 @@ export default function opencodeBash(
         ),
         timeout: Type.Optional(
           Type.Number({
-            description: "Optional timeout in milliseconds (max 600000)",
-            default: 600,
+            description: "Optional timeout in milliseconds (max 7200000)",
           }),
         ),
         dangerouslyDisableSandbox: Type.Optional(

@@ -14,7 +14,7 @@ import { BashInterruptedError, type BwrapRuntime, createBwrapRuntime } from "../
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-const MAX_TIMEOUT_MS = 600_000;
+const MAX_TIMEOUT_MS = 7_200_000;
 
 /** 对齐 Claude Code formatError：错误文本超过该长度时头尾各保留一半。 */
 const MAX_ERROR_CHARS = 10_000;
@@ -89,14 +89,14 @@ export function registerShellTools(
     label: "Bash",
     description: [
       "Executes a given bash command synchronously and returns its output.",
-      "timeout is in milliseconds, defaults to 120000, and may not exceed 600000.",
+      "timeout is in milliseconds, defaults to 120000, and may not exceed 7200000.",
       "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
     ].join("\n"),
     parameters: Type.Object(
       {
         command: Type.String({ description: "The command to execute" }),
         timeout: Type.Optional(
-          Type.Number({ description: "Optional timeout in milliseconds (max 600000)" }),
+          Type.Number({ description: "Optional timeout in milliseconds (max 7200000)" }),
         ),
         description: Type.Optional(
           Type.String({ description: "Clear, concise description of the command" }),
