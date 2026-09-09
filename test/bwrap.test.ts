@@ -222,6 +222,38 @@ describe("buildBwrapArgs", () => {
     expect(devNullTargets).toEqual(["/home/user/.git-credentials"]);
   });
 
+  it("resolves symlink components in writable paths to their real path", async () => {
+    // bwrap 创建挂载点时不跟随 symlink：含 symlink 组件的路径必须先解析成真实路径
+    const root = mkdtempSync(join(tmpdir(), "cc-bwrap-link-"));
+    mkdirSync(join(root, "real-target", "data"), { recursive: true });
+    symlinkSync(join(root, "real-target"), join(root, "link"));
+
+    const args = await buildBwrapArgs(
+      { ...base, extraWritablePaths: [join(root, "link", "data/")] },
+      "/ws",
+    );
+
+    const real = join(root, "real-target", "data");
+    expect(args).toEqual(expect.arrayContaining(["--bind-try", real, real]));
+    expect(args.filter((arg) => arg.includes("/link/"))).toEqual([]);
+  });
+
+  it("resolves symlink components in deny paths to their real path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-bwrap-deny-link-"));
+    mkdirSync(join(root, "real-target", "secret"), { recursive: true });
+    symlinkSync(join(root, "real-target"), join(root, "link"));
+
+    const args = await buildBwrapArgs(
+      { ...base, denyPaths: [`${join(root, "link", "secret")}/`] },
+      "/ws",
+    );
+
+    const tmpfsTargets = args
+      .flatMap((value, index) => (value === "--tmpfs" ? [args[index + 1]] : []))
+      .filter((path): path is string => path !== undefined);
+    expect(tmpfsTargets).toEqual([join(root, "real-target", "secret")]);
+  });
+
   it("protects workspace-internal dot dirs instead of the exec cwd's", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-args-"));
     mkdirSync(join(workspace, ".git"));

@@ -8,7 +8,7 @@
  * 探测不通过则整组跳过（macOS、无 bubblewrap 或受限 CI 环境不应报假失败）。
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -311,5 +311,26 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
 
     expect(result.exitCode).not.toBe(0);
     expect(() => readFileSync(join(outside, "nope.txt"), "utf8")).toThrow();
+  }, 60000);
+
+  it("含绝对 symlink 组件的可写路径仍能挂载并写入（bwrap 不跟随挂载点路径里的 symlink）", async () => {
+    const directory = workspace();
+    const target = join(directory, "real-target", "data");
+    mkdirSync(target, { recursive: true });
+    symlinkSync(join(directory, "real-target"), join(directory, "link"));
+
+    const result = await runSandboxCommand({
+      workspace: directory,
+      command: `printf ok > ${join(directory, "link", "data", "note.txt")}`,
+      configPath: config(directory, {
+        mode: "workspace-write",
+        writablePaths: ["."],
+        extraWritablePaths: [`${join(directory, "link", "data")}/`],
+      }),
+      onData: () => {},
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(join(target, "note.txt"), "utf8")).toBe("ok");
   }, 60000);
 });

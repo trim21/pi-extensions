@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { constants, type Dirent, existsSync, readFileSync } from "node:fs";
-import { access as fsAccess, readdir, stat } from "node:fs/promises";
+import { access as fsAccess, readdir, realpath, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -337,20 +337,34 @@ export async function findGitDirs(root: string): Promise<string[]> {
   return found;
 }
 
+/**
+ * bwrap 创建挂载点时不跟随目标路径中的 symlink 组件（防 symlink 逃逸），
+ * 含绝对 symlink 的配置路径会以 "Can't mkdir parents ... No such file or directory" 失败。
+ * 已存在的路径先解析成真实路径（沙箱内 ro-bind 的 / 下同样可见，symlink 语义不变）；
+ * 不存在的路径保持原样，交给 --*-try 的跳过语义处理。
+ */
+async function realpathOrSelf(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path;
+  }
+}
+
 export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Promise<string[]> {
   const args = ["--new-session", "--die-with-parent", "--unshare-user", "--unshare-pid"];
   // --*-bind-try：配置的路径不存在时忽略该项而不是让整条命令失败
   for (const path of resolved.writablePaths) {
-    const absolutePath = resolveBwrapPath(path, cwd);
+    const absolutePath = await realpathOrSelf(resolveBwrapPath(path, cwd));
     args.push("--bind-try", absolutePath, absolutePath);
   }
   for (const path of resolved.extraWritablePaths) {
-    const absolutePath = resolveBwrapPath(path, cwd);
+    const absolutePath = await realpathOrSelf(resolveBwrapPath(path, cwd));
     args.push("--bind-try", absolutePath, absolutePath);
   }
   // denyPaths：以 / 结尾的条目视为目录（挂空 tmpfs），否则视为文件（--ro-bind-try /dev/null 覆盖）
   for (const path of resolved.denyPaths) {
-    const target = resolveBwrapPath(path, cwd);
+    const target = await realpathOrSelf(resolveBwrapPath(path, cwd));
     if (path.endsWith("/")) {
       args.push("--tmpfs", target);
     } else {
@@ -360,13 +374,13 @@ export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Prom
   if (!resolved.network) args.push("--unshare-net");
   // --ro-bind-try：目录不存在（或已被删除）时自动忽略
   for (const name of PROTECTED_DIRS) {
-    const absolutePath = join(cwd, name);
+    const absolutePath = await realpathOrSelf(join(cwd, name));
     args.push("--ro-bind-try", absolutePath, absolutePath);
   }
   // 工作区下所有 .git 一律只读：可写 bind 之上的覆盖绑定，防止命令篡改仓库元数据。
   // 根目录本身是 git 仓库时只保护根 .git（递归扫描有成本，绝大多数情况根即唯一仓库）；
   // 根不是 git 仓库时才递归扫描嵌套仓库（如 monorepo 子仓库）。
-  const rootGit = join(cwd, ".git");
+  const rootGit = await realpathOrSelf(join(cwd, ".git"));
   let gitDirs: string[];
   try {
     await stat(rootGit);
@@ -375,7 +389,8 @@ export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Prom
     gitDirs = await findGitDirs(cwd);
   }
   for (const gitDir of gitDirs) {
-    args.push("--ro-bind-try", gitDir, gitDir);
+    const realGitDir = await realpathOrSelf(gitDir);
+    args.push("--ro-bind-try", realGitDir, realGitDir);
   }
   args.push(...resolved.extraArgs);
   return args;
