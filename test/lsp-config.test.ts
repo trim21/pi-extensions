@@ -878,13 +878,20 @@ describe("lsp service watcher", () => {
     watchWorkspaceMock.mockClear();
   });
 
-  /** 每次启动返回一个可手动 emit 的 fake watcher，stop 调用被记录。 */
+  /** 每次启动返回一个可手动 emit / fail 的 fake watcher，记录监听目录与 stop 调用。 */
   function installFakeWatcher() {
-    const fakes: { stop: ReturnType<typeof vi.fn>; emit: (changes: FileChange[]) => void }[] = [];
-    watchWorkspaceMock.mockImplementation(async (_dir, onBatch) => {
+    const fakes: {
+      dir: string;
+      stop: ReturnType<typeof vi.fn>;
+      emit: (changes: FileChange[]) => void;
+      fail: (message: string) => void;
+    }[] = [];
+    watchWorkspaceMock.mockImplementation(async (dir, onBatch, options) => {
       const fake = {
+        dir,
         stop: vi.fn(async () => {}),
         emit: (changes: FileChange[]) => void onBatch(changes),
+        fail: (message: string) => options?.onError?.(message),
       };
       fakes.push(fake);
       return fake;
@@ -927,7 +934,7 @@ describe("lsp service watcher", () => {
     };
   }
 
-  it("首个 client 建立时启动 watcher，closeAll 停止", async () => {
+  it("首个 client 建立时启动 watcher（监听其 root），closeAll 停止", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
     const file = join(dir, "x.py");
     await writeFile(file, "x = 1\n");
@@ -937,9 +944,94 @@ describe("lsp service watcher", () => {
     try {
       await service.touchFile(file, dir);
       await vi.waitFor(() => expect(watchWorkspaceMock).toHaveBeenCalledOnce());
-      expect(fakes[0]).toBeDefined();
+      expect(fakes[0].dir).toBe(dir);
       await service.shutdownAll();
       expect(fakes[0].stop).toHaveBeenCalledOnce();
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("监听范围是活跃 client 的 root，不是整个 cwd", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const a = join(dir, "packages", "a");
+    const b = join(dir, "packages", "b");
+    await mkdir(a, { recursive: true });
+    await mkdir(b, { recursive: true });
+    await writeFile(join(a, "x.py"), "x = 1\n");
+    await writeFile(join(b, "y.py"), "y = 1\n");
+    const fakes = installFakeWatcher();
+    const spyA = spyAdapter("a", a);
+    const spyB = spyAdapter("b", b);
+    const service = createLspService([spyA.adapter, spyB.adapter], join(dir, "no-global.json"));
+    try {
+      await service.touchFile(join(a, "x.py"), dir);
+      await vi.waitFor(() => expect(fakes.length).toBe(1));
+      expect(fakes[0].dir).toBe(a);
+
+      // 新增 client 只增量添加自己的 root，不打断已有监听
+      await service.touchFile(join(b, "y.py"), dir);
+      await vi.waitFor(() => expect(fakes.length).toBe(2));
+      expect(fakes.map((fake) => fake.dir).toSorted()).toEqual([a, b].toSorted());
+      expect(fakes[0].stop).not.toHaveBeenCalled();
+
+      // 重复触碰同一 root 不新建监听器
+      await service.touchFile(join(a, "x.py"), dir);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(fakes.length).toBe(2);
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("被其他 root 包含的 root 不重复监听", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const sub = join(dir, "sub");
+    await mkdir(sub, { recursive: true });
+    const file = join(sub, "x.py");
+    await writeFile(file, "x = 1\n");
+    const fakes = installFakeWatcher();
+    const outer = spyAdapter("outer", dir);
+    const inner = spyAdapter("inner", sub);
+    const service = createLspService([outer.adapter, inner.adapter], join(dir, "no-global.json"));
+    try {
+      await service.touchFile(file, dir);
+      await vi.waitFor(() => expect(fakes.length).toBe(1));
+      expect(fakes[0].dir).toBe(dir);
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("资源耗尽（ENOSPC）时停止该 root 的监听并提示，reload 后重试", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+    const fakes = installFakeWatcher();
+    const notify = vi.fn();
+    const spy = spyAdapter("a", dir);
+    const service = createLspService([spy.adapter], join(dir, "no-global.json"), { notify });
+    try {
+      await service.touchFile(file, dir);
+      await vi.waitFor(() => expect(fakes.length).toBe(1));
+
+      fakes[0].fail(
+        `workspace watcher failed for ${dir}: Error: ENOSPC: System limit for number of file watchers reached`,
+      );
+      await vi.waitFor(() => expect(fakes[0].stop).toHaveBeenCalledOnce());
+      expect(notify.mock.calls.some(([message]) => String(message).includes("ENOSPC"))).toBe(true);
+
+      // 停用后再次触碰不重建该 root 的监听器
+      await service.touchFile(file, dir);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(fakes.length).toBe(1);
+
+      // reload 是重试入口：清掉停用记录后重新建立
+      await service.reload("a");
+      await vi.waitFor(() => expect(fakes.length).toBe(2));
     } finally {
       await service.shutdownAll();
       await rm(dir, { recursive: true, force: true });

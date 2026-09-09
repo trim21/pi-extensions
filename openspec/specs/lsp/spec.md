@@ -183,7 +183,7 @@ WHEN 文件监听器报告某个仍在驻留集合中的文档被外部改动，
 - **服务器启动**（`adapter.ts` / `server-config.ts`）：按 `include` glob 匹配启用（`!` 否定排除）；root 由 `serverRoot` 解析——配置 `rootMarkers` 时从调用 cwd 沿文件路径向下找第一个含标记的目录（cwd 自身命中即 cwd，未命中回退 cwd），否则即 `workingDir`（相对调用 cwd 解析）或调用 cwd；两者互斥，同时配置在 `resolveConfig` 报错。同一服务器可为不同 root 各启动一个实例。`bin` 按绝对路径 / 相对调用 cwd / 名字（先项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin`，再 PATH）解析，`env` 的 `{root}` / `{cwd}` 模板按该文件的 root 生效。
 - **协议**：`initializationOptions` 进 initialize 请求，`settings` 进 didChangeConfiguration / workspace/configuration；languageId 按扩展名映射（缺省内置映射表）。
 - **超时**：per-server `startupTimeoutMs` / `diagnosticsWaitMs` 覆盖全局与默认值。
-- **文件监听**（`watcher.ts`）：会话 cwd 上的递归 fs.watch（`node:fs/promises`），尾部去抖 + 最长 flush 批量回调；事件按各 client 的 root 前缀 / 注册 pattern / 扩展名过滤后以 `workspace/didChangeWatchedFiles` 投递（created=1 / changed=2 / deleted=3）；监听器失败降级提示，不影响诊断链路。
+- **文件监听**（`watcher.ts` / `lsp.ts`）：`@parcel/watcher` 递归监听**活跃 client 的项目根**（root 去重、不越 cwd，无活跃 client 不监听；内核层 ignore 使被忽略目录不建 watch），尾部去抖 + 最长 flush 批量回调；事件按各 client 的 root 前缀 / 注册 pattern / 扩展名过滤后以 `workspace/didChangeWatchedFiles` 投递（created=1 / changed=2 / deleted=3）；监听器失败降级提示（ENOSPC 等资源耗尽时停用该 root 直到 `/lsp-reload`），不影响诊断链路。
 - **驻留与退场**（`client.ts`）：edit/write 进入有界 LRU（`maxOpenDocuments`，缺省 32），淘汰时 `didClose`；驻留文档被外部改动时先 `didClose` 再发 changed 事件，内容一致的自身写入 echo 完全忽略；read 只发文件事件通知，不驻留。
 
 涉及文件：`src/lib/lsp/`（lsp.ts / server-config.ts / adapter.ts / client.ts / watcher.ts）。

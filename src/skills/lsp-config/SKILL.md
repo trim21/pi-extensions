@@ -33,7 +33,8 @@ diagnosticsFullWaitTimeoutMs / diagnosticsRequestTimeoutMs / initializeTimeoutMs
 
 - `enabled`：只启用列出的服务器 id（缺省 = 全部启用）；`disabled`：从启用集中排除
 - 时长字段：毫秒数字，或带单位的字符串（`"300ms"` / `"5s"` / `"1m"` / `"2h"`，空单位按 ms）；默认值见 `clientDefaults`（client.ts）：debounce 150ms、document 等待 5s、full 等待 10s、pull 请求 3s、initialize 45s、`maxOpenDocuments` 32
-- `watch`：`enabled` / `debounceMs`（缺省 300）/ `maxBatch`（缺省 500）/ `ignore`（glob，相对工作区根的 POSIX 路径）。注意 `flushMs` 只在默认值里、**不可配**
+- `watch`：`enabled` / `debounceMs`（缺省 300）/ `maxBatch`（缺省 500）/ `ignore`（glob，相对**每个被监听的项目根**的 POSIX 路径）。注意 `flushMs` 只在默认值里、**不可配**
+- 监听范围不是整个 cwd，而是**当前活跃服务器 client 的项目根**：root 在 cwd 内就只监听 root（被其他 root 包含的 root 不重复监听，root 是 cwd 的祖先时退化为 cwd）；没有活跃 client 就不监听。因此容器 cwd（`~/projects` 下多个仓库）里只有活跃服务器所在的项目会被 watch；`ignore` 的匹配基准也随之是各自的项目根。资源耗尽（ENOSPC）时该 root 的监听器会停止并提示一次，调大 `fs.inotify.max_user_watches` 后跑 `/lsp-reload` 重试
 
 ## servers.<id> 字段
 

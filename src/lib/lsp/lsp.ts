@@ -348,7 +348,7 @@ interface LspState {
   disabled: boolean;
   /** root+serverID → 服务器状态，用于 footer status 显示。 */
   servers: Map<string, { serverID: string; root: string; state: "running" | "broken" }>;
-  /** 当前会话工作目录（watcher 挂载点）；变化时重建监听器。 */
+  /** 当前会话工作目录；变化时重算监听范围。 */
   cwd: string | undefined;
   /** client → adapter 扩展名集合，fan-out 时按扩展名过滤。 */
   clientExtensions: Map<LspClient, readonly string[]>;
@@ -529,19 +529,136 @@ export function createLspService(
 
   // ── 工作区文件监听（watcher）───────────────────────────────────────────────
 
-  let watcher: WorkspaceWatcher | undefined;
-  let watcherCwd: string | undefined;
+  /** 监听目录 → 监听器；范围 = 活跃 client 的 root，随 client 集合增量维护。 */
+  const watchers = new Map<string, WorkspaceWatcher>();
+  /** 因资源耗尽（ENOSPC / EMFILE）停用的监听目录；/lsp-reload 后重试。 */
+  const watcherFailed = new Set<string>();
 
-  async function stopWatcher(): Promise<void> {
-    const current = watcher;
-    watcher = undefined;
-    watcherCwd = undefined;
-    if (current) {
-      try {
-        await current.stop();
-      } catch {
-        // 停止失败不影响流程
+  /**
+   * client root 的有效监听目录：root 在 cwd 内即 root；root 是 cwd 的祖先时
+   * 退化为 cwd（client 只服务 cwd 内的文件）；与 cwd 无交集时返回 undefined。
+   */
+  function watchDirFor(root: string, cwd: string): string | undefined {
+    if (containsPath(root, cwd)) return root;
+    if (containsPath(cwd, root)) return cwd;
+    return undefined;
+  }
+
+  /** 期望监听的最外层目录集合：被其他目录包含的去掉，已停用的排除。 */
+  function desiredWatchRoots(cwd: string): string[] {
+    const dirs = new Set<string>();
+    for (const client of state.clients) {
+      const dir = watchDirFor(client.root, cwd);
+      if (dir && !watcherFailed.has(dir)) dirs.add(dir);
+    }
+    return [...dirs]
+      .filter((dir) => [...dirs].every((other) => other === dir || !containsPath(dir, other)))
+      .toSorted();
+  }
+
+  async function stopWatchers(): Promise<void> {
+    const current = [...watchers.values()];
+    watchers.clear();
+    await Promise.all(
+      current.map((watcher) =>
+        watcher.stop().catch(() => {
+          // 停止失败不影响流程
+        }),
+      ),
+    );
+  }
+
+  /** 为单个目录建立监听器；启动失败返回 undefined（已提示）。 */
+  async function startWatcher(
+    root: string,
+    watch: EffectiveWatchConfig,
+    notify?: ExtensionUIContext["notify"],
+  ): Promise<WorkspaceWatcher | undefined> {
+    const report = notify ?? sessionNotify;
+    const onError = (message: string): void => {
+      // 资源耗尽不可恢复：停用该目录直到 /lsp-reload（对齐 VS Code 对 ENOSPC 的处理）
+      if (!/ENOSPC|EMFILE|No space left on device/i.test(message)) {
+        report?.(message, "error");
+        return;
       }
+      watcherFailed.add(root);
+      const current = watchers.get(root);
+      watchers.delete(root);
+      void current?.stop().catch(() => {
+        // 停止失败不影响流程
+      });
+      report?.(
+        `${message}; stopped watching ${root} until /lsp-reload (raise fs.inotify.max_user_watches first)`,
+        "error",
+      );
+    };
+    try {
+      const watcher = await watchWorkspace(root, (changes) => void fanOut(changes), {
+        debounceMs: watch.debounceMs,
+        flushMs: watch.flushMs,
+        maxBatch: watch.maxBatch,
+        ignore: watch.ignore,
+        onError,
+        onTruncated: () =>
+          report?.(
+            "workspace file events truncated (batch limit exceeded); run /lsp-reload <id> if diagnostics look stale",
+            "warning",
+          ),
+      });
+      // 建立过程中已报不可恢复错误：直接停掉，不进监听表
+      if (watcherFailed.has(root)) {
+        await watcher.stop().catch(() => {
+          // 停止失败不影响流程
+        });
+        return undefined;
+      }
+      return watcher;
+    } catch (error) {
+      report?.(
+        `workspace watcher failed to start for ${root}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        "error",
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * 让监听范围与当前活跃 client 集合一致：只对差集 stop / start，
+   * 已有目录的监听器保持不动（避免新增 client 时打断其他目录的事件流）。
+   */
+  async function reconcileWatchers(
+    cwd: string,
+    notify?: ExtensionUIContext["notify"],
+  ): Promise<void> {
+    if (state.closing || state.disabled) return;
+    let config: ResolvedLspConfig;
+    try {
+      config = await currentConfig(cwd);
+    } catch (error) {
+      // 配置重读失败（如 reload 时盘上配置损坏）：保持现有监听范围，不使调用方失败
+      sessionNotify?.(
+        `LSP watcher: re-reading config failed, keeping current watch scope: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        "warning",
+      );
+      return;
+    }
+    const desired = config.watch.enabled ? desiredWatchRoots(cwd) : [];
+    // Map 迭代期间删除当前项是安全的
+    for (const [root, watcher] of watchers) {
+      if (desired.includes(root)) continue;
+      watchers.delete(root);
+      void watcher.stop().catch(() => {
+        // 停止失败不影响流程
+      });
+    }
+    for (const root of desired) {
+      if (watchers.has(root)) continue;
+      const watcher = await startWatcher(root, config.watch, notify);
+      if (watcher) watchers.set(root, watcher);
     }
   }
 
@@ -591,38 +708,6 @@ export function createLspService(
         }
       }),
     );
-  }
-
-  /** 首个 client 建立 / 会话 cwd 变化时（重）建监听器；watch.enabled: false 时不启动。 */
-  async function ensureWatcher(cwd: string, notify?: ExtensionUIContext["notify"]): Promise<void> {
-    if (state.closing || state.disabled) return;
-    const config = await currentConfig(cwd);
-    const watch = config.watch;
-    if (!watch.enabled) return;
-    if (watcher && watcherCwd === cwd) return;
-    await stopWatcher();
-    try {
-      watcher = await watchWorkspace(cwd, (changes) => void fanOut(changes), {
-        debounceMs: watch.debounceMs,
-        flushMs: watch.flushMs,
-        maxBatch: watch.maxBatch,
-        ignore: watch.ignore,
-        onError: (message) => notify?.(message, "error"),
-        onTruncated: () =>
-          notify?.(
-            "workspace file events truncated (batch limit exceeded); run /lsp-reload <id> if diagnostics look stale",
-            "warning",
-          ),
-      });
-      watcherCwd = cwd;
-    } catch (error) {
-      notify?.(
-        `workspace watcher failed to start for ${cwd}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        "error",
-      );
-    }
   }
 
   /** 汇总当前所有 LSP server 状态并渲染到 footer status。 */
@@ -727,7 +812,7 @@ export function createLspService(
         state.brokenFailAt.delete(key);
         state.brokenNotifiedAt.delete(key);
         updateStatusText();
-        void ensureWatcher(cwd, notify);
+        void reconcileWatchers(cwd, notify);
         return client;
       } catch (error) {
         reportStartupFailure(
@@ -760,10 +845,10 @@ export function createLspService(
     const extension = extname(file) || file;
     const result: LspClient[] = [];
 
-    // 会话 cwd 变化时重建 watcher（首个 client 建立后启动）
+    // 会话 cwd 变化时重算监听范围（root 不在新 cwd 内的 client 不再被监听）
     if (state.cwd !== cwd) {
       state.cwd = cwd;
-      await stopWatcher();
+      await reconcileWatchers(cwd);
     }
 
     for (const adapter of active) {
@@ -978,7 +1063,8 @@ export function createLspService(
     state.brokenFailAt.clear();
     state.brokenNotifiedAt.clear();
     state.servers.clear();
-    await stopWatcher();
+    await stopWatchers();
+    watcherFailed.clear();
     updateStatusText();
   }
 
@@ -999,6 +1085,7 @@ export function createLspService(
     state.disabled = false;
     state.brokenFailAt.clear();
     state.brokenNotifiedAt.clear();
+    watcherFailed.clear();
     updateStatusText();
   }
 
@@ -1056,9 +1143,11 @@ export function createLspService(
       state.brokenNotifiedAt.delete(key);
       state.servers.delete(key);
     }
-    if (state.clients.length === 0) await stopWatcher();
     state.closing = false;
     state.disabled = false;
+    // reload 是资源耗尽后的重试入口：清掉停用记录并按新配置重算监听范围
+    watcherFailed.clear();
+    if (state.cwd) await reconcileWatchers(state.cwd);
     updateStatusText();
     if (running.length === 0) return [];
     return respawnRunning(running);
@@ -1080,9 +1169,10 @@ export function createLspService(
     state.brokenFailAt.clear();
     state.brokenNotifiedAt.clear();
     state.servers.clear();
-    await stopWatcher();
     state.closing = false;
     state.disabled = false;
+    watcherFailed.clear();
+    if (state.cwd) await reconcileWatchers(state.cwd);
     updateStatusText();
     return respawnRunning(running);
   }
