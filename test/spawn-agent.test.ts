@@ -850,6 +850,31 @@ describe("subagent progress log", () => {
     expect(lines[2]).toBe("text: Done.");
   });
 
+  it("strips markdown markers and newlines from text lines", async () => {
+    const updates = await runWithEvents([
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "**Bold**\n# H2" },
+      },
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "text_end", contentIndex: 1, content: "a\tb   c" },
+      },
+    ]);
+    const lines = updates.at(-1)!.split("\n");
+    expect(lines[0]).toBe("text: Bold H2");
+    expect(lines[1]).toBe("text: a b c");
+  });
+
+  it("strips markdown markers from tool names", async () => {
+    const updates = await runWithEvents([
+      { type: "tool_execution_start", toolCallId: "1", toolName: "We*ird`Tool", args: {} },
+    ]);
+    expect(updates.at(-1)).toContain("tool: WeirdTool");
+  });
+
   it("keeps only the most recent 5 log lines, below the agent footer", async () => {
     // 3 组「4 个连续工具调用 + 一个文本块」共产生 6 行;合并后的工具行按
     // 单行参与滚动窗口,最后只保留 5 行,第 1 行(组 0 的工具行)被挤掉。

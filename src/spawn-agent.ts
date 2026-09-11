@@ -17,9 +17,12 @@
  * single `tool:` line (`read x 2, glob`) and over-long line content is
  * folded to the first/last 9 chars joined by `…`, so a burst of tool calls
  * or a long text block does not flood the window; any text block starts a
- * new line. The final line is always the subagent name as a code span
- * (`` `scout` ``), followed by the live usage stats when there are any; it
- * rides outside the rolling window so it is never trimmed.
+ * new line. Line content is sanitized first: markdown marker characters are
+ * stripped and whitespace (including newlines) is collapsed to single spaces,
+ * so one log entry is always exactly one rendered line. The final line is
+ * always the subagent name as a code span (`` `scout` ``), followed by the
+ * live usage stats when there are any; it rides outside the rolling window so
+ * it is never trimmed.
  *
  * Security default: without an explicit `tools:` in the frontmatter, the
  * subagent only gets read-only tools (read/grep/find/ls) — no bash/write/edit.
@@ -67,6 +70,11 @@ const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
 const MAX_PROGRESS_LINES = 5;
 /** Progress line content (without the `tool:` / `text:` prefix) is capped at 21 chars; longer text is folded to the first/last 9 chars joined by ` … `. */
 const MAX_PROGRESS_CHARS_PER_LINE = 21;
+/**
+ * 进度内容会被 pi 按 markdown 渲染，这些标记字符会改变显示效果（代码块、粗体、
+ * 链接、标题等），因此在进日志前统一删掉。
+ */
+const PROGRESS_MARKDOWN_MARKERS_RE = /[`*_~[\]<>#|]/g;
 /** 错误消息里 stderr 的展示上限。 */
 const MAX_STDERR_ERROR_BYTES = 4 * 1024;
 /** 全局默认配置：~/.pi/agent/spawn-agent.json，字段可被 frontmatter 覆盖。 */
@@ -182,6 +190,15 @@ function foldProgressLine(text: string): string {
   if (text.length <= MAX_PROGRESS_CHARS_PER_LINE) return text;
   const keep = Math.floor((MAX_PROGRESS_CHARS_PER_LINE - 3) / 2);
   return `${text.slice(0, keep)} … ${text.slice(-keep)}`;
+}
+
+/**
+ * 进度行是「单行内容 + markdown 渲染」：内容里的换行会打乱按行滚动的窗口，
+ * markdown 标记会改变渲染效果。先删掉标记字符，再把换行/制表符/连续空格折成
+ * 单个空格并去掉首尾空白，保证一条日志恒为一行。
+ */
+function sanitizeProgressLine(text: string): string {
+  return text.replaceAll(PROGRESS_MARKDOWN_MARKERS_RE, "").replaceAll(/\s+/g, " ").trim();
 }
 
 function formatTokens(count: number): string {
@@ -373,7 +390,8 @@ export async function runAgent(
     toolLine = undefined;
   };
 
-  const appendToolLine = (name: string) => {
+  const appendToolLine = (rawName: string) => {
+    const name = sanitizeProgressLine(rawName);
     const firstInBatch = toolLine === undefined;
     if (toolLine === undefined) {
       toolLineSegments = [];
@@ -402,7 +420,8 @@ export async function runAgent(
     // 一眼能看出属于哪个 subagent；usage 与它同行，TUI 始终能看到实时 token 开销。
     // 这行位于滚动窗口之外，因此永远不会被挤掉。
     const usageLine = formatUsageStats(result.usage, result.model);
-    const footer = usageLine ? `\`${result.agent}\` ${usageLine}` : `\`${result.agent}\``;
+    const name = sanitizeProgressLine(result.agent);
+    const footer = usageLine ? `\`${name}\` ${usageLine}` : `\`${name}\``;
     onUpdate?.({
       content: [{ type: "text", text: [...logLines, footer].join("\n") }],
       details: { ...result },
@@ -416,7 +435,7 @@ export async function runAgent(
         // `text:` log line. Deltas/thinking are intentionally not logged.
         const delta = event.assistantMessageEvent;
         if (delta.type === "text_end") {
-          pushLogLine(`text: ${foldProgressLine(delta.content)}`);
+          pushLogLine(`text: ${foldProgressLine(sanitizeProgressLine(delta.content))}`);
           emitUpdate();
         }
 
