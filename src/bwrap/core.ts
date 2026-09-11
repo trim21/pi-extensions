@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { constants, type Dirent, existsSync, readFileSync } from "node:fs";
 import { access as fsAccess, readdir, realpath, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -353,6 +354,15 @@ async function realpathOrSelf(path: string): Promise<string> {
 
 export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Promise<string[]> {
   const args = ["--new-session", "--die-with-parent", "--unshare-user", "--unshare-pid"];
+  // 沙箱进程以调用方（pi）的 uid/gid 运行，而不是 userns 里的 0。
+  // net-allowlist 模式下命令先经 nsenter 进入 holder 的 userns（unshare -r 把 pi 的 uid 映射成 0），
+  // bwrap 默认继承该 uid 会让沙箱内 id/stat 自称 root、与宿主视角不一致；
+  // 直接模式（无 holder）下这两个值本就等于 bwrap 的 real uid，等价于默认行为。
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  if (uid !== undefined && gid !== undefined) {
+    args.push("--uid", String(uid), "--gid", String(gid));
+  }
   // --*-bind-try：配置的路径不存在时忽略该项而不是让整条命令失败
   for (const path of resolved.writablePaths) {
     const absolutePath = await realpathOrSelf(resolveBwrapPath(path, cwd));

@@ -10,6 +10,7 @@
 import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 
 import { describe, expect, it } from "vitest";
 
@@ -23,6 +24,13 @@ import {
   resolveHeadlessBwrap,
 } from "../src/bwrap/core.ts";
 import { resolveEscalation } from "../src/bwrap/runtime.ts";
+
+/** 沙箱显式以调用进程的 uid/gid 运行（net-allowlist 下避免在沙箱内自称 root）。 */
+function identityArgs(): string[] {
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  return uid === undefined || gid === undefined ? [] : ["--uid", String(uid), "--gid", String(gid)];
+}
 
 describe("findBwrap", () => {
   it("throws when the configured bwrapPath does not exist", () => {
@@ -164,6 +172,7 @@ describe("buildBwrapArgs", () => {
       "--die-with-parent",
       "--unshare-user",
       "--unshare-pid",
+      ...identityArgs(),
       "--bind-try",
       "/ws",
       "/ws",
@@ -180,6 +189,23 @@ describe("buildBwrapArgs", () => {
     ]);
   });
 
+  it("runs the sandbox as the invoking uid/gid instead of ns root", async () => {
+    const args = await buildBwrapArgs(base, "/ws");
+    const uid = process.getuid?.();
+    const gid = process.getgid?.();
+
+    // net-allowlist 模式下 holder 的 userns 把 pi 的 uid 映射成 0，不显式指定时
+    // 沙箱内 id/stat 会自称 root（落盘属主仍正确）；缺 uid/gid 的环境不应拼出半截参数。
+    if (uid === undefined || gid === undefined) {
+      expect(args).not.toContain("--uid");
+      expect(args).not.toContain("--gid");
+      return;
+    }
+    const index = args.indexOf("--uid");
+    expect(index).toBeGreaterThan(-1);
+    expect(args.slice(index, index + 4)).toEqual(["--uid", String(uid), "--gid", String(gid)]);
+  });
+
   it("keeps extra writable paths as-is", async () => {
     const args = await buildBwrapArgs({ ...base, extraWritablePaths: ["/data/x"] }, "/ws");
 
@@ -190,6 +216,7 @@ describe("buildBwrapArgs", () => {
       "--die-with-parent",
       "--unshare-user",
       "--unshare-pid",
+      ...identityArgs(),
       "--bind-try",
       "/ws",
       "/ws",
