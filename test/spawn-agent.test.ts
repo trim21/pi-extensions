@@ -850,7 +850,7 @@ describe("subagent progress log", () => {
     expect(lines[2]).toBe("text: Done.");
   });
 
-  it("keeps only the most recent 5 lines", async () => {
+  it("keeps only the most recent 5 log lines, below the agent footer", async () => {
     // 3 组「4 个连续工具调用 + 一个文本块」共产生 6 行;合并后的工具行按
     // 单行参与滚动窗口,最后只保留 5 行,第 1 行(组 0 的工具行)被挤掉。
     const events: unknown[] = [];
@@ -871,12 +871,38 @@ describe("subagent progress log", () => {
     }
     const updates = await runWithEvents(events);
     const lines = updates.at(-1)!.split("\n");
-    expect(lines).toHaveLength(5);
+    expect(lines).toHaveLength(6);
     expect(lines[0]).toBe("text: done0");
     expect(lines[1]).toBe("tool: tool4, to … l6, tool7");
     expect(lines[2]).toBe("text: done1");
     expect(lines[3]).toBe("tool: tool8, to … 0, tool11");
     expect(lines[4]).toBe("text: done2");
+    expect(lines[5]).toBe("`scout`");
+  });
+
+  it("appends the subagent name as a code span on the last line", async () => {
+    const updates = await runWithEvents([
+      { type: "tool_execution_start", toolCallId: "1", toolName: "read", args: {} },
+    ]);
+    const lines = updates.at(-1)!.split("\n");
+    expect(lines.at(-1)).toBe("`scout`");
+  });
+
+  it("appends the live usage stats to the agent footer", async () => {
+    const updates = await runWithEvents([
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "found it" }],
+          usage: { cost: { total: 0.0123 }, totalTokens: 456 },
+          model: "claude-haiku-4-5",
+          stopReason: "end_turn",
+        },
+      },
+    ]);
+    const lines = updates.at(-1)!.split("\n");
+    expect(lines.at(-1)).toBe("`scout` 1 turn $0.0123 ctx:456 claude-haiku-4-5");
   });
 });
 

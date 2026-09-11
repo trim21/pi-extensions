@@ -19,6 +19,10 @@ pi-extensions 是 pi coding-agent 的自定义扩展集合，TypeScript ESM 项�
 - 不要用 module 级可变变量（如 `let x: T | undefined` 在模块顶层）维护跨调用状态。需要记住状态（client、缓存、单例等）时，用工厂函数 + 闭包：`createX()` 返回带内部状态的对象/函数，状态由闭包持有，生命周期随创建者。
 - Node 版本要求 `>=24`；`typescript` 通过 npm alias 安装，不要随意改动依赖版本与锁文件。
 
+## 术语
+
+- **toolcall 进度**：工具 `execute` 的 `onUpdate` 回调被调用时传入的内容。文档、注释与回复中一律用这个说法指代它。
+
 ## 项目结构
 
 ```

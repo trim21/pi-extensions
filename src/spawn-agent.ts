@@ -15,9 +15,11 @@
  * `text: <content>` lines for completed text blocks, keeping the last
  * `MAX_PROGRESS_LINES` lines. Consecutive tool calls are merged into a
  * single `tool:` line (`read x 2, glob`) and over-long line content is
- * folded to the first/last 7 chars joined by `…`, so a burst of tool calls
+ * folded to the first/last 9 chars joined by `…`, so a burst of tool calls
  * or a long text block does not flood the window; any text block starts a
- * new line.
+ * new line. The final line is always the subagent name as a code span
+ * (`` `scout` ``), followed by the live usage stats when there are any; it
+ * rides outside the rolling window so it is never trimmed.
  *
  * Security default: without an explicit `tools:` in the frontmatter, the
  * subagent only gets read-only tools (read/grep/find/ls) — no bash/write/edit.
@@ -396,12 +398,13 @@ export async function runAgent(
   };
 
   const emitUpdate = () => {
-    // Usage line rides on the last row so the TUI always shows live token
-    // cost; it lives outside the rolling window so it is never trimmed.
+    // 最后一行固定是「子代理名 + 运行中统计」：名字用 code span 标出，进度流里
+    // 一眼能看出属于哪个 subagent；usage 与它同行，TUI 始终能看到实时 token 开销。
+    // 这行位于滚动窗口之外，因此永远不会被挤掉。
     const usageLine = formatUsageStats(result.usage, result.model);
-    const lines = usageLine ? [...logLines, usageLine] : logLines;
+    const footer = usageLine ? `\`${result.agent}\` ${usageLine}` : `\`${result.agent}\``;
     onUpdate?.({
-      content: [{ type: "text", text: lines.join("\n") || "(running...)" }],
+      content: [{ type: "text", text: [...logLines, footer].join("\n") }],
       details: { ...result },
     });
   };
