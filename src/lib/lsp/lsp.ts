@@ -307,16 +307,17 @@ export function mergeConfig(globalConfig: LspConfig, localConfig: LspConfig): Ls
   };
 }
 
-/** 读取全局 + 本地配置，合并并解析为生效配置；未知字段警告经 onWarning 上报。 */
+/**
+ * 读取全局 + 本地配置，合并并解析为生效配置；未知字段警告经 onWarning 上报。
+ * 顺序读取两份配置，让警告顺序稳定为全局在前、本地在后。
+ */
 export async function loadLspConfig(
   cwd: string,
   globalConfigPath: string = join(homedir(), ".pi", "agent", "lsp.json"),
   onWarning?: (message: string) => void,
 ): Promise<ResolvedLspConfig> {
-  const [globalConfig, localConfig] = await Promise.all([
-    readConfigFile(globalConfigPath, onWarning),
-    readConfigFile(join(cwd, ".pi", "lsp.json"), onWarning),
-  ]);
+  const globalConfig = await readConfigFile(globalConfigPath, onWarning);
+  const localConfig = await readConfigFile(join(cwd, ".pi", "lsp.json"), onWarning);
   return resolveConfig(mergeConfig(globalConfig, localConfig));
 }
 
