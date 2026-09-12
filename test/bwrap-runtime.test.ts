@@ -45,10 +45,12 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 
 import {
   ALLOW_ONCE,
+  BACK,
   type BwrapRuntime,
   createBwrapRuntime,
   DENY,
   DENY_WITH_REASON,
+  EDIT_RULES,
 } from "../src/bwrap/runtime.js";
 
 beforeAll(() => {
@@ -315,7 +317,7 @@ describe("BwrapRuntime", () => {
       rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
     });
 
-    it("shows only unallowed patterns as checkboxes when part of a chain is pre-approved", async () => {
+    it("shows only unallowed patterns in the edit submenu when part of a chain is pre-approved", async () => {
       // 覆盖全局规则：`echo *` 已 allow，`head *` 未允许
       writeFileSync(
         join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
@@ -328,11 +330,13 @@ describe("BwrapRuntime", () => {
       runtime.setMode(directory, "workspace-write");
       const select = vi
         .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
         .mockImplementationOnce(async (_title: string, options: string[]) => {
-          // checkbox 只列出未允许的 `head *`，不含已允许的 `echo *`
-          expect(options).toEqual([ALLOW_ONCE, DENY, DENY_WITH_REASON, "☐ head *"]);
+          // 子菜单只列出未允许的 `head *`，不含已允许的 `echo *`
+          expect(options).toEqual(["☐ head *", BACK]);
           return "☐ head *";
         })
+        .mockResolvedValueOnce(BACK)
         .mockResolvedValueOnce(ALLOW_ONCE);
       const result = await runtime.execute({
         toolCallId: "test",
@@ -365,6 +369,43 @@ describe("BwrapRuntime", () => {
       });
       expect(result).toMatchObject({ exitCode: 0, output: "approved" });
       expect(abort).not.toHaveBeenCalled();
+    });
+
+    it("folds the persistable patterns behind the edit option instead of listing them", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async (_title: string, options: string[]) => {
+        // 主决策层只列动作：pattern 不再直接铺开，收进 Edit approval rules
+        expect(options).toEqual([ALLOW_ONCE, DENY, DENY_WITH_REASON, EDIT_RULES]);
+        return ALLOW_ONCE;
+      });
+      await runtime.execute({
+        toolCallId: "test",
+        command: "printf approved",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }),
+      });
+      expect(select).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns to the main decision when the edit submenu is dismissed", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-back-"));
+      const { runtime } = setupRuntime();
+      runtime.setMode(directory, "workspace-write");
+      // 子菜单关闭（Esc）= 回到主菜单：未勾选任何规则，Allow once 放行且不写配置
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce(ALLOW_ONCE);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf back",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
+      });
+      expect(result).toMatchObject({ exitCode: 0, output: "back" });
+      expect(existsSync(join(directory, ".pi", "bwrap.json"))).toBe(false);
     });
 
     it("shows the resolved exec cwd inside the approval dialog when workdir is provided", async () => {
@@ -549,12 +590,17 @@ describe("BwrapRuntime", () => {
       ).rejects.toThrow(/User denied command execution\.$/);
     });
 
-    it("allow forever persists only the checked rules and auto-approves next time", async () => {
+    it("persists rules picked in the edit submenu and auto-approves next time", async () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-forever-"));
       const { runtime } = setupRuntime();
       runtime.setMode(directory, "workspace-write");
-      // 勾选 `printf *`（checkbox 首轮为 ☐ 前缀），然后选 Allow once 放行本次
-      const select = vi.fn().mockResolvedValueOnce("☐ printf *").mockResolvedValueOnce(ALLOW_ONCE);
+      // 主菜单 Edit approval rules → 勾选 `printf *`（☐ 前缀）→ Back → Allow once
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
+        .mockResolvedValueOnce("☐ printf *")
+        .mockResolvedValueOnce(BACK)
+        .mockResolvedValueOnce(ALLOW_ONCE);
       const result = await runtime.execute({
         toolCallId: "test",
         command: "printf forever",
@@ -584,14 +630,15 @@ describe("BwrapRuntime", () => {
       const { runtime } = setupRuntime();
       runtime.setMode(directory, "workspace-write");
       // `echo 1 | head` 识别出 `echo *` 与 `head *` 两个 pattern：
-      // 只勾选 `echo *`，`head *` 不持久化
+      // 主菜单 Edit approval rules → 子菜单只勾选 `echo *` → Back → Allow once
       const select = vi
         .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
         .mockImplementationOnce(async (_title: string, options: string[]) => {
-          // 操作在前，checkbox 规则在后
-          expect(options).toEqual([ALLOW_ONCE, DENY, DENY_WITH_REASON, "☐ echo *", "☐ head *"]);
+          expect(options).toEqual(["☐ echo *", "☐ head *", BACK]);
           return "☐ echo *";
         })
+        .mockResolvedValueOnce(BACK)
         .mockResolvedValueOnce(ALLOW_ONCE);
       const result = await runtime.execute({
         toolCallId: "test",
@@ -644,8 +691,13 @@ describe("BwrapRuntime", () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-deny-allow-"));
       const { runtime } = setupRuntime();
       runtime.setMode(directory, "workspace-write");
-      // 勾选 `printf *` 后点 Deny：本次拒绝，但规则持久化为 allow
-      const select = vi.fn().mockResolvedValueOnce("☐ printf *").mockResolvedValueOnce(DENY);
+      // 子菜单勾选 `printf *` 后回主菜单点 Deny：本次拒绝，但规则持久化为 allow
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
+        .mockResolvedValueOnce("☐ printf *")
+        .mockResolvedValueOnce(BACK)
+        .mockResolvedValueOnce(DENY);
       await expect(
         runtime.execute({
           toolCallId: "test",
@@ -676,7 +728,9 @@ describe("BwrapRuntime", () => {
       runtime.setMode(directory, "workspace-write");
       const select = vi
         .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
         .mockResolvedValueOnce("☐ printf *")
+        .mockResolvedValueOnce(BACK)
         .mockResolvedValueOnce(DENY_WITH_REASON);
       const input = vi.fn(async () => "risky args");
       await expect(

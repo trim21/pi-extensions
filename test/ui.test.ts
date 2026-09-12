@@ -3,12 +3,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  type SelectAction,
-  selectCheckboxActions,
-  selectMultiple,
-  selectWithOptionalInput,
-} from "../src/lib/ui.js";
+import { type SelectAction, selectMultiple, selectWithOptionalInput } from "../src/lib/ui.js";
 
 function uiWith(select: ReturnType<typeof vi.fn>, input: ReturnType<typeof vi.fn> = vi.fn()) {
   return { select, input } as never;
@@ -153,56 +148,5 @@ describe("selectMultiple", () => {
     await expect(selectMultiple("Pick", tricky, uiWith(select), { doneLabel })).resolves.toEqual([
       "☐ already",
     ]);
-  });
-});
-
-describe("selectCheckboxActions", () => {
-  const entries: SelectAction[] = [{ label: "echo *" }, { label: "head *" }];
-  const actions = [
-    { action: "allow-once", label: "Allow once" },
-    { action: "deny", label: "Deny" },
-    { action: "deny-with-reason", label: "Deny with reason", inputPrompt: "Why?" },
-  ] as const;
-
-  it("lists actions first, then checkbox entries, and returns the picked action", async () => {
-    const select = vi.fn(async (_t: string, options: string[]) => {
-      expect(options).toEqual(["Allow once", "Deny", "Deny with reason", "☐ echo *", "☐ head *"]);
-      return "Deny";
-    });
-    await expect(selectCheckboxActions("Pick", entries, actions, uiWith(select))).resolves.toEqual({
-      selected: [],
-      action: "deny",
-      input: undefined,
-    });
-  });
-
-  it("toggles entries and returns the checked selection with the action", async () => {
-    const select = vi
-      .fn()
-      .mockResolvedValueOnce("☐ echo *")
-      .mockResolvedValueOnce("☐ head *")
-      .mockResolvedValueOnce("☑ echo *")
-      .mockResolvedValueOnce("Allow once");
-    await expect(selectCheckboxActions("Pick", entries, actions, uiWith(select))).resolves.toEqual({
-      selected: ["head *"],
-      action: "allow-once",
-      input: undefined,
-    });
-  });
-
-  it("returns the input for an action with inputPrompt", async () => {
-    const select = vi.fn(async () => "Deny with reason");
-    const input = vi.fn(async () => "too risky");
-    await expect(
-      selectCheckboxActions("Pick", entries, actions, uiWith(select, input)),
-    ).resolves.toEqual({ selected: [], action: "deny-with-reason", input: "too risky" });
-    expect(input).toHaveBeenCalledWith("Pick", "Why?", { signal: undefined });
-  });
-
-  it("returns undefined when the dialog is dismissed", async () => {
-    const select = vi.fn().mockResolvedValue(undefined);
-    await expect(
-      selectCheckboxActions("Pick", entries, actions, uiWith(select)),
-    ).resolves.toBeUndefined();
   });
 });

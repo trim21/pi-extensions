@@ -18,12 +18,7 @@ import { type TObject, Type } from "typebox";
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
 import { fenceCodeBlock } from "../lib/markdown.js";
 import { formatDisplayPath } from "../lib/path.js";
-import {
-  type CheckboxAction,
-  type SelectAction,
-  selectCheckboxActions,
-  selectWithOptionalInput,
-} from "../lib/ui.js";
+import { type SelectAction, selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
 import { type ApprovalRule, evaluateBashApproval, matchRule } from "./approval-rules.js";
 import { commandPatternsFor } from "./approval-suggest.js";
 import {
@@ -55,24 +50,19 @@ export function resolveEscalation(opts: { hasUI: boolean }): EscalationDecision 
 
 /** 全权限审批对话框的选项 label（也作为 switch 匹配键与测试引用）。 */
 export const ALLOW_ONCE = "Allow once";
-export const ALLOW_FOREVER = "Allow forever";
 export const DENY = "Deny";
 export const DENY_WITH_REASON = "Deny with reason";
-
-/** 审批对话框选项：允许一次 / 永久允许 / 拒绝 / 拒绝并附理由。 */
-export const FULL_ACCESS_CHOICES: readonly SelectAction[] = [
-  { label: ALLOW_ONCE },
-  { label: ALLOW_FOREVER },
-  { label: DENY },
-  { label: DENY_WITH_REASON, inputPrompt: "Why was this denied?" },
-];
+/** 第一层的折叠入口：进入按 pattern 勾选持久化规则的子菜单。 */
+export const EDIT_RULES = "Edit approval rules";
+/** 规则子菜单的返回项：结束勾选，回到第一层做放行/拒绝决策。 */
+export const BACK = "Back";
 
 /**
  * 全权限审批 UI 的决策结果：业务层（execute/approveFullAccess）据此
  * 决定放行、拒绝并持久化勾选的规则，UI 层不直接产生副作用。
  */
 export interface FullAccessUIDecision {
-  /** 用户选择的动作 label（ALLOW_ONCE / ALLOW_FOREVER / DENY / DENY_WITH_REASON）。 */
+  /** 用户选择的动作 label（ALLOW_ONCE / DENY / DENY_WITH_REASON）。 */
   result: string;
   /** 用户勾选、需持久化为 allow 规则的 pattern；未勾选时为空数组。 */
   foreverApprovedPattern: string[];
@@ -511,10 +501,6 @@ export class BwrapRuntime {
         }
         return;
       }
-      case ALLOW_FOREVER: {
-        await this.persistAllowRule(ctx, command, foreverApprovedPattern);
-        return;
-      }
       case DENY: {
         if (foreverApprovedPattern.length > 0) {
           await this.persistAllowRule(ctx, command, foreverApprovedPattern);
@@ -546,25 +532,29 @@ export class BwrapRuntime {
     reason: string | undefined,
     execCwd: string,
   ): Promise<FullAccessUIDecision | undefined> {
-    // 弹框前解析命令的持久化规则（勾选的 pattern 会写入），在弹框里以
-    // checkbox 列出：`echo 1 | head` → `echo *`、`head *`，逐项决定是否
-    // allow forever，避免用户对"永久允许"持久化什么一无所知。
+    // 弹框前解析命令的持久化规则：`echo 1 | head` → `echo *`、`head *`。
+    // 持久化规则的勾选折叠进 EDIT_RULES 子菜单，主决策列表只保留放行/拒绝，
+    // 避免一屏 checkbox 淹没决策项。
     const patterns = await commandPatternsFor(command);
-    // checkbox 只列出未命中 allow 规则的 pattern：已提前允许的部分自动放行，
+    // 子菜单只列出未命中 allow 规则的 pattern：已提前允许的部分自动放行，
     // 无需再展示或重复勾选持久化（deny 命中的命令在 evaluate 阶段已被拒绝）。
     const rules = this.resolve(ctx).approvalRules;
-    const unallowedPatterns = patterns.filter((pattern) => {
-      const rule = rules.findLast((r) => matchRule(pattern, r.pattern));
-      return rule?.action !== "allow";
-    });
+    const unallowedPatterns = [
+      ...new Set(
+        patterns.filter((pattern) => {
+          const rule = rules.findLast((r) => matchRule(pattern, r.pattern));
+          return rule?.action !== "allow";
+        }),
+      ),
+    ];
     // dcg 扫描建议是可选的参考文本：未安装时静默跳过；已安装但扫描失败
     // 时 notify 提示，弹窗本身与无 dcg 时一致
     const outcome = await dcgSuggestion(command);
     if (outcome.kind === "failed") {
       ctx.ui.notify(`dcg 扫描失败，本次无破坏性命令建议: ${outcome.detail}`, "warning");
     }
-    // 弹框主体按行组织（'\n' join），便于 review；suggestion 与规则说明
-    // 块带前导空行 + 尾部 "---" 分隔，输出与历史逐字符一致。
+    // 弹框主体按行组织（'\n' join），便于 review；suggestion 块带前导空行 +
+    // 尾部 "---" 分隔。
     const lines: string[] = [
       "Allow this command to run without sandbox?",
       "---",
@@ -575,13 +565,6 @@ export class BwrapRuntime {
     if (outcome.kind === "suggestion") {
       lines.push("", outcome.suggestion.text, "---");
     }
-    if (unallowedPatterns.length > 0) {
-      lines.push(
-        "",
-        "勾选规则将持久化为允许规则（后续同模式命令自动放行），未勾选规则仅本次处理:",
-        "---",
-      );
-    }
     lines.push(fenceCodeBlock(command));
     // 执行目录与工作区不同时，提示实际执行目录（execCwd 是解析后的绝对路径，
     // 显示用 pretty path 风格：home 内 `~/…`，否则绝对路径）
@@ -590,51 +573,51 @@ export class BwrapRuntime {
     }
     const description = lines.join("\n");
 
-    // 解析失败（无 pattern 可勾选）：保持单选对话框（Allow forever 是空操作）
-    if (patterns.length === 0) {
-      // 单选：允许一次 / 永久允许（写入规则）/ 拒绝 / 拒绝并附理由（弹输入框）
-      const verdict = await selectWithOptionalInput(description, FULL_ACCESS_CHOICES, ctx.ui, {
+    // 主决策列表：允许一次 / 拒绝 / 拒绝并附理由。有可持久化的 pattern 时
+    // 追加折叠入口，进入子菜单逐项勾选。
+    const actions: SelectAction[] = [
+      { label: ALLOW_ONCE },
+      { label: DENY },
+      { label: DENY_WITH_REASON, inputPrompt: "Why was this denied?" },
+    ];
+    if (unallowedPatterns.length > 0) {
+      actions.push({ label: EDIT_RULES });
+    }
+    // 子菜单沿用同一份说明，并补上勾选规则的语义提示。
+    const editDescription = [
+      "勾选要持久化为允许规则的命令模式（后续同模式命令自动放行，未勾选仅本次处理）:",
+      "---",
+      "",
+      description,
+    ].join("\n");
+
+    // 两层循环：子菜单勾选后回到主决策，直到用户在 Allow once / Deny 系列中做出
+    // 选择。勾选的规则在放行时持久化；Deny 系列同样持久化（用户确认该模式可信，
+    // 只是本次命令不执行）。子菜单关闭 = 返回主决策；主决策关闭 = 取消（上层按拒绝处理）。
+    let selected: string[] = [];
+    for (;;) {
+      const pending =
+        selected.length > 0
+          ? `\n\n将持久化为允许规则: ${selected.map((pattern) => escapeHtml(pattern)).join(", ")}`
+          : "";
+      const verdict = await selectWithOptionalInput(description + pending, actions, ctx.ui, {
         signal: ctx.signal,
       });
-      // 关闭对话框 = 中断并拒绝，不循环重问
       if (verdict === undefined) return undefined;
-      return {
-        result: verdict.label,
-        foreverApprovedPattern: [],
-        reason: verdict.input,
-      };
+      if (verdict.label !== EDIT_RULES) {
+        return {
+          result: verdict.label,
+          foreverApprovedPattern: selected,
+          reason: verdict.input,
+        };
+      }
+      selected = await selectMultiple(
+        editDescription,
+        unallowedPatterns.map((pattern) => ({ label: pattern })),
+        ctx.ui,
+        { signal: ctx.signal, doneLabel: BACK },
+      );
     }
-
-    // 每个识别到的 pattern 一个 checkbox：勾选 = 持久化为 allow 规则。
-    // Allow once = 执行本次并持久化勾选的规则；Deny 系列 = 拒绝本次，
-    // 勾选的规则仍持久化（用户确认该模式可信，只是本次命令不执行）。
-    const actions = [
-      { action: "allow-once", label: ALLOW_ONCE },
-      { action: "deny", label: DENY },
-      {
-        action: "deny-with-reason",
-        label: DENY_WITH_REASON,
-        inputPrompt: "Why was this denied?",
-      },
-    ] as const satisfies readonly CheckboxAction<"allow-once" | "deny" | "deny-with-reason">[];
-    const verdict = await selectCheckboxActions(
-      description,
-      [...new Set(unallowedPatterns)].map((pattern) => ({ label: pattern })),
-      actions,
-      ctx.ui,
-      { signal: ctx.signal },
-    );
-    if (verdict === undefined) return undefined;
-    const resultByAction = {
-      "allow-once": ALLOW_ONCE,
-      deny: DENY,
-      "deny-with-reason": DENY_WITH_REASON,
-    } as const;
-    return {
-      result: resultByAction[verdict.action],
-      foreverApprovedPattern: verdict.selected,
-      reason: verdict.input,
-    };
   }
 
   /** 把命令的权限模式写入项目 bwrap.json 的 approvalRules（allow forever）。 */
