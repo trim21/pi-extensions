@@ -8,7 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { existsMock } = vi.hoisted(() => ({ existsMock: vi.fn() }));
 
-vi.mock("node:fs", () => ({
+// Partial mock: only the gh-detection probe is stubbed, the rest of node:fs
+// (e.g. the proxy config read at extension load) stays real.
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
   existsSync: (...args: unknown[]) => existsMock(...args),
 }));
 

@@ -5,12 +5,15 @@
  *   - ~/.pi/agent/gh.json: { "proxy": "http://127.0.0.1:7890", "noProxy": "localhost,.corp" }
  *   - HTTPS_PROXY / HTTP_PROXY / ALL_PROXY（小写变体同样接受）、NO_PROXY
  *
- * 两条出口共用同一份配置：
- *   - gh CLI 子进程：env() 给出要注入子进程的 HTTP(S)_PROXY / NO_PROXY 等变量
+ * 两条出口共用同一份配置，且在扩展加载时一次性读完：
+ *   - gh CLI 子进程：env 给出要注入子进程的 HTTP(S)_PROXY / NO_PROXY 等变量
  *   - octokit 请求：fetch 是挂了代理 dispatcher 的 fetch；未配置代理时就是全局 fetch
+ *
+ * 配置有错（JSON 语法错、字段类型不符、proxy 不是 http(s) URL）直接抛错——扩展
+ * 加载即失败，而不是带着一份被忽略的配置静默直连。
  */
 
-import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -63,54 +66,55 @@ function firstEnv(names: readonly string[], env: NodeJS.ProcessEnv): string | un
 }
 
 /** 代理必须是 http(s) URL：undici 的 ProxyAgent 只支持 HTTP CONNECT 代理。 */
-function normalizeProxy(value: string | undefined): { proxy?: string; error?: string } {
-  if (!value) return {};
+function normalizeProxy(value: string): string {
   let protocol: string;
   try {
     protocol = new URL(value).protocol;
   } catch {
-    return { error: `invalid proxy URL: ${value}` };
+    throw new Error(`invalid proxy URL: ${value}`);
   }
   if (protocol !== "http:" && protocol !== "https:") {
-    return { error: `unsupported proxy protocol: ${value} (expected http:// or https://)` };
+    throw new Error(`unsupported proxy protocol: ${value} (expected http:// or https://)`);
   }
-  return { proxy: value };
+  return value;
 }
 
-export interface GhProxyLoad {
-  /** 生效的代理设置（配置文件与环境变量合并后的结果）。 */
-  settings: GhProxySettings;
-  /** 配置读取/解析失败的原因；未失败时为 undefined。 */
-  error?: string;
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/** 读配置文件；文件不存在视为未配置，其它失败只记录不抛出。 */
-async function readConfigFile(configPath: string): Promise<GhProxyLoad> {
-  let raw: string;
+/**
+ * 同步读配置：扩展加载时调用一次（node:fs/promises 在同步的初始化路径上用不了，
+ * 这里是仓库里允许的同步例外）。文件不存在 = 未配置；文件读不了、JSON 非法或
+ * 字段不符都直接抛。
+ */
+export function readGhProxySettings(
+  configPath: string = ghProxyConfigPath(),
+  env: NodeJS.ProcessEnv = process.env,
+): GhProxySettings {
+  let raw: string | undefined;
   try {
-    raw = await readFile(configPath, "utf8");
+    raw = readFileSync(configPath, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { settings: {} };
-    return { settings: {}, error: `${configPath}: ${describeError(error)}` };
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error(`${configPath}: ${error instanceof Error ? error.message : String(error)}`, {
+        cause: error,
+      });
+    }
   }
-  try {
-    return { settings: parseGhProxyConfig(JSON.parse(raw)) };
-  } catch (error) {
-    return { settings: {}, error: `${configPath}: ${describeError(error)}` };
-  }
-}
 
-async function resolveSettings(configPath: string, env: NodeJS.ProcessEnv): Promise<GhProxyLoad> {
-  const file = await readConfigFile(configPath);
-  const normalized = normalizeProxy(file.settings.proxy ?? firstEnv(PROXY_ENV_NAMES, env));
-  const noProxy = file.settings.noProxy ?? firstEnv(NO_PROXY_ENV_NAMES, env);
+  let file: GhProxySettings = {};
+  if (raw !== undefined) {
+    try {
+      file = parseGhProxyConfig(JSON.parse(raw));
+    } catch (error) {
+      throw new Error(`${configPath}: ${error instanceof Error ? error.message : String(error)}`, {
+        cause: error,
+      });
+    }
+  }
+
+  const proxy = file.proxy ?? firstEnv(PROXY_ENV_NAMES, env);
+  const noProxy = file.noProxy ?? firstEnv(NO_PROXY_ENV_NAMES, env);
   return {
-    settings: { ...(normalized.proxy && { proxy: normalized.proxy }), ...(noProxy && { noProxy }) },
-    error: file.error ?? normalized.error,
+    ...(proxy && { proxy: normalizeProxy(proxy) }),
+    ...(noProxy && { noProxy }),
   };
 }
 
@@ -151,46 +155,32 @@ function createProxyDispatcher(
 }
 
 export interface GhProxy {
-  /** 读取配置（首个调用触发读盘，之后返回同一个缓存结果，失败不抛出）。 */
-  load(): Promise<GhProxyLoad>;
+  /** 生效的代理设置（配置文件与环境变量合并后的结果）。 */
+  readonly settings: GhProxySettings;
   /** 要注入 gh 子进程的代理环境变量；未配置代理时为空对象。 */
-  env(): Promise<NodeJS.ProcessEnv>;
+  readonly env: NodeJS.ProcessEnv;
   /** 走代理的 fetch；未配置代理时就是全局 fetch。 */
   readonly fetch: typeof globalThis.fetch;
 }
 
 /**
- * 创建代理配置读取器。配置只在首次使用时读一次并缓存；`load` 与 `fetch` 共用这次
- * 读取，因此运行期不会出现两者看到不同配置的情况。
- *
- * 缓存的是 dispatcher（连接池复用），**不是** `globalThis.fetch` 本身：每次调用都
- * 取当前的全局 fetch，否则首个请求之后替换 `globalThis.fetch`（插桩、测试替身）
- * 就不再生效。
+ * 读一次配置并组装代理层。缓存的是 dispatcher（连接池复用），**不是**
+ * `globalThis.fetch` 本身：每次调用都取当前的全局 fetch，否则首个请求之后替换
+ * `globalThis.fetch`（插桩、测试替身）就不再生效。
  */
 export function createGhProxy(
   configPath: string = ghProxyConfigPath(),
   env: NodeJS.ProcessEnv = process.env,
 ): GhProxy {
-  let loading: Promise<GhProxyLoad> | undefined;
+  const settings = readGhProxySettings(configPath, env);
+  const { proxy, noProxy } = settings;
   let dispatcher: NonNullable<RequestInit["dispatcher"]> | undefined;
 
-  function load(): Promise<GhProxyLoad> {
-    loading ??= resolveSettings(configPath, env);
-    return loading;
-  }
-
-  return {
-    load,
-    env: async () => {
-      const { settings } = await load();
-      return proxyEnvVars(settings);
-    },
-    fetch: async (input, init) => {
-      const { settings } = await load();
-      const { proxy, noProxy } = settings;
-      if (!proxy) return globalThis.fetch(input, init);
-      dispatcher ??= createProxyDispatcher(proxy, noProxy);
-      return globalThis.fetch(input, { ...init, dispatcher });
-    },
+  const fetch: typeof globalThis.fetch = (input, init) => {
+    if (!proxy) return globalThis.fetch(input, init);
+    dispatcher ??= createProxyDispatcher(proxy, noProxy);
+    return globalThis.fetch(input, { ...init, dispatcher });
   };
+
+  return { settings, env: proxyEnvVars(settings), fetch };
 }

@@ -189,72 +189,61 @@ describe("createGhProxy", () => {
     return join(dir, "gh.json");
   }
 
-  it("treats a missing config file as unconfigured", async () => {
+  it("treats a missing config file as unconfigured", () => {
     const proxy = createGhProxy(configPath(), {});
-    await expect(proxy.load()).resolves.toEqual({ settings: {} });
-    await expect(proxy.env()).resolves.toEqual({});
+    expect(proxy.settings).toEqual({});
+    expect(proxy.env).toEqual({});
   });
 
   it("reads proxy settings from the config file", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: "http://127.0.0.1:7890" }));
     const proxy = createGhProxy(configPath(), {});
-    await expect(proxy.load()).resolves.toEqual({
-      settings: { proxy: "http://127.0.0.1:7890" },
-    });
-    await expect(proxy.env()).resolves.toMatchObject({ HTTPS_PROXY: "http://127.0.0.1:7890" });
+    expect(proxy.settings).toEqual({ proxy: "http://127.0.0.1:7890" });
+    expect(proxy.env).toMatchObject({ HTTPS_PROXY: "http://127.0.0.1:7890" });
   });
 
-  it("falls back to the standard environment variables", async () => {
+  it("falls back to the standard environment variables", () => {
     const proxy = createGhProxy(configPath(), {
       HTTPS_PROXY: "http://env:8080",
       NO_PROXY: "localhost",
     });
-    await expect(proxy.env()).resolves.toMatchObject({
-      HTTPS_PROXY: "http://env:8080",
-      NO_PROXY: "localhost",
-    });
+    expect(proxy.env).toMatchObject({ HTTPS_PROXY: "http://env:8080", NO_PROXY: "localhost" });
   });
 
   it("prefers the config file over the environment", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: "http://config:7890" }));
     const proxy = createGhProxy(configPath(), { HTTPS_PROXY: "http://env:8080" });
-    await expect(proxy.env()).resolves.toMatchObject({ HTTPS_PROXY: "http://config:7890" });
+    expect(proxy.env.HTTPS_PROXY).toBe("http://config:7890");
   });
 
   it("falls back to the environment for the fields the config leaves out", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: "http://config:7890" }));
     const proxy = createGhProxy(configPath(), { NO_PROXY: "localhost" });
-    await expect(proxy.env()).resolves.toMatchObject({ NO_PROXY: "localhost" });
+    expect(proxy.env.NO_PROXY).toBe("localhost");
   });
 
-  it("reports broken JSON without failing tool calls", async () => {
+  // 配置在扩展加载时读一次；写错了就直接抛，让进程启动即失败而不是静默直连。
+  it("throws on broken JSON", async () => {
     await writeFile(configPath(), "{not json");
-    const proxy = createGhProxy(configPath(), {});
-    await expect(proxy.load()).resolves.toMatchObject({ error: expect.stringMatching(/gh\.json/) });
-    await expect(proxy.env()).resolves.toEqual({});
+    expect(() => createGhProxy(configPath(), {})).toThrow(/gh\.json/);
   });
 
-  it("reports schema violations", async () => {
+  it("throws on schema violations", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: 7890 }));
-    const proxy = createGhProxy(configPath(), {});
-    await expect(proxy.load()).resolves.toMatchObject({ error: expect.stringMatching(/proxy/) });
+    expect(() => createGhProxy(configPath(), {})).toThrow(/proxy/);
   });
 
-  it("reports unsupported proxy protocols", async () => {
+  it("throws on unsupported proxy protocols", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: "socks5://127.0.0.1:1080" }));
-    const proxy = createGhProxy(configPath(), {});
-    await expect(proxy.load()).resolves.toMatchObject({
-      error: expect.stringMatching(/unsupported proxy protocol/),
-    });
-    await expect(proxy.env()).resolves.toEqual({});
+    expect(() => createGhProxy(configPath(), {})).toThrow(/unsupported proxy protocol/);
   });
 
-  it("reads the config file once", async () => {
+  it("reads the config file once, at construction", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: "http://first:1" }));
     const proxy = createGhProxy(configPath(), {});
-    await expect(proxy.env()).resolves.toMatchObject({ HTTPS_PROXY: "http://first:1" });
+    expect(proxy.env.HTTPS_PROXY).toBe("http://first:1");
     await writeFile(configPath(), JSON.stringify({ proxy: "http://second:2" }));
-    await expect(proxy.env()).resolves.toMatchObject({ HTTPS_PROXY: "http://first:1" });
+    expect(proxy.env.HTTPS_PROXY).toBe("http://first:1");
   });
 });
 

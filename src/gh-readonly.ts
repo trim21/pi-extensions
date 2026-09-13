@@ -95,7 +95,7 @@ export function isGhAvailable(): boolean {
   return false;
 }
 
-export async function runGh(
+export function runGh(
   args: string[],
   ctx: {
     cwd?: string;
@@ -105,15 +105,13 @@ export async function runGh(
     env?: NodeJS.ProcessEnv;
   },
 ): Promise<GhResult> {
-  const proxyEnv = await ghProxy.env();
-
   return new Promise((resolve) => {
     const proc = spawn("gh", args, {
       cwd: ctx.cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       // gh 是 Go 程序，只认环境变量形式的代理配置；ctx.env 最后合并，调用方可覆盖。
-      env: { ...process.env, ...proxyEnv, ...ctx.env, GH_PAGER: "cat" },
+      env: { ...process.env, ...ghProxy.env, ...ctx.env, GH_PAGER: "cat" },
     });
 
     let stdout = "";
@@ -349,16 +347,14 @@ function toToolResult(
  * tool's id parameter, e.g. `repo=x/y number=123`. Returns undefined when
  * neither is available, so the pendant is omitted rather than shown empty.
  */
-function subtitlePendant(
-  params: { repo?: string } & Record<string, unknown>,
-  idKey?: string,
+function subtitlePendant<IdKey extends string = never>(
+  params: { repo?: string } & Partial<Record<IdKey, string | number>>,
+  idKey?: IdKey,
 ): ToolPendant | undefined {
   const parts: string[] = [];
   if (params.repo) parts.push(`repo=${params.repo}`);
-  if (idKey) {
-    const id = params[idKey];
-    if (typeof id === "string" || typeof id === "number") parts.push(`${idKey}=${id}`);
-  }
+  const id = idKey === undefined ? undefined : params[idKey];
+  if (typeof id === "string" || typeof id === "number") parts.push(`${idKey}=${id}`);
   if (parts.length === 0) return undefined;
   return { subtitle: parts.join(" ") };
 }
@@ -756,7 +752,7 @@ export function extractStepFromLog(
 
 // ── ci-logs rendering (pure, testable) ──────────────────────────────────────
 
-export interface CiLogsResult {
+export interface ToolResult {
   content: { type: "text"; text: string }[];
   details: Record<string, unknown>;
 }
@@ -978,7 +974,7 @@ export interface PollPrChecksOptions {
   /** Test overrides. */
   intervalMs?: number;
   deadlineMs?: number;
-  onUpdate?: (msg: CiLogsResult) => void;
+  onUpdate?: (msg: ToolResult) => void;
 }
 
 /**
@@ -1136,6 +1132,308 @@ export function renderChecksVerdict(options: {
   };
 }
 
+// ── GitHub REST client ───────────────────────────────────────────────────────
+
+/** Toolcall input for the handlers that read through the REST API. */
+interface PrStatusParams {
+  number: number | string;
+  repo?: string;
+}
+
+interface RunIdParams {
+  run_id: number | string;
+  repo?: string;
+}
+
+interface JobIdParams {
+  job_id: number | string;
+  repo?: string;
+}
+
+interface PrChecksWaitParams {
+  number: number | string;
+  repo?: string;
+  fail_fast?: boolean;
+}
+
+interface CommitChecksWaitParams {
+  commit: number | string;
+  repo?: string;
+  event?: string;
+  fail_fast?: boolean;
+}
+
+/** What a toolcall handler receives from the framework. */
+export interface ToolCall<Params> {
+  params: Params;
+  ctx: { cwd?: string };
+  signal?: AbortSignal;
+  /** Streaming progress updates, passed through as-is. */
+  onUpdate?: (update: ToolResult) => void;
+}
+
+/**
+ * The GitHub reads that go through the REST API, with the HTTP layer injected:
+ * production hands in the proxy-aware fetch, tests hand in a stub and never
+ * touch the network. Handlers that only shell out to `gh` stay plain functions.
+ *
+ * `fetch` is a property (not module state) so a caller that needs different HTTP
+ * behavior — a test, another host — constructs its own instance.
+ */
+export class GhClient {
+  readonly fetch: typeof globalThis.fetch;
+  private readonly search: GithubSearch;
+  private readonly checks: GithubChecksClient;
+
+  constructor(fetchImpl: typeof globalThis.fetch = ghProxy.fetch) {
+    this.fetch = fetchImpl;
+    this.search = createGithubSearch({ fetch: fetchImpl });
+    this.checks = createGithubChecks({ fetch: fetchImpl });
+  }
+
+  /** `list-github-issues` / `list-github-prs`: browse through `gh`, search through the API. */
+  private async list(kind: "issue" | "pr", call: ToolCall<ListFilters>): Promise<ToolResult> {
+    const { params, ctx, signal } = call;
+    const result = toToolResult(
+      params.keywords
+        ? await searchList(kind, params, this.search)
+        : await listGithub(kind, params, { cwd: ctx.cwd, signal, input: params }),
+      params,
+    );
+    result.details.pendant = subtitlePendant(params);
+    return result;
+  }
+
+  listIssues(call: ToolCall<ListFilters>): Promise<ToolResult> {
+    return this.list("issue", call);
+  }
+
+  listPrs(call: ToolCall<ListFilters>): Promise<ToolResult> {
+    return this.list("pr", call);
+  }
+
+  /**
+   * `read-github-pr-status`: the PR head commit's checks as a snapshot. Same read
+   * path as the wait tools (octokit), but it never polls — pending checks come
+   * back as-is.
+   */
+  async prStatus(call: ToolCall<PrStatusParams>): Promise<ToolResult> {
+    const { params, ctx, signal } = call;
+    const { number, repo } = params;
+    const pullNumber = toPositiveId(number, "number");
+    const pendant = subtitlePendant(params, "number");
+    const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+    const { owner, repo: name } = splitRepo(effectiveRepo);
+
+    const pollSignal = signal ?? new AbortController().signal;
+    const headSha = await this.checks.pullHead(owner, name, pullNumber, pollSignal);
+    const [statuses, checkRuns] = await Promise.all([
+      this.checks.statuses(owner, name, headSha, pollSignal),
+      this.checks.checkRuns(owner, name, headSha, pollSignal),
+    ]);
+    const checks = mergeChecks(statuses, checkRuns).map((check) => ({
+      name: check.name,
+      bucket: check.bucket,
+      event: check.event,
+      run_id: check.runId,
+      job_id: check.jobId,
+      url: check.link,
+    }));
+
+    const payload = { pr: pullNumber, repo: effectiveRepo, head_sha: headSha, checks };
+    return {
+      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+      details: { ...payload, input: params, ...(pendant && { pendant }) },
+    };
+  }
+
+  /** `get-github-workflow-jobs`: every job of a run, all pages. */
+  async workflowJobs(call: ToolCall<RunIdParams>): Promise<ToolResult> {
+    const { params, ctx, signal } = call;
+    const runId = toPositiveId(params.run_id, "run_id");
+    const effectiveRepo = await resolveRepo(params.repo, signal, ctx.cwd, params);
+    const { owner, repo: name } = splitRepo(effectiveRepo);
+
+    const jobs = await this.checks.runJobs(owner, name, runId, signal);
+    const result = toToolResult(JSON.stringify({ total_count: jobs.length, jobs }), params);
+    result.details.pendant = subtitlePendant(params, "run_id");
+    return result;
+  }
+
+  /** `read-github-ci-logs`: one job's raw log on disk plus its step line ranges. */
+  async ciLogs(call: ToolCall<JobIdParams>): Promise<ToolResult> {
+    const { params, ctx, signal, onUpdate } = call;
+    const { job_id, repo } = params;
+    const jobId = toPositiveId(job_id, "job_id");
+
+    const pendant = subtitlePendant(params, "job_id");
+    const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+    const { owner, repo: name } = splitRepo(effectiveRepo);
+
+    const failure = (text: string): ToolResult => ({
+      content: [{ type: "text", text }],
+      details: { input: params, ...(pendant && { pendant }) },
+    });
+
+    let target: RunJob;
+    try {
+      target = await this.checks.job(owner, name, jobId, signal);
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (status !== 404) throw error;
+      return failure(
+        `Job ${jobId} not found in ${effectiveRepo} — job IDs come from \`get-github-workflow-jobs\`.`,
+      );
+    }
+
+    if (target.status === "queued") {
+      return failure(
+        `Job "${target.name}" is still queued — no logs available yet. Use \`watch-github-run\` to wait for it to start, then retry.`,
+      );
+    }
+
+    onUpdate?.({
+      content: [{ type: "text", text: `Fetching log of job "${target.name}"...` }],
+      details: {},
+    });
+
+    const rawLog = await getJobLog(target, signal, ctx.cwd, params);
+    const index = jobLogIndex(target, rawLog);
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(index, null, 2) }],
+      details: { ...index, input: params, ...(pendant && { pendant }) },
+    };
+  }
+
+  /** `wait-github-pr-checks`: poll the PR's head commit checks until they settle. */
+  async waitPrChecks(call: ToolCall<PrChecksWaitParams>): Promise<ToolResult> {
+    const { params, ctx, signal, onUpdate } = call;
+    const { number, repo, fail_fast } = params;
+
+    const pendant = subtitlePendant(params, "number");
+    onUpdate?.({
+      content: [{ type: "text", text: `Watching CI checks for PR #${number}...` }],
+      details: {},
+    });
+
+    const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+    const { owner, repo: repoName } = splitRepo(effectiveRepo);
+
+    const prOut = await ghExec(
+      ["pr", "view", String(number), "--repo", effectiveRepo, "--json", "headRefOid"],
+      { cwd: ctx.cwd, signal, input: params },
+    );
+    const { headRefOid } = Value.Parse(prHeadSchema, JSON.parse(prOut));
+
+    return this.waitChecksReport({
+      subject: `PR #${number}`,
+      owner,
+      repo: repoName,
+      headSha: headRefOid,
+      failFast: fail_fast === true,
+      signal,
+      onUpdate,
+      params,
+      pendant,
+    });
+  }
+
+  /** `wait-github-commit-checks`: same, addressed by commit/branch/tag instead of a PR. */
+  async waitCommitChecks(call: ToolCall<CommitChecksWaitParams>): Promise<ToolResult> {
+    const { params, ctx, signal, onUpdate } = call;
+    const { commit, repo, event, fail_fast } = params;
+
+    const pendant = subtitlePendant(params, "commit");
+    onUpdate?.({
+      content: [{ type: "text", text: `Watching CI checks for commit ${commit}...` }],
+      details: {},
+    });
+
+    const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+    const { owner, repo: repoName } = splitRepo(effectiveRepo);
+
+    const pollSignal = signal ?? new AbortController().signal;
+    const sha = await this.checks.headSha(owner, repoName, String(commit), pollSignal);
+
+    return this.waitChecksReport({
+      subject: `commit ${sha.slice(0, 7)}`,
+      owner,
+      repo: repoName,
+      headSha: sha,
+      failFast: fail_fast === true,
+      event,
+      signal,
+      onUpdate,
+      params,
+      pendant,
+    });
+  }
+
+  /**
+   * Shared wait core of `wait-github-pr-checks` and
+   * `wait-github-commit-checks`: poll the commit's checks, enrich FAILED
+   * reports with Actions job details (display-only), render the verdict.
+   * The caller resolves repo/headSha; `subject` formats the report header.
+   */
+  private async waitChecksReport(options: {
+    subject: string;
+    owner: string;
+    repo: string;
+    headSha: string;
+    failFast: boolean;
+    event?: string;
+    signal: AbortSignal | undefined;
+    onUpdate: ((msg: ToolResult) => void) | undefined;
+    params: unknown;
+    pendant?: ToolPendant;
+  }): Promise<ToolResult> {
+    const { subject, owner, repo, headSha, failFast, event, signal, onUpdate, params, pendant } =
+      options;
+
+    // 轮询层要求非空 signal；框架可能不给时构造一个占位的（从不取消）。
+    const pollSignal = signal ?? new AbortController().signal;
+
+    const poll = await pollPrChecks({
+      subject,
+      owner,
+      repo,
+      headSha,
+      failFast,
+      event,
+      checks: this.checks,
+      signal: pollSignal,
+      onUpdate,
+    });
+
+    // Actions job 详情只做展示补充，不影响判定（判定来自 checks bucket，
+    // 覆盖 Azure 等外部 CI）。抓取失败时降级为提示，不推翻结论。
+    let actionJobs: readonly ActionJob[] | undefined;
+    let enrichmentError: string | undefined;
+    if (poll.checks.some((c) => c.bucket === "fail")) {
+      try {
+        actionJobs = await this.checks.actionJobs(owner, repo, headSha, pollSignal);
+      } catch (error) {
+        enrichmentError =
+          error instanceof Error ? error.message : "Actions job details unavailable";
+      }
+    }
+
+    const verdict = renderChecksVerdict({ subject, poll, actionJobs, enrichmentError });
+    return {
+      content: [{ type: "text", text: verdict.text }],
+      details: {
+        status: verdict.status,
+        totalChecks: poll.checks.length,
+        checks: poll.checks,
+        failedJobs: verdict.failedJobs,
+        input: params,
+        ...(pendant && { pendant }),
+      },
+    };
+  }
+}
+
 // ── tools ────────────────────────────────────────────────────────────────────
 
 export default function ghReadonlyTools(pi: ExtensionAPI) {
@@ -1161,83 +1459,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     return;
   }
 
-  pi.on("session_start", async (_event, ctx) => {
-    // 代理配置读不出来（JSON 语法错、字段类型错、proxy 不是 http(s) URL）时只告警，
-    // 工具按直连继续工作——配置写错不该让整套 GitHub 工具不可用。
-    const { error } = await ghProxy.load();
-    if (!error) return;
-    try {
-      ctx.ui.notify(`gh proxy config ignored: ${error}`, "warning");
-    } catch {
-      // 读取期间 session 可能已被替换，失效的 ctx 直接忽略
-    }
-  });
-
-  const githubSearch = createGithubSearch({ fetch: ghProxy.fetch });
-  const githubChecks = createGithubChecks({ fetch: ghProxy.fetch });
-
-  /**
-   * Shared wait core of `wait-github-pr-checks` and
-   * `wait-github-commit-checks`: poll the commit's checks, enrich FAILED
-   * reports with Actions job details (display-only), render the verdict.
-   * The caller resolves repo/headSha; `subject` formats the report header.
-   */
-  async function waitChecksReport(options: {
-    subject: string;
-    owner: string;
-    repo: string;
-    headSha: string;
-    failFast: boolean;
-    event?: string;
-    signal: AbortSignal | undefined;
-    onUpdate: ((msg: CiLogsResult) => void) | undefined;
-    params: unknown;
-    pendant?: ToolPendant;
-  }) {
-    const { subject, owner, repo, headSha, failFast, event, signal, onUpdate, params, pendant } =
-      options;
-
-    // 轮询层要求非空 signal；框架可能不给时构造一个占位的（从不取消）。
-    const pollSignal = signal ?? new AbortController().signal;
-
-    const poll = await pollPrChecks({
-      subject,
-      owner,
-      repo,
-      headSha,
-      failFast,
-      event,
-      checks: githubChecks,
-      signal: pollSignal,
-      onUpdate,
-    });
-
-    // Actions job 详情只做展示补充，不影响判定（判定来自 checks bucket，
-    // 覆盖 Azure 等外部 CI）。抓取失败时降级为提示，不推翻结论。
-    let actionJobs: readonly ActionJob[] | undefined;
-    let enrichmentError: string | undefined;
-    if (poll.checks.some((c) => c.bucket === "fail")) {
-      try {
-        actionJobs = await githubChecks.actionJobs(owner, repo, headSha, pollSignal);
-      } catch (error) {
-        enrichmentError =
-          error instanceof Error ? error.message : "Actions job details unavailable";
-      }
-    }
-
-    const verdict = renderChecksVerdict({ subject, poll, actionJobs, enrichmentError });
-    return {
-      content: [{ type: "text" as const, text: verdict.text }],
-      details: {
-        status: verdict.status,
-        totalChecks: poll.checks.length,
-        checks: poll.checks,
-        failedJobs: verdict.failedJobs,
-        input: params,
-        ...(pendant && { pendant }),
-      },
-    };
-  }
+  const client = new GhClient();
 
   // ── read-github-issue ──────────────────────────────────────────────────────
   pi.registerTool({
@@ -1300,15 +1522,8 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         }),
       ),
     }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      const result = toToolResult(
-        params.keywords
-          ? await searchList("issue", params, githubSearch)
-          : await listGithub("issue", params, { cwd: ctx.cwd, signal, input: params }),
-        params,
-      );
-      result.details.pendant = subtitlePendant(params);
-      return result;
+    async execute(_id, params, signal, onUpdate, ctx) {
+      return client.listIssues({ params, ctx, signal, onUpdate });
     },
   });
 
@@ -1373,15 +1588,8 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
         }),
       ),
     }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      const result = toToolResult(
-        params.keywords
-          ? await searchList("pr", params, githubSearch)
-          : await listGithub("pr", params, { cwd: ctx.cwd, signal, input: params }),
-        params,
-      );
-      result.details.pendant = subtitlePendant(params);
-      return result;
+    async execute(_id, params, signal, onUpdate, ctx) {
+      return client.listPrs({ params, ctx, signal, onUpdate });
     },
   });
 
@@ -1418,35 +1626,8 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
       repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
     }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      const { number, repo } = params;
-      const pullNumber = toPositiveId(number, "number");
-      const pendant = subtitlePendant(params, "number");
-      const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-      const { owner, repo: name } = splitRepo(effectiveRepo);
-
-      // 与 wait 工具同一条读取路径（octokit），只是这里不轮询：pending 的 check
-      // 原样返回，等结果走 wait-github-pr-checks。
-      const pollSignal = signal ?? new AbortController().signal;
-      const headSha = await githubChecks.pullHead(owner, name, pullNumber, pollSignal);
-      const [statuses, checkRuns] = await Promise.all([
-        githubChecks.statuses(owner, name, headSha, pollSignal),
-        githubChecks.checkRuns(owner, name, headSha, pollSignal),
-      ]);
-      const checks = mergeChecks(statuses, checkRuns).map((check) => ({
-        name: check.name,
-        bucket: check.bucket,
-        event: check.event,
-        run_id: check.runId,
-        job_id: check.jobId,
-        url: check.link,
-      }));
-
-      const payload = { pr: pullNumber, repo: effectiveRepo, head_sha: headSha, checks };
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-        details: { ...payload, input: params, ...(pendant && { pendant }) },
-      };
+    async execute(_id, params, signal, onUpdate, ctx) {
+      return client.prStatus({ params, ctx, signal, onUpdate });
     },
   });
 
@@ -1582,47 +1763,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
-      const { job_id, repo } = params;
-      const jobId = toPositiveId(job_id, "job_id");
-
-      const pendant = subtitlePendant(params, "job_id");
-      const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-      const { owner, repo: name } = splitRepo(effectiveRepo);
-
-      const failure = (text: string): CiLogsResult => ({
-        content: [{ type: "text", text }],
-        details: { input: params, ...(pendant && { pendant }) },
-      });
-
-      let target: RunJob;
-      try {
-        target = await githubChecks.job(owner, name, jobId, signal);
-      } catch (error) {
-        const status = (error as { status?: number }).status;
-        if (status !== 404) throw error;
-        return failure(
-          `Job ${jobId} not found in ${effectiveRepo} — job IDs come from \`get-github-workflow-jobs\`.`,
-        );
-      }
-
-      if (target.status === "queued") {
-        return failure(
-          `Job "${target.name}" is still queued — no logs available yet. Use \`watch-github-run\` to wait for it to start, then retry.`,
-        );
-      }
-
-      onUpdate?.({
-        content: [{ type: "text", text: `Fetching log of job "${target.name}"...` }],
-        details: {},
-      });
-
-      const rawLog = await getJobLog(target, signal, ctx.cwd, params);
-      const index = jobLogIndex(target, rawLog);
-
-      return {
-        content: [{ type: "text", text: JSON.stringify(index, null, 2) }],
-        details: { ...index, input: params, ...(pendant && { pendant }) },
-      };
+      return client.ciLogs({ params, ctx, signal, onUpdate });
     },
   });
 
@@ -1637,15 +1778,8 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      const { run_id, repo } = params;
-      const runId = toPositiveId(run_id, "run_id");
-      const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-      const { owner, repo: name } = splitRepo(effectiveRepo);
-      const jobs = await githubChecks.runJobs(owner, name, runId, signal);
-      const result = toToolResult(JSON.stringify({ total_count: jobs.length, jobs }), params);
-      result.details.pendant = subtitlePendant(params, "run_id");
-      return result;
+    async execute(_id, params, signal, onUpdate, ctx) {
+      return client.workflowJobs({ params, ctx, signal, onUpdate });
     },
   });
 
@@ -1738,34 +1872,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       ),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
-      const { number, repo, fail_fast } = params;
-
-      const pendant = subtitlePendant(params, "number");
-      onUpdate?.({
-        content: [{ type: "text", text: `Watching CI checks for PR #${number}...` }],
-        details: {},
-      });
-
-      const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-      const { owner, repo: repoName } = splitRepo(effectiveRepo);
-
-      const prOut = await ghExec(
-        ["pr", "view", String(number), "--repo", effectiveRepo, "--json", "headRefOid"],
-        { cwd: ctx.cwd, signal, input: params },
-      );
-      const { headRefOid } = Value.Parse(prHeadSchema, JSON.parse(prOut));
-
-      return waitChecksReport({
-        subject: `PR #${number}`,
-        owner,
-        repo: repoName,
-        headSha: headRefOid,
-        failFast: fail_fast === true,
-        signal,
-        onUpdate,
-        params,
-        pendant,
-      });
+      return client.waitPrChecks({ params, ctx, signal, onUpdate });
     },
   });
 
@@ -1798,32 +1905,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       ),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
-      const { commit, repo, event, fail_fast } = params;
-
-      const pendant = subtitlePendant(params, "commit");
-      onUpdate?.({
-        content: [{ type: "text", text: `Watching CI checks for commit ${commit}...` }],
-        details: {},
-      });
-
-      const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-      const { owner, repo: repoName } = splitRepo(effectiveRepo);
-
-      const pollSignal = signal ?? new AbortController().signal;
-      const sha = await githubChecks.headSha(owner, repoName, String(commit), pollSignal);
-
-      return waitChecksReport({
-        subject: `commit ${sha.slice(0, 7)}`,
-        owner,
-        repo: repoName,
-        headSha: sha,
-        failFast: fail_fast === true,
-        event,
-        signal,
-        onUpdate,
-        params,
-        pendant,
-      });
+      return client.waitCommitChecks({ params, ctx, signal, onUpdate });
     },
   });
 

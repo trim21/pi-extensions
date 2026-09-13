@@ -17,8 +17,8 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("../src/lib/gh-proxy.js", () => ({
   createGhProxy: () => ({
-    load: () => Promise.resolve({ settings: { proxy: "http://config:7890" } }),
-    env: () => Promise.resolve({ HTTPS_PROXY: "http://config:7890" }),
+    settings: { proxy: "http://config:7890" },
+    env: { HTTPS_PROXY: "http://config:7890" },
     fetch: globalThis.fetch,
   }),
 }));
