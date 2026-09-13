@@ -7,7 +7,7 @@
  *
  * 对齐官方 v1（packages/opencode/src/tool/{read,edit,write}.ts）：
  * - read：流式分行（LF / CRLF / CR）、每行 `N: ` 行号前缀、单行 2000
- *   字符截断、1 起始 offset、目录排序；读取后后台 LSP warm-up。
+ *   字符截断、1 起始 offset、目录排序；读取后等待并报告该文档的诊断。
  *   不接 PDF、不接 <system-reminder>；图片 magic 检测保留。
  * - edit：匹配引擎 + 把 old/new 转到文件换行后再替换；写后等待文档诊断。
  * - write：BOM 保留（source.bom || next.bom）；写后同 edit 的诊断输出。
@@ -431,20 +431,26 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void 
         outputText = `${header}${numbered}\n\n(End of file - total ${page.count} lines)${footer}`;
       }
 
-      content = [{ type: "text", text: outputText }];
-
-      // opencode: LSP 文件事件通知是后台任务，失败不影响读取（read 不驻留文档）
-      void getService()
-        .notifyFile(absolutePath, ctx.cwd)
-        .catch(() => {
-          // 后台通知失败不影响读取
-        });
+      // opencode: 与 edit / write 同一条驻留路径：didOpen 后等待该文件的诊断并报告
+      const {
+        text: diagnosticText,
+        errorCount,
+        warningCount,
+      } = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
+      content = [
+        {
+          type: "text",
+          text: appendLspDiagnosticText(outputText, diagnosticText, errorCount),
+        },
+      ];
 
       return {
         content,
         details: {
           ...details,
-          pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath) },
+          pendant: {
+            subtitle: formatSubtitlePath(ctx.cwd, absolutePath, errorCount, warningCount),
+          },
         },
       };
     },

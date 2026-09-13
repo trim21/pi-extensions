@@ -2,7 +2,7 @@
 
 ## Purpose
 
-read / edit / write 工具内置 LSP 诊断：写文件后等待并报告 ERROR 级诊断。LSP 服务器通过一份 JSON 配置声明如何启动，无需为每种语言写 adapter。
+read / edit / write 工具内置 LSP 诊断：读取或写入文件后等待并报告该文件的诊断。LSP 服务器通过一份 JSON 配置声明如何启动，无需为每种语言写 adapter。
 
 ## Requirements
 
@@ -115,7 +115,7 @@ LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，
 
 ### Requirement: 文档驻留 LRU
 
-系统 SHALL 以有界 LRU 维护"保持打开"的文档集合：仅 edit / write 产出的文档进入驻留集合（进入时 `didOpen`，已驻留时 `didChange`），淘汰时 `didClose`；`read` MUST NOT 使文档长驻。
+系统 SHALL 以有界 LRU 维护"保持打开"的文档集合：read / edit / write 产出的文档进入驻留集合（进入时 `didOpen`，已驻留时 `didChange`），淘汰时 `didClose`。
 
 #### Scenario: 诊断请求要求文档处于驻留状态
 
@@ -127,10 +127,10 @@ LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，
 - **WHEN** 驻留文档数超过配置容量
 - **THEN** 最久未使用者优先 `didClose` 并移出驻留集合，不再被服务器当作打开文档
 
-#### Scenario: 读取不占驻留名额
+#### Scenario: 读取也报告诊断
 
-- **WHEN** 仅通过 read 工具读取文件
-- **THEN** 该文件不因读取而长驻为打开文档；服务器通过文件事件同步感知其存在
+- **WHEN** read 工具读取一个已启用 LSP 服务器的文件
+- **THEN** 该文件进入驻留集合、等待其 document 级诊断，并与 edit / write 同样报告 ERROR / WARN
 
 #### Scenario: 淘汰后再次编辑
 
@@ -156,14 +156,19 @@ WHEN 文件监听器报告某个仍在驻留集合中的文档被外部改动，
 - **WHEN** 写后诊断等待窗口内收到同路径的监听事件
 - **THEN** 本次写入的诊断结果仍在窗口内返回，不空转到超时
 
-### Requirement: 写后诊断
+### Requirement: 读后与写后诊断
 
-写文件后等待服务器诊断，报告 ERROR 级诊断。系统 MUST 在诊断收集完成之后才关闭该文档——服务器可能在 `didClose` 时推送空诊断。
+读取或写入文件后等待服务器诊断，报告 ERROR / WARN 诊断。系统 MUST 在诊断收集完成之后才关闭该文档——服务器可能在 `didClose` 时推送空诊断。
 
 #### Scenario: 写后报告诊断
 
 - **WHEN** 写工具写入文件
-- **THEN** 等待（`diagnosticsWaitMs`）并报告 ERROR 级诊断
+- **THEN** 等待（`diagnosticsWaitMs`）并报告 ERROR / WARN 诊断
+
+#### Scenario: 读后报告诊断
+
+- **WHEN** read 工具读取文件
+- **THEN** 等待（`diagnosticsWaitMs`）并把该文件的 ERROR / WARN 诊断附在读取结果之后
 
 #### Scenario: 超时与配置分离
 
@@ -177,13 +182,13 @@ WHEN 文件监听器报告某个仍在驻留集合中的文档被外部改动，
 
 ## Implementation
 
-实现位于 `src/lib/lsp/`：read / edit / write 工具写文件后经 LSP 客户端请求诊断并报告 ERROR 级诊断。
+实现位于 `src/lib/lsp/`：read / edit / write 工具读取或写入文件后经 LSP 客户端请求诊断并报告 ERROR / WARN 诊断。
 
 - **配置解析**（`server-config.ts`）：`~/.pi/agent/lsp.json`（全局）与 `.pi/lsp.json`（项目）合并——顶层字段本地覆盖全局，`servers` 按 id 合并（同名整体覆盖、新 id 新增、全局其余保留）；无内置默认服务器，服务器全部来自配置，禁用某服务器用顶层 `disabled: [id]`。
 - **服务器启动**（`adapter.ts` / `server-config.ts`）：按 `include` glob 匹配启用（`!` 否定排除）；root 由 `serverRoot` 解析——配置 `rootMarkers` 时从调用 cwd 沿文件路径向下找第一个含标记的目录（cwd 自身命中即 cwd，未命中回退 cwd），否则即 `workingDir`（相对调用 cwd 解析）或调用 cwd；两者互斥，同时配置在 `resolveConfig` 报错。同一服务器可为不同 root 各启动一个实例。`bin` 按绝对路径 / 相对调用 cwd / 名字（先项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin`，再 PATH）解析，`env` 的 `{root}` / `{cwd}` 模板按该文件的 root 生效。
 - **协议**：`initializationOptions` 进 initialize 请求，`settings` 进 didChangeConfiguration / workspace/configuration；languageId 按扩展名映射（缺省内置映射表）。
 - **超时**：per-server `startupTimeoutMs` / `diagnosticsWaitMs` 覆盖全局与默认值。
 - **文件监听**（`watcher.ts` / `lsp.ts`）：`@parcel/watcher` 递归监听**活跃 client 的项目根**（root 去重、不越 cwd，无活跃 client 不监听；内核层 ignore 使被忽略目录不建 watch），尾部去抖 + 最长 flush 批量回调；事件按各 client 的 root 前缀 / 注册 pattern / 扩展名过滤后以 `workspace/didChangeWatchedFiles` 投递（created=1 / changed=2 / deleted=3）；监听器失败降级提示（ENOSPC 等资源耗尽时停用该 root 直到 `/lsp-reload`），不影响诊断链路。
-- **驻留与退场**（`client.ts`）：edit/write 进入有界 LRU（`maxOpenDocuments`，缺省 32），淘汰时 `didClose`；驻留文档被外部改动时先 `didClose` 再发 changed 事件，内容一致的自身写入 echo 完全忽略；read 只发文件事件通知，不驻留。
+- **驻留与退场**（`client.ts`）：read / edit / write 进入有界 LRU（`maxOpenDocuments`，缺省 32），淘汰时 `didClose`；驻留文档被外部改动时先 `didClose` 再发 changed 事件，内容一致的自身写入 echo 完全忽略。
 
 涉及文件：`src/lib/lsp/`（lsp.ts / server-config.ts / adapter.ts / client.ts / watcher.ts）。

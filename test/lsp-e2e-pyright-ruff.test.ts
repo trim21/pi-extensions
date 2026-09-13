@@ -258,7 +258,7 @@ describe("cc Edit + real pyright/ruff LSP", () => {
       for (const name of ["a.py", "b.py", "c.py"]) {
         const filePath = join(directory, name);
         await writeFile(filePath, "x = 1\n");
-        // read 不占驻留名额；Edit 让文件进入有界 LRU，容量 2 时第三个 Edit 会淘汰最早者
+        // read / edit 走同一条驻留路径：文件进入有界 LRU，容量 2 时第三个文件会淘汰最早者
         await call(tools.get("Read")!, { file_path: filePath }, ctx);
         const result = await call(
           tools.get("Edit")!,

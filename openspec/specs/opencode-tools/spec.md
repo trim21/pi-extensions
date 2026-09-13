@@ -20,6 +20,11 @@ opencode 风格工具集（小写 `read` / `edit` / `write` / `bash` / `todowrit
 - **WHEN** 读取图片文件（jpg / png / gif / webp）
 - **THEN** 图片作为附件发送（当前模型支持视觉时）
 
+#### Scenario: 读取报告诊断
+
+- **WHEN** 读取的文件匹配某个已启用的 LSP 服务器
+- **THEN** 读取结果后附上该文件的 LSP 诊断（与 edit / write 同一条驻留路径）
+
 ### Requirement: edit 编辑文件
 
 按 opencode 的 schema 与匹配引擎编辑文件。
