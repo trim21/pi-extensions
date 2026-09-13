@@ -132,7 +132,7 @@ describe("opencode bash", () => {
     controller.abort();
     const result = await promise;
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "partial\n\nCommand aborted",
+      "partial\n\nCommand aborted by user",
     ]);
     expect(result.details).toEqual({});
   });

@@ -148,7 +148,7 @@ export function registerShellTools(
           );
           if (error.kind === "aborted") {
             // 用户取消：直接返回已捕获的输出，不抛错
-            const full = text ? `${text}\n\nCommand aborted` : "Command aborted";
+            const full = text ? `${text}\n\nCommand aborted by user` : "Command aborted by user";
             return { content: [{ type: "text", text: full }], details: undefined };
           }
           const full = text
