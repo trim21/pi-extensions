@@ -1,6 +1,6 @@
 ---
 name: claude-code-tools
-description: "Exact behavior of the Claude Code style tools (Read/Edit/Write/Grep/Glob/Bash/TodoWrite/AskUserQuestion) in the @trim21/personal-pi-extensions package: output formats, matching rules, read-state tracking, pagination semantics, and conventions. Load whenever you use these tools or are unsure how they behave."
+description: "Exact behavior of the Claude Code style tools (Read/Edit/Write/Grep/Glob/Bash/TodoWrite/AskUserQuestion) in the @trim21/personal-pi-extensions package: output formats, matching rules, read-before-write requirements, pagination semantics, and conventions. Load whenever you use these tools or are unsure how they behave."
 ---
 
 # Claude Code Tools Behavior
@@ -21,11 +21,13 @@ The capitalized tools below follow Claude Code behavior with a few deliberate de
 - By default reads the **entire file**, capped at 256 KB (bytes) and a rough 25K-token estimate (4 chars/token, no tokenizer). Whole reads over either cap error with `File content (X) exceeds maximum allowed size/tokens (...) — use offset and limit`; providing `limit` bypasses the byte cap and only the selected range counts toward the token cap.
 - `offset`/`limit` are 1-based positive integers. Out-of-range offset returns `Warning: the file exists but is shorter than the provided offset (N). The file has M lines.`; empty files return `Warning: the file exists but the contents are empty.`
 - Missing file → `File does not exist. Note: your current working directory is <cwd>.` plus a `Did you mean ...?` suggestion (same-base different-extension, or a corrected path under cwd).
+- **Deviation from Claude Code:** when an LSP server is configured for the file (`.pi/lsp.json` or `~/.pi/agent/lsp.json`), Read waits for that file's diagnostics and appends the same block Edit/Write produce; the pendant subtitle carries the counts. Read uses the same resident-document path as Edit/Write, so the read file enters the bounded `maxOpenDocuments` LRU. Without a matching server nothing is appended and no server is started.
 
 ## Edit / Write
 
-- **Deviation from Claude Code:** a prior Read is _not_ required before editing or overwriting — unread files are written directly. When the file _was_ read, the tool compares a content digest against the last read; after your own Edit/Write the recorded digest is refreshed, so consecutive edits by you are fine. An external change (user edit, linter, another process) to a read file triggers `File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.` — re-Read before writing.
+- **You must Read a file before editing or overwriting it.** The tool compares a content digest against the last read; after your own Edit/Write the recorded digest is refreshed, so consecutive edits by you are fine. An external change (user edit, linter, another process) triggers `File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.` — re-Read before writing.
 - **Deviation from Claude Code:** staleness is checked by content digest, not mtime.
+- Reported diagnostics: the result ends with `LSP diagnostics detected in this file` followed by a `<diagnostics file="...">` block listing at most 5 entries (ERROR first, then WARN; INFO/HINT are never reported). A truncated block ends with a `... and 3 errors, 4 warnings` line giving the severity breakdown of the entries that are **not** listed, so a block without that line lists every ERROR/WARN in the file. Read uses the same format.
 
 ### Edit specifics
 
@@ -42,7 +44,7 @@ The capitalized tools below follow Claude Code behavior with a few deliberate de
 ### Write specifics
 
 - Creating a new file → `File created successfully at: X`; overwriting an existing file → `The file X has been updated successfully.` (the distinction is reported even though both are one tool).
-- Neither new files nor overwrites of existing files require a prior Read.
+- New files need no prior Read; overwriting does.
 
 ## Grep
 

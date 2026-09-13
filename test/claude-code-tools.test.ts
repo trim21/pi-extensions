@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -74,6 +75,30 @@ function loadToolsWithHandlers(): {
     },
     exec: vi.fn(),
   } as never);
+  return { tools, handlers };
+}
+
+/** 只装 files.ts 的工具与事件 handler；globalConfigPath 指向临时配置以隔离真实全局 lsp.json。 */
+function loadFileToolsWithConfig(globalConfigPath: string): {
+  tools: Map<string, RegisteredTool>;
+  handlers: Map<string, ((...args: any[]) => unknown)[]>;
+} {
+  const tools = new Map<string, RegisteredTool>();
+  const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
+  claudeCodeFileTools(
+    {
+      registerTool(tool: RegisteredTool) {
+        tools.set(tool.name, tool);
+      },
+      registerFlag: vi.fn(),
+      registerCommand: vi.fn(),
+      on(event: string, handler: (...args: any[]) => unknown) {
+        handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+      },
+      exec: vi.fn(),
+    } as never,
+    { globalConfigPath },
+  );
   return { tools, handlers };
 }
 
@@ -302,13 +327,23 @@ describe("Read, Edit, and Write", () => {
     expect(() => exactReplace("hello", " hello", "x")).toThrow(/not found/);
   });
 
-  it("allows Edit without a prior Read", async () => {
+  it("requires a complete Read before Edit", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-files-"));
     const filePath = join(directory, "note.txt");
     await writeFile(filePath, "hello world\n", "utf8");
     const tools = loadTools();
     const ctx = context(directory);
 
+    await expect(
+      call(
+        tools.get("Edit")!,
+        { file_path: filePath, old_string: "world", new_string: "there" },
+        ctx,
+      ),
+    ).rejects.toThrow(/not been read/);
+
+    const readResult = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(readResult.details).toMatchObject({ pendant: { subtitle: "./note.txt" } });
     const editResult = await call(
       tools.get("Edit")!,
       { file_path: filePath, old_string: "world", new_string: "there" },
@@ -377,15 +412,6 @@ describe("Read, Edit, and Write", () => {
   it("allows Write to create a new file without a prior Read", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-write-"));
     const filePath = join(directory, "nested", "new.txt");
-    const tools = loadTools();
-    await call(tools.get("Write")!, { file_path: filePath, content: "new\n" }, context(directory));
-    expect(await readFile(filePath, "utf8")).toBe("new\n");
-  });
-
-  it("allows Write to overwrite an existing file without a prior Read", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "cc-write-overwrite-"));
-    const filePath = join(directory, "note.txt");
-    await writeFile(filePath, "old\n", "utf8");
     const tools = loadTools();
     await call(tools.get("Write")!, { file_path: filePath, content: "new\n" }, context(directory));
     expect(await readFile(filePath, "utf8")).toBe("new\n");
@@ -886,14 +912,13 @@ describe("reads state restore on session_start", () => {
     );
     expect(await readFile(filePath, "utf8")).toBe("hello there\n");
 
-    // rewind：session_tree 切到一个不含该 Read 的分支，记账应被清空重建；
-    // 之后文件被外部改动也不应再触发已读快照拦截（若旧快照残留会报 modified）
+    // rewind：session_tree 切到一个不含该 Read 的分支，记账应被清空重建
     for (const handler of handlers.get("session_tree") ?? []) {
       await handler({}, { sessionManager: { getBranch: () => [] } });
     }
-    await writeFile(filePath, "externally changed after rewind\n", "utf8");
-    await call(tools.get("Write")!, { file_path: filePath, content: "x\n" }, ctx);
-    expect(await readFile(filePath, "utf8")).toBe("x\n");
+    await expect(
+      call(tools.get("Write")!, { file_path: filePath, content: "x\n" }, ctx),
+    ).rejects.toThrow(/not been read/);
   });
 });
 
@@ -1194,7 +1219,7 @@ describe("Bash", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     controller.abort();
     const result = await promise;
-    expect(result.content[0].text).toBe("partial\n\nCommand aborted");
+    expect(result.content[0].text).toBe("partial\n\nCommand aborted by user");
   });
 
   it("fails any non-zero exit with Exit code N, without command semantics", async () => {
@@ -1475,4 +1500,53 @@ describe("standalone extension entries (spawn-agent -e loading)", () => {
     } as never);
     expect([...tools.keys()]).toEqual(["Glob"]);
   });
+});
+
+describe("Read reports LSP diagnostics", () => {
+  const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
+
+  it("appends the diagnostics block for the read file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-read-lsp-"));
+    const configPath = join(dir, "lsp.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        servers: {
+          mock: {
+            include: ["**/*.py"],
+            bin: process.execPath,
+            args: [fixture],
+            languageIdByExtension: { ".py": "python" },
+          },
+        },
+      }),
+    );
+    const filePath = join(dir, "x.py");
+    await writeFile(filePath, "x = 1\n", "utf8");
+
+    const { tools, handlers } = loadFileToolsWithConfig(configPath);
+    const ctx = context(dir, {
+      ui: { notify: vi.fn(), setStatus: vi.fn() },
+      sessionManager: { getBranch: () => [], getSessionId: () => "test-session" },
+    });
+    try {
+      for (const handler of handlers.get("session_start") ?? []) {
+        await handler({ type: "session_start", reason: "startup" }, ctx);
+      }
+
+      const result = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+      const text = result.content[0].text as string;
+      expect(text).toContain("1: x = 1");
+      expect(text).toContain("LSP diagnostics detected in this file\n<diagnostics file=");
+      expect(text).toContain('<diagnostics file="');
+      expect(text).toContain("mock error message");
+      expect(result.details.pendant.subtitle).toBe("./x.py (ⓧ 1)");
+    } finally {
+      for (const handler of handlers.get("session_shutdown") ?? []) {
+        await handler({ type: "session_shutdown", reason: "quit" }, ctx);
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

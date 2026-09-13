@@ -40,6 +40,8 @@ function run(overrides: Partial<CheckRun> & { name?: string }): CheckRun {
     startedAt: "2026-09-05T03:12:01Z",
     url: "https://github.com/owner/repo/actions/runs/5/job/10",
     event: null,
+    runId: 5,
+    jobId: 10,
     ...overrides,
   };
 }
@@ -51,6 +53,8 @@ function merged(overrides: Partial<MergedCheck> & { name?: string }): MergedChec
     startedAt: "2026-09-05T03:12:01Z",
     link: "https://github.com/owner/repo/actions/runs/5/job/10",
     event: null,
+    runId: 5,
+    jobId: 10,
     ...overrides,
   };
 }
@@ -370,6 +374,8 @@ describe("pollPrChecks", () => {
         startedAt: null,
         link: expect.any(String),
         event: null,
+        runId: null,
+        jobId: null,
       },
     ]);
   });

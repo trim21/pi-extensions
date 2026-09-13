@@ -1,0 +1,92 @@
+{
+"id": 86639594509,
+"run_id": 29188748619,
+"workflow_name": "Windows",
+"head_branch": "aes-ctr-mse",
+"run_url": "https://api.github.com/repos/arvidn/libtorrent/actions/runs/29188748619",
+"run_attempt": 1,
+"node_id": "CR_kwDOAjE-yc8AAAAULB9MDQ",
+"head_sha": "8201fbfc2b0c42bbe06885cf11e13dfe816548bc",
+"url": "https://api.github.com/repos/arvidn/libtorrent/actions/jobs/86639594509",
+"html_url": "https://github.com/arvidn/libtorrent/actions/runs/29188748619/job/86639594509",
+"status": "completed",
+"conclusion": "failure",
+"created_at": "2026-07-12T10:12:44Z",
+"started_at": "2026-07-12T10:14:03Z",
+"completed_at": "2026-07-12T10:27:41Z",
+"name": "Test (webtorrent=off address-model=32 crypto=built-in)",
+"steps": [
+{
+"name": "Set up job",
+"status": "completed",
+"conclusion": "success",
+"number": 1,
+"started_at": "2026-07-12T10:14:03Z",
+"completed_at": "2026-07-12T10:14:04Z"
+},
+{
+"name": "checkout",
+"status": "completed",
+"conclusion": "success",
+"number": 2,
+"started_at": "2026-07-12T10:14:04Z",
+"completed_at": "2026-07-12T10:14:22Z"
+},
+{
+"name": "install boost",
+"status": "completed",
+"conclusion": "success",
+"number": 3,
+"started_at": "2026-07-12T10:14:22Z",
+"completed_at": "2026-07-12T10:16:56Z"
+},
+{
+"name": "boost headers",
+"status": "completed",
+"conclusion": "success",
+"number": 4,
+"started_at": "2026-07-12T10:16:56Z",
+"completed_at": "2026-07-12T10:17:06Z"
+},
+{
+"name": "tests (deterministic)",
+"status": "completed",
+"conclusion": "failure",
+"number": 5,
+"started_at": "2026-07-12T10:17:06Z",
+"completed_at": "2026-07-12T10:27:35Z"
+},
+{
+"name": "tests (flaky)",
+"status": "completed",
+"conclusion": "skipped",
+"number": 6,
+"started_at": "2026-07-12T10:27:35Z",
+"completed_at": "2026-07-12T10:27:35Z"
+},
+{
+"name": "Post checkout",
+"status": "completed",
+"conclusion": "success",
+"number": 12,
+"started_at": "2026-07-12T10:27:35Z",
+"completed_at": "2026-07-12T10:27:40Z"
+},
+{
+"name": "Complete job",
+"status": "completed",
+"conclusion": "success",
+"number": 13,
+"started_at": "2026-07-12T10:27:40Z",
+"completed_at": "2026-07-12T10:27:40Z"
+}
+],
+"check_run_url": "https://api.github.com/repos/arvidn/libtorrent/check-runs/86639594509",
+"labels": [
+"windows-latest"
+],
+"runner_id": 1000067537,
+"runner_name": "GitHub Actions 1000067537",
+"runner_group_id": 0,
+"runner_group_name": "GitHub Actions"
+}

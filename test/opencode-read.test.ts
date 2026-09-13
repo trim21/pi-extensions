@@ -8,6 +8,7 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -338,4 +339,64 @@ describe("opencode read execute", () => {
       }
     },
   );
+});
+
+describe("opencode read reports LSP diagnostics", () => {
+  const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
+
+  it("appends the diagnostics block for the read file", async () => {
+    const lspDir = await mkdtemp(join(tmpdir(), "opencode-read-lsp-"));
+    const configPath = join(lspDir, "lsp.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        servers: {
+          mock: {
+            include: ["**/*.py"],
+            bin: process.execPath,
+            args: [fixture],
+            languageIdByExtension: { ".py": "python" },
+          },
+        },
+      }),
+      "utf8",
+    );
+    const filePath = join(lspDir, "x.py");
+    await writeFile(filePath, "x = 1\n", "utf8");
+
+    let tool: Tool | undefined;
+    const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
+    opencodeFileTools(
+      {
+        registerTool: (def: Tool) => {
+          if (def.name === "read") tool = def;
+        },
+        on(event: string, handler: (...args: any[]) => unknown) {
+          handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+        },
+        registerCommand: vi.fn(),
+      } as never,
+      // globalConfigPath 指向临时配置，隔离真实全局 lsp.json
+      { globalConfigPath: configPath },
+    );
+
+    const lspCtx = { cwd: lspDir, ui: { notify: vi.fn(), setStatus: vi.fn() } };
+    try {
+      for (const handler of handlers.get("session_start") ?? []) {
+        await handler({ type: "session_start", reason: "startup" }, lspCtx);
+      }
+
+      const result = await tool!.execute("id", { filePath }, undefined, undefined, lspCtx);
+      const text = result.content[0].text;
+      expect(text).toContain("1: x = 1");
+      expect(text).toContain("LSP diagnostics detected in this file\n<diagnostics file=");
+      expect(text).toContain("mock error message");
+    } finally {
+      for (const handler of handlers.get("session_shutdown") ?? []) {
+        await handler({ type: "session_shutdown", reason: "quit" }, lspCtx);
+      }
+      await rm(lspDir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

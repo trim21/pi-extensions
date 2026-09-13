@@ -1,0 +1,153 @@
+﻿2026-08-25T03:31:48.9492471Z Current runner version: '2.336.0'
+2026-08-25T03:31:48.9517747Z ##[group]Runner Image Provisioner
+2026-08-25T03:31:48.9518632Z Hosted Compute Agent
+2026-08-25T03:31:48.9519334Z Version: 20260729.566
+2026-08-25T03:31:48.9520025Z Commit: cf7153fe6e25b664e8693c24944bf2b00355d109
+2026-08-25T03:31:48.9522985Z ##[endgroup]
+2026-08-25T03:31:48.9524594Z ##[group]Operating System
+2026-08-25T03:31:48.9527370Z ##[endgroup]
+2026-08-25T03:31:48.9527979Z ##[group]Runner Image
+2026-08-25T03:31:48.9533736Z ##[endgroup]
+2026-08-25T03:31:48.9534918Z ##[group]GITHUB_TOKEN Permissions
+2026-08-25T03:31:48.9539373Z ##[endgroup]
+2026-08-25T03:31:50.3038435Z Download action repository 'docker/build-push-action@v7' (SHA:53b7df96c91f9c12dcc8a07bcb9ccacbed38856a)
+2026-08-25T03:31:50.7149990Z Complete job name: Build & push (amd64) [native]
+2026-08-25T03:31:50.7938141Z ##[group]Run actions/checkout@v7
+2026-08-25T03:31:50.7939171Z with:
+2026-08-25T03:31:50.7939735Z   ref: 6e0c2e3e353c3fc06d4bd289ccb99e2e1ac7c999
+2026-08-25T03:31:50.7940411Z   fetch-depth: 1
+2026-08-25T03:31:50.7940960Z   persist-credentials: false
+2026-08-25T03:31:50.7951896Z ##[endgroup]
+2026-08-25T03:31:50.8965501Z ##[group]Getting Git version info
+2026-08-25T03:31:50.9036401Z ##[endgroup]
+2026-08-25T03:31:50.9101648Z ##[group]Determining repository object format
+2026-08-25T03:31:50.9103019Z ##[endgroup]
+2026-08-25T03:31:50.9103817Z ##[group]Initializing the repository
+2026-08-25T03:31:50.9262330Z ##[endgroup]
+2026-08-25T03:31:50.9264100Z ##[group]Disabling automatic garbage collection
+2026-08-25T03:31:50.9298024Z ##[endgroup]
+2026-08-25T03:31:50.9299275Z ##[group]Setting up auth
+2026-08-25T03:31:51.1062807Z ##[endgroup]
+2026-08-25T03:31:51.1064326Z ##[group]Fetching the repository
+2026-08-25T03:31:52.6112832Z ##[endgroup]
+2026-08-25T03:31:52.6114056Z ##[group]Determining the checkout info
+2026-08-25T03:31:52.6115661Z ##[endgroup]
+2026-08-25T03:31:52.6192124Z ##[group]Checking out the ref
+2026-08-25T03:31:52.8310211Z ##[endgroup]
+2026-08-25T03:31:52.8386837Z ##[group]Removing auth
+2026-08-25T03:31:52.9245808Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-08-25T03:31:52.9462812Z Removing credentials config '/home/runner/work/_temp/git-credentials-4b41ac53-e069-4584-9cd3-0f558d92ec66.config'
+2026-08-25T03:31:52.9469160Z ##[endgroup]
+2026-08-25T03:31:52.9714106Z ##[group]Run printf '%s\n' "${BASE_VERSION}-unstable.${BUILD_DATE}" > internal/build/VERSION
+2026-08-25T03:31:52.9716718Z [36;1mprintf '%s\n' "${BASE_VERSION}-unstable.${BUILD_DATE}" > internal/build/VERSION[0m
+2026-08-25T03:31:52.9760718Z shell: /usr/bin/bash -e {0}
+2026-08-25T03:31:52.9761765Z env:
+2026-08-25T03:31:52.9762682Z   BASE_VERSION: v1.0.0-beta7
+2026-08-25T03:31:52.9763723Z   BUILD_DATE: 20260825
+2026-08-25T03:31:52.9764651Z ##[endgroup]
+2026-08-25T03:31:53.0035287Z ##[group]Run docker/setup-buildx-action@v4
+2026-08-25T03:31:53.0036509Z with:
+2026-08-25T03:31:53.0037492Z   driver: docker-container
+2026-08-25T03:31:53.0038446Z   use: true
+2026-08-25T03:31:53.0039235Z   keep-state: false
+2026-08-25T03:31:53.0041802Z ##[endgroup]
+2026-08-25T03:31:53.1890990Z ##[group]Docker info
+2026-08-25T03:31:56.1501577Z ##[endgroup]
+2026-08-25T03:31:56.2693096Z ##[group]Buildx version
+2026-08-25T03:31:56.3349621Z ##[endgroup]
+2026-08-25T03:31:56.3503071Z ##[group]Inspecting default docker context
+2026-08-25T03:31:56.3650044Z ##[endgroup]
+2026-08-25T03:31:56.3650683Z ##[group]Creating a new builder instance
+2026-08-25T03:31:56.5945927Z ##[endgroup]
+2026-08-25T03:31:56.5946654Z ##[group]Booting builder
+2026-08-25T03:32:00.7170382Z ##[endgroup]
+2026-08-25T03:32:00.8023981Z ##[group]Inspect builder
+2026-08-25T03:32:00.8059392Z }
+2026-08-25T03:32:00.8060120Z ##[endgroup]
+2026-08-25T03:32:00.8060909Z ##[group]BuildKit version
+2026-08-25T03:32:00.8061516Z builder-ba5a9dcc-e01f-479b-a45d-aaa1e19a2c870: v0.32.2
+2026-08-25T03:32:00.8062397Z ##[endgroup]
+2026-08-25T03:32:00.8216630Z ##[group]Run docker/login-action@v4
+2026-08-25T03:32:00.8217293Z with:
+2026-08-25T03:32:00.8217622Z   username: ***
+2026-08-25T03:32:00.8217903Z   password: ***
+2026-08-25T03:32:00.8218111Z   logout: true
+2026-08-25T03:32:00.8218307Z ##[endgroup]
+2026-08-25T03:32:01.0243963Z Logging into docker.io...
+2026-08-25T03:32:01.5926226Z Login Succeeded!
+2026-08-25T03:32:01.6064939Z ##[group]Run docker/metadata-action@v6
+2026-08-25T03:32:01.6065241Z with:
+2026-08-25T03:32:01.6065494Z   images: ***/axonhub
+2026-08-25T03:32:01.6065728Z   context: workflow
+2026-08-25T03:32:01.6068567Z   github-token: ***
+2026-08-25T03:32:01.6068806Z ##[endgroup]
+2026-08-25T03:32:02.4726830Z ##[group]Context info
+2026-08-25T03:32:02.4732692Z ##[endgroup]
+2026-08-25T03:32:02.4737751Z ##[group]Processing images input
+2026-08-25T03:32:02.4739129Z ##[endgroup]
+2026-08-25T03:32:02.4752648Z ##[group]Processing tags input
+2026-08-25T03:32:02.4755855Z ##[endgroup]
+2026-08-25T03:32:02.4756469Z ##[group]Processing flavor input
+2026-08-25T03:32:02.4759008Z ##[endgroup]
+2026-08-25T03:32:02.4800937Z ##[group]Docker image version
+2026-08-25T03:32:02.4802013Z ##[endgroup]
+2026-08-25T03:32:02.4806501Z ##[group]Docker tags
+2026-08-25T03:32:02.4808361Z ##[endgroup]
+2026-08-25T03:32:02.4882053Z ##[group]Docker labels
+2026-08-25T03:32:02.4891445Z ##[endgroup]
+2026-08-25T03:32:02.4892094Z ##[group]Annotations
+2026-08-25T03:32:02.4902185Z ##[endgroup]
+2026-08-25T03:32:02.4902872Z ##[group]JSON output
+2026-08-25T03:32:02.4927311Z ##[endgroup]
+2026-08-25T03:32:02.4927993Z ##[group]Bake file definition (tags)
+2026-08-25T03:32:02.4934806Z ##[endgroup]
+2026-08-25T03:32:02.4935503Z ##[group]Bake file definition (labels)
+2026-08-25T03:32:02.4949065Z ##[endgroup]
+2026-08-25T03:32:02.4949743Z ##[group]Bake file definition (annotations)
+2026-08-25T03:32:02.4962280Z   }
+2026-08-25T03:32:02.4962610Z }
+2026-08-25T03:32:02.4963344Z ##[endgroup]
+2026-08-25T03:32:02.5137419Z ##[group]Run docker/build-push-action@v7
+2026-08-25T03:32:02.5137746Z with:
+2026-08-25T03:32:02.5137941Z   context: .
+2026-08-25T03:32:02.5138148Z   platforms: linux/amd64
+2026-08-25T03:32:02.5138382Z   push: true
+2026-08-25T03:32:02.5172349Z ##[endgroup]
+2026-08-25T03:32:02.7648818Z ##[group]GitHub Actions runtime token ACs
+2026-08-25T03:32:02.7658405Z ##[endgroup]
+2026-08-25T03:32:02.7659363Z ##[group]Docker info
+2026-08-25T03:32:02.8643333Z ##[endgroup]
+2026-08-25T03:32:02.8643888Z ##[group]Proxy configuration
+2026-08-25T03:32:02.8644925Z ##[endgroup]
+2026-08-25T03:32:02.9185288Z ##[group]Buildx version
+2026-08-25T03:32:02.9705672Z ##[endgroup]
+2026-08-25T03:32:02.9706078Z ##[group]Builder info
+2026-08-25T03:32:03.0668232Z ##[endgroup]
+2026-08-25T03:37:14.3445648Z ##[group]ImageID
+2026-08-25T03:37:14.3447508Z ##[endgroup]
+2026-08-25T03:37:14.3447969Z ##[group]Digest
+2026-08-25T03:37:14.3449655Z ##[endgroup]
+2026-08-25T03:37:14.3450157Z ##[group]Metadata
+2026-08-25T03:37:14.3553003Z ##[endgroup]
+2026-08-25T03:37:14.3553337Z ##[group]Reference
+2026-08-25T03:37:14.3554530Z ##[endgroup]
+2026-08-25T03:37:14.3554867Z ##[group]Check build summary support
+2026-08-25T03:37:14.3555618Z ##[endgroup]
+2026-08-25T03:37:14.6054974Z ##[group]Generating build summary
+2026-08-25T03:37:16.4470545Z ##[endgroup]
+2026-08-25T03:37:16.4471460Z ##[group]Removing temp folder /home/runner/work/_temp/docker-actions-toolkit-qu8Zvu
+2026-08-25T03:37:16.4473976Z ##[endgroup]
+2026-08-25T03:37:16.4474483Z ##[group]Post cache
+2026-08-25T03:37:16.4475895Z ##[endgroup]
+2026-08-25T03:37:16.6685489Z ##[group]Logout from docker.io
+2026-08-25T03:37:16.6902794Z ##[endgroup]
+2026-08-25T03:37:16.6903761Z ##[group]Post cache
+2026-08-25T03:37:16.6905096Z ##[endgroup]
+2026-08-25T03:37:16.8901375Z ##[group]Removing builder
+2026-08-25T03:37:29.2777532Z ##[endgroup]
+2026-08-25T03:37:29.2778480Z ##[group]Cleaning up certificates
+2026-08-25T03:37:29.2797747Z ##[endgroup]
+2026-08-25T03:37:29.2798211Z ##[group]Post cache
+2026-08-25T03:37:29.2800696Z ##[endgroup]
+2026-08-25T03:37:29.4481198Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-08-25T03:37:29.4860863Z Cleaning up orphan processes

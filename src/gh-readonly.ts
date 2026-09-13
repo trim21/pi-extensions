@@ -14,7 +14,7 @@
  *   - read-github-pr-comments: Get PR comments
  *   - read-github-ci-logs: Get CI workflow run logs
  *   - read-github-workflow-runs: List workflow runs
- *   - read-github-workflow-jobs: Get workflow run jobs
+ *   - get-github-workflow-jobs: Get workflow run jobs
  *   - read-github-repo: Get repo info
  *   - list-github-releases: List releases
  *   - read-github-release: Get release details
@@ -27,18 +27,24 @@
  *
  * Or for project-local:
  *   cp gh-readonly.ts .pi/extensions/
+ *
+ * Proxy (for the gh CLI and for the octokit-backed search/checks requests):
+ *   ~/.pi/agent/gh.json: { "proxy": "http://127.0.0.1:7890", "noProxy": "localhost" }
+ *   HTTPS_PROXY / HTTP_PROXY / ALL_PROXY and NO_PROXY are used instead for the
+ *   fields the config file leaves out. The config is read once per process.
  */
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { createGhProxy } from "./lib/gh-proxy.js";
 import {
   type ActionJob,
   type CheckRun,
@@ -48,9 +54,16 @@ import {
   type GithubChecksClient,
   type GithubSearch,
   renderHits,
+  type RunJob,
 } from "./lib/github.js";
 import { type ToolPendant } from "./lib/pendant.js";
 import { createSeqState } from "./lib/seq-state.js";
+
+/**
+ * 代理配置（~/.pi/agent/gh.json，回退到 HTTP(S)_PROXY 环境变量）在本模块内共享：
+ * `gh` 子进程与 octokit 请求都从这里取，配置只在首次使用时读一次。
+ */
+const ghProxy = createGhProxy();
 
 interface GhResult {
   stdout: string;
@@ -82,16 +95,25 @@ export function isGhAvailable(): boolean {
   return false;
 }
 
-export function runGh(
+export async function runGh(
   args: string[],
-  ctx: { cwd?: string; signal?: AbortSignal; timeout?: number },
+  ctx: {
+    cwd?: string;
+    signal?: AbortSignal;
+    timeout?: number;
+    /** 追加到子进程环境变量（覆盖进程环境与代理配置），供测试或调用方定制。 */
+    env?: NodeJS.ProcessEnv;
+  },
 ): Promise<GhResult> {
+  const proxyEnv = await ghProxy.env();
+
   return new Promise((resolve) => {
     const proc = spawn("gh", args, {
       cwd: ctx.cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, GH_PAGER: "cat" },
+      // gh 是 Go 程序，只认环境变量形式的代理配置；ctx.env 最后合并，调用方可覆盖。
+      env: { ...process.env, ...proxyEnv, ...ctx.env, GH_PAGER: "cat" },
     });
 
     let stdout = "";
@@ -244,6 +266,20 @@ function repoArgs(repo?: string): string[] {
   return repo ? ["--repo", repo] : [];
 }
 
+/**
+ * `gh api` for a JSON-array endpoint, following pagination. The REST API pages
+ * these lists at 30 items by default, so a single page silently drops the rest;
+ * `--slurp` is required because `--paginate` alone prints the pages back to back
+ * (not valid JSON), and the page arrays are flattened back into one list.
+ */
+async function ghApiList(
+  path: string,
+  ctx: { cwd?: string; signal?: AbortSignal; input?: unknown },
+): Promise<unknown[]> {
+  const out = await ghExec(["api", "--paginate", "--slurp", path], ctx);
+  return Value.Parse(Type.Array(Type.Array(Type.Unknown())), JSON.parse(out)).flat();
+}
+
 /** Split `OWNER/REPO`; throws when the name doesn't have exactly one slash. */
 function splitRepo(nameWithOwner: string): { owner: string; repo: string } {
   const slash = nameWithOwner.indexOf("/");
@@ -253,27 +289,18 @@ function splitRepo(nameWithOwner: string): { owner: string; repo: string } {
   return { owner: nameWithOwner.slice(0, slash), repo: nameWithOwner.slice(slash + 1) };
 }
 
+/** Parse a positive integer toolcall parameter (run/job ids are numbers or numeric strings). */
+function toPositiveId(value: number | string, name: string): number {
+  const id = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`invalid ${name}: ${String(value)} (expected a positive integer)`);
+  }
+  return id;
+}
+
 // ── runtime validation schemas for JSON.parse results ───────────────────────
 
 const repoViewSchema = Type.Object({ nameWithOwner: Type.String() });
-
-const stepSchema = Type.Object({
-  name: Type.String(),
-  number: Type.Number(),
-  status: Type.String(),
-  conclusion: Type.Union([Type.String(), Type.Null()]),
-});
-
-const jobRunSchema = Type.Object({
-  id: Type.Number(),
-  name: Type.String(),
-  status: Type.String(),
-  conclusion: Type.Union([Type.String(), Type.Null()]),
-  html_url: Type.Optional(Type.String()),
-  steps: Type.Array(stepSchema),
-});
-
-const jobsResponseSchema = Type.Object({ jobs: Type.Array(jobRunSchema) });
 
 const prHeadSchema = Type.Object({ headRefOid: Type.String() });
 
@@ -394,51 +421,48 @@ async function searchList(
 
 // ── CI helpers ───────────────────────────────────────────────────────────────
 
-export interface StepInfo {
-  name: string;
-  number: number;
-  status: string;
-  conclusion: string | null;
-}
-
-export interface JobInfo {
-  id: number;
-  name: string;
-  conclusion: string | null;
-  steps: StepInfo[];
-}
-
-/** Build GitHub-UI-style step list for details, marking expanded steps. */
-export function stepsDetail(
-  job: JobInfo,
-  expandedSteps?: Set<number>,
-): { number: number; name: string; conclusion: string | null; expanded?: boolean }[] {
-  return job.steps.map((s) => ({
-    number: s.number,
-    name: s.name,
-    conclusion: s.conclusion,
-    ...(expandedSteps?.has(s.number) && { expanded: true }),
-  }));
-}
-
 // 模块级串行状态：同一资源（如 CI 日志）的请求排队执行，配合函数内部的
 // 缓存检查避免重复网络请求。闭包状态不与其他扩展共享，key 无需全局前缀。
 const seq = createSeqState();
 
+/**
+ * `OWNER/REPO` from a job's `run_url`
+ * (`https://api.github.com/repos/OWNER/REPO/actions/runs/123`). The path is
+ * parsed as a URL rather than pattern-matched, and GitHub canonicalizes the
+ * owner/repo casing in these fields — so this is the spelling to key the log
+ * cache on, independent of whatever `repo` the caller passed.
+ */
+export function repoFromRunUrl(runUrl: string): string {
+  const segments = new URL(runUrl).pathname.split("/").filter(Boolean);
+  const reposAt = segments.indexOf("repos");
+  const ownerAndRepo = reposAt === -1 ? [] : segments.slice(reposAt + 1, reposAt + 3);
+  if (ownerAndRepo.length !== 2) {
+    throw new Error(`unexpected run_url (expected /repos/<owner>/<repo>/...): ${runUrl}`);
+  }
+  return ownerAndRepo.join("/");
+}
+
+/** Absolute path of the raw job log cache file written by `getJobLog`. */
+export function jobLogPath(repo: string, runId: string, jobId: number): string {
+  const { owner, repo: name } = splitRepo(repo);
+  return join(homedir(), ".cache", "pi", "github", "ci-logs", owner, name, runId, `${jobId}.log`);
+}
+
 async function getJobLog(
-  runId: string,
-  jobId: number,
-  effectiveRepo: string,
+  job: RunJob,
   signal: AbortSignal | undefined,
   cwd: string | undefined,
   input?: unknown,
 ): Promise<string> {
-  const cacheDir = join(homedir(), ".cache", "pi", "ci-logs", runId);
-  const cacheFile = join(cacheDir, `${jobId}.log`);
+  // The log download only accepts a job id, and the cache is keyed on the
+  // canonical repo/run from the job itself, not on the caller's `repo` string.
+  const repo = repoFromRunUrl(job.run_url);
+  const cacheFile = jobLogPath(repo, String(job.run_id), job.id);
+  const cacheDir = dirname(cacheFile);
 
-  // 同一 runId:jobId 的请求串行执行：后一个进入时缓存已写入，直接命中缓存，
+  // 同一 cache 文件的请求串行执行：后一个进入时缓存已写入，直接命中缓存，
   // 不会重复发网络请求；串行也保证不会有两个并发写同一 cache 文件。
-  return seq.execute(`${runId}:${jobId}`, async () => {
+  return seq.execute(cacheFile, async () => {
     // Check file cache
     try {
       return await readFile(cacheFile, "utf8");
@@ -447,13 +471,14 @@ async function getJobLog(
     }
 
     // `gh api` refuses to print responses that contain terminal escape
-    // sequences unless `--allow-escape-sequences` is passed. Job logs are a
-    // binary zip, so without this flag the download always fails with
+    // sequences unless `--allow-escape-sequences` is passed. Job logs carry
+    // ANSI color codes, so without this flag the download always fails with
     // "the response contains terminal escape sequences; pass
-    // --allow-escape-sequences to output it anyway". The ANSI escapes are
-    // stripped later by `cleanStepOutput`, so there is no injection surface.
+    // --allow-escape-sequences to output it anyway". The raw bytes are kept
+    // as-is (the file is the log exactly as GitHub delivers it); the tool never
+    // echoes them, and the TUI strips ANSI when rendering tool results.
     const log = await ghExec(
-      ["api", "--allow-escape-sequences", `/repos/${effectiveRepo}/actions/jobs/${jobId}/logs`],
+      ["api", "--allow-escape-sequences", `/repos/${repo}/actions/jobs/${job.id}/logs`],
       {
         cwd,
         signal,
@@ -516,609 +541,270 @@ export function statusIcon(conclusion: string | null): string {
   }
 }
 
+/** A step's line span in the raw job log: 0-based `start`, exclusive `end`. */
+export interface StepSpan {
+  start: number;
+  end: number;
+}
+
+/** The part of a step the log index needs. `RunJobStep` satisfies it. */
+export interface StepRef {
+  number: number;
+  name: string;
+  conclusion?: string | null;
+  started_at?: string | null;
+}
+
+/** A `##[group]Run …` / `##[group]Post Run …` line: the header of one executed step. */
+interface StepHeader {
+  /** 0-based index of the `##[group]` line. */
+  line: number;
+  /** Header text with the `Run ` / `Post Run ` prefix stripped. */
+  action: string;
+  /** Runner timestamp on that line (epoch ms), null when unparsable. */
+  timestamp: number | null;
+}
+
+/** Runner timestamp every log line starts with: `2026-08-05T16:36:08.1842645Z `. */
+const LOG_TIMESTAMP_RE = /^\uFEFF?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) /;
+const HEADER_PREFIX_RE = /^(Run |Post Run )/;
+
 /**
- * Extract step content from raw job log by matching step names to "Run " groups.
- *
- * Each top-level step emits a `##[group]Run <name>` / `##[group]Post Run <name>`
- * marker at depth 1. Composite actions emit their internal steps as *additional*
- * depth-1 groups *after* the composite's own `##[endgroup]` (e.g. the internal
- * `Run actions/setup-python@…` groups inside `Run pypa/cibuildwheel@…`), so the
- * log's "Run " groups are NOT one-per-step.
- *
- * To handle that we treat a group as an *anchor* only when its action name
- * (after stripping the "Run "/"Post Run " prefix) matches a top-level API step
- * name. Composite-action internals match no API step and are absorbed into the
- * span of the enclosing step instead of truncating it.
- *
- * Step 1 ("Set up job") maps to everything before the first anchor group.
- * Steps with an anchor map to the span from their anchor to the next anchor.
- * Explicitly named steps that lack a "Run " prefix (e.g. a step named
- * "Setup node" running actions/setup-node) are located between the previous
- * and next anchor's groups.
- * Steps that were skipped and never executed return null.
- *
- * Returns null if no matching group is found.
+ * The runner writes a step's header within ~1.6s of the step's API `started_at`
+ * (the API truncates its timestamps to whole seconds), so a header inside this
+ * window is evidence of the step it belongs to.
  */
-export function extractStepFromLog(
-  log: string,
-  stepNumber: number,
-  apiSteps: { number: number; name: string }[],
-): string | null {
-  if (apiSteps.every((s) => s.number !== stepNumber)) return null;
+const HEADER_WINDOW_MS = 5_000;
+/** An exact name match proves the header belongs to that step. */
+const NAME_MATCH_SCORE = 4;
+/** Weight of a header inside the step's start window. */
+const TIME_MATCH_SCORE = 2;
 
-  const lines = log.split("\n");
+function headerTimestamp(line: string): number | null {
+  const match = LOG_TIMESTAMP_RE.exec(line);
+  if (match === null) return null;
+  const ms = Date.parse(match[1]);
+  return Number.isNaN(ms) ? null : ms;
+}
 
-  // Collect depth-1 "Run "/"Post Run " groups in log order.
-  const groups: { line: number; action: string }[] = [];
+/** Collect the depth-1 `Run ` / `Post Run ` headers, in log order. */
+function stepHeaders(lines: string[]): StepHeader[] {
+  const headers: StepHeader[] = [];
   let depth = 0;
   for (const [i, line] of lines.entries()) {
     if (line.includes("##[endgroup]")) {
       if (depth > 0) depth--;
       continue;
     }
-    if (line.includes("##[group]")) {
-      depth++;
-      if (depth === 1) {
-        const m = /##\[group\](.*)/.exec(line);
-        const name = m ? m[1].trim() : "";
-        if (name.startsWith("Run ") || name.startsWith("Post Run ")) {
-          groups.push({ line: i, action: name.replace(/^(Run |Post Run )/, "").trim() });
-        }
+    if (!line.includes("##[group]")) continue;
+    depth++;
+    if (depth !== 1) continue;
+    const name = /##\[group\](.*)/.exec(line)?.[1].trim() ?? "";
+    if (HEADER_PREFIX_RE.test(name)) {
+      headers.push({
+        line: i,
+        action: name.replace(HEADER_PREFIX_RE, "").trim(),
+        timestamp: headerTimestamp(line),
+      });
+    }
+  }
+  return headers;
+}
+
+/** How well a step explains a header — 0 means "no evidence, don't guess". */
+function headerScore(step: StepRef, header: StepHeader): number {
+  let score = 0;
+  const named = step.name.replace(HEADER_PREFIX_RE, "").trim();
+  if (HEADER_PREFIX_RE.test(step.name) && named === header.action) {
+    score += NAME_MATCH_SCORE;
+  }
+  const started = step.started_at == null ? NaN : Date.parse(step.started_at);
+  if (!Number.isNaN(started) && header.timestamp !== null) {
+    const delta = header.timestamp - started;
+    if (delta >= 0 && delta <= HEADER_WINDOW_MS) {
+      score += TIME_MATCH_SCORE * (1 - delta / HEADER_WINDOW_MS);
+    }
+  }
+  return score;
+}
+
+/**
+ * Align steps with headers: an order-preserving best-scoring matching, where
+ * either side may be left unmatched. Only pairs with real evidence are matched,
+ * so a step whose block cannot be identified gets no span instead of a guess.
+ *
+ * Name evidence disappears as soon as the workflow names a step with `name:`
+ * (the API name is then the custom one, while the log header carries the action
+ * or command), which is why the timestamps matter too. Headers belonging to a
+ * composite action's *internal* steps carry no evidence for any API step, so
+ * they stay unmatched and are absorbed into the enclosing step's span.
+ */
+function alignStepsToHeaders(
+  steps: readonly StepRef[],
+  headers: StepHeader[],
+): Map<number, number> {
+  const n = steps.length;
+  const m = headers.length;
+  // Equal-scoring alignments are decided in favour of the earlier step: a step
+  // whose output the runner never logged (post steps, "Complete job") comes last
+  // in step order, so a header claimed by both belongs to the earlier one. A
+  // step that ran always emits its header before the next step starts, which
+  // leaves several steps competing for one header whenever the API timestamps
+  // (whole seconds) collapse them into the same second.
+  const TIE_BREAK = 1e-6;
+  const scores = steps.map((step, i) =>
+    headers.map((header) => {
+      const score = headerScore(step, header);
+      return score > 0 ? score + TIE_BREAK * (n - i) : 0;
+    }),
+  );
+  // best[i][j]: score of aligning the first i steps with the first j headers.
+  const best: number[][] = Array.from({ length: n + 1 }, () =>
+    Array.from({ length: m + 1 }, () => 0),
+  );
+  const paired: boolean[][] = Array.from({ length: n + 1 }, () =>
+    Array.from({ length: m + 1 }, () => false),
+  );
+
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const pairing = scores[i - 1][j - 1];
+      const withPairing = pairing > 0 ? best[i - 1][j - 1] + pairing : -Infinity;
+      if (withPairing >= best[i - 1][j] && withPairing >= best[i][j - 1]) {
+        best[i][j] = withPairing;
+        paired[i][j] = true;
+      } else {
+        best[i][j] = Math.max(best[i - 1][j], best[i][j - 1]);
       }
     }
   }
 
-  // Step 1 ("Set up job"): everything before the first "Run "/"Post Run " group.
-  if (stepNumber === 1) {
-    return lines
-      .slice(0, groups[0]?.line ?? lines.length)
-      .join("\n")
-      .trimEnd();
-  }
-
-  // API steps that produce a "Run "/"Post Run " log group, in step order.
-  const runSteps = apiSteps
-    .filter((s) => /^(Run |Post Run )/.test(s.name))
-    .map((s) => ({ number: s.number, action: s.name.replace(/^(Run |Post Run )/, "").trim() }))
-    .toSorted((a, b) => a.number - b.number);
-
-  // Greedily assign each run step the first unclaimed group whose action name
-  // matches (log order). Leftover groups are composite-action internals.
-  const used = new Set<number>();
-  const stepToGroup = new Map<number, number>(); // api step number -> group index
-  for (const rs of runSteps) {
-    const gi = groups.findIndex((g, idx) => !used.has(idx) && g.action === rs.action);
-    if (gi !== -1) {
-      used.add(gi);
-      stepToGroup.set(rs.number, gi);
+  const assignment = new Map<number, number>(); // step number -> header index
+  for (let i = n, j = m; i > 0 && j > 0;) {
+    if (paired[i][j]) {
+      assignment.set(steps[i - 1].number, j - 1);
+      i--;
+      j--;
+    } else if (best[i - 1][j] >= best[i][j - 1]) {
+      i--;
+    } else {
+      j--;
     }
   }
+  return assignment;
+}
 
-  // Anchor sequence in log order.
-  const anchors = [...stepToGroup]
-    .map(([stepNum, gi]) => ({ stepNum, line: groups[gi].line }))
+/** Exclusive end index with trailing blank lines dropped, so a span slices to real text. */
+function trimTrailingBlankLines(lines: string[], start: number, end: number): number {
+  while (end > start && (lines[end - 1] ?? "").trim() === "") end--;
+  return end;
+}
+
+/**
+ * Locate a job's steps in its raw log: each executed step emits a depth-1
+ * `##[group]Run <x>` / `##[group]Post Run <x>` header, and its block runs from
+ * that header up to the next executed step's header. Everything in between —
+ * the action's own `::group::` output, a composite action's internal step
+ * headers — belongs to the enclosing step.
+ *
+ * "Set up job" emits no header: it owns the runner preamble before the first
+ * header. Steps with no header of their own (skipped steps, post steps the
+ * runner never logged, "Complete job") get no span.
+ */
+export function stepLineSpans(log: string, apiSteps: readonly StepRef[]): Map<number, StepSpan> {
+  const lines = log.split("\n");
+  const headers = stepHeaders(lines);
+  const spans = new Map<number, StepSpan>();
+
+  // "Set up job" is the runner's own preamble and never takes part in matching:
+  // its start window overlaps the first real step's header.
+  const preamble = apiSteps.find((s) => s.number === 1 && s.name === "Set up job");
+  if (preamble !== undefined) {
+    const end = trimTrailingBlankLines(lines, 0, headers[0]?.line ?? lines.length);
+    spans.set(preamble.number, { start: 0, end });
+  }
+
+  // A skipped step never started, so it emitted no header — and its name often
+  // repeats another step's ("Clear build" twice, "Post Run <action>" next to
+  // its "Run <action>"), which would let it steal that step's block.
+  const assignment = alignStepsToHeaders(
+    apiSteps.filter((s) => s !== preamble && s.conclusion !== "skipped"),
+    headers,
+  );
+  const placed = [...assignment]
+    .map(([number, headerIndex]) => ({ number, line: headers[headerIndex].line }))
     .toSorted((a, b) => a.line - b.line);
 
-  // Direct anchor hit: span from this anchor to the next one.
-  const anchorIdx = anchors.findIndex((a) => a.stepNum === stepNumber);
-  if (anchorIdx !== -1) {
-    const start = anchors[anchorIdx].line;
-    const end = anchorIdx + 1 < anchors.length ? anchors[anchorIdx + 1].line : lines.length;
-    return lines.slice(start, end).join("\n").trimEnd();
+  for (const [index, step] of placed.entries()) {
+    const end = trimTrailingBlankLines(lines, step.line, placed[index + 1]?.line ?? lines.length);
+    spans.set(step.number, { start: step.line, end });
   }
 
-  // Non-anchor step (explicitly named, e.g. "Setup node"): its group sits in
-  // the gap between the previous and next anchors' groups. Take the first
-  // unclaimed group in that span.
-  const prevAnchor = anchors.reduce<{ stepNum: number; line: number } | undefined>(
-    (acc, a) => (a.stepNum < stepNumber ? a : acc),
-    undefined,
-  );
-  const nextAnchor = anchors.find((a) => a.stepNum > stepNumber);
+  return spans;
+}
 
-  const spanStart = prevAnchor ? prevAnchor.line + 1 : 0;
-  const spanEnd = nextAnchor ? nextAnchor.line : lines.length;
-
-  for (const [gi, g] of groups.entries()) {
-    if (used.has(gi)) continue;
-    if (g.line >= spanStart && g.line < spanEnd) {
-      return lines.slice(g.line, spanEnd).join("\n").trimEnd();
-    }
-  }
-
-  return null;
+/** Text of `stepNumber` in its raw log, or null when the step never ran. */
+export function extractStepFromLog(
+  log: string,
+  stepNumber: number,
+  apiSteps: readonly { number: number; name: string }[],
+): string | null {
+  const span = stepLineSpans(log, apiSteps).get(stepNumber);
+  if (span === undefined) return null;
+  return log.split("\n").slice(span.start, span.end).join("\n").trimEnd();
 }
 
 // ── ci-logs rendering (pure, testable) ──────────────────────────────────────
-
-export interface CiLogsJob {
-  id: number;
-  name: string;
-  status: string;
-  conclusion: string | null;
-  steps: StepInfo[];
-}
 
 export interface CiLogsResult {
   content: { type: "text"; text: string }[];
   details: Record<string, unknown>;
 }
 
-/** GitHub Actions runner line prefix: `2026-08-05T16:35:50.8358826Z `. */
-const RUNNER_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z /;
-/** ANSI color escape sequences. */
-// eslint-disable-next-line no-control-regex -- intentional: matching raw ESC sequences in runner logs
-const ANSI_RE = /\u001B\[[0-9;]*m/g;
-
-/**
- * Strip the runner framing from a step's raw log, leaving the command's own
- * output as plain text: removes the per-line timestamp prefix, ANSI color
- * escapes and `##[group]` / `##[endgroup]` marker lines. `##[error]` /
- * `##[warning]` lines are kept — their message is part of the output.
- */
-export function cleanStepOutput(stepLog: string): string {
-  return stepLog
-    .split("\n")
-    .map((line) =>
-      line
-        .replace(/^\uFEFF/, "") // UTF-8 BOM on the first line
-        .replace(RUNNER_TIMESTAMP_RE, "")
-        .replaceAll(ANSI_RE, "")
-        .replace(/\r$/, "")
-        .trimEnd(),
-    )
-    .filter((line) => !line.startsWith("##[group]") && !line.startsWith("##[endgroup]"))
-    .join("\n")
-    .trim();
-}
-
-/**
- * Strip terminal escape sequences and a leading UTF-8 BOM from a raw job log,
- * keeping everything else — timestamps, `##[group]` markers, blank lines —
- * intact. Used when writing a job's complete log to a file: complete, but
- * readable without ANSI garbage.
- */
-export function stripAnsi(text: string): string {
-  return text.replace(/^\uFEFF/, "").replaceAll(ANSI_RE, "");
-}
-
-export interface StepLogParams {
-  runId: string;
-  job?: string;
-  step: string;
-  offset?: number;
-  limit?: number;
-  /** Return the complete, untruncated step output (ignores `offset`/`limit`). */
-  full?: boolean;
-}
-
-/**
- * Render the result of `read-github-ci-logs` for a single step: the step's
- * complete log as plain text (no runner framing). `job` is required — a step
- * only exists inside a specific job. `offset`/`limit` control the returned
- * text. Pure — no network, no `gh`.
- */
-export async function renderStepLog(
-  params: StepLogParams,
-  jobs: CiLogsJob[],
-  fetchJobLog: (jobId: number) => Promise<string>,
-  onUpdate?: (msg: CiLogsResult) => void,
-): Promise<CiLogsResult> {
-  const { job, step, offset, limit, full } = params;
-
-  if (!job) {
-    return {
-      content: [{ type: "text", text: "`job` is required when fetching a step's logs." }],
-      details: {},
-    };
-  }
-
-  const isNumeric = /^\d+$/.test(job);
-  const targetJob = jobs.find((j) => (isNumeric ? String(j.id) : j.name) === job);
-  if (!targetJob) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Job "${job}" not found. Available: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
-        },
-      ],
-      details: {},
-    };
-  }
-
-  if (targetJob.status === "queued") {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Job "${targetJob.name}" is still queued — no logs available yet. Use \`watch-github-run\` to wait for it to start, then retry.`,
-        },
-      ],
-      details: {},
-    };
-  }
-
-  // Resolve step name → number
-  const found = targetJob.steps.find((s) => s.name.toLowerCase() === step.toLowerCase());
-  if (!found) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Step "${step}" not found. Available: ${targetJob.steps.map((s) => `${s.name} (${s.number})`).join(", ")}`,
-        },
-      ],
-      details: {},
-    };
-  }
-  const stepNum = found.number;
-
-  if (stepNum < 1 || stepNum > targetJob.steps.length) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Step ${stepNum} out of range. Job "${targetJob.name}" has ${targetJob.steps.length} steps (1-${targetJob.steps.length}).`,
-        },
-      ],
-      details: {},
-    };
-  }
-
-  onUpdate?.({
-    content: [{ type: "text", text: `Fetching logs for step ${stepNum}...` }],
-    details: {},
-  });
-
-  const rawLog = await fetchJobLog(targetJob.id);
-
-  const stepLog = extractStepFromLog(rawLog, stepNum, targetJob.steps);
-  if (stepLog === null) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Could not extract step ${stepNum} from job "${targetJob.name}" logs. The log may be malformed or empty. Try fetching without \`step\` to see the full job log.`,
-        },
-      ],
-      details: {},
-    };
-  }
-
-  const clean = cleanStepOutput(stepLog);
-
-  // `full`: return the complete output, no truncation and no offset.
-  if (full) {
-    const fullLines = clean.split("\n").length;
-    return {
-      content: [{ type: "text", text: clean }],
-      details: {
-        summary: `Step ${stepNum} — ${targetJob.name} / ${found.name}: complete output (${fullLines} lines)`,
-        truncated: false,
-        full: true,
-        job: {
-          name: targetJob.name,
-          conclusion: targetJob.conclusion,
-          steps: stepsDetail(targetJob, new Set([stepNum])),
-        },
-        totalLines: fullLines,
-        shownLines: fullLines,
-      },
-    };
-  }
-
-  // Apply offset on the cleaned text, then truncate.
-  const totalLines = clean.split("\n").length;
-  let logToShow = clean;
-  let appliedOffset = false;
-  if (offset !== undefined && offset > 1) {
-    if (offset > totalLines) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Offset ${offset} exceeds step log length (${totalLines} lines).`,
-          },
-        ],
-        details: {},
-      };
-    }
-    logToShow = clean
-      .split("\n")
-      .slice(offset - 1)
-      .join("\n");
-    appliedOffset = true;
-  }
-
-  const maxLines = limit ?? 500;
-  const maxBytes = 60 * 1024;
-  const { text, truncated: tr } = truncate(logToShow, maxLines, maxBytes);
-  const shownLines = text.split("\n").length;
-
-  return {
-    content: [{ type: "text", text }],
-    details: {
-      summary: `Step ${stepNum} — ${targetJob.name} / ${found.name}: ${shownLines} of ${totalLines} lines${tr ? " (truncated)" : ""}`,
-      truncated: tr,
-      job: {
-        name: targetJob.name,
-        conclusion: targetJob.conclusion,
-        steps: stepsDetail(targetJob, new Set([stepNum])),
-      },
-      totalLines,
-      shownLines,
-      offset: appliedOffset ? offset : undefined,
-    },
-  };
-}
-
-export interface JobLogsParams {
-  runId: string;
-  job?: string;
-  offset?: number;
-  limit?: number;
-  /** Expand every step's complete output (default: only failed steps, truncated). */
-  full?: boolean;
-}
-
-export interface JobLogsStep {
+/** One step of a job, indexed into the job's raw log file. */
+export interface CiLogsStepIndex {
+  number: number;
   name: string;
-  output?: string;
+  conclusion: string | null;
+  /** 1-based inclusive line range of this step's block in `log_file`. */
+  start_line?: number;
+  end_line?: number;
 }
 
-export interface JobLogsOutput {
+/** A job's steps plus the raw log file holding their output. */
+export interface CiLogsJobIndex {
   name: string;
-  steps: JobLogsStep[];
+  id: number;
+  status: string;
+  conclusion: string | null;
+  log_file: string;
+  steps: CiLogsStepIndex[];
 }
 
 /**
- * Render the result of `read-github-ci-logs` without a `step`: a JSON array of
- * jobs `[{ name, steps: [{ name, output? }] }]`. Every step is listed by name;
- * only failed steps carry an `output` (their log as plain text). `job` is an
- * optional filter; `offset`/`limit` control the size of each `output` text.
- * Pure — no network, no `gh`.
+ * Index a job's steps into its raw log: every step that produced a log block
+ * gets the `[start_line, end_line]` range (1-based, inclusive) of that block in
+ * `log_file`; steps that never ran (skipped, or absent from the log) carry no
+ * range. The step content itself is not returned — the model reads it out of
+ * the file.
  */
-export async function renderJobLogs(
-  params: JobLogsParams,
-  jobs: CiLogsJob[],
-  fetchJobLog: (jobId: number) => Promise<string>,
-): Promise<CiLogsResult> {
-  const { job, offset, limit, full } = params;
-
-  if (jobs.length === 0) {
-    return {
-      content: [{ type: "text", text: `No jobs found for run ${params.runId}` }],
-      details: {},
-    };
-  }
-
-  let targetJobs = jobs;
-  if (job) {
-    const isNumeric = /^\d+$/.test(job);
-    targetJobs = jobs.filter((j) => (isNumeric ? String(j.id) : j.name) === job);
-    if (targetJobs.length === 0) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Job "${job}" not found. Available: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
-          },
-        ],
-        details: {},
-      };
-    }
-  }
-
-  const output: JobLogsOutput[] = [];
-
-  for (const j of targetJobs) {
-    const steps: JobLogsStep[] = [];
-    let rawLog: string | null = null;
-
-    for (const s of j.steps) {
-      if (!full && s.conclusion !== "failure") {
-        steps.push({ name: s.name });
-        continue;
-      }
-
-      try {
-        rawLog ??= await fetchJobLog(j.id);
-        const stepLog = extractStepFromLog(rawLog, s.number, j.steps);
-        if (!stepLog) {
-          steps.push({ name: s.name });
-          continue;
-        }
-
-        const clean = cleanStepOutput(stepLog);
-
-        // `full`: every step carries its complete, untruncated output.
-        if (full) {
-          steps.push({ name: s.name, output: clean });
-          continue;
-        }
-
-        const totalLines = clean.split("\n").length;
-
-        // Apply offset on the cleaned text, then truncate.
-        let logToShow = clean;
-        if (offset !== undefined && offset > 1) {
-          if (offset > totalLines) {
-            steps.push({ name: s.name });
-            continue;
-          }
-          logToShow = clean
-            .split("\n")
-            .slice(offset - 1)
-            .join("\n");
-        }
-
-        const { text } = truncate(logToShow, limit ?? 500, 60 * 1024);
-        steps.push({ name: s.name, ...(text && { output: text }) });
-      } catch {
-        // Log fetch failed — list the step without an output.
-        steps.push({ name: s.name });
-      }
-    }
-
-    output.push({ name: j.name, steps });
-  }
-
-  const totalJobs = output.length;
-  const failedJobs = output.filter((j) => j.steps.some((s) => s.output !== undefined)).length;
-  const expandedSteps = output.reduce(
-    (acc, j) => acc + j.steps.filter((s) => s.output !== undefined).length,
-    0,
-  );
-
+export function jobLogIndex(job: RunJob, rawLog: string): CiLogsJobIndex {
+  const spans = stepLineSpans(rawLog, job.steps);
   return {
-    content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
-    details: {
-      summary: full
-        ? `${totalJobs} job${totalJobs > 1 ? "s" : ""}, ${expandedSteps} step output${expandedSteps === 1 ? "" : "s"} expanded (full, untruncated)`
-        : `${totalJobs} job${totalJobs > 1 ? "s" : ""}, ${failedJobs} failed, ${expandedSteps} failed step${expandedSteps > 1 ? "s" : ""}`,
-      truncated: undefined,
-      ...(full && { full: true }),
-      jobs: targetJobs.map((j) => ({
-        name: j.name,
-        conclusion: j.conclusion,
-        steps: stepsDetail(j, undefined),
-      })),
-    },
-  };
-}
-
-// ── writing complete logs to a file ─────────────────────────────────────────
-
-export interface WriteLogFileParams {
-  runId: string;
-  job?: string;
-  step?: string;
-  outputFile: string;
-}
-
-/**
- * Write the complete log to a file and return metadata (path, line/byte
- * counts) instead of the log content itself. With `step`: the step's cleaned
- * output. Without `step`: the whole job's log, timestamps and `##[group]`
- * markers kept but ANSI escapes stripped. `job` is required when the run has
- * more than one job (a single-job run is used implicitly). Relative
- * `outputFile` paths resolve against `cwd`.
- */
-export async function writeLogFile(
-  params: WriteLogFileParams,
-  jobs: CiLogsJob[],
-  fetchJobLog: (jobId: number) => Promise<string>,
-  cwd: string | undefined,
-  input: unknown,
-): Promise<CiLogsResult> {
-  const { job, step, outputFile } = params;
-
-  const isNumeric = /^\d+$/.test(job ?? "");
-  const targetJobs = job ? jobs.filter((j) => (isNumeric ? String(j.id) : j.name) === job) : jobs;
-  if (targetJobs.length === 0) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Job "${job}" not found. Available: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
-        },
-      ],
-      details: { input },
-    };
-  }
-  if (targetJobs.length > 1) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Job "${job}" matches ${targetJobs.length} jobs. Specify a unique job name or id. Available: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
-        },
-      ],
-      details: { input },
-    };
-  }
-  const targetJob = targetJobs[0];
-
-  if (targetJob.status === "queued") {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Job "${targetJob.name}" is still queued — no logs available yet. Use \`watch-github-run\` to wait for it to start, then retry.`,
-        },
-      ],
-      details: { input },
-    };
-  }
-
-  const rawLog = await fetchJobLog(targetJob.id);
-
-  let content: string;
-  let what: string;
-  if (step === undefined) {
-    content = stripAnsi(rawLog);
-    what = `job "${targetJob.name}" (id: ${targetJob.id})`;
-  } else {
-    const found = targetJob.steps.find((s) => s.name.toLowerCase() === step.toLowerCase());
-    if (found === undefined) {
+    name: job.name,
+    id: job.id,
+    status: job.status,
+    conclusion: job.conclusion,
+    log_file: jobLogPath(repoFromRunUrl(job.run_url), String(job.run_id), job.id),
+    steps: job.steps.map((s) => {
+      const span = spans.get(s.number);
       return {
-        content: [
-          {
-            type: "text",
-            text: `Step "${step}" not found. Available: ${targetJob.steps.map((s) => `${s.name} (${s.number})`).join(", ")}`,
-          },
-        ],
-        details: { input },
+        number: s.number,
+        name: s.name,
+        conclusion: s.conclusion,
+        ...(span && span.end > span.start && { start_line: span.start + 1, end_line: span.end }),
       };
-    }
-    const stepLog = extractStepFromLog(rawLog, found.number, targetJob.steps);
-    if (stepLog === null) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Could not extract step ${found.number} from job "${targetJob.name}" logs. The log may be malformed or empty.`,
-          },
-        ],
-        details: { input },
-      };
-    }
-    content = cleanStepOutput(stepLog);
-    what = `step ${found.number} ("${found.name}") of job "${targetJob.name}"`;
-  }
-
-  const target = resolve(cwd ?? process.cwd(), outputFile);
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, content);
-
-  const lines = content.split("\n").length;
-  const bytes = Buffer.byteLength(content, "utf8");
-
-  return {
-    content: [
-      {
-        type: "text",
-        text:
-          `## CI log written to \`${target}\`\n\n` +
-          `- content: ${what}\n` +
-          `- ${lines} lines, ${bytes} bytes\n` +
-          `- run: ${params.runId}\n\n` +
-          `Read it with the \`read\` tool (use \`offset\`/\`limit\` for large files).`,
-      },
-    ],
-    details: {
-      outputFile: target,
-      lines,
-      bytes,
-      runId: params.runId,
-      job: {
-        name: targetJob.name,
-        id: targetJob.id,
-        conclusion: targetJob.conclusion,
-      },
-      input,
-    },
+    }),
   };
 }
 
@@ -1142,6 +828,10 @@ export interface MergedCheck {
   readonly link: string | null;
   /** Triggering workflow event (push, pull_request, ...); null when unknown. */
   readonly event: string | null;
+  /** Actions run id behind this check, for `get-github-workflow-jobs`; null when unknown. */
+  readonly runId: number | null;
+  /** Actions job id behind this check, for `read-github-ci-logs`; null when unknown. */
+  readonly jobId: number | null;
 }
 
 function statusBucket(state: string): CheckBucket {
@@ -1194,6 +884,8 @@ export function mergeChecks(
       startedAt: null,
       link: status.targetUrl,
       event: null,
+      runId: null,
+      jobId: null,
     })),
     ...checkRuns.map((run) => ({
       name: run.name,
@@ -1201,6 +893,8 @@ export function mergeChecks(
       startedAt: run.startedAt,
       link: run.url,
       event: run.event,
+      runId: run.runId,
+      jobId: run.jobId,
     })),
   ];
 }
@@ -1467,8 +1161,20 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     return;
   }
 
-  const githubSearch = createGithubSearch();
-  const githubChecks = createGithubChecks();
+  pi.on("session_start", async (_event, ctx) => {
+    // 代理配置读不出来（JSON 语法错、字段类型错、proxy 不是 http(s) URL）时只告警，
+    // 工具按直连继续工作——配置写错不该让整套 GitHub 工具不可用。
+    const { error } = await ghProxy.load();
+    if (!error) return;
+    try {
+      ctx.ui.notify(`gh proxy config ignored: ${error}`, "warning");
+    } catch {
+      // 读取期间 session 可能已被替换，失效的 ctx 直接忽略
+    }
+  });
+
+  const githubSearch = createGithubSearch({ fetch: ghProxy.fetch });
+  const githubChecks = createGithubChecks({ fetch: ghProxy.fetch });
 
   /**
    * Shared wait core of `wait-github-pr-checks` and
@@ -1706,28 +1412,41 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     name: "read-github-pr-status",
     label: "GitHub PR Status",
     description:
-      "Get the current status checks and CI results for a GitHub pull request. Returns the current snapshot immediately; pending checks are reported as-is, not waited on. Use wait-github-pr-checks to block until checks finish.",
+      "Get the current checks of a pull request's head commit as JSON {pr, repo, head_sha, checks:[{name, bucket, event, run_id, job_id, url}]}. `bucket` is pass / fail / pending / skipped; Actions checks carry the `run_id` and `job_id` behind them (null for other CI), which is what read-github-ci-logs and get-github-workflow-jobs take. Returns the snapshot immediately without waiting — use wait-github-pr-checks to block until the checks finish.",
     promptSnippet: "Read GitHub PR status checks",
     parameters: Type.Object({
       number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+      repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params;
-      const args = ["pr", "checks", String(number), ...repoArgs(repo)];
+      const pullNumber = toPositiveId(number, "number");
+      const pendant = subtitlePendant(params, "number");
+      const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+      const { owner, repo: name } = splitRepo(effectiveRepo);
 
-      // `gh pr checks` exit codes: 0 = all passed, 1 = some failed, 8 = some
-      // pending. All three are valid states — return the current snapshot
-      // as-is without waiting. `wait-github-pr-checks` is the blocking variant.
-      const result = await runGh(args, { cwd: ctx.cwd, signal });
+      // 与 wait 工具同一条读取路径（octokit），只是这里不轮询：pending 的 check
+      // 原样返回，等结果走 wait-github-pr-checks。
+      const pollSignal = signal ?? new AbortController().signal;
+      const headSha = await githubChecks.pullHead(owner, name, pullNumber, pollSignal);
+      const [statuses, checkRuns] = await Promise.all([
+        githubChecks.statuses(owner, name, headSha, pollSignal),
+        githubChecks.checkRuns(owner, name, headSha, pollSignal),
+      ]);
+      const checks = mergeChecks(statuses, checkRuns).map((check) => ({
+        name: check.name,
+        bucket: check.bucket,
+        event: check.event,
+        run_id: check.runId,
+        job_id: check.jobId,
+        url: check.link,
+      }));
 
-      if (result.code !== 0 && result.code !== 1 && result.code !== 8) {
-        // Anything else is a real error (cancelled, auth, network, ...)
-        throw new GhError(args, result, params);
-      }
-      const toolResult = toToolResult(result.stdout, params);
-      toolResult.details.pendant = subtitlePendant(params, "number");
-      return toolResult;
+      const payload = { pr: pullNumber, repo: effectiveRepo, head_sha: headSha, checks };
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+        details: { ...payload, input: params, ...(pendant && { pendant }) },
+      };
     },
   });
 
@@ -1754,21 +1473,18 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       if (reviews) {
         const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
 
-        const [comments, reviewsOut] = await Promise.all([
-          ghExec(["api", `/repos/${effectiveRepo}/pulls/${String(number)}/comments`], {
+        const [reviewComments, reviewSummaries] = await Promise.all([
+          ghApiList(`/repos/${effectiveRepo}/pulls/${String(number)}/comments`, {
             cwd: ctx.cwd,
             signal,
             input: params,
           }),
-          ghExec(["api", `/repos/${effectiveRepo}/pulls/${String(number)}/reviews`], {
+          ghApiList(`/repos/${effectiveRepo}/pulls/${String(number)}/reviews`, {
             cwd: ctx.cwd,
             signal,
             input: params,
           }),
         ]);
-
-        const reviewComments = Value.Parse(Type.Array(Type.Unknown()), JSON.parse(comments));
-        const reviewSummaries = Value.Parse(Type.Array(Type.Unknown()), JSON.parse(reviewsOut));
 
         out = JSON.stringify(
           {
@@ -1856,131 +1572,78 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     name: "read-github-ci-logs",
     label: "GitHub CI Logs",
     description:
-      "Get CI logs from a GitHub Actions workflow run. Without step: returns a JSON array of jobs [{name, steps:[{name, output?}]}] where every step is listed by name and failed steps carry their log as plain text in `output`. With step (requires job): returns that step's complete log as plain text. offset/limit control the size of every expanded output. Use run_id from list-github-workflow-runs. Note: queued jobs have no logs yet; use watch-github-run to wait for completion. Set full=true for complete untruncated outputs (every step when step is omitted; caution: very large outputs consume a lot of LLM context). Set output_file=/path to write the complete log to a file instead of returning it (requires job when the run has multiple jobs); the tool returns the file path to read.",
+      "Download one GitHub Actions job's CI log by job ID and index its steps. Returns JSON {name, id, status, conclusion, log_file, steps:[{number, name, conclusion, start_line?, end_line?}]}: `log_file` is the job's complete raw log on disk (runner timestamps and ANSI kept, exactly as GitHub delivers it) and each step carries the 1-based inclusive line range of its block inside that file. Read the content out of the file yourself (read/grep with offset/limit) — it is not echoed back. Get the job IDs from get-github-workflow-jobs, then call this once per job you need." +
+      " Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
     promptSnippet: "Read GitHub CI logs",
     parameters: Type.Object({
-      run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),
+      job_id: Type.Union([Type.Number(), Type.String()], {
+        description: "Job ID, from get-github-workflow-jobs.",
+      }),
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-      job: Type.Optional(
-        Type.String({
-          description:
-            "Job name or ID. Optional filter when listing jobs; required when fetching a specific step's logs.",
-        }),
-      ),
-      step: Type.Optional(
-        Type.String({
-          description:
-            "Step name to fetch the complete log for. Requires `job`. Omit to list jobs/steps with failed step logs expanded.",
-        }),
-      ),
-      offset: Type.Optional(
-        Type.Number({
-          description:
-            "Line number to start each output text from (1-indexed). Useful for long outputs where the error is at the end.",
-        }),
-      ),
-      limit: Type.Optional(
-        Type.Number({
-          description: "Maximum number of lines per output text (default 500).",
-        }),
-      ),
-      full: Type.Optional(
-        Type.Boolean({
-          description:
-            "Return complete, untruncated output instead of the default 500-line/60KB cap. With `step`: that step's full output. Without `step`: every step's full output (not just failed ones). Ignored when `output_file` is set. Caution: very large outputs consume a lot of LLM context — prefer `output_file` for big logs.",
-        }),
-      ),
-      output_file: Type.Optional(
-        Type.String({
-          description:
-            "Write the complete log to this file instead of returning it (relative paths resolve against the working directory). With `step` (requires `job`): the step's cleaned output. Without `step`: requires `job` (or a run with a single job) and writes that job's full log — timestamps and group markers kept, ANSI escapes stripped. Returns the file path; read it with the `read` tool.",
-        }),
-      ),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
-      const { run_id, repo, job, step, offset, limit, full, output_file } = params;
+      const { job_id, repo } = params;
+      const jobId = toPositiveId(job_id, "job_id");
 
-      const pendant = subtitlePendant(params, "run_id");
+      const pendant = subtitlePendant(params, "job_id");
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-      const jobsOut = await ghExec(["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`], {
-        cwd: ctx.cwd,
-        signal,
-        input: params,
+      const { owner, repo: name } = splitRepo(effectiveRepo);
+
+      const failure = (text: string): CiLogsResult => ({
+        content: [{ type: "text", text }],
+        details: { input: params, ...(pendant && { pendant }) },
       });
-      const { jobs } = Value.Parse(jobsResponseSchema, JSON.parse(jobsOut));
 
-      const fetchJobLog = (jobId: number): Promise<string> =>
-        getJobLog(String(run_id), jobId, effectiveRepo, signal, ctx.cwd, params);
-
-      // ── Write the complete log to a file ───────────────────────────────
-      if (output_file !== undefined && output_file !== "") {
-        const result = await writeLogFile(
-          { runId: String(run_id), job, step, outputFile: output_file },
-          jobs,
-          fetchJobLog,
-          ctx.cwd,
-          params,
+      let target: RunJob;
+      try {
+        target = await githubChecks.job(owner, name, jobId, signal);
+      } catch (error) {
+        const status = (error as { status?: number }).status;
+        if (status !== 404) throw error;
+        return failure(
+          `Job ${jobId} not found in ${effectiveRepo} — job IDs come from \`get-github-workflow-jobs\`.`,
         );
-        return { ...result, details: { ...result.details, ...(pendant && { pendant }) } };
       }
 
-      // ── Fetch a specific step's logs (requires `job`) ─────────────────
-      if (step !== undefined) {
-        onUpdate?.({
-          content: [{ type: "text", text: `Fetching job list...` }],
-          details: {},
-        });
-        const stepResult = await renderStepLog(
-          { runId: String(run_id), job, step, offset, limit, full },
-          jobs,
-          fetchJobLog,
-          onUpdate,
+      if (target.status === "queued") {
+        return failure(
+          `Job "${target.name}" is still queued — no logs available yet. Use \`watch-github-run\` to wait for it to start, then retry.`,
         );
-        return {
-          ...stepResult,
-          details: { ...stepResult.details, input: params, ...(pendant && { pendant }) },
-        };
       }
 
-      // ── List jobs/steps, with failed step logs expanded ────────────────
       onUpdate?.({
-        content: [{ type: "text", text: `Fetching job list...` }],
+        content: [{ type: "text", text: `Fetching log of job "${target.name}"...` }],
         details: {},
       });
-      const jobsResult = await renderJobLogs(
-        { runId: String(run_id), job, offset, limit, full },
-        jobs,
-        fetchJobLog,
-      );
+
+      const rawLog = await getJobLog(target, signal, ctx.cwd, params);
+      const index = jobLogIndex(target, rawLog);
+
       return {
-        ...jobsResult,
-        details: { ...jobsResult.details, input: params, ...(pendant && { pendant }) },
+        content: [{ type: "text", text: JSON.stringify(index, null, 2) }],
+        details: { ...index, input: params, ...(pendant && { pendant }) },
       };
     },
   });
 
-  // ── read-github-workflow-jobs ──────────────────────────────────────────────
+  // ── get-github-workflow-jobs ──────────────────────────────────────────────
   pi.registerTool({
-    name: "read-github-workflow-jobs",
+    name: "get-github-workflow-jobs",
     label: "GitHub Workflow Jobs",
     description:
-      "Get structured job data (name, status, conclusion, job ID) for a workflow run. Useful before reading CI logs to identify which job to inspect.",
-    promptSnippet: "Read GitHub workflow run jobs",
+      "Get every job of a workflow run as JSON {total_count, jobs:[{id, run_id, run_url, name, status, conclusion, html_url, steps:[{name, number, status, conclusion, started_at}]}]}. Paginated server-side, so runs with more than 30 jobs return all of them. Use the `id` with read-github-ci-logs after read-github-pr-status / wait-github-commit-checks did not already give you a job id.",
+    promptSnippet: "Get GitHub workflow run jobs",
     parameters: Type.Object({
       run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { run_id, repo } = params;
+      const runId = toPositiveId(run_id, "run_id");
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-      const result = toToolResult(
-        await ghExec(["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`], {
-          cwd: ctx.cwd,
-          signal,
-          input: params,
-        }),
-        params,
-      );
+      const { owner, repo: name } = splitRepo(effectiveRepo);
+      const jobs = await githubChecks.runJobs(owner, name, runId, signal);
+      const result = toToolResult(JSON.stringify({ total_count: jobs.length, jobs }), params);
       result.details.pendant = subtitlePendant(params, "run_id");
       return result;
     },

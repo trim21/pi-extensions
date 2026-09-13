@@ -219,7 +219,7 @@ describe("BwrapRuntime", () => {
     await expect(promise).rejects.toMatchObject({
       kind: "aborted",
       name: "AbortError",
-      message: "Command aborted",
+      message: "Command aborted by user",
       partial: { output: "partial" },
     });
   });

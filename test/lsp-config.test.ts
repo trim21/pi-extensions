@@ -711,7 +711,7 @@ describe("lsp config integration", () => {
   });
 
   it("notifies startup failure via session notify even when the request carries none", async () => {
-    // Read warm-up 等通道不带请求级 notify；配置会话通知后启动失败仍必须主动上报，
+    // opencode 工具集等通道不带请求级 notify；配置会话通知后启动失败仍必须主动上报，
     // 不能静默 broken（否则用户开着 session 却不知道 TS server 是坏的）。
     const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
     const file = join(dir, "x.py");
@@ -1215,7 +1215,7 @@ describe("lsp service watcher", () => {
     }
   });
 
-  it("notifyFile：只发文件事件通知，不 didOpen 驻留（read 路径）", async () => {
+  it("lspDiagnosticsForFile：didOpen 后等待并报告诊断（read / edit / write 共用路径）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
     const file = join(dir, "x.py");
     await writeFile(file, "x = 1\n");
@@ -1223,14 +1223,12 @@ describe("lsp service watcher", () => {
     const spy = spyAdapter("a", dir);
     const service = createLspService([spy.adapter], join(dir, "no-global.json"));
     try {
-      await service.notifyFile(file, dir);
-      await vi.waitFor(() => {
-        expect(spy.notifications.some((n) => n.method === "workspace/didChangeWatchedFiles")).toBe(
-          true,
-        );
-      });
-      // read 不驻留：从不 didOpen
-      expect(spy.notifications.some((n) => n.method === "textDocument/didOpen")).toBe(false);
+      const report = await service.lspDiagnosticsForFile(file, dir);
+      // read 与 edit / write 同一条驻留路径：先 didOpen 再取诊断
+      expect(spy.notifications.some((n) => n.method === "textDocument/didOpen")).toBe(true);
+      expect(report.text).toContain("mock error message");
+      expect(report.errorCount).toBe(1);
+      expect(report.warningCount).toBe(0);
       await service.shutdownAll();
       expect(fakes[0]?.stop).toHaveBeenCalledOnce();
     } finally {

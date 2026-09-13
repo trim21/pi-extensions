@@ -109,7 +109,7 @@ export default function opencodeBash(
           const status =
             error.kind === "timeout"
               ? `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`
-              : "Command aborted";
+              : "Command aborted by user";
           const full = text ? `${text}\n\n${status}` : status;
           // 对齐上游 opencode：超时与中断都不抛错，输出与状态文本一起返回
           return {

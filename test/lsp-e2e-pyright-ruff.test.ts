@@ -155,7 +155,7 @@ describe("cc Edit + real pyright/ruff LSP", () => {
       );
 
       const text = result.content[0].text;
-      expect(text).toContain("LSP errors detected in this file");
+      expect(text).toContain("LSP diagnostics detected in this file");
       // pyright: undefined_name 未定义
       expect(text).toContain("undefined_name");
       // ruff: F821 undefined-name（消息用反引号包裹名字）
@@ -184,7 +184,7 @@ describe("cc Edit + real pyright/ruff LSP", () => {
         },
         ctx,
       );
-      expect(broken.content[0].text).toContain("LSP errors detected in this file");
+      expect(broken.content[0].text).toContain("LSP diagnostics detected in this file");
 
       // 给服务器时间消化第一次 didChange 的重算，排除处理时序竞态
       await new Promise((resolve) => setTimeout(resolve, 2_000));
@@ -199,7 +199,7 @@ describe("cc Edit + real pyright/ruff LSP", () => {
         },
         ctx,
       );
-      expect(fixed.content[0].text).not.toContain("LSP errors detected");
+      expect(fixed.content[0].text).not.toContain("LSP diagnostics detected");
     },
     90_000,
   );
@@ -242,7 +242,7 @@ describe("cc Edit + real pyright/ruff LSP", () => {
       await new Promise((resolve) => setTimeout(resolve, 3_000));
       const clean = await readFile(filePath, "utf8");
       const recheck = await call(tools.get("Write")!, { file_path: filePath, content: clean }, ctx);
-      expect(recheck.content[0].text).not.toContain("LSP errors detected");
+      expect(recheck.content[0].text).not.toContain("LSP diagnostics detected");
     },
     90_000,
   );
@@ -258,7 +258,7 @@ describe("cc Edit + real pyright/ruff LSP", () => {
       for (const name of ["a.py", "b.py", "c.py"]) {
         const filePath = join(directory, name);
         await writeFile(filePath, "x = 1\n");
-        // read 不占驻留名额；Edit 让文件进入有界 LRU，容量 2 时第三个 Edit 会淘汰最早者
+        // read / edit 走同一条驻留路径：文件进入有界 LRU，容量 2 时第三个文件会淘汰最早者
         await call(tools.get("Read")!, { file_path: filePath }, ctx);
         const result = await call(
           tools.get("Edit")!,
@@ -269,7 +269,7 @@ describe("cc Edit + real pyright/ruff LSP", () => {
           },
           ctx,
         );
-        expect(result.content[0].text).toContain("LSP errors detected in this file");
+        expect(result.content[0].text).toContain("LSP diagnostics detected in this file");
         expect(result.content[0].text).toContain("undefined_name");
       }
     },
@@ -316,7 +316,7 @@ describe("cc Edit + real pyright/ruff LSP", () => {
         },
         ctx,
       );
-      expect(fixed.content[0].text).toContain("LSP errors detected in this file");
+      expect(fixed.content[0].text).toContain("LSP diagnostics detected in this file");
       expect(fixed.content[0].text).toMatch(/cannot be assigned|reportArgumentType/);
     },
     90_000,

@@ -57,6 +57,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/** runGh 先解析代理配置再 spawn，发假事件前得等进程真的起来。 */
+async function waitForSpawn(): Promise<void> {
+  await vi.waitFor(() => {
+    expect(spawnMock).toHaveBeenCalled();
+  });
+}
+
 describe("runGh timeout", () => {
   it("a timed-out process is reported as killed with a non-zero code", async () => {
     const result = await runGh(["api", "slow-endpoint"], { timeout: 50 });
@@ -68,15 +75,18 @@ describe("runGh timeout", () => {
   });
 
   it("uses a 10-minute default timeout", async () => {
-    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const promise = runGh(["api", "slow-endpoint"], {});
-    vi.advanceTimersByTime(600_000);
-    const result = await promise;
-    expect(result.reason).toBe("timeout");
+    await waitForSpawn();
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 600_000);
+    fakeProc.exit(0);
+    await promise;
+    timeoutSpy.mockRestore();
   });
 
   it("does not kill a process that exits before the timeout", async () => {
     const promise = runGh(["api", "fast"], { timeout: 50 });
+    await waitForSpawn();
     fakeProc.exit(0);
     const result = await promise;
     expect(result.killed).toBe(false);
@@ -86,6 +96,7 @@ describe("runGh timeout", () => {
   it("an aborted signal is reported as killed with reason=abort", async () => {
     const ac = new AbortController();
     const promise = runGh(["api", "x"], { signal: ac.signal, timeout: 10_000 });
+    await waitForSpawn();
     ac.abort();
     const result = await promise;
     expect(result.killed).toBe(true);
@@ -109,6 +120,7 @@ describe("runGh spawn failure", () => {
   it("captures the underlying spawn error (e.g. gh not found)", async () => {
     const err = new Error("spawn gh ENOENT");
     const promise = runGh(["issue", "view", "1057"], {});
+    await waitForSpawn();
     fakeProc.emit("error", err);
     const result = await promise;
     expect(result.spawnError).toBe("spawn gh ENOENT");
@@ -121,6 +133,7 @@ describe("runGh spawn failure", () => {
     const promise = ghExec(["issue", "view", "1057"], {
       input: { number: 1057, repo: "bangumi/frontend" },
     });
+    await waitForSpawn();
     fakeProc.emit("error", err);
     const ghErr = await promise.catch((error: unknown) => error);
     expect(ghErr).toBeInstanceOf(GhError);
@@ -130,6 +143,7 @@ describe("runGh spawn failure", () => {
 
   it("marks a non-zero exit with no output as (no output)", async () => {
     const promise = ghExec(["issue", "view", "1057"], {});
+    await waitForSpawn();
     fakeProc.exit(1);
     const ghErr = await promise.catch((error: unknown) => error);
     expect(ghErr).toBeInstanceOf(GhError);

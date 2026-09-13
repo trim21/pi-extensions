@@ -248,17 +248,29 @@ export interface GithubApi {
   call<T>(fn: (octokit: Octokit) => Promise<T>): Promise<T>;
 }
 
+export interface GithubClientOptions {
+  /**
+   * Custom fetch for octokit's `request.fetch` hook — octokit v5 drops the old
+   * `agent` option, so a proxy has to arrive as a fetch implementation with a
+   * proxy dispatcher attached. Defaults to the global fetch.
+   */
+  fetch?: typeof globalThis.fetch;
+}
+
 /**
  * Create a shared octokit accessor. The client (and its auth token) is cached
  * in the returned closure, so repeated calls reuse the same client without
  * module-level state. A stale cached token can produce 401s; the cache is
  * dropped and the request retried once in that case.
  */
-export function createGithubApi(): GithubApi {
+export function createGithubApi(options: GithubClientOptions = {}): GithubApi {
   let client: Octokit | undefined;
 
   async function getClient(): Promise<Octokit> {
-    client ??= new Octokit({ auth: await ghAuthToken() });
+    client ??= new Octokit({
+      auth: await ghAuthToken(),
+      ...(options.fetch && { request: { fetch: options.fetch } }),
+    });
     return client;
   }
 
@@ -287,8 +299,8 @@ export interface GithubSearch {
 /**
  * Create a search client backed by a cached octokit instance.
  */
-export function createGithubSearch(): GithubSearch {
-  const api = createGithubApi();
+export function createGithubSearch(options: GithubClientOptions = {}): GithubSearch {
+  const api = createGithubApi(options);
 
   return {
     async search(kind, params) {
@@ -334,6 +346,10 @@ export interface CheckRun {
   readonly url: string | null;
   /** Triggering workflow event (push, pull_request, ...); null when unknown. */
   readonly event: string | null;
+  /** Actions workflow run id parsed from `details_url`; null for non-Actions checks. */
+  readonly runId: number | null;
+  /** Actions job id parsed from `details_url`; null when the check is run- not job-level. */
+  readonly jobId: number | null;
 }
 
 /** One Actions job flattened with its workflow run metadata. */
@@ -345,6 +361,32 @@ export interface ActionJob {
   readonly jobName: string;
   readonly conclusion: string | null;
   readonly jobUrl?: string;
+}
+
+/** One step of a workflow run job, as the REST API reports it. */
+export interface RunJobStep {
+  readonly name: string;
+  readonly number: number;
+  readonly status: string;
+  readonly conclusion: string | null;
+  /** ISO-8601 UTC, second precision; null/absent for steps that never started. */
+  readonly started_at?: string | null;
+}
+
+/**
+ * One job of a workflow run. Field names mirror the REST API because the CI log
+ * index consumes them as they arrive: `run_url`/`run_id` locate the job's raw
+ * log file, `steps` give the step list to align against that log.
+ */
+export interface RunJob {
+  readonly id: number;
+  readonly run_id: number;
+  readonly run_url: string;
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly html_url: string | null;
+  readonly steps: readonly RunJobStep[];
 }
 
 export interface GithubChecksClient {
@@ -367,6 +409,21 @@ export interface GithubChecksClient {
     headSha: string,
     signal: AbortSignal,
   ): Promise<readonly ActionJob[]>;
+  /**
+   * Every job of one workflow run, steps included. The endpoint pages at 30
+   * items by default, which used to hide the jobs past the first page from the
+   * CI-log tools; `paginate` follows the Link header so all pages arrive.
+   */
+  runJobs(
+    owner: string,
+    repo: string,
+    runId: number,
+    signal: AbortSignal | undefined,
+  ): Promise<readonly RunJob[]>;
+  /** One job by id, steps included (`run_url`/`run_id` identify its run). */
+  job(owner: string, repo: string, jobId: number, signal: AbortSignal | undefined): Promise<RunJob>;
+  /** Head commit SHA of a PR — the commit whose checks are reported. */
+  pullHead(owner: string, repo: string, pullNumber: number, signal: AbortSignal): Promise<string>;
   /** Resolve a SHA, branch name, or tag name to the commit's full SHA. */
   headSha(owner: string, repo: string, ref: string, signal: AbortSignal): Promise<string>;
 }
@@ -378,13 +435,46 @@ export interface GithubChecksClient {
  * GitHub Apps) — so external CI is visible to the caller.
  */
 const ACTIONS_RUN_URL_RE = /\/actions\/runs\/(\d+)/;
-export function createGithubChecks(): GithubChecksClient {
-  const api = createGithubApi();
+/** Job-level check runs point at `.../actions/runs/<run>/job/<job>`. */
+const ACTIONS_JOB_URL_RE = /\/actions\/runs\/\d+\/job\/(\d+)/;
+
+/** One REST job object (list and single-job endpoints share the schema). */
+type ApiJob = Awaited<ReturnType<Octokit["rest"]["actions"]["getJobForWorkflowRun"]>>["data"];
+
+function toRunJob(job: ApiJob): RunJob {
+  return {
+    id: job.id,
+    run_id: job.run_id,
+    run_url: job.run_url,
+    name: job.name,
+    status: job.status,
+    conclusion: job.conclusion,
+    html_url: job.html_url ?? null,
+    steps: (job.steps ?? []).map((step) => ({
+      name: step.name,
+      number: step.number,
+      status: step.status,
+      conclusion: step.conclusion,
+      started_at: step.started_at ?? null,
+    })),
+  };
+}
+
+export function createGithubChecks(options: GithubClientOptions = {}): GithubChecksClient {
+  const api = createGithubApi(options);
 
   return {
     async statuses(owner, repo, ref, signal) {
       const { data } = await api.call((octokit) =>
-        octokit.rest.repos.getCombinedStatusForRef({ owner, repo, ref, request: { signal } }),
+        octokit.rest.repos.getCombinedStatusForRef({
+          owner,
+          repo,
+          ref,
+          // The statuses array is paginated and defaults to 30 per page; a
+          // commit carrying more than 100 statuses is not a real scenario.
+          per_page: 100,
+          request: { signal },
+        }),
       );
       return data.statuses.map((status) => ({
         context: status.context,
@@ -414,8 +504,8 @@ export function createGithubChecks(): GithubChecksClient {
       );
       const events = new Map<string, string>();
       if (runIds.size > 0) {
-        const { data } = await api.call((octokit) =>
-          octokit.rest.actions.listWorkflowRunsForRepo({
+        const commitRuns = await api.call((octokit) =>
+          octokit.paginate(octokit.rest.actions.listWorkflowRunsForRepo, {
             owner,
             repo,
             head_sha: ref,
@@ -423,24 +513,34 @@ export function createGithubChecks(): GithubChecksClient {
             request: { signal },
           }),
         );
-        for (const run of data.workflow_runs) {
+        for (const run of commitRuns) {
           const id = String(run.id);
           if (runIds.has(id)) events.set(id, run.event);
         }
       }
-      return runs.map((run) => ({
-        name: run.name,
-        status: run.status,
-        conclusion: run.conclusion,
-        startedAt: run.started_at,
-        url: run.html_url ?? run.details_url ?? null,
-        event: events.get(ACTIONS_RUN_URL_RE.exec(run.details_url ?? "")?.[1] ?? "") ?? null,
-      }));
+      return runs.map((run) => {
+        const detailsUrl = run.details_url ?? "";
+        const runId = ACTIONS_RUN_URL_RE.exec(detailsUrl)?.[1];
+        const jobId = ACTIONS_JOB_URL_RE.exec(detailsUrl)?.[1];
+        return {
+          name: run.name,
+          status: run.status,
+          conclusion: run.conclusion,
+          startedAt: run.started_at,
+          url: run.html_url ?? run.details_url ?? null,
+          event: events.get(runId ?? "") ?? null,
+          runId: runId === undefined ? null : Number(runId),
+          jobId: jobId === undefined ? null : Number(jobId),
+        };
+      });
     },
 
     async actionJobs(owner, repo, headSha, signal) {
-      const { data } = await api.call((octokit) =>
-        octokit.rest.actions.listWorkflowRunsForRepo({
+      // Both levels are paginated: a commit can carry several workflow runs
+      // (push and pull_request), and a single run can have more jobs than one
+      // page — a missing page would silently drop failed jobs from the report.
+      const runs = await api.call((octokit) =>
+        octokit.paginate(octokit.rest.actions.listWorkflowRunsForRepo, {
           owner,
           repo,
           head_sha: headSha,
@@ -449,9 +549,9 @@ export function createGithubChecks(): GithubChecksClient {
         }),
       );
       const jobs: ActionJob[] = [];
-      for (const run of data.workflow_runs) {
-        const { data: jobsData } = await api.call((octokit) =>
-          octokit.rest.actions.listJobsForWorkflowRun({
+      for (const run of runs) {
+        const runJobs = await api.call((octokit) =>
+          octokit.paginate(octokit.rest.actions.listJobsForWorkflowRun, {
             owner,
             repo,
             run_id: run.id,
@@ -459,7 +559,7 @@ export function createGithubChecks(): GithubChecksClient {
             request: { signal },
           }),
         );
-        for (const job of jobsData.jobs) {
+        for (const job of runJobs) {
           jobs.push({
             runId: run.id,
             runName: run.name ?? "",
@@ -472,6 +572,38 @@ export function createGithubChecks(): GithubChecksClient {
         }
       }
       return jobs;
+    },
+
+    async runJobs(owner, repo, runId, signal) {
+      const jobs = await api.call((octokit) =>
+        octokit.paginate(octokit.rest.actions.listJobsForWorkflowRun, {
+          owner,
+          repo,
+          run_id: runId,
+          per_page: 100,
+          request: { signal },
+        }),
+      );
+      return jobs.map((job) => toRunJob(job));
+    },
+
+    async job(owner, repo, jobId, signal) {
+      const { data } = await api.call((octokit) =>
+        octokit.rest.actions.getJobForWorkflowRun({
+          owner,
+          repo,
+          job_id: jobId,
+          request: { signal },
+        }),
+      );
+      return toRunJob(data);
+    },
+
+    async pullHead(owner, repo, pullNumber, signal) {
+      const { data } = await api.call((octokit) =>
+        octokit.rest.pulls.get({ owner, repo, pull_number: pullNumber, request: { signal } }),
+      );
+      return data.head.sha;
     },
 
     async headSha(owner, repo, ref, signal) {

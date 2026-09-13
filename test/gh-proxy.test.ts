@@ -1,0 +1,302 @@
+/**
+ * Tests for the gh-readonly proxy layer (src/lib/gh-proxy.ts): gh.json parsing,
+ * environment fallback, the variables injected into `gh` child processes, and
+ * the fetch handed to octokit's `request.fetch`.
+ *
+ * The fetch tests run against loopback servers: a minimal HTTP proxy
+ * (CONNECT tunneling, like undici's ProxyAgent expects) and a fake origin.
+ */
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type RequestListener, type Server } from "node:http";
+import { connect as netConnect } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { createGhProxy, parseGhProxyConfig, proxyEnvVars } from "../src/lib/gh-proxy.js";
+
+interface ReceivedRequest {
+  method: string;
+  url: string;
+  body: string;
+}
+
+interface TestServer {
+  url: string;
+  close(): Promise<void>;
+}
+
+async function listen(server: Server): Promise<number> {
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("server has no TCP port");
+  return address.port;
+}
+
+async function closeServer(server: Server): Promise<void> {
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
+/** Records requests then answers with a fixed JSON body. */
+async function startOrigin(): Promise<TestServer & { requests: ReceivedRequest[] }> {
+  const requests: ReceivedRequest[] = [];
+  const server = createServer(
+    collectRequest(requests, (res) => {
+      res.writeHead(201, { "content-type": "application/json", "x-origin": "yes" });
+      res.end(JSON.stringify({ ok: true }));
+    }),
+  );
+  const port = await listen(server);
+  return {
+    requests,
+    url: `http://127.0.0.1:${String(port)}`,
+    close: () => closeServer(server),
+  };
+}
+
+/**
+ * Minimal HTTP proxy: CONNECT requests are tunneled to their target (undici's
+ * ProxyAgent tunnels http and https targets alike), and every CONNECT is
+ * recorded so tests can assert the traffic went through the proxy.
+ */
+async function startProxy(): Promise<TestServer & { connects: string[] }> {
+  const connects: string[] = [];
+  const server = createServer((_req, res) => {
+    res.writeHead(502, { "content-type": "text/plain" });
+    res.end("proxy only tunnels, it does not serve requests");
+  });
+  server.on("connect", (req, clientSocket, head) => {
+    const target = req.url ?? "";
+    connects.push(target);
+    const [host, port] = target.split(":", 2);
+    const upstream = netConnect(Number(port), host, () => {
+      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length > 0) upstream.write(head);
+      upstream.pipe(clientSocket);
+      clientSocket.pipe(upstream);
+    });
+    upstream.on("error", () => clientSocket.destroy());
+    clientSocket.on("error", () => upstream.destroy());
+  });
+  const port = await listen(server);
+  return {
+    connects,
+    url: `http://127.0.0.1:${String(port)}`,
+    close: () => closeServer(server),
+  };
+}
+
+/** Buffer the request body, record the request, then hand off to `respond`. */
+function collectRequest(
+  requests: ReceivedRequest[],
+  respond: (res: Parameters<RequestListener>[1]) => void,
+): RequestListener {
+  return (req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      requests.push({
+        method: req.method ?? "",
+        url: req.url ?? "",
+        body: Buffer.concat(chunks).toString(),
+      });
+      respond(res);
+    });
+  };
+}
+
+describe("parseGhProxyConfig", () => {
+  it("trims proxy and noProxy", () => {
+    expect(
+      parseGhProxyConfig({ proxy: " http://127.0.0.1:7890 ", noProxy: " localhost " }),
+    ).toEqual({
+      proxy: "http://127.0.0.1:7890",
+      noProxy: "localhost",
+    });
+  });
+
+  it("drops empty values", () => {
+    expect(parseGhProxyConfig({ proxy: "  ", noProxy: "" })).toEqual({});
+  });
+
+  it("rejects non-string fields", () => {
+    expect(() => parseGhProxyConfig({ proxy: 7890 })).toThrow(/proxy/);
+  });
+});
+
+describe("proxyEnvVars", () => {
+  it("returns nothing when no proxy is configured", () => {
+    expect(proxyEnvVars({})).toEqual({});
+  });
+
+  it("sets upper and lower case variables for both schemes", () => {
+    expect(proxyEnvVars({ proxy: "http://127.0.0.1:7890", noProxy: "localhost" })).toEqual({
+      HTTP_PROXY: "http://127.0.0.1:7890",
+      HTTPS_PROXY: "http://127.0.0.1:7890",
+      ALL_PROXY: "http://127.0.0.1:7890",
+      http_proxy: "http://127.0.0.1:7890",
+      https_proxy: "http://127.0.0.1:7890",
+      all_proxy: "http://127.0.0.1:7890",
+      NO_PROXY: "localhost",
+      no_proxy: "localhost",
+    });
+  });
+});
+
+describe("createGhProxy", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "gh-proxy-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function configPath(): string {
+    return join(dir, "gh.json");
+  }
+
+  it("treats a missing config file as unconfigured", async () => {
+    const proxy = createGhProxy(configPath(), {});
+    await expect(proxy.load()).resolves.toEqual({ settings: {} });
+    await expect(proxy.env()).resolves.toEqual({});
+  });
+
+  it("reads proxy settings from the config file", async () => {
+    await writeFile(configPath(), JSON.stringify({ proxy: "http://127.0.0.1:7890" }));
+    const proxy = createGhProxy(configPath(), {});
+    await expect(proxy.load()).resolves.toEqual({
+      settings: { proxy: "http://127.0.0.1:7890" },
+    });
+    await expect(proxy.env()).resolves.toMatchObject({ HTTPS_PROXY: "http://127.0.0.1:7890" });
+  });
+
+  it("falls back to the standard environment variables", async () => {
+    const proxy = createGhProxy(configPath(), {
+      HTTPS_PROXY: "http://env:8080",
+      NO_PROXY: "localhost",
+    });
+    await expect(proxy.env()).resolves.toMatchObject({
+      HTTPS_PROXY: "http://env:8080",
+      NO_PROXY: "localhost",
+    });
+  });
+
+  it("prefers the config file over the environment", async () => {
+    await writeFile(configPath(), JSON.stringify({ proxy: "http://config:7890" }));
+    const proxy = createGhProxy(configPath(), { HTTPS_PROXY: "http://env:8080" });
+    await expect(proxy.env()).resolves.toMatchObject({ HTTPS_PROXY: "http://config:7890" });
+  });
+
+  it("falls back to the environment for the fields the config leaves out", async () => {
+    await writeFile(configPath(), JSON.stringify({ proxy: "http://config:7890" }));
+    const proxy = createGhProxy(configPath(), { NO_PROXY: "localhost" });
+    await expect(proxy.env()).resolves.toMatchObject({ NO_PROXY: "localhost" });
+  });
+
+  it("reports broken JSON without failing tool calls", async () => {
+    await writeFile(configPath(), "{not json");
+    const proxy = createGhProxy(configPath(), {});
+    await expect(proxy.load()).resolves.toMatchObject({ error: expect.stringMatching(/gh\.json/) });
+    await expect(proxy.env()).resolves.toEqual({});
+  });
+
+  it("reports schema violations", async () => {
+    await writeFile(configPath(), JSON.stringify({ proxy: 7890 }));
+    const proxy = createGhProxy(configPath(), {});
+    await expect(proxy.load()).resolves.toMatchObject({ error: expect.stringMatching(/proxy/) });
+  });
+
+  it("reports unsupported proxy protocols", async () => {
+    await writeFile(configPath(), JSON.stringify({ proxy: "socks5://127.0.0.1:1080" }));
+    const proxy = createGhProxy(configPath(), {});
+    await expect(proxy.load()).resolves.toMatchObject({
+      error: expect.stringMatching(/unsupported proxy protocol/),
+    });
+    await expect(proxy.env()).resolves.toEqual({});
+  });
+
+  it("reads the config file once", async () => {
+    await writeFile(configPath(), JSON.stringify({ proxy: "http://first:1" }));
+    const proxy = createGhProxy(configPath(), {});
+    await expect(proxy.env()).resolves.toMatchObject({ HTTPS_PROXY: "http://first:1" });
+    await writeFile(configPath(), JSON.stringify({ proxy: "http://second:2" }));
+    await expect(proxy.env()).resolves.toMatchObject({ HTTPS_PROXY: "http://first:1" });
+  });
+});
+
+describe("createGhProxy fetch", () => {
+  let dir: string;
+  let origin: Awaited<ReturnType<typeof startOrigin>>;
+  let proxy: Awaited<ReturnType<typeof startProxy>>;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "gh-proxy-fetch-"));
+    origin = await startOrigin();
+    proxy = await startProxy();
+  });
+
+  afterEach(async () => {
+    await origin.close();
+    await proxy.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function configuredProxy(
+    settings: Record<string, string>,
+  ): Promise<ReturnType<typeof createGhProxy>> {
+    const path = join(dir, "gh.json");
+    await writeFile(path, JSON.stringify(settings));
+    return createGhProxy(path, {});
+  }
+
+  it("uses the global fetch when no proxy is configured", async () => {
+    const client = createGhProxy(join(dir, "missing.json"), {});
+    const response = await client.fetch(`${origin.url}/direct`);
+    expect(response.status).toBe(201);
+    expect(origin.requests[0]?.url).toBe("/direct");
+    expect(proxy.connects).toEqual([]);
+  });
+
+  it("routes requests through the configured proxy", async () => {
+    const client = await configuredProxy({ proxy: proxy.url });
+    const response = await client.fetch(`${origin.url}/through`, {
+      method: "POST",
+      body: JSON.stringify({ hello: "world" }),
+      headers: { "content-type": "application/json" },
+    });
+
+    expect(proxy.connects).toEqual([new URL(origin.url).host]);
+    expect(response.status).toBe(201);
+    expect(response.headers.get("x-origin")).toBe("yes");
+    expect(response.url).toBe(`${origin.url}/through`);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+    expect(origin.requests).toEqual([
+      { method: "POST", url: "/through", body: JSON.stringify({ hello: "world" }) },
+    ]);
+  });
+
+  it("bypasses the proxy for noProxy hosts", async () => {
+    const client = await configuredProxy({ proxy: proxy.url, noProxy: "127.0.0.1" });
+    const response = await client.fetch(`${origin.url}/bypassed`);
+    expect(response.status).toBe(201);
+    expect(origin.requests[0]?.url).toBe("/bypassed");
+    expect(proxy.connects).toEqual([]);
+  });
+
+  it("tunnels https targets through the proxy", async () => {
+    const client = await configuredProxy({ proxy: proxy.url });
+    await expect(client.fetch("https://api.github.com/zen")).rejects.toThrow();
+    expect(proxy.connects).toEqual(["api.github.com:443"]);
+  });
+});

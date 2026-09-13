@@ -440,7 +440,7 @@ export class BwrapRuntime {
       // 兼容 pi local ops 抛的 new Error("aborted")
       if (error instanceof Error && (error.name === "AbortError" || error.message === "aborted")) {
         const partial = await this.finalizeOutput(output);
-        throw new BashInterruptedError("aborted", "Command aborted", partial, error);
+        throw new BashInterruptedError("aborted", "Command aborted by user", partial, error);
       }
       throw error;
     } finally {

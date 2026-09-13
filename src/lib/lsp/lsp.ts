@@ -16,7 +16,7 @@
  *   的 id 直接忽略；
  * - client 按 (root, serverID) 缓存，并发 spawn 去重，启动失败记入
  *   broken（冷却期内跳过，冷却过后下次触碰自动重试）并主动 notify；
- * - 工具只与 touchFile / notifyFile / diagnostics / lspDiagnosticsForFile 四个方法打交道；通知回调按请求传入。
+ * - 工具只与 touchFile / diagnostics / lspDiagnosticsForFile 三个方法打交道；通知回调按请求传入。
  */
 
 import { readFileSync } from "node:fs";
@@ -43,7 +43,7 @@ import {
   WATCH_KIND_CREATE,
   WATCH_KIND_DELETE,
 } from "./client.js";
-import { report } from "./diagnostic.js";
+import { type DiagnosticReport, EMPTY_DIAGNOSTIC_REPORT, report } from "./diagnostic.js";
 import {
   createAdapters,
   matchesInclude,
@@ -397,14 +397,13 @@ export interface LspService {
     diagnostics?: "document" | "full",
     options?: LspRequestOptions,
   ): Promise<void>;
-  /** read 用：只发文件事件通知服务器磁盘上有该文件，不驻留、不等诊断。 */
-  notifyFile(file: string, cwd: string, options?: LspRequestOptions): Promise<void>;
   diagnostics(): Promise<Record<string, Diagnostic[]>>;
+  /** read / edit / write 用：等待文档诊断并返回该文件的 ERROR / WARN 报告与计数。 */
   lspDiagnosticsForFile(
     file: string,
     cwd: string,
     options?: LspRequestOptions,
-  ): Promise<{ text: string; errorCount: number; warningCount: number }>;
+  ): Promise<DiagnosticReport>;
   /**
    * 符号重命名：只面向 kind 为 "language" 的服务器（linter 不参与符号级
    * 功能）；多 client 按配置顺序取第一个成功结果，全部失败时抛聚合错误。
@@ -736,7 +735,7 @@ export function createLspService(
   /**
    * 记录一次启动失败：进入 broken（冷却期内跳过）、渲染 status，并按节流
    * 间隔主动 notify。错误上报优先走会话级 sessionNotify——不依赖触发请求
-   * 恰好携带 notify（否则 Read warm-up 等静默通道会把失败吞掉）；未注入
+   * 恰好携带 notify（否则 opencode 工具集等不带请求级 notify 的通道会把失败吞掉）；未注入
    * 会话通知时退回请求级 notify 兜底。
    */
   function reportStartupFailure(
@@ -881,7 +880,7 @@ export function createLspService(
 
   /**
    * 打开文档让服务器索引 / 产出诊断。diagnostics 传 "document" 时最多等 5s，
-   * "full" 最多等 10s；不传则只通知不等待（read 的 warm-up 用）。
+   * "full" 最多等 10s；不传则只 didOpen 不等待。
    */
   async function touchFile(
     file: string,
@@ -923,37 +922,19 @@ export function createLspService(
   }
 
   /**
-   * read 的 warm-up：通知服务器磁盘上有这个文件（D5），不 didOpen 驻留、不等诊断。
-   * 驻留文档若磁盘已被外部改写会顺带触发退场。
-   */
-  async function notifyFile(file: string, cwd: string, options?: LspRequestOptions): Promise<void> {
-    const clients = await getClients(file, cwd, options?.notify);
-    await Promise.all(
-      clients.map((client) =>
-        client.notify.watchedFiles([{ path: file, type: "changed", isDirectory: false }]),
-      ),
-    ).catch(() => {
-      // 文件事件通知失败不影响读取
-    });
-  }
-
-  /**
-   * edit/write 用：等待文档诊断并返回该文件的 ERROR / WARN 报告（text 空串表示无此类诊断）
-   * 与数量。内部所有 LSP 失败都会被吞掉，不干扰写操作本身。
+   * read / edit / write 用：等待文档诊断并返回该文件的 ERROR / WARN 报告（text 空串表示无此类诊断）
+   * 与数量。内部所有 LSP 失败都会被吞掉，不干扰读取或写操作本身。
    */
   async function lspDiagnosticsForFile(
     file: string,
     cwd: string,
     options?: LspRequestOptions,
-  ): Promise<{ text: string; errorCount: number; warningCount: number }> {
-    if (options?.signal?.aborted) return { text: "", errorCount: 0, warningCount: 0 };
+  ): Promise<DiagnosticReport> {
+    if (options?.signal?.aborted) return EMPTY_DIAGNOSTIC_REPORT;
     await touchFile(file, cwd, "document", options);
     const all = await diagnostics();
     const normalized = normalize(file);
-    const issues = all[normalized] ?? [];
-    const errorCount = issues.filter((item) => (item.severity ?? 1) === 1).length;
-    const warningCount = issues.filter((item) => item.severity === 2).length;
-    return { text: report(normalized, issues), errorCount, warningCount };
+    return report(normalized, all[normalized] ?? []);
   }
 
   /** 符号重命名：只面向 language 类服务器；按配置顺序取第一个成功结果。 */
@@ -1184,7 +1165,6 @@ export function createLspService(
 
   return {
     touchFile,
-    notifyFile,
     diagnostics,
     lspDiagnosticsForFile,
     rename,
