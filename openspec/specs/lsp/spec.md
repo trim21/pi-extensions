@@ -46,7 +46,7 @@ LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，
 
 ### Requirement: 服务器启动
 
-服务器按配置启动，包含匹配规则、项目根定位与可执行文件发现。
+服务器 SHALL 按配置启动，包含匹配规则、项目根定位与可执行文件发现。
 
 #### Scenario: 按 include glob 启用
 
@@ -55,8 +55,22 @@ LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，
 
 #### Scenario: 项目根定位
 
-- **WHEN** 配置了 `rootMarkers`
-- **THEN** 从文件目录向上查找标记文件作为项目根；缺省用调用 cwd
+- **WHEN** 服务器未配置 `rootMarkers`
+- **THEN** 项目根即调用 cwd；配置了 `workingDir` 时即该目录（相对调用 cwd 解析，绝对路径原样），文件不在该目录内时不启用该服务器
+- **WHEN** 配置了 `rootMarkers`（非空字符串数组，元素为精确文件名，目录名亦可）
+- **THEN** 从会话 cwd 沿文件路径逐级向下查找，第一个含任一标记的目录即项目根（cwd 自身含标记时即 cwd，取最外层命中）；路径上没有命中时回退会话 cwd；搜索 MUST NOT 越过会话 cwd
+
+#### Scenario: workingDir 与 rootMarkers 互斥
+
+- **WHEN** 同一服务器同时配置了 `workingDir` 与 `rootMarkers`
+- **THEN** 视为配置错误并在配置解析时报错，不静默忽略任一字段
+
+#### Scenario: 同一服务器多个项目根
+
+- **WHEN** 同一服务器的文件落在不同项目根（如容器 cwd 下并列的 `~/projects/a` 与 `~/projects/b`）
+- **THEN** 每个项目根各自持有一个独立服务器实例；`bin` 解析、`{root}` 模板与项目工作区二进制查找均按该文件的项目根生效；状态与启动失败记录按项目根分别维护
+- **WHEN** 重载该服务器
+- **THEN** 此前运行中的每个项目根实例都被恢复
 
 #### Scenario: 可执行文件发现
 
@@ -65,17 +79,24 @@ LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，
 
 ### Requirement: 工作区文件事件同步
 
-系统 SHALL 为会话工作区目录维护**单个**递归文件监听器，把工作区内的文件创建 / 修改 / 删除事件以 `workspace/didChangeWatchedFiles` 批量通知给已启动的语言服务器。事件源不限于本 agent 自己写入的文件。
+系统 SHALL 为当前活跃服务器实例的项目根维护递归文件监听器，把监听范围内的文件创建 / 修改 / 删除事件以 `workspace/didChangeWatchedFiles` 批量通知给已启动的语言服务器。事件源不限于本 agent 自己写入的文件。同一目录只监听一次：被其他活跃 root 包含的 root 不单独建立监听器；root 不在会话 cwd 内时退化为监听 cwd。
 
 #### Scenario: 事件类型映射
 
-- **WHEN** 工作区内文件被创建、内容被修改、或被删除
+- **WHEN** 监听范围内文件被创建、内容被修改、或被删除
 - **THEN** 分别以 `didChangeWatchedFiles` type 1（created）、2（changed）、3（deleted）通知；删除与创建须能区分（底层事件不区分二者时按文件当前是否存在判定）
 
 #### Scenario: 工作区之外不跟踪
 
 - **WHEN** 变更路径不在会话 `cwd` 之内（含服务器 root 位于 `cwd` 之上的情况）
 - **THEN** 不产生任何通知，保持现有仅由工具触发的同步行为
+
+#### Scenario: 按活跃项目根限定监听范围
+
+- **WHEN** 活跃 client 的 root 是会话 cwd 的子目录（`rootMarkers` / `workingDir` 场景）
+- **THEN** 只对活跃 root 建立递归监听器，cwd 下没有活跃 client 的其他目录 MUST NOT 产生任何文件监听；投递仍按各 client 的 root 与注册 pattern 过滤
+- **WHEN** 多个活跃 client 的 root 存在包含关系（如 `/repo` 与 `/repo/packages/a`）
+- **THEN** 只监听最外层 root，不为被包含的 root 重复建立监听器
 
 #### Scenario: 去抖与批量上限
 
@@ -90,14 +111,18 @@ LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，
 #### Scenario: 监听器不可用时降级
 
 - **WHEN** 监听器无法启动或中途失败（如系统 watch 资源耗尽）
-- **THEN** 关闭该监听器并一次性提示，写后诊断链路保持原有行为，不使工具调用失败
+- **THEN** 关闭该 root 的监听器并一次性提示，写后诊断链路保持原有行为，不使工具调用失败
+- **WHEN** 失败原因是资源耗尽（ENOSPC / EMFILE 等系统级限制）
+- **THEN** 在 `/lsp-reload` 之前不再为该 root 重建监听器（重试前须先提高系统限制）
 
 #### Scenario: 生命周期跟随服务器
 
-- **WHEN** 工作区内最后一个服务器 client 关闭（`/lsp-stop`、`/lsp-reload`、session 结束）
-- **THEN** 监听器停止；服务器再次启动时重新建立
+- **WHEN** 服务器 client 启动
+- **THEN** 其项目根纳入监听范围（已被其他 root 覆盖时不重复监听）
+- **WHEN** 工作区内最后一个使用某 root 的服务器 client 关闭（`/lsp-stop`、`/lsp-reload`、session 结束）
+- **THEN** 该 root 的监听器停止；服务器再次启动时重新建立
 - **WHEN** 会话工作目录变化
-- **THEN** 在新工作目录上重建监听器
+- **THEN** 按新的 cwd 重算监听范围
 
 ### Requirement: 尊重服务器注册的监听 pattern
 
@@ -184,6 +209,53 @@ WHEN 文件监听器报告某个仍在驻留集合中的文档被外部改动，
 
 - **WHEN** 本次写入的诊断尚未收集完成
 - **THEN** 不得因 LRU 淘汰或外部改动而关闭该文档；`didClose` 只发生在诊断汇总之后
+
+### Requirement: LSP 工具条件注册
+
+LSP 专属工具（`lsp-rename`、`lsp-find-definition`、`lsp-find-reference`、`lsp-inspect`）SHALL 仅在当前会话存在 enabled 的 LSP 服务器时注册并对模型可见；read / edit / write 等文件工具 SHALL 无条件注册，不受 LSP 配置影响。
+
+#### Scenario: 未配置 lsp.json
+
+- **WHEN** 会话 cwd 及全局均无 `lsp.json` 或 `servers` 为空
+- **THEN** LSP 专属工具不出现在模型工具列表中；文件工具正常注册
+
+#### Scenario: 配置有效
+
+- **WHEN** `lsp.json` 定义了至少一个 enabled 服务器
+- **THEN** LSP 专属工具在首轮对话前注册完成并对模型可见
+
+#### Scenario: 子代理工具白名单
+
+- **WHEN** 子代理通过工具白名单声明 LSP 专属工具
+- **THEN** 白名单过滤发生在注册之后的每次工具表重建，迟到注册的白名单内工具正常激活
+
+### Requirement: 惰性生命周期
+
+LSP 配置 SHALL 在 `session_start` 时加载并校验（pi await 该事件）；配置有效时才创建 service 实例，服务器进程仍保持首次工具调用时惰性 spawn。扩展实例随会话重建（reload / new / resume / fork）时，manager 与其闭包状态 SHALL 一并重建，旧实例的进程由 `session_shutdown` 清理。
+
+#### Scenario: 配置错误降级
+
+- **WHEN** `lsp.json` 存在但解析或校验失败
+- **THEN** 向用户提示错误，LSP 保持 disabled，文件工具照常工作，不阻断会话启动
+
+#### Scenario: 会话切换无泄漏
+
+- **WHEN** 用户执行 /new、/resume 或 /fork
+- **THEN** 旧实例在 session_shutdown 时关闭全部服务器进程；新会话的 manager 从零构建
+
+### Requirement: service 不可用时的降级
+
+文件工具对 LSP service 的访问 SHALL 通过惰性访问器完成；service 未创建或 disabled 时，访问器 SHALL 返回共享的 no-op service（诊断与文件事件通知为空操作），SHALL NOT 抛错或反复重建。
+
+#### Scenario: 未配置时的写后诊断
+
+- **WHEN** LSP disabled 时调用 edit / write
+- **THEN** 工具正常完成写入，诊断输出为空，行为与"无匹配服务器"时一致
+
+#### Scenario: 管理命令在 disabled 状态
+
+- **WHEN** LSP disabled 时调用 /lsp-stop、/lsp-start 或 /lsp-reload
+- **THEN** 命令给出"LSP 未配置"类的友好提示，不报错不 spawn 进程
 
 ## Implementation
 
