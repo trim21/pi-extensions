@@ -27,6 +27,11 @@
  *
  * Or for project-local:
  *   cp gh-readonly.ts .pi/extensions/
+ *
+ * Proxy (for the gh CLI and for the octokit-backed search/checks requests):
+ *   ~/.pi/agent/gh.json: { "proxy": "http://127.0.0.1:7890", "noProxy": "localhost" }
+ *   HTTPS_PROXY / HTTP_PROXY / ALL_PROXY and NO_PROXY are used instead for the
+ *   fields the config file leaves out. The config is read once per process.
  */
 
 import { spawn } from "node:child_process";
@@ -39,6 +44,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { createGhProxy } from "./lib/gh-proxy.js";
 import {
   type ActionJob,
   type CheckRun,
@@ -51,6 +57,12 @@ import {
 } from "./lib/github.js";
 import { type ToolPendant } from "./lib/pendant.js";
 import { createSeqState } from "./lib/seq-state.js";
+
+/**
+ * 代理配置（~/.pi/agent/gh.json，回退到 HTTP(S)_PROXY 环境变量）在本模块内共享：
+ * `gh` 子进程与 octokit 请求都从这里取，配置只在首次使用时读一次。
+ */
+const ghProxy = createGhProxy();
 
 interface GhResult {
   stdout: string;
@@ -82,16 +94,25 @@ export function isGhAvailable(): boolean {
   return false;
 }
 
-export function runGh(
+export async function runGh(
   args: string[],
-  ctx: { cwd?: string; signal?: AbortSignal; timeout?: number },
+  ctx: {
+    cwd?: string;
+    signal?: AbortSignal;
+    timeout?: number;
+    /** 追加到子进程环境变量（覆盖进程环境与代理配置），供测试或调用方定制。 */
+    env?: NodeJS.ProcessEnv;
+  },
 ): Promise<GhResult> {
+  const proxyEnv = await ghProxy.env();
+
   return new Promise((resolve) => {
     const proc = spawn("gh", args, {
       cwd: ctx.cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, GH_PAGER: "cat" },
+      // gh 是 Go 程序，只认环境变量形式的代理配置；ctx.env 最后合并，调用方可覆盖。
+      env: { ...process.env, ...proxyEnv, ...ctx.env, GH_PAGER: "cat" },
     });
 
     let stdout = "";
@@ -1146,8 +1167,20 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     return;
   }
 
-  const githubSearch = createGithubSearch();
-  const githubChecks = createGithubChecks();
+  pi.on("session_start", async (_event, ctx) => {
+    // 代理配置读不出来（JSON 语法错、字段类型错、proxy 不是 http(s) URL）时只告警，
+    // 工具按直连继续工作——配置写错不该让整套 GitHub 工具不可用。
+    const { error } = await ghProxy.load();
+    if (!error) return;
+    try {
+      ctx.ui.notify(`gh proxy config ignored: ${error}`, "warning");
+    } catch {
+      // 读取期间 session 可能已被替换，失效的 ctx 直接忽略
+    }
+  });
+
+  const githubSearch = createGithubSearch({ fetch: ghProxy.fetch });
+  const githubChecks = createGithubChecks({ fetch: ghProxy.fetch });
 
   /**
    * Shared wait core of `wait-github-pr-checks` and

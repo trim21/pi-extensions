@@ -248,17 +248,29 @@ export interface GithubApi {
   call<T>(fn: (octokit: Octokit) => Promise<T>): Promise<T>;
 }
 
+export interface GithubClientOptions {
+  /**
+   * Custom fetch for octokit's `request.fetch` hook — octokit v5 drops the old
+   * `agent` option, so a proxy has to arrive as a fetch implementation with a
+   * proxy dispatcher attached. Defaults to the global fetch.
+   */
+  fetch?: typeof globalThis.fetch;
+}
+
 /**
  * Create a shared octokit accessor. The client (and its auth token) is cached
  * in the returned closure, so repeated calls reuse the same client without
  * module-level state. A stale cached token can produce 401s; the cache is
  * dropped and the request retried once in that case.
  */
-export function createGithubApi(): GithubApi {
+export function createGithubApi(options: GithubClientOptions = {}): GithubApi {
   let client: Octokit | undefined;
 
   async function getClient(): Promise<Octokit> {
-    client ??= new Octokit({ auth: await ghAuthToken() });
+    client ??= new Octokit({
+      auth: await ghAuthToken(),
+      ...(options.fetch && { request: { fetch: options.fetch } }),
+    });
     return client;
   }
 
@@ -287,8 +299,8 @@ export interface GithubSearch {
 /**
  * Create a search client backed by a cached octokit instance.
  */
-export function createGithubSearch(): GithubSearch {
-  const api = createGithubApi();
+export function createGithubSearch(options: GithubClientOptions = {}): GithubSearch {
+  const api = createGithubApi(options);
 
   return {
     async search(kind, params) {
@@ -378,8 +390,8 @@ export interface GithubChecksClient {
  * GitHub Apps) — so external CI is visible to the caller.
  */
 const ACTIONS_RUN_URL_RE = /\/actions\/runs\/(\d+)/;
-export function createGithubChecks(): GithubChecksClient {
-  const api = createGithubApi();
+export function createGithubChecks(options: GithubClientOptions = {}): GithubChecksClient {
+  const api = createGithubApi(options);
 
   return {
     async statuses(owner, repo, ref, signal) {

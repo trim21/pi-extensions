@@ -59,6 +59,7 @@ interface ToolDef {
 function getPrStatusExecutor(): ToolDef["execute"] {
   const tools: unknown[] = [];
   const pi = {
+    on: () => {},
     registerTool: (t: unknown) => {
       tools.push(t);
       return tools.length;
@@ -86,9 +87,17 @@ afterEach(() => {
   spawnMock.mockClear();
 });
 
+/** 工具先解析代理配置再 spawn gh，发假事件前得等进程真的起来。 */
+async function waitForSpawn(): Promise<void> {
+  await vi.waitFor(() => {
+    expect(spawnMock).toHaveBeenCalled();
+  });
+}
+
 describe.skipIf(process.platform === "win32")("read-github-pr-status", () => {
   it("returns the current checks immediately when all checks pass (exit 0)", async () => {
     const promise = call();
+    await waitForSpawn();
     fakeProc.exit(0, "passed table");
 
     const result = await promise;
@@ -98,6 +107,7 @@ describe.skipIf(process.platform === "win32")("read-github-pr-status", () => {
 
   it("returns the current checks immediately when a check fails (exit 1)", async () => {
     const promise = call();
+    await waitForSpawn();
     fakeProc.exit(1, "failed table");
 
     const result = await promise;
@@ -107,6 +117,7 @@ describe.skipIf(process.platform === "win32")("read-github-pr-status", () => {
 
   it("returns pending checks as-is without polling (exit 8)", async () => {
     const promise = call();
+    await waitForSpawn();
     fakeProc.exit(8, "pending table");
 
     const result = await promise;
@@ -116,6 +127,7 @@ describe.skipIf(process.platform === "win32")("read-github-pr-status", () => {
 
   it("throws GhError for any other exit code", async () => {
     const promise = call();
+    await waitForSpawn();
     fakeProc.exit(2);
 
     await expect(promise).rejects.toThrow(GhError);
