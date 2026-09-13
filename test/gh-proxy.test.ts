@@ -12,7 +12,7 @@ import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createGhProxy, parseGhProxyConfig, proxyEnvVars } from "../src/lib/gh-proxy.js";
 
@@ -83,6 +83,29 @@ async function startProxy(): Promise<TestServer & { connects: string[] }> {
     });
     upstream.on("error", () => clientSocket.destroy());
     clientSocket.on("error", () => upstream.destroy());
+  });
+  const port = await listen(server);
+  return {
+    connects,
+    url: `http://127.0.0.1:${String(port)}`,
+    close: () => closeServer(server),
+  };
+}
+
+/**
+ * A proxy that records CONNECT targets and then refuses the tunnel. Used where
+ * the test must not depend on the host having (or not having) network access to
+ * the target host.
+ */
+async function startRefusingProxy(): Promise<TestServer & { connects: string[] }> {
+  const connects: string[] = [];
+  const server = createServer((_req, res) => {
+    res.writeHead(502, { "content-type": "text/plain" });
+    res.end("no tunneling");
+  });
+  server.on("connect", (req, socket) => {
+    connects.push(req.url ?? "");
+    socket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
   });
   const port = await listen(server);
   return {
@@ -295,8 +318,32 @@ describe("createGhProxy fetch", () => {
   });
 
   it("tunnels https targets through the proxy", async () => {
-    const client = await configuredProxy({ proxy: proxy.url });
-    await expect(client.fetch("https://api.github.com/zen")).rejects.toThrow();
-    expect(proxy.connects).toEqual(["api.github.com:443"]);
+    // A proxy that refuses to open the tunnel: the assertion stays independent of
+    // whether the test host has network access to the target.
+    const refusing = await startRefusingProxy();
+    try {
+      const client = await configuredProxy({ proxy: refusing.url });
+      await expect(client.fetch("https://api.github.com/zen")).rejects.toThrow();
+      expect(refusing.connects).toEqual(["api.github.com:443"]);
+    } finally {
+      await refusing.close();
+    }
+  });
+
+  it("honours a global fetch replaced after the first request", async () => {
+    const client = createGhProxy(join(dir, "missing.json"), {});
+    const first = vi.spyOn(globalThis, "fetch");
+    await client.fetch(`${origin.url}/first`);
+    expect(origin.requests.map((r) => r.url)).toEqual(["/first"]);
+    first.mockRestore();
+
+    // Regression: caching `globalThis.fetch` on the first call kept the
+    // replacement from taking effect (same module-level ghProxy instance is
+    // reused for the whole session).
+    const second = vi.spyOn(globalThis, "fetch");
+    await client.fetch(`${origin.url}/second`);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(origin.requests.map((r) => r.url)).toEqual(["/first", "/second"]);
+    second.mockRestore();
   });
 });

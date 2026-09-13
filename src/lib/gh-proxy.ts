@@ -132,24 +132,22 @@ export function proxyEnvVars(settings: GhProxySettings): NodeJS.ProcessEnv {
 }
 
 /**
- * 挂着代理 dispatcher 的 fetch，供 octokit 的 `request.fetch` 使用。
- *
- * octokit v5 丢弃了 node-fetch 时代的 `agent` 选项（@octokit/request 的选项里没有
- * 这个字段，也没有任何地方把它转交给 fetch），只接受自定义 fetch —— octokit
- * README 的 Proxy Servers 一节就是挂 undici 的代理 dispatcher。NO_PROXY 匹配由
- * EnvHttpProxyAgent 负责；未配置代理时原样返回全局 fetch，默认路径行为不变。
+ * 代理 dispatcher：NO_PROXY 匹配、CONNECT 隧道都交给 undici 的
+ * EnvHttpProxyAgent，octokit 侧只认自定义 fetch（v5 丢掉了 node-fetch 时代的
+ * `agent` 选项，@octokit/request 的选项里没有这个字段，也没有任何地方把它转交给
+ * fetch），所以代理只能从 fetch 挂进去。
  */
-function createFetch(settings: GhProxySettings): typeof globalThis.fetch {
-  const { proxy, noProxy } = settings;
-  if (!proxy) return globalThis.fetch;
+function createProxyDispatcher(
+  proxy: string,
+  noProxy: string | undefined,
+): NonNullable<RequestInit["dispatcher"]> {
   // undici 包与 Node 全局 fetch 各带一份 Dispatcher 类型声明（@types/node 走
   // undici-types），结构一致但 compose 重载对不上，这里只做类型层面的转换。
-  const dispatcher = new EnvHttpProxyAgent({
+  return new EnvHttpProxyAgent({
     httpProxy: proxy,
     httpsProxy: proxy,
     ...(noProxy && { noProxy }),
   }) as unknown as NonNullable<RequestInit["dispatcher"]>;
-  return (input, init) => globalThis.fetch(input, { ...init, dispatcher });
 }
 
 export interface GhProxy {
@@ -164,13 +162,17 @@ export interface GhProxy {
 /**
  * 创建代理配置读取器。配置只在首次使用时读一次并缓存；`load` 与 `fetch` 共用这次
  * 读取，因此运行期不会出现两者看到不同配置的情况。
+ *
+ * 缓存的是 dispatcher（连接池复用），**不是** `globalThis.fetch` 本身：每次调用都
+ * 取当前的全局 fetch，否则首个请求之后替换 `globalThis.fetch`（插桩、测试替身）
+ * 就不再生效。
  */
 export function createGhProxy(
   configPath: string = ghProxyConfigPath(),
   env: NodeJS.ProcessEnv = process.env,
 ): GhProxy {
   let loading: Promise<GhProxyLoad> | undefined;
-  let proxied: typeof globalThis.fetch | undefined;
+  let dispatcher: NonNullable<RequestInit["dispatcher"]> | undefined;
 
   function load(): Promise<GhProxyLoad> {
     loading ??= resolveSettings(configPath, env);
@@ -185,8 +187,10 @@ export function createGhProxy(
     },
     fetch: async (input, init) => {
       const { settings } = await load();
-      proxied ??= createFetch(settings);
-      return proxied(input, init);
+      const { proxy, noProxy } = settings;
+      if (!proxy) return globalThis.fetch(input, init);
+      dispatcher ??= createProxyDispatcher(proxy, noProxy);
+      return globalThis.fetch(input, { ...init, dispatcher });
     },
   };
 }
