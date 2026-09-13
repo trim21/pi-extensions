@@ -4,9 +4,10 @@ exports[`renderJobLogs > filters to a single job with job=lint 1`] = `
 {
   "content": [
     {
-      "text": "[
+      "text": [
   {
     "name": "lint",
+    "log_file": "<CI-LOG-CACHE>/31026014828/92374541920.log",
     "steps": [
       {
         "name": "Set up job"
@@ -47,7 +48,7 @@ exports[`renderJobLogs > filters to a single job with job=lint 1`] = `
       }
     ]
   }
-]",
+],
       "type": "text",
     },
   ],
@@ -154,9 +155,10 @@ exports[`renderJobLogs > returns a JSON array of jobs; failed steps carry output
 {
   "content": [
     {
-      "text": "[
+      "text": [
   {
     "name": "test",
+    "log_file": "<CI-LOG-CACHE>/31026014828/92374541741.log",
     "steps": [
       {
         "name": "Set up job"
@@ -231,6 +233,7 @@ exports[`renderJobLogs > returns a JSON array of jobs; failed steps carry output
   },
   {
     "name": "lint",
+    "log_file": "<CI-LOG-CACHE>/31026014828/92374541920.log",
     "steps": [
       {
         "name": "Set up job"
@@ -271,7 +274,7 @@ exports[`renderJobLogs > returns a JSON array of jobs; failed steps carry output
       }
     ]
   }
-]",
+],
       "type": "text",
     },
   ],
@@ -471,7 +474,7 @@ exports[`renderStepLog (test job 92374541741) > extracts explicitly named action
 {
   "content": [
     {
-      "text": "with:
+      "text": with:
   node-version: 24
   cache: pnpm
   check-latest: false
@@ -485,7 +488,9 @@ npm: 11.16.0
 yarn: 1.22.22
 [command]/home/runner/setup-pnpm/node_modules/.bin/pnpm store path --silent
 /home/runner/setup-pnpm/node_modules/.bin/store/v11
-pnpm cache is not found",
+pnpm cache is not found
+
+[Raw job log (whole job): <CI-LOG-CACHE>/31026014828/92374541741.log],
       "type": "text",
     },
   ],
@@ -553,6 +558,7 @@ pnpm cache is not found",
       ],
     },
     "offset": undefined,
+    "rawLogFile": <CI-LOG-CACHE>/31026014828/92374541741.log,
     "shownLines": 15,
     "summary": "Step 4 — test / Setup node: 15 of 15 lines",
     "totalLines": 15,
@@ -565,7 +571,7 @@ exports[`renderStepLog (test job 92374541741) > honors offset within a step log 
 {
   "content": [
     {
-      "text": "$ NODE_OPTIONS="--no-warnings --experimental-vm-modules" jest --coverage
+      "text": $ NODE_OPTIONS="--no-warnings --experimental-vm-modules" jest --coverage
 FAIL test/serialize.test.ts
   ● Test suite failed to run
 
@@ -646,7 +652,9 @@ includeif.gitdir:/github/workspace/.git/worktrees/*.path
 [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
 Removing credentials config '/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config'
 Cleaning up orphan processes
-##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+
+[Raw job log (whole job): <CI-LOG-CACHE>/31026014828/92374541741.log],
       "type": "text",
     },
   ],
@@ -714,6 +722,7 @@ Cleaning up orphan processes
       ],
     },
     "offset": 5,
+    "rawLogFile": <CI-LOG-CACHE>/31026014828/92374541741.log,
     "shownLines": 82,
     "summary": "Step 6 — test / Run pnpm test --coverage: 82 of 86 lines",
     "totalLines": 86,
@@ -726,11 +735,15 @@ exports[`renderStepLog (test job 92374541741) > reports offset beyond the step l
 {
   "content": [
     {
-      "text": "Offset 9999 exceeds step log length (86 lines).",
+      "text": Offset 9999 exceeds step log length (86 lines).
+
+[Raw job log (whole job): <CI-LOG-CACHE>/31026014828/92374541741.log],
       "type": "text",
     },
   ],
-  "details": {},
+  "details": {
+    "rawLogFile": <CI-LOG-CACHE>/31026014828/92374541741.log,
+  },
 }
 `;
 
@@ -738,7 +751,7 @@ exports[`renderStepLog (test job 92374541741) > returns the failing test step's 
 {
   "content": [
     {
-      "text": "pnpm test --coverage
+      "text": pnpm test --coverage
 shell: /usr/bin/bash -e {0}
 env:
   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
@@ -823,7 +836,9 @@ includeif.gitdir:/github/workspace/.git/worktrees/*.path
 [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
 Removing credentials config '/home/runner/work/_temp/git-credentials-328b5635-c71b-4b00-8135-c6eb2b621a60.config'
 Cleaning up orphan processes
-##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+
+[Raw job log (whole job): <CI-LOG-CACHE>/31026014828/92374541741.log],
       "type": "text",
     },
   ],
@@ -891,6 +906,7 @@ Cleaning up orphan processes
       ],
     },
     "offset": undefined,
+    "rawLogFile": <CI-LOG-CACHE>/31026014828/92374541741.log,
     "shownLines": 86,
     "summary": "Step 6 — test / Run pnpm test --coverage: 86 of 86 lines",
     "totalLines": 86,
@@ -903,7 +919,7 @@ exports[`renderStepLog > matches job by id 1`] = `
 {
   "content": [
     {
-      "text": "npx prettier --check ./
+      "text": npx prettier --check ./
 shell: /usr/bin/bash -e {0}
 env:
   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
@@ -947,7 +963,9 @@ includeif.gitdir:/github/workspace/.git/worktrees/*.path
 [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
 Removing credentials config '/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config'
 Cleaning up orphan processes
-##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+
+[Raw job log (whole job): <CI-LOG-CACHE>/31026014828/92374541920.log],
       "type": "text",
     },
   ],
@@ -1020,6 +1038,7 @@ Cleaning up orphan processes
       ],
     },
     "offset": undefined,
+    "rawLogFile": <CI-LOG-CACHE>/31026014828/92374541920.log,
     "shownLines": 45,
     "summary": "Step 6 — lint / Run npx prettier --check ./: 45 of 45 lines",
     "totalLines": 45,
@@ -1068,7 +1087,7 @@ exports[`renderStepLog > returns a failing step's complete plain-text log (lint 
 {
   "content": [
     {
-      "text": "npx prettier --check ./
+      "text": npx prettier --check ./
 shell: /usr/bin/bash -e {0}
 env:
   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
@@ -1112,7 +1131,9 @@ includeif.gitdir:/github/workspace/.git/worktrees/*.path
 [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
 Removing credentials config '/home/runner/work/_temp/git-credentials-816cf3b4-e793-4cb2-ac44-31ccfe0b488f.config'
 Cleaning up orphan processes
-##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: pnpm/action-setup@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+
+[Raw job log (whole job): <CI-LOG-CACHE>/31026014828/92374541920.log],
       "type": "text",
     },
   ],
@@ -1185,6 +1206,7 @@ Cleaning up orphan processes
       ],
     },
     "offset": undefined,
+    "rawLogFile": <CI-LOG-CACHE>/31026014828/92374541920.log,
     "shownLines": 45,
     "summary": "Step 6 — lint / Run npx prettier --check ./: 45 of 45 lines",
     "totalLines": 45,
@@ -1197,7 +1219,7 @@ exports[`renderStepLog > returns a passing step's complete plain-text log (lint 
 {
   "content": [
     {
-      "text": "pnpm install --frozen-lockfile
+      "text": pnpm install --frozen-lockfile
 shell: /usr/bin/bash -e {0}
 env:
   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
@@ -1236,7 +1258,9 @@ devDependencies:
 
 . prepare$ husky
 . prepare: Done
-Done in 3.8s using pnpm v11.20.0",
+Done in 3.8s using pnpm v11.20.0
+
+[Raw job log (whole job): <CI-LOG-CACHE>/31026014828/92374541920.log],
       "type": "text",
     },
   ],
@@ -1309,6 +1333,7 @@ Done in 3.8s using pnpm v11.20.0",
       ],
     },
     "offset": undefined,
+    "rawLogFile": <CI-LOG-CACHE>/31026014828/92374541920.log,
     "shownLines": 40,
     "summary": "Step 5 — lint / Run pnpm install --frozen-lockfile: 40 of 40 lines",
     "totalLines": 40,

@@ -14,7 +14,7 @@
  * Run: npx vitest run test/ci-logs.test.ts
  */
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,6 +24,7 @@ import {
   type CiLogsJob,
   cleanStepOutput,
   extractStepFromLog,
+  jobLogPath,
   renderJobLogs,
   renderStepLog,
   stripAnsi,
@@ -33,8 +34,29 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, "fixtures");
 
+/**
+ * Tool output embeds the raw-log cache path under the current user's home, so
+ * snapshots would differ between local runs and CI. Normalize that cache root
+ * (and only that root): the fixtures contain bare `/home/runner/...` paths that
+ * must stay verbatim, which a broad `homedir()` replacement would rewrite on CI.
+ */
+const ciLogCacheRoot = join(homedir(), ".cache", "pi", "ci-logs");
+expect.addSnapshotSerializer({
+  serialize(value: unknown) {
+    return String(value).replaceAll(ciLogCacheRoot, "<CI-LOG-CACHE>");
+  },
+  test(value: unknown) {
+    return typeof value === "string" && value.includes(ciLogCacheRoot);
+  },
+});
+
 function loadFixture(name: string): string {
   return readFileSync(join(fixturesDir, name), "utf8");
+}
+
+/** Drop the trailing `[Raw job log (whole job): <path>]` notice appended to step logs. */
+function stripRawLogNotice(text: string): string {
+  return text.replace(/\n\n\[Raw job log \(whole job\): .*\]$/, "");
 }
 
 const jobs = (
@@ -220,6 +242,32 @@ describe("renderStepLog (test job 92374541741)", () => {
   });
 });
 
+describe("raw log file path", () => {
+  it("appends the raw log path (and details field) in step mode", async () => {
+    const result = await renderStepLog(
+      { runId: "31026014828", job: "lint", step: "Run npx prettier --check ./" },
+      jobs,
+      fetchJobLog,
+    );
+    const path = jobLogPath("31026014828", 92374541920);
+    expect(result.content[0].text.endsWith(`\n\n[Raw job log (whole job): ${path}]`)).toBe(true);
+    expect(result.details.rawLogFile).toBe(path);
+  });
+
+  it("reports log_file per fetched job without step", async () => {
+    const result = await renderJobLogs({ runId: "31026014828" }, jobs, fetchJobLog);
+    const parsed = JSON.parse(result.content[0].text) as { name: string; log_file?: string }[];
+    expect(parsed.find((j) => j.name === "lint")?.log_file).toBe(
+      jobLogPath("31026014828", 92374541920),
+    );
+    expect(parsed.find((j) => j.name === "test")?.log_file).toBe(
+      jobLogPath("31026014828", 92374541741),
+    );
+    // `build` succeeded: its log was never fetched, so there is no file to point at
+    expect(parsed.find((j) => j.name === "build")?.log_file).toBeUndefined();
+  });
+});
+
 describe("step log extraction integrity (lint job)", () => {
   it("failing step 6 contains the prettier error output", () => {
     const log = extractStepFromLog(lintRawLog, 6, lintJob.steps);
@@ -334,7 +382,7 @@ describe("renderStepLog full", () => {
       jobs,
       fetchBig,
     );
-    const text = result.content[0].text;
+    const text = stripRawLogNotice(result.content[0].text);
     expect(text.split("\n")).toHaveLength(600);
     expect(text).toContain("output line 599");
     expect(result.details).toMatchObject({
@@ -351,7 +399,7 @@ describe("renderStepLog full", () => {
       jobs,
       fetchBig,
     );
-    const text = result.content[0].text;
+    const text = stripRawLogNotice(result.content[0].text);
     expect(text.split("\n")).toHaveLength(500);
     expect(result.details.truncated).toBe(true);
     expect(text).not.toContain("output line 599");

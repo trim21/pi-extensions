@@ -425,6 +425,11 @@ export function stepsDetail(
 // 缓存检查避免重复网络请求。闭包状态不与其他扩展共享，key 无需全局前缀。
 const seq = createSeqState();
 
+/** Absolute path of the raw job log cache file written by `getJobLog`. */
+export function jobLogPath(runId: string, jobId: number): string {
+  return join(homedir(), ".cache", "pi", "ci-logs", runId, `${jobId}.log`);
+}
+
 async function getJobLog(
   runId: string,
   jobId: number,
@@ -433,8 +438,8 @@ async function getJobLog(
   cwd: string | undefined,
   input?: unknown,
 ): Promise<string> {
-  const cacheDir = join(homedir(), ".cache", "pi", "ci-logs", runId);
-  const cacheFile = join(cacheDir, `${jobId}.log`);
+  const cacheFile = jobLogPath(runId, jobId);
+  const cacheDir = dirname(cacheFile);
 
   // 同一 runId:jobId 的请求串行执行：后一个进入时缓存已写入，直接命中缓存，
   // 不会重复发网络请求；串行也保证不会有两个并发写同一 cache 文件。
@@ -682,6 +687,15 @@ export function stripAnsi(text: string): string {
   return text.replace(/^\uFEFF/, "").replaceAll(ANSI_RE, "");
 }
 
+/**
+ * Appended to `read-github-ci-logs` content so the raw log file path reaches
+ * the model: tool `details` is not part of the LLM context, so the path has to
+ * live in the returned text.
+ */
+function rawLogNotice(path: string): string {
+  return `[Raw job log (whole job): ${path}]`;
+}
+
 export interface StepLogParams {
   runId: string;
   job?: string;
@@ -772,6 +786,7 @@ export async function renderStepLog(
   });
 
   const rawLog = await fetchJobLog(targetJob.id);
+  const rawLogFile = jobLogPath(params.runId, targetJob.id);
 
   const stepLog = extractStepFromLog(rawLog, stepNum, targetJob.steps);
   if (stepLog === null) {
@@ -779,10 +794,10 @@ export async function renderStepLog(
       content: [
         {
           type: "text",
-          text: `Could not extract step ${stepNum} from job "${targetJob.name}" logs. The log may be malformed or empty. Try fetching without \`step\` to see the full job log.`,
+          text: `Could not extract step ${stepNum} from job "${targetJob.name}" logs. The log may be malformed or empty — read the raw file instead.\n\n${rawLogNotice(rawLogFile)}`,
         },
       ],
-      details: {},
+      details: { rawLogFile },
     };
   }
 
@@ -792,11 +807,12 @@ export async function renderStepLog(
   if (full) {
     const fullLines = clean.split("\n").length;
     return {
-      content: [{ type: "text", text: clean }],
+      content: [{ type: "text", text: `${clean}\n\n${rawLogNotice(rawLogFile)}` }],
       details: {
         summary: `Step ${stepNum} — ${targetJob.name} / ${found.name}: complete output (${fullLines} lines)`,
         truncated: false,
         full: true,
+        rawLogFile,
         job: {
           name: targetJob.name,
           conclusion: targetJob.conclusion,
@@ -818,10 +834,10 @@ export async function renderStepLog(
         content: [
           {
             type: "text",
-            text: `Offset ${offset} exceeds step log length (${totalLines} lines).`,
+            text: `Offset ${offset} exceeds step log length (${totalLines} lines).\n\n${rawLogNotice(rawLogFile)}`,
           },
         ],
-        details: {},
+        details: { rawLogFile },
       };
     }
     logToShow = clean
@@ -837,10 +853,11 @@ export async function renderStepLog(
   const shownLines = text.split("\n").length;
 
   return {
-    content: [{ type: "text", text }],
+    content: [{ type: "text", text: `${text}\n\n${rawLogNotice(rawLogFile)}` }],
     details: {
       summary: `Step ${stepNum} — ${targetJob.name} / ${found.name}: ${shownLines} of ${totalLines} lines${tr ? " (truncated)" : ""}`,
       truncated: tr,
+      rawLogFile,
       job: {
         name: targetJob.name,
         conclusion: targetJob.conclusion,
@@ -869,15 +886,18 @@ export interface JobLogsStep {
 
 export interface JobLogsOutput {
   name: string;
+  /** Absolute path of this job's raw log on disk, set when its log was fetched. */
+  log_file?: string;
   steps: JobLogsStep[];
 }
 
 /**
  * Render the result of `read-github-ci-logs` without a `step`: a JSON array of
- * jobs `[{ name, steps: [{ name, output? }] }]`. Every step is listed by name;
- * only failed steps carry an `output` (their log as plain text). `job` is an
- * optional filter; `offset`/`limit` control the size of each `output` text.
- * Pure — no network, no `gh`.
+ * jobs `[{ name, log_file?, steps: [{ name, output? }] }]`. Every step is listed
+ * by name; only failed steps carry an `output` (their log as plain text).
+ * `log_file` is the raw on-disk log path for jobs whose log was fetched. `job`
+ * is an optional filter; `offset`/`limit` control the size of each `output`
+ * text. Pure — no network, no `gh`.
  */
 export async function renderJobLogs(
   params: JobLogsParams,
@@ -961,7 +981,11 @@ export async function renderJobLogs(
       }
     }
 
-    output.push({ name: j.name, steps });
+    output.push({
+      name: j.name,
+      ...(rawLog !== null && { log_file: jobLogPath(params.runId, j.id) }),
+      steps,
+    });
   }
 
   const totalJobs = output.length;
@@ -1856,7 +1880,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     name: "read-github-ci-logs",
     label: "GitHub CI Logs",
     description:
-      "Get CI logs from a GitHub Actions workflow run. Without step: returns a JSON array of jobs [{name, steps:[{name, output?}]}] where every step is listed by name and failed steps carry their log as plain text in `output`. With step (requires job): returns that step's complete log as plain text. offset/limit control the size of every expanded output. Use run_id from list-github-workflow-runs. Note: queued jobs have no logs yet; use watch-github-run to wait for completion. Set full=true for complete untruncated outputs (every step when step is omitted; caution: very large outputs consume a lot of LLM context). Set output_file=/path to write the complete log to a file instead of returning it (requires job when the run has multiple jobs); the tool returns the file path to read.",
+      "Get CI logs from a GitHub Actions workflow run. Without step: returns a JSON array of jobs [{name, log_file?, steps:[{name, output?}]}] where every step is listed by name and failed steps carry their log as plain text in `output`. With step (requires job): returns that step's complete log as plain text. Every fetched job log is also saved raw (timestamps and ANSI kept) to a local file whose path is reported — `log_file` on the job, or a trailing `[Raw job log (whole job): <path>]` line with step — so read/grep that file for the complete, untruncated log. offset/limit control the size of every expanded output. Use run_id from list-github-workflow-runs. Note: queued jobs have no logs yet; use watch-github-run to wait for completion. Set full=true for complete untruncated outputs (every step when step is omitted; caution: very large outputs consume a lot of LLM context). Set output_file=/path to write the complete cleaned log to this file instead of returning it (requires job when the run has multiple jobs); the tool returns the file path to read.",
     promptSnippet: "Read GitHub CI logs",
     parameters: Type.Object({
       run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),

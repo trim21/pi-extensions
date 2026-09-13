@@ -66,6 +66,11 @@ GitHub 只读工具集：以系统 `gh` CLI 为后端查询 issue / PR / CI / re
 - **WHEN** 读取 CI 日志
 - **THEN** 默认只展开失败 step 的日志，step 可指定名称（不区分大小写）或 job id；`full=true` 返回完整输出，`output_file` 写文件并返回元数据
 
+#### Scenario: 返回原始日志文件路径
+
+- **WHEN** 读取 CI 日志并抓取了某个 job 的日志
+- **THEN** 该 job 的原始日志（保留时间戳与 ANSI）落盘到 `~/.cache/pi/ci-logs/`，且路径随结果返回给模型：无 step 模式是该 job 的 `log_file` 字段，step 模式是内容末尾的 `[Raw job log (whole job): <path>]` 行（`details` 不进 LLM 上下文）
+
 #### Scenario: 日志缓存
 
 - **WHEN** 重复读取同一 runId:jobId 的日志
@@ -93,7 +98,7 @@ GitHub 只读工具集：以系统 `gh` CLI 为后端查询 issue / PR / CI / re
 - **输出截断**：stdout 统一截断为 2000 行 / 50KB，details 带 `truncated` 标志。
 - **错误契约**：非零退出抛 `GhError`，消息带调用输入与输出上下文，标注 `(command timed out)` / `(command aborted)` / `spawn failed`；被 kill 的进程退出码记为失败而非成功。
 - **repo 缺省**：未指定 `repo` 时用当前目录解析（`gh repo view --json nameWithOwner`）。
-- **CI 日志**：`read-github-ci-logs` 基于 `##[group]Run <name>` 深度 1 锚点解析 step（复合 action 内部 step 被吸收），清洗时间戳 / ANSI / group 标记；日志按 runId:jobId 磁盘缓存到 `~/.cache/pi/ci-logs/`，同一 job 的请求经 `createSeqState` 串行化。
+- **CI 日志**：`read-github-ci-logs` 基于 `##[group]Run <name>` 深度 1 锚点解析 step（复合 action 内部 step 被吸收），清洗时间戳 / ANSI / group 标记；日志按 runId:jobId 磁盘缓存到 `~/.cache/pi/ci-logs/`（路径由 `jobLogPath` 统一计算并随结果返回），同一 job 的请求经 `createSeqState` 串行化。
 - **等待工具**：`wait-github-pr-checks` 的轮询、判定与报告见 `openspec/specs/wait-github-pr-checks/spec.md`（octokit 客户端在 `src/lib/github.ts`）；`watch-github-run` 仍为单次 `gh run watch`。
 - 无重试逻辑；`read-github-pr-comments` 的 `reviews=true` 并行调 `gh api` 拿 reviews + comments。
 
