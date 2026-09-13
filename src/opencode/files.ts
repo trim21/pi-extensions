@@ -432,15 +432,13 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void 
       }
 
       // opencode: 与 edit / write 同一条驻留路径：didOpen 后等待该文件的诊断并报告
-      const {
-        text: diagnosticText,
-        errorCount,
-        warningCount,
-      } = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
+      const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
+        signal,
+      });
       content = [
         {
           type: "text",
-          text: appendLspDiagnosticText(outputText, diagnosticText, errorCount),
+          text: appendLspDiagnosticText(outputText, diagnostics.text),
         },
       ];
 
@@ -449,7 +447,12 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void 
         details: {
           ...details,
           pendant: {
-            subtitle: formatSubtitlePath(ctx.cwd, absolutePath, errorCount, warningCount),
+            subtitle: formatSubtitlePath(
+              ctx.cwd,
+              absolutePath,
+              diagnostics.errorCount,
+              diagnostics.warningCount,
+            ),
           },
         },
       };
@@ -503,8 +506,9 @@ function registerEditTool(pi: ExtensionAPI, getService: () => LspService): void 
         change: { oldText: oldString, newText: newString, replaceAll },
       });
 
-      const [message, details, diagnosticText, errorCount, warningCount] =
-        await withFileMutationQueue(absolutePath, async () => {
+      const [message, details, diagnostics] = await withFileMutationQueue(
+        absolutePath,
+        async () => {
           signal?.throwIfAborted();
 
           // opencode: 前置校验，先于空 oldString 分支
@@ -529,17 +533,13 @@ function registerEditTool(pi: ExtensionAPI, getService: () => LspService): void 
             await mkdir(dirname(absolutePath), { recursive: true });
             signal?.throwIfAborted();
             await writeFile(absolutePath, newString, "utf8");
-            const {
-              text: diagnosticText,
-              errorCount,
-              warningCount,
-            } = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
+            const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
+              signal,
+            });
             return [
               "Edit applied successfully.",
               { diff: "", patch: "", firstChangedLine: 0 },
-              diagnosticText,
-              errorCount,
-              warningCount,
+              diagnostics,
             ] as const;
           }
 
@@ -571,27 +571,29 @@ function registerEditTool(pi: ExtensionAPI, getService: () => LspService): void 
           const diffNew = normalizeToLF(applied.contentNew);
           const diffResult = generateDiffString(diffOld, diffNew);
           const patch = generateUnifiedPatch(filePath, diffOld, diffNew);
-          const {
-            text: diagnosticText,
-            errorCount,
-            warningCount,
-          } = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
+          const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
+            signal,
+          });
           return [
             "Edit applied successfully.",
             { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
-            diagnosticText,
-            errorCount,
-            warningCount,
+            diagnostics,
           ] as const;
-        });
+        },
+      );
 
-      const text = appendLspDiagnosticText(message, diagnosticText, errorCount);
+      const text = appendLspDiagnosticText(message, diagnostics.text);
       return {
         content: [{ type: "text" as const, text }],
         details: {
           ...details,
           pendant: {
-            subtitle: formatSubtitlePath(ctx.cwd, absolutePath, errorCount, warningCount),
+            subtitle: formatSubtitlePath(
+              ctx.cwd,
+              absolutePath,
+              diagnostics.errorCount,
+              diagnostics.warningCount,
+            ),
           },
         },
       };
@@ -647,8 +649,9 @@ function registerWriteTool(pi: ExtensionAPI, getService: () => LspService): void
       });
       const dir = dirname(absolutePath);
 
-      const [message, details, diagnosticText, errorCount, warningCount] =
-        await withFileMutationQueue(absolutePath, async () => {
+      const [message, details, diagnostics] = await withFileMutationQueue(
+        absolutePath,
+        async () => {
           signal?.throwIfAborted();
 
           // opencode: desiredBom = source.bom || next.bom —— 保留原文件 BOM，
@@ -671,28 +674,26 @@ function registerWriteTool(pi: ExtensionAPI, getService: () => LspService): void
           await mkdir(dir, { recursive: true });
           signal?.throwIfAborted();
           await writeFile(absolutePath, desiredBom + nextText, "utf8");
-          const {
-            text: diagnosticText,
-            errorCount,
-            warningCount,
-          } = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, { signal });
+          const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
+            signal,
+          });
 
-          return [
-            "Wrote file successfully.",
-            {},
-            diagnosticText,
-            errorCount,
-            warningCount,
-          ] as const;
-        });
+          return ["Wrote file successfully.", {}, diagnostics] as const;
+        },
+      );
 
-      const text = appendLspDiagnosticText(message, diagnosticText, errorCount);
+      const text = appendLspDiagnosticText(message, diagnostics.text);
       return {
         content: [{ type: "text" as const, text }],
         details: {
           ...details,
           pendant: {
-            subtitle: formatSubtitlePath(ctx.cwd, absolutePath, errorCount, warningCount),
+            subtitle: formatSubtitlePath(
+              ctx.cwd,
+              absolutePath,
+              diagnostics.errorCount,
+              diagnostics.warningCount,
+            ),
           },
         },
       };

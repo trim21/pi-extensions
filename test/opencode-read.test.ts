@@ -390,7 +390,7 @@ describe("opencode read reports LSP diagnostics", () => {
       const result = await tool!.execute("id", { filePath }, undefined, undefined, lspCtx);
       const text = result.content[0].text;
       expect(text).toContain("1: x = 1");
-      expect(text).toContain("LSP errors detected in this file");
+      expect(text).toContain("LSP diagnostics detected in this file\n<diagnostics file=");
       expect(text).toContain("mock error message");
     } finally {
       for (const handler of handlers.get("session_shutdown") ?? []) {

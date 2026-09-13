@@ -170,6 +170,11 @@ WHEN 文件监听器报告某个仍在驻留集合中的文档被外部改动，
 - **WHEN** read 工具读取文件
 - **THEN** 等待（`diagnosticsWaitMs`）并把该文件的 ERROR / WARN 诊断附在读取结果之后
 
+#### Scenario: 报告完整计数与截断状态
+
+- **WHEN** 报告某文件的诊断（每文件最多列出 5 条）
+- **THEN** 标题固定为 `LSP diagnostics detected in this file`；未列出的部分在块尾以 `... and N errors, M warnings` 给出严重级别构成（为 0 的一类省略），未截断时没有该行
+
 #### Scenario: 超时与配置分离
 
 - **WHEN** 配置 `startupTimeoutMs` / `diagnosticsWaitMs` / `initializeTimeoutMs`

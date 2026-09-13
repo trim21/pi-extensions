@@ -43,7 +43,7 @@ import {
   WATCH_KIND_CREATE,
   WATCH_KIND_DELETE,
 } from "./client.js";
-import { report } from "./diagnostic.js";
+import { type DiagnosticReport, EMPTY_DIAGNOSTIC_REPORT, report } from "./diagnostic.js";
 import {
   createAdapters,
   matchesInclude,
@@ -398,12 +398,12 @@ export interface LspService {
     options?: LspRequestOptions,
   ): Promise<void>;
   diagnostics(): Promise<Record<string, Diagnostic[]>>;
-  /** read / edit / write 用：等待文档诊断并返回该文件的 ERROR / WARN 报告与数量。 */
+  /** read / edit / write 用：等待文档诊断并返回该文件的 ERROR / WARN 报告与计数。 */
   lspDiagnosticsForFile(
     file: string,
     cwd: string,
     options?: LspRequestOptions,
-  ): Promise<{ text: string; errorCount: number; warningCount: number }>;
+  ): Promise<DiagnosticReport>;
   /**
    * 符号重命名：只面向 kind 为 "language" 的服务器（linter 不参与符号级
    * 功能）；多 client 按配置顺序取第一个成功结果，全部失败时抛聚合错误。
@@ -929,15 +929,12 @@ export function createLspService(
     file: string,
     cwd: string,
     options?: LspRequestOptions,
-  ): Promise<{ text: string; errorCount: number; warningCount: number }> {
-    if (options?.signal?.aborted) return { text: "", errorCount: 0, warningCount: 0 };
+  ): Promise<DiagnosticReport> {
+    if (options?.signal?.aborted) return EMPTY_DIAGNOSTIC_REPORT;
     await touchFile(file, cwd, "document", options);
     const all = await diagnostics();
     const normalized = normalize(file);
-    const issues = all[normalized] ?? [];
-    const errorCount = issues.filter((item) => (item.severity ?? 1) === 1).length;
-    const warningCount = issues.filter((item) => item.severity === 2).length;
-    return { text: report(normalized, issues), errorCount, warningCount };
+    return report(normalized, all[normalized] ?? []);
   }
 
   /** 符号重命名：只面向 language 类服务器；按配置顺序取第一个成功结果。 */

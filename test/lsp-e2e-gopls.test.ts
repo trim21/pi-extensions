@@ -156,7 +156,7 @@ describe("cc Edit/Write + real gopls LSP", () => {
         ctx,
       );
       const text: string = fixed.content[0].text;
-      expect(text).toContain("LSP errors detected in this file");
+      expect(text).toContain("LSP diagnostics detected in this file");
       expect(text).toMatch(/as int|cannot use/);
       expect(text).not.toContain("undefinedName");
     },
@@ -187,7 +187,7 @@ describe("cc Edit/Write + real gopls LSP", () => {
         },
         ctx,
       );
-      expect(broken.content[0].text).toContain("LSP errors detected in this file");
+      expect(broken.content[0].text).toContain("LSP diagnostics detected in this file");
 
       await new Promise((resolve) => setTimeout(resolve, 2_000));
 
@@ -202,7 +202,7 @@ describe("cc Edit/Write + real gopls LSP", () => {
       // 磁盘已干净，再触发一次 Write（内容不变），不应再报旧错误
       const clean = await readFile(mainPath, "utf8");
       const recheck = await call(tools.get("Write")!, { file_path: mainPath, content: clean }, ctx);
-      expect(recheck.content[0].text).not.toContain("LSP errors detected");
+      expect(recheck.content[0].text).not.toContain("LSP diagnostics detected");
     },
     120_000,
   );

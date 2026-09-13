@@ -1538,7 +1538,7 @@ describe("Read reports LSP diagnostics", () => {
       const result = await call(tools.get("Read")!, { file_path: filePath }, ctx);
       const text = result.content[0].text as string;
       expect(text).toContain("1: x = 1");
-      expect(text).toContain("LSP errors detected in this file");
+      expect(text).toContain("LSP diagnostics detected in this file\n<diagnostics file=");
       expect(text).toContain('<diagnostics file="');
       expect(text).toContain("mock error message");
       expect(result.details.pendant.subtitle).toBe("./x.py (ⓧ 1)");
