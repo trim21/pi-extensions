@@ -22,6 +22,7 @@ pi-extensions 是 pi coding-agent 的自定义扩展集合，TypeScript ESM 项�
 ## 术语
 
 - **toolcall 进度**：工具 `execute` 的 `onUpdate` 回调被调用时传入的内容。文档、注释与回复中一律用这个说法指代它。
+- **toolcall 输出**：工具 `execute` 返回值里的 `content` 部分（`{ content: [...] }`），即真正进入 LLM 上下文的内容；同级的 `details` 不算输出。文档、注释与回复中一律用这个说法指代它。
 
 ## 项目结构
 
