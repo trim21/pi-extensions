@@ -14,7 +14,7 @@
  *   - read-github-pr-comments: Get PR comments
  *   - read-github-ci-logs: Get CI workflow run logs
  *   - read-github-workflow-runs: List workflow runs
- *   - read-github-workflow-jobs: Get workflow run jobs
+ *   - get-github-workflow-jobs: Get workflow run jobs
  *   - read-github-repo: Get repo info
  *   - list-github-releases: List releases
  *   - read-github-release: Get release details
@@ -54,6 +54,7 @@ import {
   type GithubChecksClient,
   type GithubSearch,
   renderHits,
+  type RunJob,
 } from "./lib/github.js";
 import { type ToolPendant } from "./lib/pendant.js";
 import { createSeqState } from "./lib/seq-state.js";
@@ -265,6 +266,20 @@ function repoArgs(repo?: string): string[] {
   return repo ? ["--repo", repo] : [];
 }
 
+/**
+ * `gh api` for a JSON-array endpoint, following pagination. The REST API pages
+ * these lists at 30 items by default, so a single page silently drops the rest;
+ * `--slurp` is required because `--paginate` alone prints the pages back to back
+ * (not valid JSON), and the page arrays are flattened back into one list.
+ */
+async function ghApiList(
+  path: string,
+  ctx: { cwd?: string; signal?: AbortSignal; input?: unknown },
+): Promise<unknown[]> {
+  const out = await ghExec(["api", "--paginate", "--slurp", path], ctx);
+  return Value.Parse(Type.Array(Type.Array(Type.Unknown())), JSON.parse(out)).flat();
+}
+
 /** Split `OWNER/REPO`; throws when the name doesn't have exactly one slash. */
 function splitRepo(nameWithOwner: string): { owner: string; repo: string } {
   const slash = nameWithOwner.indexOf("/");
@@ -274,30 +289,18 @@ function splitRepo(nameWithOwner: string): { owner: string; repo: string } {
   return { owner: nameWithOwner.slice(0, slash), repo: nameWithOwner.slice(slash + 1) };
 }
 
+/** Parse a positive integer toolcall parameter (run/job ids are numbers or numeric strings). */
+function toPositiveId(value: number | string, name: string): number {
+  const id = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`invalid ${name}: ${String(value)} (expected a positive integer)`);
+  }
+  return id;
+}
+
 // ── runtime validation schemas for JSON.parse results ───────────────────────
 
 const repoViewSchema = Type.Object({ nameWithOwner: Type.String() });
-
-const stepSchema = Type.Object({
-  name: Type.String(),
-  number: Type.Number(),
-  status: Type.String(),
-  conclusion: Type.Union([Type.String(), Type.Null()]),
-  started_at: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-});
-
-const jobRunSchema = Type.Object({
-  id: Type.Number(),
-  run_id: Type.Number(),
-  run_url: Type.String(),
-  name: Type.String(),
-  status: Type.String(),
-  conclusion: Type.Union([Type.String(), Type.Null()]),
-  html_url: Type.Optional(Type.String()),
-  steps: Type.Array(stepSchema),
-});
-
-const jobsResponseSchema = Type.Object({ jobs: Type.Array(jobRunSchema) });
 
 const prHeadSchema = Type.Object({ headRefOid: Type.String() });
 
@@ -418,15 +421,6 @@ async function searchList(
 
 // ── CI helpers ───────────────────────────────────────────────────────────────
 
-export interface StepInfo {
-  name: string;
-  number: number;
-  status: string;
-  conclusion: string | null;
-  /** ISO-8601 UTC, second precision. Null for steps that never started. */
-  started_at?: string | null;
-}
-
 // 模块级串行状态：同一资源（如 CI 日志）的请求排队执行，配合函数内部的
 // 缓存检查避免重复网络请求。闭包状态不与其他扩展共享，key 无需全局前缀。
 const seq = createSeqState();
@@ -455,7 +449,7 @@ export function jobLogPath(repo: string, runId: string, jobId: number): string {
 }
 
 async function getJobLog(
-  job: CiLogsJob,
+  job: RunJob,
   signal: AbortSignal | undefined,
   cwd: string | undefined,
   input?: unknown,
@@ -553,7 +547,7 @@ export interface StepSpan {
   end: number;
 }
 
-/** The part of a step the log index needs. `StepInfo` satisfies it. */
+/** The part of a step the log index needs. `RunJobStep` satisfies it. */
 export interface StepRef {
   number: number;
   name: string;
@@ -645,7 +639,10 @@ function headerScore(step: StepRef, header: StepHeader): number {
  * composite action's *internal* steps carry no evidence for any API step, so
  * they stay unmatched and are absorbed into the enclosing step's span.
  */
-function alignStepsToHeaders(steps: StepRef[], headers: StepHeader[]): Map<number, number> {
+function alignStepsToHeaders(
+  steps: readonly StepRef[],
+  headers: StepHeader[],
+): Map<number, number> {
   const n = steps.length;
   const m = headers.length;
   // Equal-scoring alignments are decided in favour of the earlier step: a step
@@ -714,7 +711,7 @@ function trimTrailingBlankLines(lines: string[], start: number, end: number): nu
  * header. Steps with no header of their own (skipped steps, post steps the
  * runner never logged, "Complete job") get no span.
  */
-export function stepLineSpans(log: string, apiSteps: StepRef[]): Map<number, StepSpan> {
+export function stepLineSpans(log: string, apiSteps: readonly StepRef[]): Map<number, StepSpan> {
   const lines = log.split("\n");
   const headers = stepHeaders(lines);
   const spans = new Map<number, StepSpan>();
@@ -750,7 +747,7 @@ export function stepLineSpans(log: string, apiSteps: StepRef[]): Map<number, Ste
 export function extractStepFromLog(
   log: string,
   stepNumber: number,
-  apiSteps: { number: number; name: string }[],
+  apiSteps: readonly { number: number; name: string }[],
 ): string | null {
   const span = stepLineSpans(log, apiSteps).get(stepNumber);
   if (span === undefined) return null;
@@ -758,17 +755,6 @@ export function extractStepFromLog(
 }
 
 // ── ci-logs rendering (pure, testable) ──────────────────────────────────────
-
-export interface CiLogsJob {
-  id: number;
-  run_id: number;
-  /** Canonical `api.github.com/repos/<owner>/<repo>/actions/runs/<id>`. */
-  run_url: string;
-  name: string;
-  status: string;
-  conclusion: string | null;
-  steps: StepInfo[];
-}
 
 export interface CiLogsResult {
   content: { type: "text"; text: string }[];
@@ -802,7 +788,7 @@ export interface CiLogsJobIndex {
  * range. The step content itself is not returned — the model reads it out of
  * the file.
  */
-export function jobLogIndex(job: CiLogsJob, rawLog: string): CiLogsJobIndex {
+export function jobLogIndex(job: RunJob, rawLog: string): CiLogsJobIndex {
   const spans = stepLineSpans(rawLog, job.steps);
   return {
     name: job.name,
@@ -842,6 +828,10 @@ export interface MergedCheck {
   readonly link: string | null;
   /** Triggering workflow event (push, pull_request, ...); null when unknown. */
   readonly event: string | null;
+  /** Actions run id behind this check, for `get-github-workflow-jobs`; null when unknown. */
+  readonly runId: number | null;
+  /** Actions job id behind this check, for `read-github-ci-logs`; null when unknown. */
+  readonly jobId: number | null;
 }
 
 function statusBucket(state: string): CheckBucket {
@@ -894,6 +884,8 @@ export function mergeChecks(
       startedAt: null,
       link: status.targetUrl,
       event: null,
+      runId: null,
+      jobId: null,
     })),
     ...checkRuns.map((run) => ({
       name: run.name,
@@ -901,6 +893,8 @@ export function mergeChecks(
       startedAt: run.startedAt,
       link: run.url,
       event: run.event,
+      runId: run.runId,
+      jobId: run.jobId,
     })),
   ];
 }
@@ -1418,28 +1412,41 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     name: "read-github-pr-status",
     label: "GitHub PR Status",
     description:
-      "Get the current status checks and CI results for a GitHub pull request. Returns the current snapshot immediately; pending checks are reported as-is, not waited on. Use wait-github-pr-checks to block until checks finish.",
+      "Get the current checks of a pull request's head commit as JSON {pr, repo, head_sha, checks:[{name, bucket, event, run_id, job_id, url}]}. `bucket` is pass / fail / pending / skipped; Actions checks carry the `run_id` and `job_id` behind them (null for other CI), which is what read-github-ci-logs and get-github-workflow-jobs take. Returns the snapshot immediately without waiting — use wait-github-pr-checks to block until the checks finish.",
     promptSnippet: "Read GitHub PR status checks",
     parameters: Type.Object({
       number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+      repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params;
-      const args = ["pr", "checks", String(number), ...repoArgs(repo)];
+      const pullNumber = toPositiveId(number, "number");
+      const pendant = subtitlePendant(params, "number");
+      const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+      const { owner, repo: name } = splitRepo(effectiveRepo);
 
-      // `gh pr checks` exit codes: 0 = all passed, 1 = some failed, 8 = some
-      // pending. All three are valid states — return the current snapshot
-      // as-is without waiting. `wait-github-pr-checks` is the blocking variant.
-      const result = await runGh(args, { cwd: ctx.cwd, signal });
+      // 与 wait 工具同一条读取路径（octokit），只是这里不轮询：pending 的 check
+      // 原样返回，等结果走 wait-github-pr-checks。
+      const pollSignal = signal ?? new AbortController().signal;
+      const headSha = await githubChecks.pullHead(owner, name, pullNumber, pollSignal);
+      const [statuses, checkRuns] = await Promise.all([
+        githubChecks.statuses(owner, name, headSha, pollSignal),
+        githubChecks.checkRuns(owner, name, headSha, pollSignal),
+      ]);
+      const checks = mergeChecks(statuses, checkRuns).map((check) => ({
+        name: check.name,
+        bucket: check.bucket,
+        event: check.event,
+        run_id: check.runId,
+        job_id: check.jobId,
+        url: check.link,
+      }));
 
-      if (result.code !== 0 && result.code !== 1 && result.code !== 8) {
-        // Anything else is a real error (cancelled, auth, network, ...)
-        throw new GhError(args, result, params);
-      }
-      const toolResult = toToolResult(result.stdout, params);
-      toolResult.details.pendant = subtitlePendant(params, "number");
-      return toolResult;
+      const payload = { pr: pullNumber, repo: effectiveRepo, head_sha: headSha, checks };
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+        details: { ...payload, input: params, ...(pendant && { pendant }) },
+      };
     },
   });
 
@@ -1466,21 +1473,18 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       if (reviews) {
         const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
 
-        const [comments, reviewsOut] = await Promise.all([
-          ghExec(["api", `/repos/${effectiveRepo}/pulls/${String(number)}/comments`], {
+        const [reviewComments, reviewSummaries] = await Promise.all([
+          ghApiList(`/repos/${effectiveRepo}/pulls/${String(number)}/comments`, {
             cwd: ctx.cwd,
             signal,
             input: params,
           }),
-          ghExec(["api", `/repos/${effectiveRepo}/pulls/${String(number)}/reviews`], {
+          ghApiList(`/repos/${effectiveRepo}/pulls/${String(number)}/reviews`, {
             cwd: ctx.cwd,
             signal,
             input: params,
           }),
         ]);
-
-        const reviewComments = Value.Parse(Type.Array(Type.Unknown()), JSON.parse(comments));
-        const reviewSummaries = Value.Parse(Type.Array(Type.Unknown()), JSON.parse(reviewsOut));
 
         out = JSON.stringify(
           {
@@ -1568,39 +1572,39 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     name: "read-github-ci-logs",
     label: "GitHub CI Logs",
     description:
-      "Download one GitHub Actions job's CI log and index its steps. Returns JSON {name, id, status, conclusion, log_file, steps:[{number, name, conclusion, start_line?, end_line?}]}: `log_file` is the job's complete raw log on disk (runner timestamps and ANSI kept, exactly as GitHub delivers it) and each step carries the 1-based inclusive line range of its block inside that file. Read the content out of the file yourself (read/grep with offset/limit) — it is not echoed back. Get `job` names/ids from read-github-workflow-jobs." +
+      "Download one GitHub Actions job's CI log by job ID and index its steps. Returns JSON {name, id, status, conclusion, log_file, steps:[{number, name, conclusion, start_line?, end_line?}]}: `log_file` is the job's complete raw log on disk (runner timestamps and ANSI kept, exactly as GitHub delivers it) and each step carries the 1-based inclusive line range of its block inside that file. Read the content out of the file yourself (read/grep with offset/limit) — it is not echoed back. Get the job IDs from get-github-workflow-jobs, then call this once per job you need." +
       " Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
     promptSnippet: "Read GitHub CI logs",
     parameters: Type.Object({
-      run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),
+      job_id: Type.Union([Type.Number(), Type.String()], {
+        description: "Job ID, from get-github-workflow-jobs.",
+      }),
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-      job: Type.String({ description: "Job name or job ID, from read-github-workflow-jobs." }),
     }),
     async execute(_id, params, signal, onUpdate, ctx) {
-      const { run_id, repo, job } = params;
-      const runId = String(run_id);
+      const { job_id, repo } = params;
+      const jobId = toPositiveId(job_id, "job_id");
 
-      const pendant = subtitlePendant(params, "run_id");
+      const pendant = subtitlePendant(params, "job_id");
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-      const jobsOut = await ghExec(["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`], {
-        cwd: ctx.cwd,
-        signal,
-        input: params,
-      });
-      const { jobs } = Value.Parse(jobsResponseSchema, JSON.parse(jobsOut));
+      const { owner, repo: name } = splitRepo(effectiveRepo);
 
       const failure = (text: string): CiLogsResult => ({
         content: [{ type: "text", text }],
         details: { input: params, ...(pendant && { pendant }) },
       });
 
-      const isNumeric = /^\d+$/.test(job);
-      const target = jobs.find((j) => (isNumeric ? String(j.id) : j.name) === job);
-      if (target === undefined) {
+      let target: RunJob;
+      try {
+        target = await githubChecks.job(owner, name, jobId, signal);
+      } catch (error) {
+        const status = (error as { status?: number }).status;
+        if (status !== 404) throw error;
         return failure(
-          `Job "${job}" not found in run ${runId}. Available: ${jobs.map((j) => `${j.name} (id: ${j.id})`).join(", ")}`,
+          `Job ${jobId} not found in ${effectiveRepo} — job IDs come from \`get-github-workflow-jobs\`.`,
         );
       }
+
       if (target.status === "queued") {
         return failure(
           `Job "${target.name}" is still queued — no logs available yet. Use \`watch-github-run\` to wait for it to start, then retry.`,
@@ -1622,28 +1626,24 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
     },
   });
 
-  // ── read-github-workflow-jobs ──────────────────────────────────────────────
+  // ── get-github-workflow-jobs ──────────────────────────────────────────────
   pi.registerTool({
-    name: "read-github-workflow-jobs",
+    name: "get-github-workflow-jobs",
     label: "GitHub Workflow Jobs",
     description:
-      "Get structured job data (name, status, conclusion, job ID) for a workflow run. Useful before reading CI logs to identify which job to inspect.",
-    promptSnippet: "Read GitHub workflow run jobs",
+      "Get every job of a workflow run as JSON {total_count, jobs:[{id, run_id, run_url, name, status, conclusion, html_url, steps:[{name, number, status, conclusion, started_at}]}]}. Paginated server-side, so runs with more than 30 jobs return all of them. Use the `id` with read-github-ci-logs after read-github-pr-status / wait-github-commit-checks did not already give you a job id.",
+    promptSnippet: "Get GitHub workflow run jobs",
     parameters: Type.Object({
       run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { run_id, repo } = params;
+      const runId = toPositiveId(run_id, "run_id");
       const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-      const result = toToolResult(
-        await ghExec(["api", `/repos/${effectiveRepo}/actions/runs/${run_id}/jobs`], {
-          cwd: ctx.cwd,
-          signal,
-          input: params,
-        }),
-        params,
-      );
+      const { owner, repo: name } = splitRepo(effectiveRepo);
+      const jobs = await githubChecks.runJobs(owner, name, runId, signal);
+      const result = toToolResult(JSON.stringify({ total_count: jobs.length, jobs }), params);
       result.details.pendant = subtitlePendant(params, "run_id");
       return result;
     },

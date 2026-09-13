@@ -19,13 +19,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
-  type CiLogsJob,
   extractStepFromLog,
   jobLogIndex,
   jobLogPath,
   repoFromRunUrl,
   stepLineSpans,
 } from "../src/gh-readonly.js";
+import { type RunJob } from "../src/lib/github.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, "fixtures");
@@ -34,17 +34,16 @@ function loadFixture(name: string): string {
   return readFileSync(join(fixturesDir, name), "utf8");
 }
 
-const jobs = (
-  JSON.parse(loadFixture("php-serialize-31026014828-jobs.json")) as { jobs: CiLogsJob[] }
-).jobs;
+const jobs = (JSON.parse(loadFixture("php-serialize-31026014828-jobs.json")) as { jobs: RunJob[] })
+  .jobs;
 const lintRawLog = loadFixture("php-serialize-92374541920-raw.log");
 const testRawLog = loadFixture("php-serialize-92374541741-raw.log");
 
 const lintJob = jobs.find((j) => j.id === 92374541920)!;
 const testJob = jobs.find((j) => j.id === 92374541741)!;
 
-function loadJob(name: string): CiLogsJob {
-  return JSON.parse(loadFixture(name)) as CiLogsJob;
+function loadJob(name: string): RunJob {
+  return JSON.parse(loadFixture(name)) as RunJob;
 }
 
 /**
@@ -53,7 +52,7 @@ function loadJob(name: string): CiLogsJob {
  * block at all. This is what the tool promises the model: one block per step
  * that actually produced log output.
  */
-function stepBlocks(log: string, job: CiLogsJob): [number, string | null][] {
+function stepBlocks(log: string, job: RunJob): [number, string | null][] {
   const spans = stepLineSpans(log, job.steps);
   const lines = log.split("\n");
   return job.steps.map((s) => {
@@ -65,7 +64,7 @@ function stepBlocks(log: string, job: CiLogsJob): [number, string | null][] {
 }
 
 /** The text a model gets by reading a step's line range out of the raw file. */
-function readStepRange(log: string, job: CiLogsJob, stepNumber: number): string | null {
+function readStepRange(log: string, job: RunJob, stepNumber: number): string | null {
   const step = jobLogIndex(job, log).steps.find((s) => s.number === stepNumber);
   if (step?.start_line === undefined || step.end_line === undefined) return null;
   return log
@@ -211,13 +210,14 @@ describe("composite action step ranges (winflexbison cibuildwheel)", () => {
   // "Run " groups AFTER the composite's own ##[endgroup]. The range must absorb
   // them instead of ending at the first internal group.
   const rawLog = loadFixture("winflexbison-cibuildwheel-raw.log");
-  const job: CiLogsJob = {
+  const job: RunJob = {
     id: 1,
     run_id: 1,
     run_url: "https://api.github.com/repos/winflexbison/winflexbison/actions/runs/1",
     name: "cibuildwheel",
     status: "completed",
     conclusion: "success",
+    html_url: null,
     steps: [
       { number: 1, name: "Set up job", status: "completed", conclusion: "success" },
       {
