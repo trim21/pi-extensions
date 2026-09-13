@@ -152,16 +152,20 @@ describe("cc Edit/Write + real typescript-language-server LSP", () => {
 
       // 建立 client 并驻留 main.ts（引入自身错误拿到基线诊断）
       await call(tools.get("Read")!, { file_path: mainPath }, ctx);
+      // 基线断言用「语法错误」而不是 undefined_name：typescript-language-server 对一次
+      // didOpen 分语法 / 语义两段推送，冷启动时语义阶段可能晚于等待窗口（CI 上实测会
+      // 迟到），只有语法阶段的诊断一定在第一次推送里，断言它才不受服务器时序影响。
       const baseline = await call(
         tools.get("Edit")!,
         {
           file_path: mainPath,
-          old_string: 'greet("world")',
-          new_string: "greet(undefined_name)",
+          old_string: 'greet("world");',
+          new_string: "greet(undefined_name);\nconst broken: = 1;",
         },
         ctx,
       );
-      expect(baseline.content[0].text).toContain("undefined_name");
+      expect(baseline.content[0].text).toContain("LSP errors detected in this file");
+      expect(baseline.content[0].text).toMatch(/Type expected/);
 
       // 外部写入者（git pull / 对方 agent push）改写被依赖的 lib.ts：参数改为 number
       await writeFile(
