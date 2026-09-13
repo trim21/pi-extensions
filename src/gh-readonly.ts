@@ -262,6 +262,7 @@ const stepSchema = Type.Object({
   number: Type.Number(),
   status: Type.String(),
   conclusion: Type.Union([Type.String(), Type.Null()]),
+  started_at: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 });
 
 const jobRunSchema = Type.Object({
@@ -401,6 +402,8 @@ export interface StepInfo {
   number: number;
   status: string;
   conclusion: string | null;
+  /** ISO-8601 UTC, second precision. Null for steps that never started. */
+  started_at?: string | null;
 }
 
 // 模块级串行状态：同一资源（如 CI 日志）的请求排队执行，配合函数内部的
@@ -529,115 +532,194 @@ export interface StepSpan {
   end: number;
 }
 
-/**
- * Locate a job's steps in its raw log by matching step names to "Run " groups.
- *
- * Each top-level step emits a `##[group]Run <name>` / `##[group]Post Run <name>`
- * marker at depth 1. Composite actions emit their internal steps as *additional*
- * depth-1 groups *after* the composite's own `##[endgroup]` (e.g. the internal
- * `Run actions/setup-python@…` groups inside `Run pypa/cibuildwheel@…`), so the
- * log's "Run " groups are NOT one-per-step.
- *
- * To handle that we treat a group as an *anchor* only when its action name
- * (after stripping the "Run "/"Post Run " prefix) matches a top-level API step
- * name. Composite-action internals match no API step and are absorbed into the
- * span of the enclosing step instead of truncating it.
- *
- * Step 1 ("Set up job") maps to everything before the first anchor group.
- * Steps with an anchor map to the span from their anchor to the next anchor.
- * Explicitly named steps that lack a "Run " prefix (e.g. a step named
- * "Setup node" running actions/setup-node) are located between the previous
- * and next anchor's groups.
- * Steps that were skipped and never executed get no span.
- */
-export function stepLineSpans(
-  log: string,
-  apiSteps: { number: number; name: string }[],
-): Map<number, StepSpan> {
-  const lines = log.split("\n");
-  const spans = new Map<number, StepSpan>();
+/** The part of a step the log index needs. `StepInfo` satisfies it. */
+export interface StepRef {
+  number: number;
+  name: string;
+  conclusion?: string | null;
+  started_at?: string | null;
+}
 
-  // Collect depth-1 "Run "/"Post Run " groups in log order.
-  const groups: { line: number; action: string }[] = [];
+/** A `##[group]Run …` / `##[group]Post Run …` line: the header of one executed step. */
+interface StepHeader {
+  /** 0-based index of the `##[group]` line. */
+  line: number;
+  /** Header text with the `Run ` / `Post Run ` prefix stripped. */
+  action: string;
+  /** Runner timestamp on that line (epoch ms), null when unparsable. */
+  timestamp: number | null;
+}
+
+/** Runner timestamp every log line starts with: `2026-08-05T16:36:08.1842645Z `. */
+const LOG_TIMESTAMP_RE = /^\uFEFF?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) /;
+const HEADER_PREFIX_RE = /^(Run |Post Run )/;
+
+/**
+ * The runner writes a step's header within ~1.6s of the step's API `started_at`
+ * (the API truncates its timestamps to whole seconds), so a header inside this
+ * window is evidence of the step it belongs to.
+ */
+const HEADER_WINDOW_MS = 5_000;
+/** An exact name match proves the header belongs to that step. */
+const NAME_MATCH_SCORE = 4;
+/** Weight of a header inside the step's start window. */
+const TIME_MATCH_SCORE = 2;
+
+function headerTimestamp(line: string): number | null {
+  const match = LOG_TIMESTAMP_RE.exec(line);
+  if (match === null) return null;
+  const ms = Date.parse(match[1]);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/** Collect the depth-1 `Run ` / `Post Run ` headers, in log order. */
+function stepHeaders(lines: string[]): StepHeader[] {
+  const headers: StepHeader[] = [];
   let depth = 0;
   for (const [i, line] of lines.entries()) {
     if (line.includes("##[endgroup]")) {
       if (depth > 0) depth--;
       continue;
     }
-    if (line.includes("##[group]")) {
-      depth++;
-      if (depth === 1) {
-        const m = /##\[group\](.*)/.exec(line);
-        const name = m ? m[1].trim() : "";
-        if (name.startsWith("Run ") || name.startsWith("Post Run ")) {
-          groups.push({ line: i, action: name.replace(/^(Run |Post Run )/, "").trim() });
-        }
+    if (!line.includes("##[group]")) continue;
+    depth++;
+    if (depth !== 1) continue;
+    const name = /##\[group\](.*)/.exec(line)?.[1].trim() ?? "";
+    if (HEADER_PREFIX_RE.test(name)) {
+      headers.push({
+        line: i,
+        action: name.replace(HEADER_PREFIX_RE, "").trim(),
+        timestamp: headerTimestamp(line),
+      });
+    }
+  }
+  return headers;
+}
+
+/** How well a step explains a header — 0 means "no evidence, don't guess". */
+function headerScore(step: StepRef, header: StepHeader): number {
+  let score = 0;
+  const named = step.name.replace(HEADER_PREFIX_RE, "").trim();
+  if (HEADER_PREFIX_RE.test(step.name) && named === header.action) {
+    score += NAME_MATCH_SCORE;
+  }
+  const started = step.started_at == null ? NaN : Date.parse(step.started_at);
+  if (!Number.isNaN(started) && header.timestamp !== null) {
+    const delta = header.timestamp - started;
+    if (delta >= 0 && delta <= HEADER_WINDOW_MS) {
+      score += TIME_MATCH_SCORE * (1 - delta / HEADER_WINDOW_MS);
+    }
+  }
+  return score;
+}
+
+/**
+ * Align steps with headers: an order-preserving best-scoring matching, where
+ * either side may be left unmatched. Only pairs with real evidence are matched,
+ * so a step whose block cannot be identified gets no span instead of a guess.
+ *
+ * Name evidence disappears as soon as the workflow names a step with `name:`
+ * (the API name is then the custom one, while the log header carries the action
+ * or command), which is why the timestamps matter too. Headers belonging to a
+ * composite action's *internal* steps carry no evidence for any API step, so
+ * they stay unmatched and are absorbed into the enclosing step's span.
+ */
+function alignStepsToHeaders(steps: StepRef[], headers: StepHeader[]): Map<number, number> {
+  const n = steps.length;
+  const m = headers.length;
+  // Equal-scoring alignments are decided in favour of the earlier step: a step
+  // whose output the runner never logged (post steps, "Complete job") comes last
+  // in step order, so a header claimed by both belongs to the earlier one. A
+  // step that ran always emits its header before the next step starts, which
+  // leaves several steps competing for one header whenever the API timestamps
+  // (whole seconds) collapse them into the same second.
+  const TIE_BREAK = 1e-6;
+  const scores = steps.map((step, i) =>
+    headers.map((header) => {
+      const score = headerScore(step, header);
+      return score > 0 ? score + TIE_BREAK * (n - i) : 0;
+    }),
+  );
+  // best[i][j]: score of aligning the first i steps with the first j headers.
+  const best: number[][] = Array.from({ length: n + 1 }, () =>
+    Array.from({ length: m + 1 }, () => 0),
+  );
+  const paired: boolean[][] = Array.from({ length: n + 1 }, () =>
+    Array.from({ length: m + 1 }, () => false),
+  );
+
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const pairing = scores[i - 1][j - 1];
+      const withPairing = pairing > 0 ? best[i - 1][j - 1] + pairing : -Infinity;
+      if (withPairing >= best[i - 1][j] && withPairing >= best[i][j - 1]) {
+        best[i][j] = withPairing;
+        paired[i][j] = true;
+      } else {
+        best[i][j] = Math.max(best[i - 1][j], best[i][j - 1]);
       }
     }
   }
 
-  // API steps that produce a "Run "/"Post Run " log group, in step order.
-  const runSteps = apiSteps
-    .filter((s) => /^(Run |Post Run )/.test(s.name))
-    .map((s) => ({ number: s.number, action: s.name.replace(/^(Run |Post Run )/, "").trim() }))
-    .toSorted((a, b) => a.number - b.number);
-
-  // Greedily assign each run step the first unclaimed group whose action name
-  // matches (log order). Leftover groups are composite-action internals.
-  const used = new Set<number>();
-  const stepToGroup = new Map<number, number>(); // api step number -> group index
-  for (const rs of runSteps) {
-    const gi = groups.findIndex((g, idx) => !used.has(idx) && g.action === rs.action);
-    if (gi !== -1) {
-      used.add(gi);
-      stepToGroup.set(rs.number, gi);
+  const assignment = new Map<number, number>(); // step number -> header index
+  for (let i = n, j = m; i > 0 && j > 0;) {
+    if (paired[i][j]) {
+      assignment.set(steps[i - 1].number, j - 1);
+      i--;
+      j--;
+    } else if (best[i - 1][j] >= best[i][j - 1]) {
+      i--;
+    } else {
+      j--;
     }
   }
+  return assignment;
+}
 
-  // Anchor sequence in log order.
-  const anchors = [...stepToGroup]
-    .map(([stepNum, gi]) => ({ stepNum, line: groups[gi].line }))
+/** Exclusive end index with trailing blank lines dropped, so a span slices to real text. */
+function trimTrailingBlankLines(lines: string[], start: number, end: number): number {
+  while (end > start && (lines[end - 1] ?? "").trim() === "") end--;
+  return end;
+}
+
+/**
+ * Locate a job's steps in its raw log: each executed step emits a depth-1
+ * `##[group]Run <x>` / `##[group]Post Run <x>` header, and its block runs from
+ * that header up to the next executed step's header. Everything in between —
+ * the action's own `::group::` output, a composite action's internal step
+ * headers — belongs to the enclosing step.
+ *
+ * "Set up job" emits no header: it owns the runner preamble before the first
+ * header. Steps with no header of their own (skipped steps, post steps the
+ * runner never logged, "Complete job") get no span.
+ */
+export function stepLineSpans(log: string, apiSteps: StepRef[]): Map<number, StepSpan> {
+  const lines = log.split("\n");
+  const headers = stepHeaders(lines);
+  const spans = new Map<number, StepSpan>();
+
+  // "Set up job" is the runner's own preamble and never takes part in matching:
+  // its start window overlaps the first real step's header.
+  const preamble = apiSteps.find((s) => s.number === 1 && s.name === "Set up job");
+  if (preamble !== undefined) {
+    const end = trimTrailingBlankLines(lines, 0, headers[0]?.line ?? lines.length);
+    spans.set(preamble.number, { start: 0, end });
+  }
+
+  // A skipped step never started, so it emitted no header — and its name often
+  // repeats another step's ("Clear build" twice, "Post Run <action>" next to
+  // its "Run <action>"), which would let it steal that step's block.
+  const assignment = alignStepsToHeaders(
+    apiSteps.filter((s) => s !== preamble && s.conclusion !== "skipped"),
+    headers,
+  );
+  const placed = [...assignment]
+    .map(([number, headerIndex]) => ({ number, line: headers[headerIndex].line }))
     .toSorted((a, b) => a.line - b.line);
 
-  for (const s of apiSteps) {
-    let start: number;
-    let end: number;
-
-    if (s.number === 1) {
-      // Step 1 ("Set up job"): everything before the first "Run " group.
-      start = 0;
-      end = groups[0]?.line ?? lines.length;
-    } else {
-      const anchorIdx = anchors.findIndex((a) => a.stepNum === s.number);
-      if (anchorIdx === -1) {
-        // Non-anchor step (explicitly named, e.g. "Setup node"): its group sits
-        // in the gap between the previous and next anchors' groups. Take the
-        // first unclaimed group in that span.
-        const prevAnchor = anchors.reduce<{ stepNum: number; line: number } | undefined>(
-          (acc, a) => (a.stepNum < s.number ? a : acc),
-          undefined,
-        );
-        const nextAnchor = anchors.find((a) => a.stepNum > s.number);
-        const gapStart = prevAnchor ? prevAnchor.line + 1 : 0;
-        const gapEnd = nextAnchor ? nextAnchor.line : lines.length;
-
-        const gi = groups.findIndex(
-          (g, idx) => !used.has(idx) && g.line >= gapStart && g.line < gapEnd,
-        );
-        if (gi === -1) continue; // step never ran → no block in the log
-        start = groups[gi].line;
-        end = gapEnd;
-      } else {
-        // Direct anchor hit: span from this anchor to the next one.
-        start = anchors[anchorIdx].line;
-        end = anchorIdx + 1 < anchors.length ? anchors[anchorIdx + 1].line : lines.length;
-      }
-    }
-
-    // Drop trailing blank lines so the span slices to the step's own text.
-    while (end > start && lines[end - 1].trim() === "") end--;
-    spans.set(s.number, { start, end });
+  for (const [index, step] of placed.entries()) {
+    const end = trimTrailingBlankLines(lines, step.line, placed[index + 1]?.line ?? lines.length);
+    spans.set(step.number, { start: step.line, end });
   }
 
   return spans;

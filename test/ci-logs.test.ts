@@ -43,6 +43,27 @@ const testRawLog = loadFixture("php-serialize-92374541741-raw.log");
 const lintJob = jobs.find((j) => j.id === 92374541920)!;
 const testJob = jobs.find((j) => j.id === 92374541741)!;
 
+function loadJob(name: string): CiLogsJob {
+  return JSON.parse(loadFixture(name)) as CiLogsJob;
+}
+
+/**
+ * Step number → the `##[group]` header its span starts at, `<preamble>` for the
+ * runner-setup block before the first header, and `null` when the step has no
+ * block at all. This is what the tool promises the model: one block per step
+ * that actually produced log output.
+ */
+function stepBlocks(log: string, job: CiLogsJob): [number, string | null][] {
+  const spans = stepLineSpans(log, job.steps);
+  const lines = log.split("\n");
+  return job.steps.map((s) => {
+    const span = spans.get(s.number);
+    if (span === undefined) return [s.number, null];
+    const line = (lines[span.start] ?? "").replace(/^\uFEFF?\S+Z /, "").replace(/\r$/, "");
+    return [s.number, line.startsWith("##[group]") ? line.slice("##[group]".length) : "<preamble>"];
+  });
+}
+
 /** The text a model gets by reading a step's line range out of the raw file. */
 function readStepRange(log: string, job: CiLogsJob, stepNumber: number): string | null {
   const step = jobLogIndex(job, log).steps.find((s) => s.number === stepNumber);
@@ -243,5 +264,192 @@ describe("composite action step ranges (winflexbison cibuildwheel)", () => {
     const step4 = stepLineSpans(rawLog, job.steps).get(4)!;
     const step5 = stepLineSpans(rawLog, job.steps).get(5)!;
     expect(step4.end).toBeLessThanOrEqual(step5.start);
+  });
+});
+
+// ── real logs from public repositories ──────────────────────────────────────
+//
+// These are trimmed excerpts of real job logs (public repos), keeping every
+// `##[group]` / `##[endgroup]` line plus a few output lines per block, so line
+// numbers differ from the originals while the structure and timestamps do not.
+// Each one covers a shape the older fixtures missed.
+
+describe("axonhub — every step has a custom name (no name matching possible)", () => {
+  // looplj/axonhub run 32805492887 job 97674749621. Every step is declared with
+  // `name:`, so no API step name equals its `##[group]Run <action-or-command>`
+  // header — the previous name-based matcher gave all 11 steps the same span
+  // from the first header to EOF.
+  const job = loadJob("axonhub-97674749621-job.json");
+  const log = loadFixture("axonhub-97674749621-raw.log");
+
+  it("gives each executed step its own header block", () => {
+    expect(stepBlocks(log, job)).toEqual([
+      [1, "<preamble>"],
+      [2, "Run actions/checkout@v7"],
+      [3, "Run printf '%s\\n' \"${BASE_VERSION}-unstable.${BUILD_DATE}\" > internal/build/VERSION"],
+      [4, "Run docker/setup-buildx-action@v4"],
+      [5, "Run docker/login-action@v4"],
+      [6, "Run docker/metadata-action@v6"],
+      [7, "Run docker/build-push-action@v7"],
+      // post/complete steps never emit a header of their own in this log
+      [11, null],
+      [12, null],
+      [13, null],
+      [14, null],
+      [15, null],
+    ]);
+  });
+
+  it("absorbs the action's own groups into the enclosing step", () => {
+    const checkout = readStepRange(log, job, 2)!;
+    expect(checkout).toContain("##[group]Getting Git version info");
+    expect(checkout).toContain("##[group]Removing auth");
+    expect(checkout).not.toContain("Docker info");
+
+    const buildx = readStepRange(log, job, 4)!;
+    expect(buildx).toContain("##[group]Docker info");
+    expect(buildx).not.toContain("##[group]Run docker/login-action@v4");
+  });
+});
+
+describe("libtorrent — CRLF log, no name matches, last group never closed", () => {
+  // arvidn/libtorrent run 29188748619 job 86639594509 (Windows runner: CRLF).
+  const job = loadJob("libtorrent-86639594509-job.json");
+  const log = loadFixture("libtorrent-86639594509-raw.log");
+
+  it("is a CRLF log", () => {
+    expect(log).toContain("\r\n");
+  });
+
+  it("gives each executed step its own header block", () => {
+    expect(stepBlocks(log, job)).toEqual([
+      [1, "<preamble>"],
+      [2, "Run actions/checkout@v6"],
+      [
+        3,
+        "Run git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.91.0 https://github.com/boostorg/boost.git",
+      ],
+      [4, "Run cd boost"],
+      [5, String.raw`Run set BOOST_ROOT=%CD%\boost`],
+      // skipped, post and complete steps have no block
+      [6, null],
+      [12, null],
+      [13, null],
+    ]);
+  });
+
+  it("keeps the trailing unclosed group inside the last step", () => {
+    expect(readStepRange(log, job, 5)).toContain("##[group]test_pe_crypto.cpp.aes_ctr");
+  });
+});
+
+describe("neptune — CRLF log with composite internals that look like headers", () => {
+  // trim21/neptune run 29664454918 job 88132442135. Step 3 is a composite
+  // action whose internal steps are emitted as depth-1 `Run ` groups; a later
+  // step must not claim them.
+  const job = loadJob("neptune-88132442135-job.json");
+  const log = loadFixture("neptune-88132442135-raw.log");
+
+  it("is a CRLF log", () => {
+    expect(log).toContain("\r\n");
+  });
+
+  it("skips the composite's internal groups when matching later steps", () => {
+    expect(stepBlocks(log, job)).toEqual([
+      [1, "<preamble>"],
+      [2, "Run actions/checkout@v7.0.0"],
+      [3, "Run trim21/actions/setup-go@master"],
+      [4, "Run jaxxstorm/action-install-gh-release@v3.0.0"],
+      [
+        5,
+        "Run gotestsum --format=pkgname --format-hide-empty-pkg -- -short -race -count=1 -coverprofile=coverage.txt -covermode=atomic ./...",
+      ],
+      [6, null],
+      [7, null],
+      [8, null],
+      [9, null],
+      [10, null],
+      [11, null],
+      [12, null],
+      [23, null],
+      [24, null],
+      [25, null],
+    ]);
+  });
+
+  it("absorbs the composite's internal steps into the composite step", () => {
+    const setup = readStepRange(log, job, 3)!;
+    expect(setup).toContain("##[group]Run actions/setup-go@v6");
+    expect(setup).toContain("##[group]Run actions/cache@v6");
+    expect(setup).toContain("##[group]Run go get ./...");
+    expect(setup).not.toContain("action-install-gh-release");
+  });
+});
+
+describe("opendal — a skipped step must not take a running step's block", () => {
+  // apache/opendal run 30707827656 job 91390443085. "Clear build" appears three
+  // times (twice executed, once skipped) and "Run actions/checkout@v7" twice, so
+  // name matching alone hands a skipped step a block that belongs to a step that
+  // really ran.
+  const job = loadJob("opendal-91390443085-job.json");
+  const log = loadFixture("opendal-91390443085-raw.log");
+
+  it("maps only the steps that produced output", () => {
+    expect(stepBlocks(log, job)).toEqual([
+      [1, "<preamble>"],
+      [2, "Run actions/checkout@v7"],
+      [3, "Run pnpm/action-setup@v6"],
+      [4, "Run actions/setup-node@v6"],
+      [5, "Run npm install -g --force corepack && corepack enable"],
+      [6, "Run pnpm install --frozen-lockfile"],
+      [7, "Run actions/download-artifact@v8"],
+      [8, "Run # Useful for debugging"],
+      [9, "Run actions/cache@v6"],
+      [10, "Run pnpm build"],
+      [11, null],
+      [12, "Run rm -rf ./build"],
+      [13, null],
+      [14, null],
+      [15, null],
+      [16, null],
+      [17, null],
+      [18, "Run pnpm build"],
+      [19, null],
+      [20, "Run rm -rf ./build"],
+      [21, "Run pnpm build"],
+      [22, null],
+      [41, null],
+      [42, null],
+      [43, null],
+      [44, null],
+      [45, null],
+    ]);
+  });
+});
+
+describe("overlay-s3 — several steps starting in the same second", () => {
+  // trim21/overlay-s3 run 33060502066 job 98477797742. The API truncates step
+  // timestamps to whole seconds, so the failing step 10, step 11 and the post
+  // steps all start at 09:52:52; the blocks must still follow step order.
+  const job = loadJob("overlay-s3-98477797742-job.json");
+  const log = loadFixture("overlay-s3-98477797742-raw.log");
+
+  it("keeps the failing step on its own block", () => {
+    expect(stepBlocks(log, job)).toEqual([
+      [1, "<preamble>"],
+      [2, "Run actions/checkout@v7"],
+      [3, "Run actions/setup-go@v7"],
+      [4, "Run docker run -d --name silo -p 127.0.0.1:9000:9000 \\"],
+      [5, "Run go build ./... && go vet ./..."],
+      [6, "Run go test ./..."],
+      [7, "Run go test -run TestIntegration -v ./..."],
+      [8, "Run curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc"],
+      [9, "Run go build -o overlay-s3 ."],
+      [10, "Run set -euo pipefail"],
+      [11, "Run docker logs silo 2>&1 | tail -200"],
+      [21, null],
+      [22, null],
+      [23, null],
+    ]);
   });
 });

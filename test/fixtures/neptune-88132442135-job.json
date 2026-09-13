@@ -1,0 +1,148 @@
+{
+"id": 88132442135,
+"run_id": 29664454918,
+"workflow_name": "ci",
+"head_branch": "master",
+"run_url": "https://api.github.com/repos/trim21/neptune/actions/runs/29664454918",
+"run_attempt": 1,
+"node_id": "CR_kwDOMZZNz88AAAAUhRpYFw",
+"head_sha": "707cccdebda76c195a91aaaf6f6eb8a38f7716a2",
+"url": "https://api.github.com/repos/trim21/neptune/actions/jobs/88132442135",
+"html_url": "https://github.com/trim21/neptune/actions/runs/29664454918/job/88132442135",
+"status": "completed",
+"conclusion": "failure",
+"created_at": "2026-07-18T23:00:25Z",
+"started_at": "2026-07-18T23:00:29Z",
+"completed_at": "2026-07-18T23:03:40Z",
+"name": "test (windows-latest)",
+"steps": [
+{
+"name": "Set up job",
+"status": "completed",
+"conclusion": "success",
+"number": 1,
+"started_at": "2026-07-18T23:00:30Z",
+"completed_at": "2026-07-18T23:00:32Z"
+},
+{
+"name": "Run actions/checkout@v7.0.0",
+"status": "completed",
+"conclusion": "success",
+"number": 2,
+"started_at": "2026-07-18T23:00:32Z",
+"completed_at": "2026-07-18T23:00:36Z"
+},
+{
+"name": "Run trim21/actions/setup-go@master",
+"status": "completed",
+"conclusion": "success",
+"number": 3,
+"started_at": "2026-07-18T23:00:36Z",
+"completed_at": "2026-07-18T23:01:16Z"
+},
+{
+"name": "Install gotestsum",
+"status": "completed",
+"conclusion": "success",
+"number": 4,
+"started_at": "2026-07-18T23:01:16Z",
+"completed_at": "2026-07-18T23:01:17Z"
+},
+{
+"name": "Run gotestsum --format=pkgname --format-hide-empty-pkg -- -short -race -count=1 -coverprofile=coverage.txt -covermode=atomic ./...",
+"status": "completed",
+"conclusion": "failure",
+"number": 5,
+"started_at": "2026-07-18T23:01:17Z",
+"completed_at": "2026-07-18T23:03:36Z"
+},
+{
+"name": "Upload coverage to Codecov",
+"status": "completed",
+"conclusion": "skipped",
+"number": 6,
+"started_at": "2026-07-18T23:03:36Z",
+"completed_at": "2026-07-18T23:03:36Z"
+},
+{
+"name": "Run gotestsum --format=pkgname --format-hide-empty-pkg -- -short -race -tags=release -count=1 -coverprofile=coverage.txt -covermode=atomic ./...",
+"status": "completed",
+"conclusion": "skipped",
+"number": 7,
+"started_at": "2026-07-18T23:03:36Z",
+"completed_at": "2026-07-18T23:03:36Z"
+},
+{
+"name": "Upload coverage to Codecov",
+"status": "completed",
+"conclusion": "skipped",
+"number": 8,
+"started_at": "2026-07-18T23:03:36Z",
+"completed_at": "2026-07-18T23:03:36Z"
+},
+{
+"name": "Run go build -tags=release -o tmp/try.exe",
+"status": "completed",
+"conclusion": "skipped",
+"number": 9,
+"started_at": "2026-07-18T23:03:36Z",
+"completed_at": "2026-07-18T23:03:36Z"
+},
+{
+"name": "Run ./tmp/try.exe --help",
+"status": "completed",
+"conclusion": "skipped",
+"number": 10,
+"started_at": "2026-07-18T23:03:36Z",
+"completed_at": "2026-07-18T23:03:36Z"
+},
+{
+"name": "Run go build -o tmp/try.exe",
+"status": "completed",
+"conclusion": "skipped",
+"number": 11,
+"started_at": "2026-07-18T23:03:36Z",
+"completed_at": "2026-07-18T23:03:36Z"
+},
+{
+"name": "Run ./tmp/try.exe --help",
+"status": "completed",
+"conclusion": "skipped",
+"number": 12,
+"started_at": "2026-07-18T23:03:36Z",
+"completed_at": "2026-07-18T23:03:36Z"
+},
+{
+"name": "Post Run trim21/actions/setup-go@master",
+"status": "completed",
+"conclusion": "success",
+"number": 23,
+"started_at": "2026-07-18T23:03:36Z",
+"completed_at": "2026-07-18T23:03:36Z"
+},
+{
+"name": "Post Run actions/checkout@v7.0.0",
+"status": "completed",
+"conclusion": "success",
+"number": 24,
+"started_at": "2026-07-18T23:03:36Z",
+"completed_at": "2026-07-18T23:03:38Z"
+},
+{
+"name": "Complete job",
+"status": "completed",
+"conclusion": "success",
+"number": 25,
+"started_at": "2026-07-18T23:03:38Z",
+"completed_at": "2026-07-18T23:03:38Z"
+}
+],
+"check_run_url": "https://api.github.com/repos/trim21/neptune/check-runs/88132442135",
+"labels": [
+"windows-latest"
+],
+"runner_id": 1000242638,
+"runner_name": "GitHub Actions 1000242638",
+"runner_group_id": 0,
+"runner_group_name": "GitHub Actions"
+}
