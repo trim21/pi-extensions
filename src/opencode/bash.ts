@@ -1,14 +1,37 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import type { ExtensionAPI, TruncationResult } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
+import {
+  BashInterruptedError,
+  type BwrapRuntime,
+  createBwrapRuntime,
+  sandboxHintBlock,
+} from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-const MAX_TIMEOUT_MS = 600_000;
+const MAX_TIMEOUT_MS = 7_200_000;
 
 /** 对齐上游 opencode 的截断提示文案（tools/BashTool/bash.ts）。 */
 const CAPTURE_TRUNCATED_NOTICE = "[output capture truncated at the in-memory safety limit]";
+
+/** Bash tool guidance, kept in markdown so it reads like documentation. */
+const BASH_PROMPT = readFileSync(fileURLToPath(new URL("bash.md", import.meta.url)), "utf8").trim();
+
+/** opencode 风格截断提示（成功、超时、中断路径共用）。 */
+function appendTruncationNotice(
+  text: string,
+  truncation: TruncationResult,
+  fullOutputPath: string | undefined,
+): string {
+  if (!truncation.truncated) return text;
+  let out = `${text}\n\n${CAPTURE_TRUNCATED_NOTICE}`;
+  if (fullOutputPath) out += `\nFull output: ${fullOutputPath}`;
+  return out;
+}
 
 /**
  * 对齐上游 opencode（packages/core/src/tool/bash.ts）：
@@ -28,13 +51,17 @@ export default function opencodeBash(
     description: [
       "Executes a given bash command synchronously and returns its output.",
       "The default working directory is the current directory; use workdir to run elsewhere.",
-      "timeout is in milliseconds, defaults to 120000, and may not exceed 600000.",
+      "timeout is in milliseconds, defaults to 120000, and may not exceed 7200000.",
       "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
     ].join("\n"),
     promptSnippet: "execute bash command",
+    promptGuidelines: [BASH_PROMPT],
     parameters: Type.Object(
       {
         command: Type.String({ description: "The command to execute" }),
+        description: Type.Optional(
+          Type.String({ description: "Clear, concise description of the command" }),
+        ),
         workdir: Type.Optional(
           Type.String({
             description:
@@ -43,8 +70,7 @@ export default function opencodeBash(
         ),
         timeout: Type.Optional(
           Type.Number({
-            description: "Optional timeout in milliseconds (max 600000)",
-            default: 600,
+            description: "Optional timeout in milliseconds (max 7200000)",
           }),
         ),
         dangerouslyDisableSandbox: Type.Optional(
@@ -73,22 +99,31 @@ export default function opencodeBash(
           command: params.command,
           timeout: timeout / 1000,
           requestFullAccess: params.dangerouslyDisableSandbox,
+          description: params.description,
           signal,
           onUpdate,
         });
       } catch (error) {
         if (!(error instanceof Error)) throw error;
-        // 对齐上游 opencode：超时不抛错，返回提示文本（丢弃部分输出）
-        if (/Command timed out after [\d.]+ seconds/.test(error.message)) {
+        if (error instanceof BashInterruptedError) {
+          const text = appendTruncationNotice(
+            error.partial.output || "",
+            error.partial.truncation,
+            error.partial.fullOutputPath,
+          );
+          const status =
+            error.kind === "timeout"
+              ? `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`
+              : "Command aborted by user";
+          const full = text ? `${text}\n\n${status}` : status;
+          // 对齐上游 opencode：超时与中断都不抛错，输出与状态文本一起返回；
+          // 超时可能是沙箱的网络限制导致的，附加沙箱状态（用户中断与沙箱无关）
           return {
             content: [
-              {
-                type: "text" as const,
-                text: `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
-              },
-              { type: "text" as const, text: "Command timed out before completion." },
+              { type: "text" as const, text: full },
+              ...sandboxHintBlock(error.kind === "timeout" ? error.sandboxHint : undefined),
             ],
-            details: { timeout: true },
+            details: error.kind === "timeout" ? { timeout: true } : {},
           };
         }
         throw error;
@@ -96,14 +131,14 @@ export default function opencodeBash(
 
       // 命令失败（非 0 退出码）不抛错：输出与状态文本一起返回
       let text = result.output || "(no output)";
-      if (result.truncation.truncated) {
-        text += `\n\n${CAPTURE_TRUNCATED_NOTICE}`;
-        if (result.fullOutputPath) text += `\nFull output: ${result.fullOutputPath}`;
-      }
+      text = appendTruncationNotice(text, result.truncation, result.fullOutputPath);
+      const failed = result.exitCode !== 0 && result.exitCode !== null;
       return {
         content: [
           { type: "text" as const, text },
           { type: "text" as const, text: `Command exited with code ${result.exitCode}.` },
+          // 失败可能是被沙箱的写边界或网络限制挡住的，附一块沙箱状态
+          ...sandboxHintBlock(failed ? result.sandboxHint : undefined),
         ],
         details: {
           exitCode: result.exitCode,

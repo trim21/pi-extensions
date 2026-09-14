@@ -10,7 +10,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import opencodeFileTools from "../src/opencode/files.js";
 
@@ -41,6 +41,8 @@ function loadTool(): Tool {
     registerTool: (def: Tool) => {
       if (def.name === "edit") tool = def;
     },
+    on: vi.fn(),
+    registerCommand: vi.fn(),
   } as never);
   return tool!;
 }
@@ -72,6 +74,7 @@ describe("opencode edit execute", () => {
     );
     expect(result.content[0].text).toBe("Edit applied successfully.");
     expect(result.details.diff).toBe("");
+    expect(result.details).toMatchObject({ pendant: { subtitle: `./${join("sub", "file.txt")}` } });
     expect(await readFile(target, "utf8")).toBe("hello\n");
   });
 

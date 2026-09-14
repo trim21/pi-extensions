@@ -7,20 +7,30 @@
  * - buildBwrapArgs: writable "." resolves against the workspace argument, so
  *   a per-command workdir can never move the sandbox write boundary.
  */
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 
 import { describe, expect, it } from "vitest";
 
 import {
   buildBwrapArgs,
   findBwrap,
+  findGitDirs,
+  findMihomo,
   resolveBwrap,
   type ResolvedBwrap,
   resolveHeadlessBwrap,
 } from "../src/bwrap/core.ts";
 import { resolveEscalation } from "../src/bwrap/runtime.ts";
+
+/** 沙箱显式以调用进程的 uid/gid 运行（net-allowlist 下避免在沙箱内自称 root）。 */
+function identityArgs(): string[] {
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  return uid === undefined || gid === undefined ? [] : ["--uid", String(uid), "--gid", String(gid)];
+}
 
 describe("findBwrap", () => {
   it("throws when the configured bwrapPath does not exist", () => {
@@ -32,14 +42,41 @@ describe("findBwrap", () => {
   });
 });
 
+describe("findMihomo", () => {
+  it("throws when the configured mihomoPath does not exist", () => {
+    expect(() => findMihomo("/nonexistent/mihomo")).toThrow(/not found at configured path/);
+  });
+
+  it("falls back to the bundled binary when mihomo is not in PATH", () => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      expect(findMihomo(undefined, process.execPath)).toBe(process.execPath);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("throws when neither PATH nor the bundled binary has mihomo", () => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      expect(() => findMihomo(undefined, "/nonexistent/mihomo")).toThrow(/bundled/);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+});
+
 describe("resolveBwrap", () => {
   it("resolves allow-net with sandbox on and network on", () => {
     const resolved = resolveBwrap({
       mode: "allow-net",
       writablePaths: [".", "/tmp"],
       extraWritablePaths: [],
-      tmpfsPaths: [],
+      denyPaths: [],
       extraArgs: [],
+      networkAllowlist: [],
     });
 
     expect(resolved.mode).toBe("allow-net");
@@ -53,8 +90,9 @@ describe("resolveBwrap", () => {
       mode: "workspace-write",
       writablePaths: [".", "/tmp"],
       extraWritablePaths: [],
-      tmpfsPaths: [],
+      denyPaths: [],
       extraArgs: [],
+      networkAllowlist: [],
     });
 
     expect(resolved.bwrapEnabled).toBe(true);
@@ -68,8 +106,9 @@ describe("resolveHeadlessBwrap", () => {
       mode: "allow-all",
       writablePaths: [".", "/tmp"],
       extraWritablePaths: [],
-      tmpfsPaths: [],
+      denyPaths: [],
       extraArgs: [],
+      networkAllowlist: [],
     });
 
     expect(resolved.mode).toBe("readonly");
@@ -83,14 +122,15 @@ describe("resolveHeadlessBwrap", () => {
       mode: "workspace-write",
       writablePaths: [".", "/tmp"],
       extraWritablePaths: ["~/.cache", "~/go/pkg"],
-      tmpfsPaths: ["/tmp/scratch"],
+      denyPaths: ["/tmp/scratch"],
       extraArgs: ["--bind", "/x", "/x"],
+      networkAllowlist: [],
     });
 
     expect(resolved.mode).toBe("readonly");
     expect(resolved.writablePaths).toEqual([]);
     expect(resolved.extraWritablePaths).toEqual([]);
-    expect(resolved.tmpfsPaths).toEqual([]);
+    expect(resolved.denyPaths).toEqual([]);
     expect(resolved.extraArgs).toEqual([]);
   });
 });
@@ -116,32 +156,58 @@ describe("buildBwrapArgs", () => {
     network: false,
     writablePaths: [".", "/tmp"],
     extraWritablePaths: [],
-    tmpfsPaths: [],
+    denyPaths: [],
     extraArgs: [],
+    networkAllowlist: [],
     approvalRules: [],
   };
 
-  it("binds writable '.' to the workspace argument, not the exec cwd", () => {
-    const args = buildBwrapArgs(base, "/ws");
+  it("binds writable '.' to the workspace argument, not the exec cwd", async () => {
+    const args = await buildBwrapArgs(base, "/ws");
 
-    // writablePaths 的 "." 解析为 workspace（/ws）；workspace 不存在时无 .git 等保护挂载
+    // writablePaths 的 "." 解析为 workspace（/ws）；workspace 不存在时无 .git 等保护挂载。
+    // --bind-try / --ro-bind-try：配置路径不存在时忽略，而不是让整条命令失败。
     expect(args).toEqual([
       "--new-session",
       "--die-with-parent",
       "--unshare-user",
       "--unshare-pid",
-      "--bind",
+      ...identityArgs(),
+      "--bind-try",
       "/ws",
       "/ws",
-      "--bind",
+      "--bind-try",
       "/tmp",
       "/tmp",
       "--unshare-net",
+      "--ro-bind-try",
+      join("/ws", ".pi"),
+      join("/ws", ".pi"),
+      "--ro-bind-try",
+      join("/ws", ".agent"),
+      join("/ws", ".agent"),
     ]);
   });
 
-  it("keeps extra writable paths as-is", () => {
-    const args = buildBwrapArgs({ ...base, extraWritablePaths: ["/data/x"] }, "/ws");
+  it("runs the sandbox as the invoking uid/gid instead of ns root", async () => {
+    const args = await buildBwrapArgs(base, "/ws");
+    const uid = process.getuid?.();
+    const gid = process.getgid?.();
+
+    // net-allowlist 模式下 holder 的 userns 把 pi 的 uid 映射成 0，不显式指定时
+    // 沙箱内 id/stat 会自称 root（落盘属主仍正确）；缺 uid/gid 的环境不应拼出半截参数。
+    if (uid === undefined || gid === undefined) {
+      expect(args).not.toContain("--uid");
+      expect(args).not.toContain("--gid");
+      return;
+    }
+    const index = args.indexOf("--uid");
+    expect(index).toBeGreaterThan(-1);
+    expect(args.slice(index, index + 4)).toEqual(["--uid", String(uid), "--gid", String(gid)]);
+  });
+
+  it("keeps extra writable paths as-is", async () => {
+    const args = await buildBwrapArgs({ ...base, extraWritablePaths: ["/data/x"] }, "/ws");
 
     // 顺序：writable binds → extra binds → unshare-net
     const bindsEnd = args.indexOf("--unshare-net");
@@ -150,27 +216,143 @@ describe("buildBwrapArgs", () => {
       "--die-with-parent",
       "--unshare-user",
       "--unshare-pid",
-      "--bind",
+      ...identityArgs(),
+      "--bind-try",
       "/ws",
       "/ws",
-      "--bind",
+      "--bind-try",
       "/tmp",
       "/tmp",
-      "--bind",
+      "--bind-try",
       "/data/x",
       "/data/x",
     ]);
   });
 
-  it("protects workspace-internal dot dirs instead of the exec cwd's", () => {
+  it("deny paths: trailing slash means dir, otherwise file", async () => {
+    const args = await buildBwrapArgs(
+      { ...base, denyPaths: ["/etc/secret/", "/home/user/.git-credentials"] },
+      "/ws",
+    );
+
+    // 目录条目 → --tmpfs 挂空；文件条目 → --ro-bind-try /dev/null 覆盖
+    const tmpfsTargets = args
+      .flatMap((value, index) => (value === "--tmpfs" ? [args[index + 1]] : []))
+      .filter((path): path is string => path !== undefined);
+    expect(tmpfsTargets).toEqual(["/etc/secret/"]);
+
+    const devNullTargets = args
+      .flatMap((value, index) =>
+        value === "--ro-bind-try" && args[index + 1] === "/dev/null" ? [args[index + 2]] : [],
+      )
+      .filter((path): path is string => path !== undefined);
+    expect(devNullTargets).toEqual(["/home/user/.git-credentials"]);
+  });
+
+  it("resolves symlink components in writable paths to their real path", async () => {
+    // bwrap 创建挂载点时不跟随 symlink：含 symlink 组件的路径必须先解析成真实路径
+    const root = mkdtempSync(join(tmpdir(), "cc-bwrap-link-"));
+    mkdirSync(join(root, "real-target", "data"), { recursive: true });
+    symlinkSync(join(root, "real-target"), join(root, "link"));
+
+    const args = await buildBwrapArgs(
+      { ...base, extraWritablePaths: [join(root, "link", "data/")] },
+      "/ws",
+    );
+
+    const real = join(root, "real-target", "data");
+    expect(args).toEqual(expect.arrayContaining(["--bind-try", real, real]));
+    expect(args.filter((arg) => arg.includes("/link/"))).toEqual([]);
+  });
+
+  it("resolves symlink components in deny paths to their real path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-bwrap-deny-link-"));
+    mkdirSync(join(root, "real-target", "secret"), { recursive: true });
+    symlinkSync(join(root, "real-target"), join(root, "link"));
+
+    const args = await buildBwrapArgs(
+      { ...base, denyPaths: [`${join(root, "link", "secret")}/`] },
+      "/ws",
+    );
+
+    const tmpfsTargets = args
+      .flatMap((value, index) => (value === "--tmpfs" ? [args[index + 1]] : []))
+      .filter((path): path is string => path !== undefined);
+    expect(tmpfsTargets).toEqual([join(root, "real-target", "secret")]);
+  });
+
+  it("protects workspace-internal dot dirs instead of the exec cwd's", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-args-"));
     mkdirSync(join(workspace, ".git"));
-    const args = buildBwrapArgs(base, workspace);
+    const args = await buildBwrapArgs(base, workspace);
 
-    // 只保护 workspace 下实际存在的 .git；exec cwd（/outside）不在保护列表
+    // 只保护 workspace 下的 dot dirs；exec cwd（/outside）不在保护列表
     const roBindTargets = args.flatMap((value, index) =>
-      value === "--ro-bind" ? [args[index + 1]] : [],
+      value === "--ro-bind-try" ? [args[index + 1]] : [],
     );
-    expect(roBindTargets).toEqual([join(workspace, ".git")]);
+    expect(roBindTargets).toEqual([
+      join(workspace, ".pi"),
+      join(workspace, ".agent"),
+      join(workspace, ".git"),
+    ]);
+  });
+
+  it("protects only the root .git when the workspace is a git repo", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-git-"));
+    mkdirSync(join(workspace, ".git"));
+    mkdirSync(join(workspace, "sub", ".git"), { recursive: true });
+    const args = await buildBwrapArgs(base, workspace);
+
+    // 根 .git 存在：不递归扫描，嵌套仓库不在保护列表
+    const gitTargets = args
+      .flatMap((value, index) => (value === "--ro-bind-try" ? [args[index + 1]] : []))
+      .filter((path) => path.endsWith(".git"));
+    expect(gitTargets).toEqual([join(workspace, ".git")]);
+  });
+
+  it("scans for nested .git when the workspace root is not a git repo", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-nested-"));
+    mkdirSync(join(workspace, "sub", ".git"), { recursive: true });
+    const args = await buildBwrapArgs(base, workspace);
+
+    const gitTargets = args
+      .flatMap((value, index) => (value === "--ro-bind-try" ? [args[index + 1]] : []))
+      .filter((path) => path.endsWith(".git"));
+    expect(gitTargets).toEqual([join(workspace, "sub", ".git")]);
+  });
+});
+
+describe("findGitDirs", () => {
+  it("collects nested .git directories", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-gitdirs-"));
+    mkdirSync(join(root, ".git"));
+    mkdirSync(join(root, "packages", "a", ".git"), { recursive: true });
+    mkdirSync(join(root, "packages", "b", ".git"), { recursive: true });
+
+    const dirs = await findGitDirs(root);
+    expect(dirs.toSorted()).toEqual(
+      [
+        join(root, ".git"),
+        join(root, "packages", "a", ".git"),
+        join(root, "packages", "b", ".git"),
+      ].toSorted(),
+    );
+  });
+
+  it("skips package directories", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-gitdirs-skip-"));
+    mkdirSync(join(root, "node_modules", "pkg", ".git"), { recursive: true });
+    mkdirSync(join(root, ".venv", "proj", ".git"), { recursive: true });
+    mkdirSync(join(root, "real", ".git"), { recursive: true });
+
+    expect(await findGitDirs(root)).toEqual([join(root, "real", ".git")]);
+  });
+
+  it("does not follow symlinked directories", async () => {
+    const root = mkdtempSync(join(tmpdir(), "cc-gitdirs-link-"));
+    mkdirSync(join(root, "real", ".git"), { recursive: true });
+    symlinkSync(join(root, "real"), join(root, "loop"));
+
+    expect(await findGitDirs(root)).toEqual([join(root, "real", ".git")]);
   });
 });

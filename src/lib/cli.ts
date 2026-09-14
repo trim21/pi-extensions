@@ -238,7 +238,7 @@ export function parseCommand<TFlags extends TObject>(
       } else if (info.kind === "boolean") {
         rawFlags[info.key] = true;
       } else {
-        const next = tokens[i + 1];
+        const next = tokens.at(i + 1);
         if (next !== undefined && !looksLikeFlag(next)) {
           rawFlags[info.key] = next;
           i++;
@@ -266,7 +266,7 @@ export function parseCommand<TFlags extends TObject>(
         } else if (j + 1 < rest.length) {
           rawFlags[info.key] = rest.slice(j + 1);
         } else {
-          const next = tokens[i + 1];
+          const next = tokens.at(i + 1);
           if (next !== undefined && !looksLikeFlag(next)) {
             rawFlags[info.key] = next;
             i++;
@@ -327,10 +327,7 @@ export function parseCommand<TFlags extends TObject>(
     parsed = Value.Convert(spec.flags, Value.Clone(parsed));
     if (!Value.Check(spec.flags, parsed)) {
       const [first] = [...Value.Errors(spec.flags, parsed)];
-      return errorResult(
-        spec,
-        `Invalid arguments: ${first?.message ?? "value does not match flags"}`,
-      );
+      return errorResult(spec, `Invalid arguments: ${first.message}`);
     }
   } catch {
     return errorResult(spec, "Invalid arguments");

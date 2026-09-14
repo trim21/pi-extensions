@@ -1,13 +1,14 @@
 /**
- * Tests for `read-github-pr-status` — it must return the current snapshot of
- * `gh pr checks` immediately, without polling.
+ * Tests for `read-github-pr-status` (`GhClient.prStatus`) — it must return the
+ * current checks of the PR's head commit immediately, without polling, and each
+ * Actions-backed check has to carry the `run_id` / `job_id` that lead to its log.
  *
- * `gh pr checks` exit codes: 0 = all passed, 1 = some failed, 8 = some pending.
- * All three are valid states; pending must be reported as-is (regression: it
- * used to poll until the checks resolved, duplicating `wait-github-pr-checks`).
- * Any other exit code is a real error and throws a GhError.
+ * Responses come from recorded fixtures (see test/github-fixtures.ts), injected
+ * into the client: these tests never touch the network nor `globalThis.fetch`.
+ * Only `gh auth token` crosses a process boundary, and that spawn is stubbed.
  *
  * Run: npx vitest run test/pr-status.test.ts
+ * Re-record: RECORD_GITHUB=1 pnpm exec vitest run --testTimeout=60000 test/pr-status.test.ts
  */
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -16,109 +17,164 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
-vi.mock("node:child_process", () => ({
+// Partial mock: only the `gh auth token` spawn is stubbed; the cassette's own
+// `execFileSync` (which reads the developer's token while recording) stays real.
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import registerTools, { GhError } from "../src/gh-readonly.js";
+import { GhClient } from "../src/gh-readonly.js";
+import { type FixtureRoutes, type GithubCassette, githubCassette } from "./github-fixtures.js";
 
-/** A fake gh child process that exits with the given code when told. */
+/** Fake `gh auth token` process. */
 class FakeChildProcess extends EventEmitter {
-  killed = false;
   stdout = new PassThrough();
   stderr = new PassThrough();
 
-  kill(_signal?: NodeJS.Signals | number): boolean {
-    this.killed = true;
-    this.emit("close", null, _signal);
+  kill(): boolean {
     return true;
   }
-
-  exit(code: number, stdout = ""): void {
-    if (stdout) this.stdout.write(stdout);
-    this.emit("close", code);
-  }
 }
-
-let fakeProc: FakeChildProcess;
-
-interface ToolDef {
-  name: string;
-  execute: (
-    _id: string,
-    params: { number: number | string; repo?: string },
-    signal: AbortSignal | undefined,
-    _onUpdate: unknown,
-    ctx: { cwd?: string },
-  ) => Promise<{
-    content: { type: "text"; text: string }[];
-    details: Record<string, unknown>;
-  }>;
-}
-
-function getPrStatusExecutor(): ToolDef["execute"] {
-  const tools: unknown[] = [];
-  const pi = {
-    registerTool: (t: unknown) => {
-      tools.push(t);
-      return tools.length;
-    },
-  };
-  registerTools(pi as unknown as Parameters<typeof registerTools>[0]);
-  const tool = tools.find(
-    (t): t is ToolDef => (t as { name?: string }).name === "read-github-pr-status",
-  );
-  if (!tool) throw new Error("read-github-pr-status not registered");
-  return tool.execute;
-}
-
-// gh-readonly 在 Windows 上整体禁用（见 gh-readonly.ts），executor 测试只属于
-// 非 Windows 平台；guard 避免模块加载时在 win32 上调用扩展工厂。
-const exec = process.platform === "win32" ? undefined : getPrStatusExecutor();
-const call = () => exec!("id", { number: 1 }, undefined, undefined, { cwd: undefined });
 
 beforeEach(() => {
-  fakeProc = new FakeChildProcess();
-  spawnMock.mockReturnValue(fakeProc);
+  spawnMock.mockImplementation(() => {
+    const proc = new FakeChildProcess();
+    setImmediate(() => {
+      proc.stdout.write("test-token\n");
+      proc.emit("close", 0);
+    });
+    return proc;
+  });
 });
 
 afterEach(() => {
-  spawnMock.mockClear();
+  spawnMock.mockReset();
 });
 
-describe.skipIf(process.platform === "win32")("read-github-pr-status", () => {
-  it("returns the current checks immediately when all checks pass (exit 0)", async () => {
-    const promise = call();
-    fakeProc.exit(0, "passed table");
+const PULL_ROUTE = "pulls/137";
+const STATUS_ROUTE = "commits/";
+const CHECK_RUNS_ROUTE = "check-runs";
+const RUNS_ROUTE = "actions/runs?head_sha=";
 
-    const result = await promise;
-    expect(result.content[0].text).toBe("passed table");
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+interface PullFixture {
+  number: number;
+  title: string;
+  head: { sha: string };
+}
+interface CombinedStatusFixture {
+  total_count: number;
+  statuses: { context: string; state: string; target_url: string }[];
+}
+interface CheckRunsFixture {
+  total_count: number;
+  check_runs: {
+    name: string;
+    conclusion: string | null;
+    html_url: string;
+    details_url: string;
+  }[];
+}
+
+const PR_NUMBER = 137;
+
+/** Route table shared by the tests in this file. */
+function routes(): FixtureRoutes {
+  return {
+    [PULL_ROUTE]: "pull.json",
+    "check-runs": "check-runs.json",
+    // must come after check-runs, both live under /commits/<sha>/
+    [STATUS_ROUTE]: "combined-status.json",
+    [RUNS_ROUTE]: "workflow-runs.json",
+  };
+}
+
+/** Run one toolcall through a client wired to the recorded responses. */
+function prStatus(api: GithubCassette, params: { number: number | string; repo?: string }) {
+  return new GhClient(api.fetch).prStatus({ params, ctx: {} });
+}
+
+describe("read-github-pr-status", () => {
+  it("reports every check of the head commit with its run/job ids", async () => {
+    const api = githubCassette(routes());
+    const result = await prStatus(api, { number: PR_NUMBER, repo: "trim21/pi-extensions" });
+    // expectations come from the response this run served (replayed or recorded)
+    const pull = api.body<PullFixture>(PULL_ROUTE);
+    const combinedStatus = api.body<CombinedStatusFixture>(STATUS_ROUTE);
+    const checkRuns = api.body<CheckRunsFixture>("check-runs");
+    const [firstStatus] = combinedStatus.statuses;
+    if (!firstStatus) throw new Error("fixture has no commit status");
+    const text = result.content[0]?.text ?? "";
+    const payload = JSON.parse(text) as {
+      pr: number;
+      repo: string;
+      head_sha: string;
+      checks: {
+        name: string;
+        bucket: string;
+        event: string | null;
+        run_id: number | null;
+        job_id: number | null;
+        url: string | null;
+      }[];
+    };
+
+    expect(payload.pr).toBe(PR_NUMBER);
+    expect(payload.repo).toBe("trim21/pi-extensions");
+    expect(payload.head_sha).toBe(pull.head.sha);
+    // every commit status and every check run of the commit shows up separately
+    expect(payload.checks).toHaveLength(
+      combinedStatus.statuses.length + checkRuns.check_runs.length,
+    );
+
+    // Actions check runs carry the run/job ids from their details_url; the
+    // commit statuses (codecov) have no Actions job behind them
+    for (const check of payload.checks) {
+      const isActionsJob = /\/actions\/runs\/\d+\/job\/\d+/.test(check.url ?? "");
+      if (isActionsJob) {
+        expect(check.run_id).toBeGreaterThan(0);
+        expect(check.job_id).toBeGreaterThan(0);
+      } else {
+        expect(check.run_id).toBeNull();
+        expect(check.job_id).toBeNull();
+      }
+      expect(["pass", "fail", "pending", "skipped"]).toContain(check.bucket);
+    }
+
+    const codecov = payload.checks.find((c) => c.name === firstStatus.context);
+    expect(codecov).toMatchObject({
+      bucket: "pass",
+      run_id: null,
+      job_id: null,
+      url: firstStatus.target_url,
+    });
+
+    // same-named check runs stay distinct entries (push + pull_request triggers)
+    const names = payload.checks.map((c) => c.name);
+    expect(new Set(names).size).toBeLessThan(names.length);
+    // ...and the Actions ones are labelled with the event that triggered them
+    expect(payload.checks.some((c) => c.event === "pull_request")).toBe(true);
+
+    expect(api.unused()).toEqual([]);
   });
 
-  it("returns the current checks immediately when a check fails (exit 1)", async () => {
-    const promise = call();
-    fakeProc.exit(1, "failed table");
+  it("returns the snapshot immediately instead of polling", async () => {
+    const api = githubCassette(routes());
+    await prStatus(api, { number: PR_NUMBER, repo: "trim21/pi-extensions" });
 
-    const result = await promise;
-    expect(result.content[0].text).toBe("failed table");
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+    // one request per read (PR, commit statuses, check runs, run events) — a
+    // polling implementation would repeat the check reads until they settle
+    expect(api.calls.filter((url) => url.includes("check-runs"))).toHaveLength(1);
+    expect(api.calls.filter((url) => url.includes("/status"))).toHaveLength(1);
+    expect(api.calls.filter((url) => url.includes(PULL_ROUTE))).toHaveLength(1);
+    expect(api.unused()).toEqual([]);
   });
 
-  it("returns pending checks as-is without polling (exit 8)", async () => {
-    const promise = call();
-    fakeProc.exit(8, "pending table");
-
-    const result = await promise;
-    expect(result.content[0].text).toBe("pending table");
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("throws GhError for any other exit code", async () => {
-    const promise = call();
-    fakeProc.exit(2);
-
-    await expect(promise).rejects.toThrow(GhError);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+  it("rejects a non-numeric PR number instead of asking the API", async () => {
+    const api = githubCassette({});
+    await expect(prStatus(api, { number: "abc", repo: "trim21/pi-extensions" })).rejects.toThrow(
+      /invalid number/,
+    );
+    expect(api.calls).toEqual([]);
   });
 });

@@ -2,7 +2,7 @@
  * 文件扩展名 → LSP languageId 映射，用于 didOpen 通知。
  * 移植自 opencode packages/opencode/src/lsp/language.ts。
  */
-export const LANGUAGE_EXTENSIONS: Record<string, string> = {
+export const LANGUAGE_EXTENSIONS: Record<string, string | undefined> = {
   ".abap": "abap",
   ".bat": "bat",
   ".bib": "bibtex",

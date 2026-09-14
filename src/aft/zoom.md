@@ -7,5 +7,3 @@
 - `contextLines`：符号前后附加的上下文行数，默认 3。
 - `callgraph: true`：附带同文件内 calls-out / called-by 调用关系标注，帮助理解符号如何被使用、依赖谁。
 - 适合先 aft_outline 拿到符号名与行号，再 zoom 具体实现；不要用它读整个文件（用 read）。
-
-只支持本地文件路径，不支持 URL。

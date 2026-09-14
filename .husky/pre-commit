@@ -1,1 +1,2 @@
+pnpm exec tsc
 pnpm exec lint-staged

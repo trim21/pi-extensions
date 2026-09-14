@@ -372,7 +372,7 @@ const EscapeNormalizedReplacer: Replacer = function* (content, find) {
 
 const MultiOccurrenceReplacer: Replacer = function* (content, find) {
   let startIndex = 0;
-  while (true) {
+  for (;;) {
     const index = content.indexOf(find, startIndex);
     if (index === -1) break;
     yield find;

@@ -172,6 +172,45 @@ describe("buildDiffPreview", () => {
     const lines = preview!.split("\n");
     expect(lines.length).toBe(103); // 100 diff lines + truncation note + ``` fences
   });
+
+  // 内容含 ``` 时三反引号围栏会被提前闭合，渲染错乱（上下文行前只有
+  // 一个空格缩进，仍在 CommonMark 闭合围栏允许的缩进范围内）。
+  it("uses a longer fence when the patch contains ``` lines", async () => {
+    await writeFile(TARGET, "```js\nold\n```\n", "utf8");
+
+    const preview = await buildDiffPreview(TARGET, { oldText: "old", newText: "new" });
+
+    expect(preview).toMatchInlineSnapshot(`
+      "\`\`\`\`diff
+      --- target.txt
+      +++ target.txt
+      @@ -1,3 +1,3 @@
+       \`\`\`js
+      -old
+      +new
+       \`\`\`
+
+      \`\`\`\`"
+    `);
+  });
+
+  it("fallback parameter diff also escapes ``` content", async () => {
+    await writeFile(TARGET, "unused\n", "utf8");
+
+    const preview = await buildDiffPreview(TARGET, {
+      oldText: "missing",
+      newText: "```js\nx\n```",
+    });
+
+    expect(preview).toMatchInlineSnapshot(`
+      "\`\`\`\`diff
+      -missing
+      +\`\`\`js
+      +x
+      +\`\`\`
+      \`\`\`\`"
+    `);
+  });
 });
 
 // ── guardWriteAccess ─────────────────────────────────────────────────────────
@@ -236,7 +275,7 @@ describe("guardWriteAccess", () => {
       const select = vi.fn(async () => "Block");
       await expect(
         guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), writeOptions(OUTSIDE)),
-      ).rejects.toThrow("Write outside workspace denied by user.");
+      ).rejects.toThrow("user deny write: blocked");
     },
   );
 
@@ -245,7 +284,7 @@ describe("guardWriteAccess", () => {
     const input = vi.fn(async () => "not allowed");
     await expect(
       guardWriteAccess(ctxWith({ ui: { select, input } }), writeOptions(OUTSIDE)),
-    ).rejects.toThrow("Write outside workspace denied: not allowed");
+    ).rejects.toThrow("user deny write: not allowed");
   });
 
   it.skipIf(process.platform === "win32")(
@@ -258,7 +297,7 @@ describe("guardWriteAccess", () => {
       const input = vi.fn(async () => undefined as string | undefined);
       await expect(
         guardWriteAccess(ctxWith({ ui: { select, input } }), writeOptions(OUTSIDE)),
-      ).rejects.toThrow("Write outside workspace denied by user.");
+      ).rejects.toThrow("user deny write: blocked");
       expect(select).toHaveBeenCalledTimes(2);
     },
   );
@@ -270,10 +309,20 @@ describe("guardWriteAccess", () => {
       const select = vi.fn(async () => undefined as string | undefined);
       await expect(
         guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() }, abort }), writeOptions(OUTSIDE)),
-      ).rejects.toThrow("Write outside workspace cancelled by user.");
+      ).rejects.toThrow("user deny write: cancelled");
       expect(abort).toHaveBeenCalled();
     },
   );
+
+  it.skipIf(process.platform === "win32")("uses the calling tool's name in the error", async () => {
+    const select = vi.fn(async () => "Block");
+    await expect(
+      guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), {
+        toolName: "test-tool",
+        absolutePath: OUTSIDE,
+      }),
+    ).rejects.toThrow("user deny test-tool: blocked");
+  });
 
   it.skipIf(process.platform === "win32")("shows a diff preview for an outside edit", async () => {
     const select = vi.fn(async (title: string) => {

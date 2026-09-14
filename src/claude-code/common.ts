@@ -18,10 +18,6 @@ import { Value } from "typebox/value";
 const fileSnapshotSchema = Type.Object({
   digest: Type.String(),
   textEditable: Type.Boolean(),
-  // 以下字段仅 Read 写入，供同范围重复读取 dedup；Edit/Write 不写，
-  // 覆盖记录后 offset 缺省 → 不再 dedup，强制重新 Read（对齐 CC readFileState）
-  offset: Type.Optional(Type.Number()),
-  limit: Type.Optional(Type.Number()),
 });
 
 export type FileSnapshot = Static<typeof fileSnapshotSchema>;
@@ -51,10 +47,6 @@ export function searchRoot(path: string | undefined, cwd: string): string {
 export function toRelativePath(filePath: string, cwd: string): string {
   const relativePath = relative(cwd, filePath);
   return relativePath.startsWith("..") ? filePath : relativePath;
-}
-
-export function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw new Error("Operation aborted");
 }
 
 export function snapshotsEqual(left: FileSnapshot, right: FileSnapshot): boolean {

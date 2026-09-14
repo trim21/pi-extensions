@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
-    "target": "ES2023",
+    "target": "ES2024",
     "module": "Node16",
-    "lib": ["ES2023"],
+    "lib": ["ES2025"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -13,5 +13,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "bin/**/*.ts"]
 }

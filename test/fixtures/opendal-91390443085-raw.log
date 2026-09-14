@@ -1,0 +1,138 @@
+﻿2026-08-01T16:23:44.7297631Z Current runner version: '2.336.0'
+2026-08-01T16:23:44.7321351Z ##[group]Runner Image Provisioner
+2026-08-01T16:23:44.7322282Z Hosted Compute Agent
+2026-08-01T16:23:44.7322919Z Version: 20260707.563
+2026-08-01T16:23:44.7323773Z Commit: 02667638d2b423fbc733a8e32a88b44996a3ba6e
+2026-08-01T16:23:44.7326687Z ##[endgroup]
+2026-08-01T16:23:44.7328109Z ##[group]Operating System
+2026-08-01T16:23:44.7330453Z ##[endgroup]
+2026-08-01T16:23:44.7331002Z ##[group]Runner Image
+2026-08-01T16:23:44.7336428Z ##[endgroup]
+2026-08-01T16:23:44.7337554Z ##[group]GITHUB_TOKEN Permissions
+2026-08-01T16:23:44.7340795Z ##[endgroup]
+2026-08-01T16:23:48.0670945Z Download action repository 'peaceiris/actions-gh-pages@v4.1.0' (SHA:84c30a85c19949d7eee79c4ff27748b70285e453)
+2026-08-01T16:23:48.9217188Z Complete job name: build-website
+2026-08-01T16:23:49.0018862Z ##[group]Run actions/checkout@v7
+2026-08-01T16:23:49.0019610Z with:
+2026-08-01T16:23:49.0019823Z   fetch-depth: 0
+2026-08-01T16:23:49.0020146Z   repository: apache/opendal
+2026-08-01T16:23:49.0023151Z   token: ***
+2026-08-01T16:23:49.0027665Z ##[endgroup]
+2026-08-01T16:23:49.0964139Z ##[group]Getting Git version info
+2026-08-01T16:23:49.1096500Z ##[endgroup]
+2026-08-01T16:23:49.1161869Z ##[group]Determining repository object format
+2026-08-01T16:23:49.1163715Z ##[endgroup]
+2026-08-01T16:23:49.1164134Z ##[group]Initializing the repository
+2026-08-01T16:23:49.1344544Z ##[endgroup]
+2026-08-01T16:23:49.1345175Z ##[group]Disabling automatic garbage collection
+2026-08-01T16:23:49.1375605Z ##[endgroup]
+2026-08-01T16:23:49.1376399Z ##[group]Setting up auth
+2026-08-01T16:23:49.2447964Z ##[endgroup]
+2026-08-01T16:23:49.2448673Z ##[group]Fetching the repository
+2026-08-01T16:23:55.1552643Z ##[endgroup]
+2026-08-01T16:23:55.1553849Z ##[group]Determining the checkout info
+2026-08-01T16:23:55.1554940Z ##[endgroup]
+2026-08-01T16:23:55.1647662Z ##[group]Checking out the ref
+2026-08-01T16:23:55.3674623Z ##[endgroup]
+2026-08-01T16:23:55.3722403Z [command]/usr/bin/git log -1 --format=%H
+2026-08-01T16:23:55.3748753Z 48c39522f71a67b6edacc08ddb4210009e6ca980
+2026-08-01T16:23:55.3969860Z ##[group]Run pnpm/action-setup@v6
+2026-08-01T16:23:55.3970141Z with:
+2026-08-01T16:23:55.3970325Z   version: 11.8.0
+2026-08-01T16:23:55.3970520Z   run_install: false
+2026-08-01T16:23:55.3970727Z   dest: ~/setup-pnpm
+2026-08-01T16:23:55.3973125Z ##[endgroup]
+2026-08-01T16:23:55.5419296Z ##[group]Running self-installer...
+2026-08-01T16:24:00.7001832Z Successfully updated pnpm to v11.8.0
+2026-08-01T16:24:00.7264131Z ##[endgroup]
+2026-08-01T16:24:00.7286614Z Installation Completed!
+2026-08-01T16:24:00.7482269Z ##[group]Run actions/setup-node@v6
+2026-08-01T16:24:00.7482558Z with:
+2026-08-01T16:24:00.7482773Z   node-version-file: website/.node-version
+2026-08-01T16:24:00.7483066Z   cache: pnpm
+2026-08-01T16:24:00.7483310Z   cache-dependency-path: website/pnpm-lock.yaml
+2026-08-01T16:24:00.7488460Z ##[endgroup]
+2026-08-01T16:24:05.7918287Z ##[group]Environment details
+2026-08-01T16:24:06.0160907Z ##[endgroup]
+2026-08-01T16:24:09.9125829Z Cache restored successfully
+2026-08-01T16:24:09.9174069Z Cache restored from key: node-cache-Linux-x64-pnpm-2cc78efb024088d34487ac682f3afda47a39c2ceb08645cd06bf144986ebdaa4
+2026-08-01T16:24:09.9354562Z ##[group]Run npm install -g --force corepack && corepack enable
+2026-08-01T16:24:09.9355130Z [36;1mnpm install -g --force corepack && corepack enable[0m
+2026-08-01T16:24:09.9401329Z shell: /usr/bin/bash -e {0}
+2026-08-01T16:24:09.9401595Z env:
+2026-08-01T16:24:09.9401812Z   RUST_DOC_TOOLCHAIN: nightly-2026-04-30
+2026-08-01T16:24:09.9403578Z ##[endgroup]
+2026-08-01T16:24:10.4933846Z 
+2026-08-01T16:24:10.4934467Z changed 1 package in 494ms
+2026-08-01T16:24:10.5913128Z ##[group]Run pnpm install --frozen-lockfile
+2026-08-01T16:24:10.5913900Z [36;1mpnpm install --frozen-lockfile[0m
+2026-08-01T16:24:10.5958049Z shell: /usr/bin/bash -e {0}
+2026-08-01T16:24:10.5958344Z env:
+2026-08-01T16:24:10.5958593Z   RUST_DOC_TOOLCHAIN: nightly-2026-04-30
+2026-08-01T16:24:10.5960389Z ##[endgroup]
+2026-08-01T16:24:17.9684445Z 
+2026-08-01T16:24:18.0039060Z Done in 6.6s using pnpm v11.8.0
+2026-08-01T16:24:18.0744934Z ##[group]Run actions/download-artifact@v8
+2026-08-01T16:24:18.0745442Z with:
+2026-08-01T16:24:18.0745784Z   pattern: *-documentation
+2026-08-01T16:24:18.0746203Z   path: website/static/docs/
+2026-08-01T16:24:18.0746632Z   merge-multiple: false
+2026-08-01T16:24:18.0751449Z ##[endgroup]
+2026-08-01T16:24:20.8750846Z Total of 14 artifact(s) downloaded
+2026-08-01T16:24:20.8757599Z Download artifact has finished successfully
+2026-08-01T16:24:20.9049251Z ##[group]Run # Useful for debugging
+2026-08-01T16:24:20.9049753Z [36;1m# Useful for debugging[0m
+2026-08-01T16:24:20.9050129Z [36;1mls -al static/docs/[0m
+2026-08-01T16:24:20.9050462Z [36;1m[0m
+2026-08-01T16:24:20.9050938Z [36;1m# Becasue `website/static/docs/` maps to `/docs/` on website, we want to organize paths[0m
+2026-08-01T16:24:20.9112298Z ##[endgroup]
+2026-08-01T16:24:20.9465293Z drwxr-xr-x   5 runner runner  4096 Aug  1 16:24 ruby
+2026-08-01T16:24:20.9465945Z drwxr-xr-x 103 runner runner  4096 Aug  1 16:24 rust
+2026-08-01T16:24:21.0092830Z ##[group]Run actions/cache@v6
+2026-08-01T16:24:21.0093209Z with:
+2026-08-01T16:24:21.0093984Z   path: website/node_modules/.cache/
+2026-08-01T16:24:21.0094695Z   key: website-build-artifacts-Linux-2cc78efb024088d34487ac682f3afda47a39c2ceb08645cd06bf144986ebdaa4-v1
+2026-08-01T16:24:21.0095355Z   enableCrossOsArchive: false
+2026-08-01T16:24:21.0098669Z ##[endgroup]
+2026-08-01T16:24:22.4815141Z Cache restored successfully
+2026-08-01T16:24:22.4899861Z Cache restored from key: website-build-artifacts-Linux-2cc78efb024088d34487ac682f3afda47a39c2ceb08645cd06bf144986ebdaa4-v1
+2026-08-01T16:24:22.4999527Z ##[group]Run pnpm build
+2026-08-01T16:24:22.4999906Z [36;1mpnpm build[0m
+2026-08-01T16:24:22.5000340Z [36;1mcp /home/runner/work/opendal/opendal/.asf.yaml ./build/.asf.yaml[0m
+2026-08-01T16:24:22.5045231Z shell: /usr/bin/bash -e {0}
+2026-08-01T16:24:22.5045588Z env:
+2026-08-01T16:24:22.5047822Z ##[endgroup]
+2026-08-01T16:33:17.9790255Z [SUCCESS] Generated static files in "build".
+2026-08-01T16:33:17.9791366Z [INFO] Use `npm run serve` command to test your build locally.
+2026-08-01T16:33:18.1701054Z ##[group]Run rm -rf ./build
+2026-08-01T16:33:18.1701448Z [36;1mrm -rf ./build[0m
+2026-08-01T16:33:18.1777073Z shell: /usr/bin/bash -e {0}
+2026-08-01T16:33:18.1777429Z env:
+2026-08-01T16:33:18.1777731Z   RUST_DOC_TOOLCHAIN: nightly-2026-04-30
+2026-08-01T16:33:18.1778416Z   RUSTDOCFLAGS: --cfg docsrs -D rustdoc::broken_intra_doc_links -D rustdoc::invalid_rust_codeblocks -D rustdoc::bare_urls
+2026-08-01T16:33:18.1779124Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-08-01T16:33:18.1779536Z ##[endgroup]
+2026-08-01T16:33:18.3733081Z ##[group]Run pnpm build
+2026-08-01T16:33:18.3733653Z [36;1mpnpm build[0m
+2026-08-01T16:33:18.3734090Z [36;1mcp /home/runner/work/opendal/opendal/.asf.yaml ./build/.asf.yaml[0m
+2026-08-01T16:33:18.3780513Z shell: /usr/bin/bash -e {0}
+2026-08-01T16:33:18.3780917Z env:
+2026-08-01T16:33:18.3784390Z ##[endgroup]
+2026-08-01T16:33:45.8015094Z [SUCCESS] Generated static files in "build".
+2026-08-01T16:33:45.8016057Z [INFO] Use `npm run serve` command to test your build locally.
+2026-08-01T16:33:45.9801010Z ##[group]Run rm -rf ./build
+2026-08-01T16:33:45.9801398Z [36;1mrm -rf ./build[0m
+2026-08-01T16:33:45.9846167Z shell: /usr/bin/bash -e {0}
+2026-08-01T16:33:45.9846514Z env:
+2026-08-01T16:33:45.9846810Z   RUST_DOC_TOOLCHAIN: nightly-2026-04-30
+2026-08-01T16:33:45.9847483Z   RUSTDOCFLAGS: --cfg docsrs -D rustdoc::broken_intra_doc_links -D rustdoc::invalid_rust_codeblocks -D rustdoc::bare_urls
+2026-08-01T16:33:45.9848190Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-08-01T16:33:45.9848596Z ##[endgroup]
+2026-08-01T16:33:46.1440998Z ##[group]Run pnpm build
+2026-08-01T16:33:46.1441389Z [36;1mpnpm build[0m
+2026-08-01T16:33:46.1441826Z [36;1mcp /home/runner/work/opendal/opendal/.asf.yaml ./build/.asf.yaml[0m
+2026-08-01T16:33:46.1485850Z shell: /usr/bin/bash -e {0}
+2026-08-01T16:33:46.1486188Z env:
+2026-08-01T16:33:46.1488759Z ##[endgroup]
+2026-08-01T16:34:13.9757619Z Removing credentials config '/home/runner/work/_temp/git-credentials-349fee64-2012-46e6-9ece-cbabbd174c8b.config'
+2026-08-01T16:34:13.9895591Z Cleaning up orphan processes

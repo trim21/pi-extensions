@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  type BashCommand,
-  commandPattern,
-  evaluateBashApproval,
-  matchRule,
-  parseBashCommands,
-} from "../src/bwrap/approval-rules.js";
+import { evaluateBashApproval, matchRule, parseBashCommands } from "../src/bwrap/approval-rules.js";
 
 describe("parseBashCommands", () => {
   it("extracts top-level commands with name and args", async () => {
@@ -40,21 +34,13 @@ describe("parseBashCommands", () => {
     const parsed = await parseBashCommands('echo "hello world" > /tmp/out');
     const echo = parsed.commands.find((c) => c.name === "echo")!;
     expect(echo.args).toEqual(['"hello world"']);
-  });
-});
-
-const cmd = (name: string, args: string[]): BashCommand => ({ name, args, raw: "", nested: [] });
-
-describe("commandPattern", () => {
-  it("uses BashArity to keep subcommands, dropping flags and values", () => {
-    expect(commandPattern(cmd("git", ["checkout", "main"]))).toBe("git checkout *");
-    expect(commandPattern(cmd("git", ["push", "origin", "main"]))).toBe("git push *");
-    expect(commandPattern(cmd("npm", ["install", "react"]))).toBe("npm install *");
-    expect(commandPattern(cmd("npm", ["run", "dev"]))).toBe("npm run dev *");
+    expect(parsed.hasFileOutputRedirect).toBe(true);
   });
 
-  it("falls back to command name + * for unknown commands", () => {
-    expect(commandPattern(cmd("some-tool", ["--flag", "value"]))).toBe("some-tool *");
+  it("does not treat pipelines or fd copies as file output redirects", async () => {
+    expect((await parseBashCommands("echo hi | tail -n 5")).hasFileOutputRedirect).toBe(false);
+    expect((await parseBashCommands("echo hi 2>&1")).hasFileOutputRedirect).toBe(false);
+    expect((await parseBashCommands("echo hi < /etc/passwd")).hasFileOutputRedirect).toBe(false);
   });
 });
 
@@ -64,6 +50,12 @@ describe("matchRule", () => {
     expect(matchRule("git push *", "git *")).toBe(true);
     expect(matchRule("git checkout *", "git push *")).toBe(false);
     expect(matchRule("npm install *", "npm *")).toBe(true);
+  });
+
+  it("matches raw commands against a -- separated rule pattern", () => {
+    expect(
+      matchRule("python ./script/file.py -- some sub command", "python ./script/file.py -- *"),
+    ).toBe(true);
   });
 });
 
@@ -141,13 +133,69 @@ describe("evaluateBashApproval", () => {
     ).toBeUndefined();
   });
 
+  it("does not allow echo with an output redirection under an echo * rule", async () => {
+    const echoAllow = [{ action: "allow" as const, pattern: "echo *" }];
+    expect(await evaluateBashApproval("echo '' > file", echoAllow)).toBeUndefined();
+    expect(await evaluateBashApproval("echo hi >> file", echoAllow)).toBeUndefined();
+    expect(await evaluateBashApproval("{ echo hi; } > file", echoAllow)).toBeUndefined();
+    expect(await evaluateBashApproval("( echo hi ) > file", echoAllow)).toBeUndefined();
+  });
+
+  it("still allows pipelines when every command matches an allow rule", async () => {
+    expect(
+      await evaluateBashApproval("echo '' | tail -n 5", [
+        { action: "allow", pattern: "echo *" },
+        { action: "allow", pattern: "tail *" },
+      ]),
+    ).toBe("allow");
+  });
+
+  it("still allows fd copies and input redirects under an echo * rule", async () => {
+    expect(
+      await evaluateBashApproval("echo hi 2>&1", [{ action: "allow", pattern: "echo *" }]),
+    ).toBe("allow");
+    expect(
+      await evaluateBashApproval("echo hi < /etc/passwd", [{ action: "allow", pattern: "echo *" }]),
+    ).toBe("allow");
+  });
+
+  it("still denies a redirected command that matches a deny rule", async () => {
+    expect(
+      await evaluateBashApproval("echo hi > file", [{ action: "deny", pattern: "echo *" }]),
+    ).toBe("deny");
+  });
+
   it("last matching rule wins (later rules take precedence)", async () => {
-    // 命令模式是 arity 粒度（git push *），规则需按同粒度写
     expect(
       await evaluateBashApproval("git push origin main", [
         { action: "deny", pattern: "git push *" },
         { action: "allow", pattern: "git *" },
       ]),
     ).toBe("allow");
+  });
+
+  it("allows a script invocation under a rule that lists the -- separator", async () => {
+    // 规则匹配的是命令原文，`--` 只是普通字面 token
+    expect(
+      await evaluateBashApproval("python ./script/file.py -- some sub command", [
+        { action: "allow", pattern: "python ./script/file.py -- *" },
+      ]),
+    ).toBe("allow");
+  });
+
+  it("allows a command under a rule that lists a literal flag", async () => {
+    expect(
+      await evaluateBashApproval("npm install --save-dev vitest", [
+        { action: "allow", pattern: "npm install --save-dev *" },
+      ]),
+    ).toBe("allow");
+  });
+
+  it("does not allow a script invocation when the rule requires a different literal", async () => {
+    expect(
+      await evaluateBashApproval("python ./script/file.py other.py", [
+        { action: "allow", pattern: "python ./script/file.py -- *" },
+      ]),
+    ).toBeUndefined();
   });
 });

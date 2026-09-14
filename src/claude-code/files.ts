@@ -14,7 +14,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
+import { appendLspDiagnosticText, type DiagnosticReport } from "../lib/lsp/diagnostic.js";
+import { registerLspInspectTools } from "../lib/lsp/inspect-tool.js";
+import { createLspManager, type LspService, type LspServiceOptions } from "../lib/lsp/lsp.js";
+import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
+import { formatSubtitlePath } from "../lib/path.js";
+import type { ToolPendant } from "../lib/pendant.ts";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import {
   type ClaudeCodeState,
@@ -24,15 +29,10 @@ import {
   type FileSnapshot,
   requireAbsolutePath,
   snapshotsEqual,
-  throwIfAborted,
 } from "./common.js";
 import { convertLeadingTabsToSpaces, findActualString, preserveQuoteStyle } from "./edit-utils.js";
 
 const SAMPLE_BYTES = 4096;
-
-/** 同范围重复读取、文件未变时返回的 stub（对齐 Claude Code 的 file_unchanged）。 */
-export const FILE_UNCHANGED_STUB =
-  "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.";
 
 /** Read 全读时的文件大小上限（对齐 Claude Code 的 256KB）。 */
 const MAX_READ_SIZE_BYTES = 0.25 * 1024 * 1024;
@@ -114,9 +114,10 @@ function splitFileLines(content: string): string[] {
 }
 
 /**
- * 格式化读取输出（对齐 Claude Code 的 addLineNumbers）：行号无 padding，
- * limit 未指定时读取全部。无 PARTIAL 提示、无单行截断（由 execute 层的
- * 字节/token 上限兜底）。
+ * 格式化读取输出：行号前缀用 `N: `（对齐 opencode Read）。弃用 Claude Code
+ * 的 `N\t` 前缀——tab 分隔符在 Go 等 tab 缩进语言里会与内容缩进连排，模型
+ * 易误判多一层缩进。limit 未指定时读取全部。无 PARTIAL 提示、无单行截断
+ * （由 execute 层的字节/token 上限兜底）。
  */
 export function formatReadOutput(
   content: string,
@@ -141,7 +142,7 @@ export function formatReadOutput(
   const startIndex = offset === 0 ? 0 : offset - 1;
   const selected =
     limit === undefined ? lines.slice(startIndex) : lines.slice(startIndex, startIndex + limit);
-  const text = selected.map((line, index) => `${offset + index}\t${line}`).join("\n");
+  const text = selected.map((line, index) => `${offset + index}: ${line}`).join("\n");
   return { text, totalLines };
 }
 
@@ -224,7 +225,7 @@ function requireCurrentRead(
 export function registerFileTools(
   pi: ExtensionAPI,
   state: ClaudeCodeState,
-  service: LspService,
+  getService: () => LspService,
 ): void {
   pi.registerTool({
     name: "Read",
@@ -252,7 +253,7 @@ export function registerFileTools(
       { additionalProperties: false },
     ),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      throwIfAborted(signal);
+      signal?.throwIfAborted();
       const filePath = requireAbsolutePath(params.file_path);
       if (
         params.offset !== undefined &&
@@ -276,7 +277,7 @@ export function registerFileTools(
         }
         throw error;
       }
-      throwIfAborted(signal);
+      signal?.throwIfAborted();
 
       const extension = extname(filePath).toLowerCase();
       if (extension === ".pdf") {
@@ -295,7 +296,16 @@ export function registerFileTools(
         const snapshot = snapshotOf(image, false);
         const key = await readStateKey(filePath);
         state.reads.set(key, snapshot);
-        return { content, details: { reads: { [key]: snapshot } } };
+        return {
+          content,
+          details: {
+            reads: { [key]: snapshot },
+            pendant: {
+              subtitle: formatSubtitlePath(ctx.cwd, filePath),
+              title: "Read",
+            } satisfies ToolPendant,
+          },
+        };
       }
 
       const offset = params.offset ?? 1;
@@ -303,18 +313,6 @@ export function registerFileTools(
       const key = await readStateKey(filePath);
       const buffer = await readFile(filePath);
 
-      // 同范围 + checksum 未变 → 返回 stub 而非重发内容（对齐 CC readFileState；
-      // 复用 reads 里的 sha256，比 mtime 可靠，无时间片粒度问题）
-      const previous = state.reads.get(key);
-      if (
-        previous !== undefined &&
-        previous.offset !== undefined &&
-        previous.offset === offset &&
-        previous.limit === limit &&
-        snapshotsEqual(previous, snapshotOf(buffer))
-      ) {
-        return { content: [{ type: "text", text: FILE_UNCHANGED_STUB }], details: {} };
-      }
       if (isBinary(buffer.subarray(0, SAMPLE_BYTES)))
         throw new Error(`Cannot read binary file: ${filePath}`);
       // 全读（limit 未传）时受字节上限约束（对齐 Claude Code）
@@ -332,15 +330,31 @@ export function registerFileTools(
           `File content (${estimatedTokens} tokens) exceeds maximum allowed tokens (${MAX_READ_TOKENS}). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file.`,
         );
       }
-      const snapshot = { ...snapshotOf(buffer), offset, limit };
+      const snapshot = snapshotOf(buffer);
       state.reads.set(key, snapshot);
-      // LSP warm-up 是后台任务，失败不影响读取
-      void service.touchFile(filePath, ctx.cwd).catch(() => {
-        // 后台 warm-up 失败不影响读取
+      // 与 Edit / Write 同一条驻留路径：didOpen 后等待该文件的诊断并报告
+      const diagnostics = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
+        notify: (message, level) => ctx.ui.notify(message, level),
       });
       return {
-        content: [{ type: "text", text: formatted.text }],
-        details: { reads: { [key]: snapshot } },
+        content: [
+          {
+            type: "text",
+            text: appendLspDiagnosticText(formatted.text, diagnostics.text),
+          },
+        ],
+        details: {
+          reads: { [key]: snapshot },
+          pendant: {
+            subtitle: formatSubtitlePath(
+              ctx.cwd,
+              filePath,
+              diagnostics.errorCount,
+              diagnostics.warningCount,
+            ),
+            title: "Read",
+          } satisfies ToolPendant,
+        },
       };
     },
   });
@@ -370,7 +384,7 @@ export function registerFileTools(
       { additionalProperties: false },
     ),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      throwIfAborted(signal);
+      signal?.throwIfAborted();
       const filePath = requireAbsolutePath(params.file_path);
       await guardWriteAccess(ctx, {
         toolName: "Edit",
@@ -381,8 +395,8 @@ export function registerFileTools(
           replaceAll: params.replace_all,
         },
       });
-      const [message, details, diagnosticText] = await withFileMutationQueue<
-        [string, FileToolDetails, string]
+      const [message, details, diagnostics] = await withFileMutationQueue<
+        [string, FileToolDetails, DiagnosticReport]
       >(filePath, async () => {
         const oldString = params.old_string;
         const newString = params.new_string;
@@ -413,8 +427,8 @@ export function registerFileTools(
           const key = await readStateKey(filePath);
           state.reads.set(key, snapshot);
           const diff = generateDiffString("", convertLeadingTabsToSpaces(newString));
-          throwIfAborted(signal);
-          const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+          signal?.throwIfAborted();
+          const diagnostics = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
             notify: (message, level) => ctx.ui.notify(message, level),
             signal,
           });
@@ -426,7 +440,7 @@ export function registerFileTools(
               firstChangedLine: diff.firstChangedLine,
               reads: { [key]: snapshot },
             },
-            diagnosticText,
+            diagnostics,
           ];
         }
         const replaceAll = params.replace_all ?? false;
@@ -464,7 +478,7 @@ export function registerFileTools(
         const key = await readStateKey(filePath);
         requireCurrentRead(state, key, filePath, content);
         await access(filePath, constants.R_OK | constants.W_OK);
-        throwIfAborted(signal);
+        signal?.throwIfAborted();
         const original = content.toString("utf8");
 
         // CRLF 规范化后匹配（old_string 不需要带 \r），写回时恢复原行尾
@@ -510,8 +524,8 @@ export function registerFileTools(
         const text = replaceAll
           ? `The file ${filePath} has been updated. All occurrences were successfully replaced.`
           : `The file ${filePath} has been updated successfully.`;
-        throwIfAborted(signal);
-        const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+        signal?.throwIfAborted();
+        const diagnostics = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
           notify: (message, level) => ctx.ui.notify(message, level),
         });
         return [
@@ -526,14 +540,26 @@ export function registerFileTools(
             firstChangedLine: diff.firstChangedLine,
             reads: { [key]: snapshot },
           },
-          diagnosticText,
+          diagnostics,
         ];
       });
 
-      const text = diagnosticText
-        ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
-        : message;
-      return { content: [{ type: "text" as const, text }], details };
+      const text = appendLspDiagnosticText(message, diagnostics.text);
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          ...details,
+          pendant: {
+            subtitle: formatSubtitlePath(
+              ctx.cwd,
+              filePath,
+              diagnostics.errorCount,
+              diagnostics.warningCount,
+            ),
+            title: "Edit",
+          } satisfies ToolPendant,
+        },
+      };
     },
   });
 
@@ -557,15 +583,15 @@ export function registerFileTools(
       { additionalProperties: false },
     ),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      throwIfAborted(signal);
+      signal?.throwIfAborted();
       const filePath = requireAbsolutePath(params.file_path);
       await guardWriteAccess(ctx, {
         toolName: "Write",
         absolutePath: filePath,
         change: { oldText: "", newText: params.content },
       });
-      const [message, details, diagnosticText] = await withFileMutationQueue<
-        [string, FileToolDetails, string]
+      const [message, details, diagnostics] = await withFileMutationQueue<
+        [string, FileToolDetails, DiagnosticReport]
       >(filePath, async () => {
         let original: string | undefined;
         let key: string | undefined;
@@ -582,7 +608,7 @@ export function registerFileTools(
             throw error;
           }
         }
-        throwIfAborted(signal);
+        signal?.throwIfAborted();
         await mkdir(dirname(filePath), { recursive: true });
         await writeFile(filePath, params.content, "utf8");
         const snapshot = snapshotOf(params.content);
@@ -594,8 +620,8 @@ export function registerFileTools(
           original === undefined
             ? `File created successfully at: ${filePath}`
             : `The file ${filePath} has been updated successfully.`;
-        throwIfAborted(signal);
-        const diagnosticText = await service.lspDiagnosticsForFile(filePath, ctx.cwd, {
+        signal?.throwIfAborted();
+        const diagnostics = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
           notify: (message, level) => ctx.ui.notify(message, level),
         });
         return [
@@ -606,20 +632,34 @@ export function registerFileTools(
             firstChangedLine: diff.firstChangedLine,
             reads: { [resolvedKey]: snapshot },
           },
-          diagnosticText,
+          diagnostics,
         ];
       });
 
-      const text = diagnosticText
-        ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
-        : message;
-      return { content: [{ type: "text" as const, text }], details };
+      const text = appendLspDiagnosticText(message, diagnostics.text);
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          ...details,
+          pendant: {
+            subtitle: formatSubtitlePath(
+              ctx.cwd,
+              filePath,
+              diagnostics.errorCount,
+              diagnostics.warningCount,
+            ),
+          },
+        },
+      };
     },
   });
+
+  // 只读符号查询工具（find-definition / find-reference / inspect）与 opencode 共享；
+  // 它们由 manager 的 onEnabled 回调注册，不在这里注册。
 }
 
 /** 会更新 reads state 并随 details 持久化快照的工具名。 */
-const FILE_TOOL_NAMES = new Set(["Read", "Edit", "Write"]);
+const FILE_TOOL_NAMES = new Set(["Read", "Edit", "Write", "lsp-rename"]);
 
 /**
  * 从当前分支的历史工具结果重建已读记账。先清空再重放，保证 state 只反映
@@ -647,9 +687,33 @@ function restoreFileReads(
  * state 归本文件所有：扩展实例内创建，并随 session 事件从历史分支恢复，
  * 与主进程 index.ts 聚合加载时的行为一致。
  */
-export default function claudeCodeFileTools(pi: ExtensionAPI): void {
-  const service = registerLsp(pi);
+export default function claudeCodeFileTools(pi: ExtensionAPI, options?: LspServiceOptions): void {
   const state = createClaudeCodeState();
+
+  // LSP 专属工具（lsp-rename / inspect 族）仅在 lsp.json 存在 enabled 服务器时
+  // 注册（session_start 校验后）；本工具集跟踪 read-before-write 状态，rename
+  // 落盘的文件要标记为已读并随 details 持久化（restoreFileReads 依赖 details.reads）。
+  const manager = createLspManager(
+    pi,
+    {
+      onEnabled: (pi, service) => {
+        registerLspRenameTool(pi, service, {
+          recordReads: async (applied) => {
+            const reads: Record<string, FileSnapshot> = {};
+            for (const fileEdit of applied) {
+              const key = await readStateKey(fileEdit.path);
+              const snapshot = snapshotOf(fileEdit.newText);
+              state.reads.set(key, snapshot);
+              reads[key] = snapshot;
+            }
+            return reads;
+          },
+        });
+        registerLspInspectTools(pi, service);
+      },
+    },
+    options,
+  );
 
   // 扩展实例在进程启动 / /reload / /new / /resume / /fork 时重建，内存里的
   // 已读记账随之丢失。这里从当前分支的历史工具结果里恢复：digest 是当时的值，
@@ -666,5 +730,6 @@ export default function claudeCodeFileTools(pi: ExtensionAPI): void {
     restoreFileReads(state, ctx.sessionManager);
   });
 
-  registerFileTools(pi, state, service);
+  // 文件工具无条件注册；service 惰性获取，disabled 时为 no-op。
+  registerFileTools(pi, state, () => manager.mustLazyGetService());
 }

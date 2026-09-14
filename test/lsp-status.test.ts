@@ -12,20 +12,18 @@ import { createLspService } from "../src/lib/lsp/lsp.js";
 const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
 
 /** spawn 真实 mock stdio LSP server（initialize 握手后 didOpen 会 push 诊断）。 */
-function runningAdapter(id: string, root: string): LspServerAdapter {
+function runningAdapter(id: string): LspServerAdapter {
   return {
     id,
     extensions: [".py"],
-    findRoot: async () => root,
     spawn: async () => ({ process: spawnProcess(process.execPath, [fixture]) }),
   };
 }
 
-function unavailableAdapter(id: string, root: string): LspServerAdapter {
+function unavailableAdapter(id: string): LspServerAdapter {
   return {
     id,
     extensions: [".py"],
-    findRoot: async () => root,
     spawn: () => Promise.resolve(undefined),
   };
 }
@@ -34,7 +32,7 @@ describe("LSP status", () => {
   it("shows running servers and clears on shutdown", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-status-"));
     await writeFile(join(dir, "a.py"), "x = 1\n");
-    const service = createLspService([runningAdapter("pyright", dir)], join(dir, "no-global.json"));
+    const service = createLspService([runningAdapter("pyright")], join(dir, "no-global.json"));
     const statuses: (string | undefined)[] = [];
     service.attachStatus((text) => {
       statuses.push(text);
@@ -51,10 +49,7 @@ describe("LSP status", () => {
   it("marks servers that failed to spawn as unavailable", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-status-"));
     await writeFile(join(dir, "a.py"), "x = 1\n");
-    const service = createLspService(
-      [unavailableAdapter("ruff", dir)],
-      join(dir, "no-global.json"),
-    );
+    const service = createLspService([unavailableAdapter("ruff")], join(dir, "no-global.json"));
     const statuses: (string | undefined)[] = [];
     service.attachStatus((text) => {
       statuses.push(text);
@@ -69,7 +64,7 @@ describe("LSP status", () => {
   it("refreshStatus re-renders the current server state", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-status-"));
     await writeFile(join(dir, "a.py"), "x = 1\n");
-    const service = createLspService([runningAdapter("pyright", dir)], join(dir, "no-global.json"));
+    const service = createLspService([runningAdapter("pyright")], join(dir, "no-global.json"));
     const statuses: (string | undefined)[] = [];
     service.attachStatus((text) => {
       statuses.push(text);

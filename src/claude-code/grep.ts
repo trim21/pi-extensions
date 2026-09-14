@@ -17,7 +17,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
-import { searchRoot, suggestPathUnderCwd, throwIfAborted, toRelativePath } from "./common.js";
+import { searchRoot, suggestPathUnderCwd, toRelativePath } from "./common.js";
 
 const GREP_OUTPUT_MODES = ["content", "files_with_matches", "count"] as const;
 
@@ -272,7 +272,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
         }
       }
       const result = await pi.exec("rg", buildGrepArguments(params, ctx.cwd), { signal });
-      throwIfAborted(signal);
+      signal?.throwIfAborted();
       if (result.code !== 0 && result.code !== 1) {
         throw new Error(result.stderr.trim() || `ripgrep exited with code ${result.code}`);
       }

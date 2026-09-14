@@ -66,7 +66,7 @@ function nonEmpty(value: string | undefined): string | undefined {
 function normalizeModel(model: Static<typeof modelSchema>): OpenaiCostModelConfig | undefined {
   const id = nonEmpty(model.id);
   if (!id) return undefined;
-  const input = model.input?.filter((value) => value === "text" || value === "image") ?? [];
+  const input = model.input ?? [];
   return {
     id,
     name: nonEmpty(model.name) ?? id,

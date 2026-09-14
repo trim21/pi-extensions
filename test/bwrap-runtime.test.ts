@@ -43,12 +43,16 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   };
 });
 
+import { type BwrapConfig, resolveBwrap } from "../src/bwrap/core.js";
 import {
   ALLOW_ONCE,
+  BACK,
   type BwrapRuntime,
   createBwrapRuntime,
   DENY,
   DENY_WITH_REASON,
+  describeSandbox,
+  EDIT_RULES,
 } from "../src/bwrap/runtime.js";
 
 beforeAll(() => {
@@ -69,7 +73,14 @@ function setupRuntime() {
 }
 
 function fullAccessContext(ui: unknown, abort: () => void = vi.fn(), cwd = process.cwd()) {
-  return { cwd, hasUI: true, signal: undefined, abort, ui } as never;
+  return {
+    cwd,
+    hasUI: true,
+    sessionManager: { getSessionId: () => "test-session" },
+    signal: undefined,
+    abort,
+    ui,
+  } as never;
 }
 
 function startSession(runtime: BwrapRuntime, pi: { on: ReturnType<typeof vi.fn> }) {
@@ -112,7 +123,11 @@ describe("BwrapRuntime", () => {
           runtime.execute({
             toolCallId: "test",
             command: "echo should-not-run",
-            ctx: { cwd: process.cwd(), hasUI: true } as never,
+            ctx: {
+              cwd: process.cwd(),
+              hasUI: true,
+              sessionManager: { getSessionId: () => "test-session" },
+            } as never,
           }),
         ).rejects.toThrow(/refusing to execute commands without sandboxing/);
       },
@@ -125,7 +140,11 @@ describe("BwrapRuntime", () => {
       const result = await runtime.execute({
         toolCallId: "test",
         command: "printf runtime",
-        ctx: { cwd: process.cwd(), hasUI: true } as never,
+        ctx: {
+          cwd: process.cwd(),
+          hasUI: true,
+          sessionManager: { getSessionId: () => "test-session" },
+        } as never,
       });
       expect(result).toMatchObject({ exitCode: 0, output: "runtime" });
     });
@@ -137,7 +156,11 @@ describe("BwrapRuntime", () => {
     const result = await runtime.execute({
       toolCallId: "test",
       command: "printf runtime",
-      ctx: { cwd: process.cwd(), hasUI: true } as never,
+      ctx: {
+        cwd: process.cwd(),
+        hasUI: true,
+        sessionManager: { getSessionId: () => "test-session" },
+      } as never,
     });
     expect(result).toMatchObject({ exitCode: 0, output: "runtime" });
   });
@@ -148,9 +171,59 @@ describe("BwrapRuntime", () => {
     const result = await runtime.execute({
       toolCallId: "test",
       command: "sh -c 'printf oops; exit 3'",
-      ctx: { cwd: process.cwd(), hasUI: true } as never,
+      ctx: {
+        cwd: process.cwd(),
+        hasUI: true,
+        sessionManager: { getSessionId: () => "test-session" },
+      } as never,
     });
     expect(result).toMatchObject({ exitCode: 3, output: "oops" });
+  });
+
+  it("attaches partial output to timeout errors", async () => {
+    const { runtime } = setupRuntime();
+    runtime.setMode(process.cwd(), "allow-all");
+    await expect(
+      runtime.execute({
+        toolCallId: "test",
+        command: "printf partial; sleep 1",
+        timeout: 0.02,
+        ctx: {
+          cwd: process.cwd(),
+          hasUI: true,
+          sessionManager: { getSessionId: () => "test-session" },
+        } as never,
+      }),
+    ).rejects.toMatchObject({
+      kind: "timeout",
+      name: "TimeoutError",
+      message: "Command timed out after 0.02 seconds",
+      partial: { output: "partial" },
+    });
+  });
+
+  it("attaches partial output to abort errors", async () => {
+    const { runtime } = setupRuntime();
+    runtime.setMode(process.cwd(), "allow-all");
+    const controller = new AbortController();
+    const promise = runtime.execute({
+      toolCallId: "test",
+      command: "printf partial; sleep 1",
+      signal: controller.signal,
+      ctx: {
+        cwd: process.cwd(),
+        hasUI: true,
+        sessionManager: { getSessionId: () => "test-session" },
+      } as never,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({
+      kind: "aborted",
+      name: "AbortError",
+      message: "Command aborted by user",
+      partial: { output: "partial" },
+    });
   });
 
   it("rejects full-access requests before execution without a UI", async () => {
@@ -188,7 +261,7 @@ describe("BwrapRuntime", () => {
         toolCallId: "test",
         command: "git status",
         requestFullAccess: true,
-        requestFullAccessReason: "test",
+        description: "test",
         ctx: fullAccessContext({ select, input: vi.fn() }),
       });
       expect(result).toMatchObject({ exitCode: 0 });
@@ -224,7 +297,29 @@ describe("BwrapRuntime", () => {
       expect(result).toMatchObject({ exitCode: 0 });
     });
 
-    it("shows only unallowed patterns as checkboxes when part of a chain is pre-approved", async () => {
+    it("does not auto-allow a file redirect under an echo * rule", async () => {
+      writeFileSync(
+        join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+        JSON.stringify({
+          approvalRules: [{ action: "allow", pattern: "echo *" }],
+        }),
+      );
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async () => DENY);
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "echo '' > file",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input: vi.fn() }),
+        }),
+      ).rejects.toThrow(/User denied unsandboxed execution/);
+      expect(select).toHaveBeenCalled();
+      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
+    });
+
+    it("shows only unallowed patterns in the edit submenu when part of a chain is pre-approved", async () => {
       // 覆盖全局规则：`echo *` 已 allow，`head *` 未允许
       writeFileSync(
         join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
@@ -237,11 +332,13 @@ describe("BwrapRuntime", () => {
       runtime.setMode(directory, "workspace-write");
       const select = vi
         .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
         .mockImplementationOnce(async (_title: string, options: string[]) => {
-          // checkbox 只列出未允许的 `head *`，不含已允许的 `echo *`
-          expect(options).toEqual([ALLOW_ONCE, DENY, DENY_WITH_REASON, "☐ head *"]);
+          // 子菜单只列出未允许的 `head *`，不含已允许的 `echo *`
+          expect(options).toEqual(["☐ head *", BACK]);
           return "☐ head *";
         })
+        .mockResolvedValueOnce(BACK)
         .mockResolvedValueOnce(ALLOW_ONCE);
       const result = await runtime.execute({
         toolCallId: "test",
@@ -274,6 +371,43 @@ describe("BwrapRuntime", () => {
       });
       expect(result).toMatchObject({ exitCode: 0, output: "approved" });
       expect(abort).not.toHaveBeenCalled();
+    });
+
+    it("folds the persistable patterns behind the edit option instead of listing them", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async (_title: string, options: string[]) => {
+        // 主决策层只列动作：pattern 不再直接铺开，收进 Edit approval rules
+        expect(options).toEqual([ALLOW_ONCE, DENY, DENY_WITH_REASON, EDIT_RULES]);
+        return ALLOW_ONCE;
+      });
+      await runtime.execute({
+        toolCallId: "test",
+        command: "printf approved",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }),
+      });
+      expect(select).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns to the main decision when the edit submenu is dismissed", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-back-"));
+      const { runtime } = setupRuntime();
+      runtime.setMode(directory, "workspace-write");
+      // 子菜单关闭（Esc）= 回到主菜单：未勾选任何规则，Allow once 放行且不写配置
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce(ALLOW_ONCE);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf back",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
+      });
+      expect(result).toMatchObject({ exitCode: 0, output: "back" });
+      expect(existsSync(join(directory, ".pi", "bwrap.json"))).toBe(false);
     });
 
     it("shows the resolved exec cwd inside the approval dialog when workdir is provided", async () => {
@@ -420,7 +554,7 @@ describe("BwrapRuntime", () => {
           requestFullAccess: true,
           ctx: fullAccessContext({ select, input }),
         }),
-      ).rejects.toThrow(/User denied unsandboxed execution: too risky/);
+      ).rejects.toThrow(/User denied command execution with reason: too risky/);
       expect(select).toHaveBeenCalledTimes(1);
       expect(input).toHaveBeenCalledTimes(1);
     });
@@ -437,7 +571,7 @@ describe("BwrapRuntime", () => {
           requestFullAccess: true,
           ctx: fullAccessContext({ select, input }),
         }),
-      ).rejects.toThrow(/User denied unsandboxed execution\.$/);
+      ).rejects.toThrow(/User denied command execution\.$/);
       // 无循环：单选 1 次，input 取消后直接拒绝
       expect(select).toHaveBeenCalledTimes(1);
       expect(input).toHaveBeenCalledTimes(1);
@@ -455,15 +589,20 @@ describe("BwrapRuntime", () => {
           requestFullAccess: true,
           ctx: fullAccessContext({ select, input }),
         }),
-      ).rejects.toThrow(/User denied unsandboxed execution\.$/);
+      ).rejects.toThrow(/User denied command execution\.$/);
     });
 
-    it("allow forever persists only the checked rules and auto-approves next time", async () => {
+    it("persists rules picked in the edit submenu and auto-approves next time", async () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-forever-"));
       const { runtime } = setupRuntime();
       runtime.setMode(directory, "workspace-write");
-      // 勾选 `printf *`（checkbox 首轮为 ☐ 前缀），然后选 Allow once 放行本次
-      const select = vi.fn().mockResolvedValueOnce("☐ printf *").mockResolvedValueOnce(ALLOW_ONCE);
+      // 主菜单 Edit approval rules → 勾选 `printf *`（☐ 前缀）→ Back → Allow once
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
+        .mockResolvedValueOnce("☐ printf *")
+        .mockResolvedValueOnce(BACK)
+        .mockResolvedValueOnce(ALLOW_ONCE);
       const result = await runtime.execute({
         toolCallId: "test",
         command: "printf forever",
@@ -493,14 +632,15 @@ describe("BwrapRuntime", () => {
       const { runtime } = setupRuntime();
       runtime.setMode(directory, "workspace-write");
       // `echo 1 | head` 识别出 `echo *` 与 `head *` 两个 pattern：
-      // 只勾选 `echo *`，`head *` 不持久化
+      // 主菜单 Edit approval rules → 子菜单只勾选 `echo *` → Back → Allow once
       const select = vi
         .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
         .mockImplementationOnce(async (_title: string, options: string[]) => {
-          // 操作在前，checkbox 规则在后
-          expect(options).toEqual([ALLOW_ONCE, DENY, DENY_WITH_REASON, "☐ echo *", "☐ head *"]);
+          expect(options).toEqual(["☐ echo *", "☐ head *", BACK]);
           return "☐ echo *";
         })
+        .mockResolvedValueOnce(BACK)
         .mockResolvedValueOnce(ALLOW_ONCE);
       const result = await runtime.execute({
         toolCallId: "test",
@@ -553,8 +693,13 @@ describe("BwrapRuntime", () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-deny-allow-"));
       const { runtime } = setupRuntime();
       runtime.setMode(directory, "workspace-write");
-      // 勾选 `printf *` 后点 Deny：本次拒绝，但规则持久化为 allow
-      const select = vi.fn().mockResolvedValueOnce("☐ printf *").mockResolvedValueOnce(DENY);
+      // 子菜单勾选 `printf *` 后回主菜单点 Deny：本次拒绝，但规则持久化为 allow
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
+        .mockResolvedValueOnce("☐ printf *")
+        .mockResolvedValueOnce(BACK)
+        .mockResolvedValueOnce(DENY);
       await expect(
         runtime.execute({
           toolCallId: "test",
@@ -585,7 +730,9 @@ describe("BwrapRuntime", () => {
       runtime.setMode(directory, "workspace-write");
       const select = vi
         .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
         .mockResolvedValueOnce("☐ printf *")
+        .mockResolvedValueOnce(BACK)
         .mockResolvedValueOnce(DENY_WITH_REASON);
       const input = vi.fn(async () => "risky args");
       await expect(
@@ -595,7 +742,7 @@ describe("BwrapRuntime", () => {
           requestFullAccess: true,
           ctx: fullAccessContext({ select, input }, undefined, directory),
         }),
-      ).rejects.toThrow(/User denied unsandboxed execution: risky args/);
+      ).rejects.toThrow(/User denied command execution with reason: risky args/);
       const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
         approvalRules: { action: string; pattern: string }[];
       };
@@ -726,5 +873,61 @@ describe("Windows (no bwrap): every command requires approval", () => {
         ctx: { cwd: process.cwd(), hasUI: false } as never,
       }),
     ).rejects.toThrow(/no UI is available/);
+  });
+});
+
+describe("describeSandbox", () => {
+  const baseConfig: BwrapConfig = {
+    mode: "workspace-write",
+    writablePaths: [".", "/tmp"],
+    extraWritablePaths: [],
+    denyPaths: [],
+    extraArgs: [],
+    networkAllowlist: [],
+  };
+  function render(overrides: Partial<BwrapConfig>, unsandboxed = false): string | undefined {
+    return describeSandbox(resolveBwrap({ ...baseConfig, ...overrides }), unsandboxed);
+  }
+
+  it("reports the default write boundary: / read-only, /tmp/ and ./ writable, ./.git/ read-only", () => {
+    expect(render({})).toMatchInlineSnapshot(`
+      "[Sandbox] This command ran in a sandbox: / is read-only, /tmp/ and ./ are writable, ./.git/ is read-only; network access is off.
+      [Sandbox] If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request."
+    `);
+  });
+
+  it("reports read-only mode as a read-only filesystem", () => {
+    expect(render({ mode: "readonly" })).toMatchInlineSnapshot(`
+      "[Sandbox] This command ran in a sandbox: the filesystem is read-only; network access is off.
+      [Sandbox] If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request."
+    `);
+  });
+
+  it("separates unrestricted network from an allowlist", () => {
+    expect(render({ mode: "allow-net" })).toContain("network access is unrestricted");
+    expect(render({ mode: "net-allowlist", networkAllowlist: ["example.com"] })).toContain(
+      "network access is limited to allowlisted addresses",
+    );
+    // allowlist 域名不出现在提示里
+    expect(render({ mode: "net-allowlist", networkAllowlist: ["example.com"] })).not.toContain(
+      "example.com",
+    );
+  });
+
+  it("ignores configured extra writable paths: the hint describes the default layout", () => {
+    expect(
+      render({
+        writablePaths: ["."],
+        extraWritablePaths: ["/data", "sub", "~/cache"],
+      }),
+    ).toMatchInlineSnapshot(`
+      "[Sandbox] This command ran in a sandbox: / is read-only, /tmp/ and ./ are writable, ./.git/ is read-only; network access is off.
+      [Sandbox] If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request."
+    `);
+  });
+
+  it("returns no hint when the command ran outside the sandbox", () => {
+    expect(render({ mode: "workspace-write" }, true)).toBeUndefined();
+    expect(render({ mode: "allow-all" }, true)).toBeUndefined();
   });
 });

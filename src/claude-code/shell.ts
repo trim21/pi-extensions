@@ -6,14 +6,20 @@ import {
   type BashToolDetails,
   type ExtensionAPI,
   formatSize,
+  type TruncationResult,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
+import {
+  BashInterruptedError,
+  type BwrapRuntime,
+  createBwrapRuntime,
+  sandboxHintBlock,
+} from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-const MAX_TIMEOUT_MS = 600_000;
+const MAX_TIMEOUT_MS = 7_200_000;
 
 /** 对齐 Claude Code formatError：错误文本超过该长度时头尾各保留一半。 */
 const MAX_ERROR_CHARS = 10_000;
@@ -36,6 +42,25 @@ function formatBashError(exitCode: number | null, output: string): string {
   );
 }
 
+/** 输出被截断时附加的 `[Showing lines...]` 提示（成功、超时、中断路径共用）。 */
+function appendTruncationNotice(
+  text: string,
+  truncation: TruncationResult,
+  fullOutputPath: string | undefined,
+): string {
+  if (!fullOutputPath || !truncation.truncated) return text;
+  const startLine = truncation.totalLines - truncation.outputLines + 1;
+  const endLine = truncation.totalLines;
+  if (truncation.lastLinePartial) {
+    const lastLineSize = formatSize(text.length - text.lastIndexOf("\n", text.length - 2) - 1);
+    return `${text}\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${fullOutputPath}]`;
+  }
+  if (truncation.truncatedBy === "lines") {
+    return `${text}\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${fullOutputPath}]`;
+  }
+  return `${text}\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(truncation.maxBytes)} limit). Full output: ${fullOutputPath}]`;
+}
+
 /**
  * 成功路径：消费 runtime 的截断结果（输出已由 runtime 截断并落盘），
  * 截断时追加 `[Showing lines X-Y of N. Full output: path]` 提示。
@@ -46,21 +71,7 @@ export function formatBashSuccess(result: Awaited<ReturnType<BwrapRuntime["execu
   details: BashToolDetails | undefined;
 } {
   const { output, truncation, fullOutputPath } = result;
-  let text = output || "(no output)";
-  if (fullOutputPath && truncation.truncated) {
-    const startLine = truncation.totalLines - truncation.outputLines + 1;
-    const endLine = truncation.totalLines;
-    if (truncation.lastLinePartial) {
-      const lastLineSize = formatSize(
-        output.length - output.lastIndexOf("\n", output.length - 2) - 1,
-      );
-      text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${fullOutputPath}]`;
-    } else if (truncation.truncatedBy === "lines") {
-      text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${fullOutputPath}]`;
-    } else {
-      text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(truncation.maxBytes)} limit). Full output: ${fullOutputPath}]`;
-    }
-  }
+  const text = appendTruncationNotice(output || "(no output)", truncation, fullOutputPath);
   return {
     content: [{ type: "text", text }],
     details: fullOutputPath && truncation.truncated ? { truncation, fullOutputPath } : undefined,
@@ -83,14 +94,14 @@ export function registerShellTools(
     label: "Bash",
     description: [
       "Executes a given bash command synchronously and returns its output.",
-      "timeout is in milliseconds, defaults to 120000, and may not exceed 600000.",
+      "timeout is in milliseconds, defaults to 120000, and may not exceed 7200000.",
       "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
     ].join("\n"),
     parameters: Type.Object(
       {
         command: Type.String({ description: "The command to execute" }),
         timeout: Type.Optional(
-          Type.Number({ description: "Optional timeout in milliseconds (max 600000)" }),
+          Type.Number({ description: "Optional timeout in milliseconds (max 7200000)" }),
         ),
         description: Type.Optional(
           Type.String({ description: "Clear, concise description of the command" }),
@@ -127,30 +138,49 @@ export function registerShellTools(
           command: params.command,
           timeout: timeout / 1000,
           requestFullAccess: params.dangerouslyDisableSandbox,
-          requestFullAccessReason: params.description,
+          description: params.description,
           signal,
           onUpdate,
         });
       } catch (error) {
         if (!(error instanceof Error)) throw error;
-        const timeoutMatch = /Command timed out after [\d.]+ seconds/.exec(error.message);
-        const message = timeoutMatch
-          ? error.message.slice(0, timeoutMatch.index) +
-            `Command timed out after ${timeout} milliseconds` +
-            error.message.slice(timeoutMatch.index + timeoutMatch[0].length)
-          : error.message;
-        throw new Error(message, { cause: error });
+        if (error instanceof BashInterruptedError) {
+          // 输出在前（必要时带截断提示），状态文本在最后
+          const text = appendTruncationNotice(
+            error.partial.output || "",
+            error.partial.truncation,
+            error.partial.fullOutputPath,
+          );
+          if (error.kind === "aborted") {
+            // 用户取消：直接返回已捕获的输出，不抛错
+            const full = text ? `${text}\n\nCommand aborted by user` : "Command aborted by user";
+            return { content: [{ type: "text", text: full }], details: undefined };
+          }
+          const full = text
+            ? `${text}\n\nCommand timed out after ${timeout} milliseconds`
+            : `Command timed out after ${timeout} milliseconds`;
+          return {
+            content: [{ type: "text", text: full }, ...sandboxHintBlock(error.sandboxHint)],
+            details: undefined,
+          };
+        }
+        throw error;
       }
 
-      // 对齐 Claude Code：非 0 退出码视为错误（不做 grep/find 等命令语义化特判，
-      // 任何非 0 都抛错）；错误文本用完整输出（从落盘文件读取，必要时头尾截断）
+      // 对齐 Claude Code：非 0 退出码都算失败（不做 grep/find 等命令语义化特判）。
+      // 失败是命令的正常结果而不是异常：与成功一样 return，文本用完整输出
+      // （从落盘文件读取，必要时头尾截断），沙箱状态另行附一块
       if (result.exitCode !== 0 && result.exitCode !== null) {
         const full = result.fullOutputPath
           ? await readFile(result.fullOutputPath, "utf8")
           : result.output;
-        throw new Error(formatBashError(result.exitCode, full), {
-          cause: result,
-        });
+        return {
+          content: [
+            { type: "text", text: formatBashError(result.exitCode, full) },
+            ...sandboxHintBlock(result.sandboxHint),
+          ],
+          details: undefined,
+        };
       }
       return formatBashSuccess(result);
     },

@@ -16,25 +16,236 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createMessageConnection,
   type MessageConnection,
+  ResponseError,
   StreamMessageReader,
   StreamMessageWriter,
 } from "vscode-jsonrpc/node";
-import type { Diagnostic as VSCodeDiagnostic } from "vscode-languageserver-types";
+import type {
+  Diagnostic as VSCodeDiagnostic,
+  Hover,
+  Location as LspLocation,
+  LocationLink,
+  Range,
+  WorkspaceEdit,
+} from "vscode-languageserver-types";
 
 import type { LspServerHandle } from "./adapter.js";
 import { LANGUAGE_EXTENSIONS } from "./language.js";
+import { editFilePaths } from "./rename.js";
+import type { FileChange, FileChangeType } from "./watcher.js";
 
 // LSP spec 常量
 const FILE_CHANGE_CREATED = 1;
 const FILE_CHANGE_CHANGED = 2;
+const FILE_CHANGE_DELETED = 3;
 const TEXT_DOCUMENT_SYNC_INCREMENTAL = 2;
+
+/** LSP WatchKind 位掩码（FileSystemWatcher.kind，缺省 create|change|delete）。 */
+export const WATCH_KIND_CREATE = 1;
+export const WATCH_KIND_CHANGE = 2;
+export const WATCH_KIND_DELETE = 4;
+const WATCH_KIND_ALL = WATCH_KIND_CREATE | WATCH_KIND_CHANGE | WATCH_KIND_DELETE;
+
+/** 服务器通过 client/registerCapability 注册的单个 watcher。 */
+export interface WatcherGlob {
+  pattern: string;
+  kind: number;
+}
+
+const FILE_CHANGE_TYPE: Record<FileChangeType, number> = {
+  created: FILE_CHANGE_CREATED,
+  changed: FILE_CHANGE_CHANGED,
+  deleted: FILE_CHANGE_DELETED,
+};
 
 export type Diagnostic = VSCodeDiagnostic;
 
+/** 两个路径集合是否一致（用于判断 references 结果是否收敛）。 */
+function samePaths(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const path of a) if (!b.has(path)) return false;
+  return true;
+}
+
+/** LSP MethodNotFound（-32601）：服务器未实现 prepareRename / rename 请求。 */
+const LSP_METHOD_NOT_FOUND = -32601;
+
+/** LSP ContentModified（-32801）：服务器处理请求期间内容被修改，重发请求即可。 */
+const LSP_CONTENT_MODIFIED = -32801;
+
+/**
+ * 位置不可 rename 或服务器不具备 rename 能力；与传输失败等意外错误区分，
+ * 供调用方在多候选探测时跳过该 client 而不是中断整个操作。
+ */
+export class RenameNotPossibleError extends Error {}
+
+/**
+ * 服务器不支持某 LSP 方法（MethodNotFound）。与传输失败区分，供服务层跳过
+ * 该服务器尝试下一个，而不是把整个操作当作失败。
+ */
+export class LspMethodNotSupportedError extends Error {
+  readonly serverID: string;
+  readonly method: string;
+  constructor(serverID: string, method: string) {
+    super(`LSP server "${serverID}" does not support ${method}`);
+    this.serverID = serverID;
+    this.method = method;
+  }
+}
+
+/**
+ * rename edit 未覆盖 references 看到的全部文件：服务器索引可能仍在后台加载。
+ * 抛出时发生在写盘之前，整个 rename 无副作用，可稍后重试。
+ */
+export class RenameIncompleteError extends Error {
+  readonly missing: readonly string[];
+  readonly extra: readonly string[];
+  constructor(missing: readonly string[], extra: readonly string[] = []) {
+    const parts: string[] = [];
+    if (missing.length > 0) {
+      parts.push(
+        `textDocument/references found the symbol in ${missing.length} file(s) ` +
+          `that the rename edit does not cover (${missing.join(", ")})`,
+      );
+    }
+    if (extra.length > 0) {
+      parts.push(
+        `the rename edit touches ${extra.length} file(s) ` +
+          `that textDocument/references did not report (${extra.join(", ")})`,
+      );
+    }
+    super(
+      `LSP rename incomplete: ${parts.join("; ")}. ` +
+        `The server index may still be loading; nothing was modified, retry shortly.`,
+    );
+    this.missing = missing;
+    this.extra = extra;
+  }
+}
+
+/**
+ * rename 覆盖校验的轮询节奏。budgetMs 是 references 收敛 + 重试的总预算；
+ * 测试可临时缩小以缩短等待。
+ */
+export const renameVerificationTiming = {
+  pollMs: 400,
+  budgetMs: 10_000,
+  /** ContentModified(-32801) 重试上限：服务器处理期间文档被修改，重发请求即可。 */
+  contentModifiedRetries: 3,
+};
+
+/**
+ * ContentModified 语义：请求处理期间 salsa 数据库被文件变更修改，服务器请
+ * 客户端重发请求。重发无副作用，直接重试；仅连续超限才向上抛，避免无限循环。
+ */
+async function retryOnContentModified<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!(error instanceof ResponseError && error.code === LSP_CONTENT_MODIFIED)) throw error;
+      if (attempt >= renameVerificationTiming.contentModifiedRetries) throw error;
+    }
+  }
+}
+
+interface PrepareRenameResponse {
+  range?: unknown;
+  placeholder?: string;
+  defaultBehavior?: boolean;
+}
+
+/** renameSymbol 的请求与结果（line / character 为 0-based LSP position）。 */
+export interface RenameSymbolRequest {
+  path: string;
+  line: number;
+  character: number;
+  newName: string;
+}
+
+export interface RenameSymbolResult {
+  edit: WorkspaceEdit;
+  /** prepareRename 返回的符号当前名；服务器未提供 prepare 时缺省。 */
+  placeholder?: string;
+}
+
+/** definition / references / hover 请求的输入（line / character 为 0-based LSP position）。 */
+export interface InspectPositionRequest {
+  path: string;
+  line: number;
+  character: number;
+}
+
+/** definition / references 归一化后的位置（0-based；1-based 格式化由工具层负责）。 */
+export interface InspectLocation {
+  path: string;
+  line: number;
+  character: number;
+}
+
+type DefinitionResult = LspLocation | LspLocation[] | LocationLink | LocationLink[] | null;
+
+/** Location / LocationLink → path + 0-based 坐标；非 file: URI 是服务器的意外行为，跳过。 */
+function toInspectLocations(result: DefinitionResult): InspectLocation[] {
+  if (result === null) return [];
+  const items = Array.isArray(result) ? result : [result];
+  const locations: InspectLocation[] = [];
+  for (const item of items) {
+    if ("targetUri" in item) {
+      if (!item.targetUri.startsWith("file:")) continue;
+      const range =
+        (item as Omit<LocationLink, "targetSelectionRange"> & { targetSelectionRange?: Range })
+          .targetSelectionRange ?? item.targetRange;
+      locations.push({
+        path: normalize(fileURLToPath(item.targetUri)),
+        line: range.start.line,
+        character: range.start.character,
+      });
+    } else {
+      if (!item.uri.startsWith("file:")) continue;
+      locations.push({
+        path: normalize(fileURLToPath(item.uri)),
+        line: item.range.start.line,
+        character: item.range.start.character,
+      });
+    }
+  }
+  return locations;
+}
+
+/** stderr 尾部保留上限（字符）：足够容纳启动失败的最后报错，又不撑爆通知。 */
+const STDERR_TAIL_CHARS = 4_000;
+
+/** 展开 Error 的 cause 链为一条 message；流包装错误只包一层，逐层展开即可还原根因。 */
+function errorChainMessage(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const parts: string[] = [];
+  let current: unknown = error;
+  while (current instanceof Error && current.message && !parts.includes(current.message)) {
+    parts.push(current.message);
+    current = current.cause;
+  }
+  if (typeof current === "string" || typeof current === "number") parts.push(String(current));
+  return parts.join(": ");
+}
+
+/** 拼装握手失败的完整原因：错误链 + 进程退出状态 + stderr 尾部。 */
+function describeStartupFailure(
+  error: unknown,
+  exitDescription: string | undefined,
+  stderrTail: string,
+): string {
+  const parts = [errorChainMessage(error)];
+  if (exitDescription) parts.push(`server ${exitDescription}`);
+  const stderr = stderrTail.trim();
+  if (stderr) parts.push(`stderr: ${stderr}`);
+  return parts.join("; ");
+}
+
 export class InitializeError extends Error {
   readonly serverID: string;
-  constructor(serverID: string, cause: unknown) {
-    super(`Failed to initialize LSP server ${serverID}`, { cause });
+  constructor(serverID: string, cause: unknown, detail?: string) {
+    super(`Failed to initialize LSP server ${serverID}${detail ? `: ${detail}` : ""}`, { cause });
     this.serverID = serverID;
   }
 }
@@ -69,6 +280,7 @@ interface CapabilityRegistration {
   registerOptions?: {
     identifier?: string;
     workspaceDiagnostics?: boolean;
+    watchers?: { globPattern?: string; kind?: number }[];
   };
 }
 
@@ -79,8 +291,22 @@ interface ServerCapabilities {
         change?: number;
       };
   diagnosticProvider?: unknown;
+  renameProvider?: boolean | { prepareProvider?: boolean };
   [key: string]: unknown;
 }
+
+/**
+ * create 的直连缺省（单一来源）：lsp.ts 的 resolveConfig 解析超时/LRU 时引用
+ * 同一组数值，保证配置层缺省与直连调用方取值一致。
+ */
+export const clientDefaults = {
+  diagnosticsDebounceMs: 150,
+  diagnosticsDocumentWaitTimeoutMs: 5_000,
+  diagnosticsFullWaitTimeoutMs: 10_000,
+  diagnosticsRequestTimeoutMs: 3_000,
+  initializeTimeoutMs: 45_000,
+  maxOpenDocuments: 32,
+} as const;
 
 export interface CreateInput {
   serverID: string;
@@ -93,6 +319,8 @@ export interface CreateInput {
   diagnosticsFullWaitTimeoutMs?: number;
   diagnosticsRequestTimeoutMs?: number;
   initializeTimeoutMs?: number;
+  /** 驻留文档上限（LRU 容量，缺省 32）；超过时淘汰最久未使用并 didClose。 */
+  maxOpenDocuments?: number;
 }
 
 export interface LspClient {
@@ -101,7 +329,11 @@ export interface LspClient {
   readonly connection: MessageConnection;
   readonly notify: {
     open(request: { path: string }): Promise<number>;
+    /** 把工作区文件事件批量通知服务器；驻留文档不在此通道（走 didOpen/didChange/退场）。 */
+    watchedFiles(changes: FileChange[]): Promise<void>;
   };
+  /** 服务器注册的 workspace/didChangeWatchedFiles watchers（pattern + kind，按 pattern+kind 去重）。 */
+  watchers(): WatcherGlob[];
   readonly diagnostics: Map<string, Diagnostic[]>;
   waitForDiagnostics(request: {
     path: string;
@@ -110,6 +342,27 @@ export interface LspClient {
     after?: number;
     signal?: AbortSignal;
   }): Promise<void>;
+  /**
+   * 符号重命名：先把磁盘内容同步给服务器（didOpen/didChange），再按能力决定
+   * 是否先发 prepareRename 校验位置，最后发 textDocument/rename 返回 WorkspaceEdit。
+   * 位置不在符号上 / 服务器不支持 rename 时抛 RenameNotPossibleError。
+   */
+  renameSymbol(request: RenameSymbolRequest): Promise<RenameSymbolResult>;
+  /**
+   * textDocument/definition：归一化后的定义位置列表（Location / LocationLink
+   * 统一转 path + 0-based 坐标；无结果返回空数组）。
+   */
+  definition(request: InspectPositionRequest): Promise<InspectLocation[]>;
+  /**
+   * textDocument/references：归一化后的引用位置列表（是否含声明处由服务器
+   * 按 includeDeclaration 决定，此处固定包含，对齐 rename 覆盖校验口径）。
+   */
+  references(request: InspectPositionRequest): Promise<InspectLocation[]>;
+  /**
+   * textDocument/hover：服务器返回的 contents 原样透传，不做内容归一化；
+   * 服务器无信息时返回 null（合法应答，非错误）。
+   */
+  hover(request: InspectPositionRequest): Promise<Hover | null>;
   shutdown(): Promise<void>;
 }
 
@@ -205,21 +458,33 @@ function stopProcess(process: LspServerHandle["process"]): Promise<void> {
 }
 
 export async function create(input: CreateInput): Promise<LspClient> {
-  const diagnosticsDebounceMs = input.diagnosticsDebounceMs ?? 150;
-  const diagnosticsDocumentWaitTimeoutMs = input.diagnosticsDocumentWaitTimeoutMs ?? 5_000;
-  const diagnosticsFullWaitTimeoutMs = input.diagnosticsFullWaitTimeoutMs ?? 10_000;
-  const diagnosticsRequestTimeoutMs = input.diagnosticsRequestTimeoutMs ?? 3_000;
-  const initializeTimeoutMs = input.initializeTimeoutMs ?? 45_000;
+  const diagnosticsDebounceMs = input.diagnosticsDebounceMs ?? clientDefaults.diagnosticsDebounceMs;
+  const diagnosticsDocumentWaitTimeoutMs =
+    input.diagnosticsDocumentWaitTimeoutMs ?? clientDefaults.diagnosticsDocumentWaitTimeoutMs;
+  const diagnosticsFullWaitTimeoutMs =
+    input.diagnosticsFullWaitTimeoutMs ?? clientDefaults.diagnosticsFullWaitTimeoutMs;
+  const diagnosticsRequestTimeoutMs =
+    input.diagnosticsRequestTimeoutMs ?? clientDefaults.diagnosticsRequestTimeoutMs;
+  const initializeTimeoutMs = input.initializeTimeoutMs ?? clientDefaults.initializeTimeoutMs;
+  const maxOpenDocuments = input.maxOpenDocuments ?? clientDefaults.maxOpenDocuments;
 
   const connection = createMessageConnection(
     new StreamMessageReader(input.server.process.stdout),
     new StreamMessageWriter(input.server.process.stdin),
   );
-  input.server.process.stderr?.resume();
+  // stderr 平时只在尾部保留少量内容（避免子进程大量输出撑爆内存）；
+  // 握手失败时随错误输出，服务器 panic / 参数错误等启动原因由此还原。
+  let stderrTail = "";
+  input.server.process.stderr.setEncoding("utf8");
+  input.server.process.stderr.on("data", (chunk: string) => {
+    stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_CHARS);
+  });
   /** 连接或服务器进程已关闭；pull 重试循环以此终止，避免无界等待。 */
   let connectionClosed = false;
-  input.server.process.once("exit", () => {
+  let exitDescription: string | undefined;
+  input.server.process.once("exit", (code, signal) => {
     connectionClosed = true;
+    exitDescription = code === null ? `killed by signal ${signal}` : `exited with code ${code}`;
   });
   connection.onDispose(() => {
     connectionClosed = true;
@@ -231,6 +496,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
   const pullDiagnostics = new Map<string, Diagnostic[]>();
   const published = new Map<string, { at: number; version?: number }>();
   const diagnosticRegistrations = new Map<string, CapabilityRegistration>();
+  /** registration id → workspace/didChangeWatchedFiles watchers（pattern + WatchKind 位）。 */
+  const watcherRegistrations = new Map<string, WatcherGlob[]>();
   const registrationListeners = new Set<() => void>();
   const diagnosticListeners = new Set<(input: { path: string; serverID: string }) => void>();
   /** resolvedPath → 客户端已发送的最新文档版本（didOpen=0，didChange 递增）。 */
@@ -286,9 +553,19 @@ export async function create(input: CreateInput): Promise<LspClient> {
       (params as { registrations?: CapabilityRegistration[] }).registrations ?? [];
     let changed = false;
     for (const registration of registrations) {
-      if (registration.method !== "textDocument/diagnostic") continue;
-      diagnosticRegistrations.set(registration.id, registration);
-      changed = true;
+      if (registration.method === "workspace/didChangeWatchedFiles") {
+        const watchers =
+          registration.registerOptions?.watchers
+            ?.map((watcher) => ({
+              pattern: watcher.globPattern,
+              kind: watcher.kind ?? WATCH_KIND_ALL,
+            }))
+            .filter((watcher): watcher is WatcherGlob => typeof watcher.pattern === "string") ?? [];
+        watcherRegistrations.set(registration.id, watchers);
+      } else if (registration.method === "textDocument/diagnostic") {
+        diagnosticRegistrations.set(registration.id, registration);
+        changed = true;
+      }
     }
     if (changed) emitRegistrationChange();
   });
@@ -297,9 +574,12 @@ export async function create(input: CreateInput): Promise<LspClient> {
       (params as { unregisterations?: { id: string; method: string }[] }).unregisterations ?? [];
     let changed = false;
     for (const registration of registrations) {
-      if (registration.method !== "textDocument/diagnostic") continue;
-      diagnosticRegistrations.delete(registration.id);
-      changed = true;
+      if (registration.method === "workspace/didChangeWatchedFiles") {
+        watcherRegistrations.delete(registration.id);
+      } else if (registration.method === "textDocument/diagnostic") {
+        diagnosticRegistrations.delete(registration.id);
+        changed = true;
+      }
     }
     if (changed) emitRegistrationChange();
   });
@@ -339,11 +619,20 @@ export async function create(input: CreateInput): Promise<LspClient> {
     connection.end();
     connection.dispose();
     await stopProcess(input.server.process);
-    throw new InitializeError(input.serverID, error);
+    throw new InitializeError(
+      input.serverID,
+      error,
+      describeStartupFailure(error, exitDescription, stderrTail),
+    );
   });
 
   const syncKind = getSyncKind(initialized.capabilities);
   const hasStaticPullDiagnostics = Boolean(initialized.capabilities?.diagnosticProvider);
+  // prepareProvider 只在静态声明为对象且显式开启时使用；其余情况跳过 prepare
+  // 直接 rename（能力可能经动态注册，静态声明缺失不代表服务器不支持）。
+  const renameProvider = initialized.capabilities?.renameProvider;
+  const hasPrepareProvider =
+    typeof renameProvider === "object" && renameProvider.prepareProvider === true;
 
   await connection.sendNotification("initialized", {});
 
@@ -352,7 +641,40 @@ export async function create(input: CreateInput): Promise<LspClient> {
     await connection.sendNotification("workspace/didChangeConfiguration", { settings });
   }
 
-  const files: Record<string, { version: number; text: string }> = {};
+  const files: Record<string, { version: number; text: string } | undefined> = {};
+
+  // ── 驻留 LRU ────────────────────────────────────────────────────────────────
+
+  /** path → 最近使用时间；迭代序即使用序（头部最久）。 */
+  const lruOrder = new Map<string, number>();
+  /** 正在等待诊断的文档（didClose 淘汰时跳过，见"关闭不得早于诊断收集"）。 */
+  const waitingForDiagnostics = new Set<string>();
+
+  const touch = (path: string): void => {
+    lruOrder.delete(path);
+    lruOrder.set(path, Date.now());
+  };
+
+  /** 超过容量时淘汰最久未使用的文档（didClose 并移出驻留集合）。 */
+  async function evictExcess(): Promise<void> {
+    while (lruOrder.size > maxOpenDocuments) {
+      const oldest = lruOrder.keys().next().value;
+      if (oldest === undefined) return;
+      lruOrder.delete(oldest);
+      const document = files[oldest];
+      if (document === undefined) continue;
+      if (waitingForDiagnostics.has(oldest)) {
+        // 防御：等待中的文档挪到 MRU，等下轮再淘汰（正常不会发生，刚 touch 即 MRU）
+        touch(oldest);
+        continue;
+      }
+      await connection.sendNotification("textDocument/didClose", {
+        textDocument: { uri: pathToFileURL(oldest).href },
+      });
+      delete files[oldest];
+      documentVersions.delete(oldest);
+    }
+  }
 
   // ── 诊断拉取（pull）辅助 ────────────────────────────────────────────────────
 
@@ -561,16 +883,16 @@ export async function create(input: CreateInput): Promise<LspClient> {
     if (timeout <= 0) return Promise.resolve(false);
     return new Promise<boolean>((resolve) => {
       let finished = false;
+      const timer = setTimeout(() => finish(false), timeout);
       const finish = (result: boolean) => {
         if (finished) return;
         finished = true;
-        if (timer) clearTimeout(timer);
+        clearTimeout(timer);
         registrationListeners.delete(listener);
         resolve(result);
       };
       const listener = () => finish(true);
       registrationListeners.add(listener);
-      const timer = setTimeout(() => finish(false), timeout);
     });
   }
 
@@ -584,12 +906,14 @@ export async function create(input: CreateInput): Promise<LspClient> {
     return new Promise<boolean>((resolve) => {
       let finished = false;
       let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutTimer = setTimeout(() => finish(false), request.timeout);
+      const unsub = () => diagnosticListeners.delete(listener);
       const finish = (result: boolean) => {
         if (finished) return;
         finished = true;
         if (debounceTimer) clearTimeout(debounceTimer);
-        if (timeoutTimer) clearTimeout(timeoutTimer);
-        unsub?.();
+        clearTimeout(timeoutTimer);
+        unsub();
         resolve(result);
       };
       const schedule = () => {
@@ -604,13 +928,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
         );
       };
 
-      const timeoutTimer = setTimeout(() => finish(false), request.timeout);
       const listener = (event: { path: string; serverID: string }) => {
         if (event.path !== request.path || event.serverID !== input.serverID) return;
         schedule();
       };
       diagnosticListeners.add(listener);
-      const unsub = () => diagnosticListeners.delete(listener);
       schedule();
     });
   }
@@ -688,66 +1010,283 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
   // ── 公开 API ────────────────────────────────────────────────────────────────
 
+  const openDocument = async (request: { path: string }): Promise<number> => {
+    const resolvedPath = normalize(
+      isAbsolute(request.path) ? request.path : resolve(input.directory, request.path),
+    );
+    const text = await readFile(resolvedPath, "utf8");
+    const extension = extname(resolvedPath);
+    const languageId =
+      input.server.languageIds?.[extension] ?? LANGUAGE_EXTENSIONS[extension] ?? "plaintext";
+    const uri = pathToFileURL(resolvedPath).href;
+
+    const document = files[resolvedPath];
+    if (document !== undefined) {
+      // didChange：内容已变，旧诊断立即失效。清空缓存避免等待窗口内服务器
+      // 重算未完成时（大项目可远超窗口）聚合到过期诊断；新 push 到达即填充。
+      pushDiagnostics.delete(resolvedPath);
+      pullDiagnostics.delete(resolvedPath);
+
+      const next = document.version + 1;
+      files[resolvedPath] = { version: next, text };
+      documentVersions.set(resolvedPath, next);
+      await connection.sendNotification("textDocument/didChange", {
+        textDocument: { uri, version: next },
+        contentChanges:
+          syncKind === TEXT_DOCUMENT_SYNC_INCREMENTAL
+            ? [
+                {
+                  range: { start: { line: 0, character: 0 }, end: endPosition(document.text) },
+                  text,
+                },
+              ]
+            : [{ text }],
+      });
+      touch(resolvedPath);
+      await evictExcess();
+      return next;
+    }
+
+    pushDiagnostics.delete(resolvedPath);
+    pullDiagnostics.delete(resolvedPath);
+    await connection.sendNotification("textDocument/didOpen", {
+      textDocument: { uri, languageId, version: 0, text },
+    });
+    files[resolvedPath] = { version: 0, text };
+    documentVersions.set(resolvedPath, 0);
+    touch(resolvedPath);
+    await evictExcess();
+    return 0;
+  };
+
+  // ── 只读符号查询（definition / references / hover）──────────────────────────
+
+  /** 请求前先同步磁盘内容（didOpen/didChange），保证服务器基于最新文本应答。 */
+  const preparePositionRequest = async (request: InspectPositionRequest) => {
+    const resolvedPath = normalize(
+      isAbsolute(request.path) ? request.path : resolve(input.directory, request.path),
+    );
+    await openDocument({ path: resolvedPath });
+    return {
+      uri: pathToFileURL(resolvedPath).href,
+      position: { line: request.line, character: request.character },
+    };
+  };
+
+  const sendInspectRequest = async <T>(method: string, message: object): Promise<T> => {
+    try {
+      return await retryOnContentModified(() => connection.sendRequest<T>(method, message));
+    } catch (error) {
+      if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
+        throw new LspMethodNotSupportedError(input.serverID, method);
+      }
+      throw error;
+    }
+  };
+
   return {
     root: input.root,
     get serverID() {
       return input.serverID;
     },
+    watchers(): WatcherGlob[] {
+      return [
+        ...new Set(
+          [...watcherRegistrations.values()].flat().map((w) => JSON.stringify([w.pattern, w.kind])),
+        ),
+      ].map((key) => {
+        const [pattern, kind] = JSON.parse(key) as [string, number];
+        return { pattern, kind };
+      });
+    },
     get connection() {
       return connection;
     },
     notify: {
-      async open(request: { path: string }): Promise<number> {
-        const resolvedPath = normalize(
-          isAbsolute(request.path) ? request.path : resolve(input.directory, request.path),
-        );
-        const text = await readFile(resolvedPath, "utf8");
-        const extension = extname(resolvedPath);
-        const languageId =
-          input.server.languageIds?.[extension] ?? LANGUAGE_EXTENSIONS[extension] ?? "plaintext";
-        const uri = pathToFileURL(resolvedPath).href;
-
-        const document = files[resolvedPath];
-        if (document !== undefined) {
-          // didChange：内容已变，旧诊断立即失效。清空缓存避免等待窗口内服务器
-          // 重算未完成时（大项目可远超窗口）聚合到过期诊断；新 push 到达即填充。
-          pushDiagnostics.delete(resolvedPath);
-          pullDiagnostics.delete(resolvedPath);
-          await connection.sendNotification("workspace/didChangeWatchedFiles", {
-            changes: [{ uri, type: FILE_CHANGE_CHANGED }],
+      open: openDocument,
+      async watchedFiles(changes: FileChange[]): Promise<void> {
+        const notified: { uri: string; type: number }[] = [];
+        for (const change of changes) {
+          const resolvedPath = normalize(
+            isAbsolute(change.path) ? change.path : resolve(input.directory, change.path),
+          );
+          const document = files[resolvedPath];
+          if (document !== undefined) {
+            // 写后诊断等待中的文档不退场（didClose 可能抹掉本次写入的诊断结果）
+            if (waitingForDiagnostics.has(resolvedPath)) continue;
+            // 驻留文档被外部改动：内容一致的自身写入 echo 完全忽略；否则先 didClose
+            // 让服务器回落磁盘，再以文件事件通知——不 bump 版本，避免与写后等待竞态。
+            if (change.type === "changed") {
+              let disk: string | undefined;
+              try {
+                disk = await readFile(resolvedPath, "utf8");
+              } catch {
+                // 文件已被删除或不可读：按磁盘状态变化处理
+              }
+              if (disk === document.text) continue;
+            }
+            await connection.sendNotification("textDocument/didClose", {
+              textDocument: { uri: pathToFileURL(resolvedPath).href },
+            });
+            delete files[resolvedPath];
+            documentVersions.delete(resolvedPath);
+          }
+          notified.push({
+            uri: pathToFileURL(resolvedPath).href,
+            type: FILE_CHANGE_TYPE[change.type],
           });
-
-          const next = document.version + 1;
-          files[resolvedPath] = { version: next, text };
-          documentVersions.set(resolvedPath, next);
-          await connection.sendNotification("textDocument/didChange", {
-            textDocument: { uri, version: next },
-            contentChanges:
-              syncKind === TEXT_DOCUMENT_SYNC_INCREMENTAL
-                ? [
-                    {
-                      range: { start: { line: 0, character: 0 }, end: endPosition(document.text) },
-                      text,
-                    },
-                  ]
-                : [{ text }],
-          });
-          return next;
         }
-
+        if (notified.length === 0) return;
         await connection.sendNotification("workspace/didChangeWatchedFiles", {
-          changes: [{ uri, type: FILE_CHANGE_CREATED }],
+          changes: notified,
         });
-
-        pushDiagnostics.delete(resolvedPath);
-        pullDiagnostics.delete(resolvedPath);
-        await connection.sendNotification("textDocument/didOpen", {
-          textDocument: { uri, languageId, version: 0, text },
-        });
-        files[resolvedPath] = { version: 0, text };
-        documentVersions.set(resolvedPath, 0);
-        return 0;
       },
+    },
+    async renameSymbol(request: RenameSymbolRequest): Promise<RenameSymbolResult> {
+      const resolvedPath = normalize(
+        isAbsolute(request.path) ? request.path : resolve(input.directory, request.path),
+      );
+      const uri = pathToFileURL(resolvedPath).href;
+      // rename 前强制同步磁盘内容，保证服务器基于最新文本计算编辑
+      await openDocument({ path: resolvedPath });
+      const position = { line: request.line, character: request.character };
+      const at = `${resolvedPath}:${request.line + 1}:${request.character + 1}`;
+      const notRenameable = () =>
+        new RenameNotPossibleError(`LSP server "${input.serverID}" cannot rename at ${at}`);
+
+      // references 前置 + rename 双向校验：LSP 没有标准化的"索引完成"信号，
+      // 服务器（如 tsserver）可能在项目加载完成前回答，导致 rename 漏掉
+      // 尚未入索引的文件。对策分三层：
+      // 1. 收敛检测：references 连续两次文件集合一致才认为索引稳定，防止
+      //    "服务器根本还没发现某文件"时校验形同虚设；
+      // 2. 覆盖校验（missing）：references 报告的文件必须都被 rename edit
+      //    覆盖，缺失说明服务器索引落后，抛 RenameIncompleteError；
+      // 3. 一致性校验（extra）：rename 触及的文件超出已收敛的 references
+      //    集合，说明两次请求之间项目覆盖在增长（rename 晚于 references，
+      //    索引仍在加载），此时 rename 的结果本身不可信——回到 references
+      //    轮询等重新收敛，再重发 rename 复检；预算耗尽仍不一致时抛
+      //    RenameIncompleteError——调用方尚未写盘，整个操作无副作用。
+      // 服务器不支持 references（MethodNotFound）时跳过校验，信任服务器，
+      // 与编辑器行为一致。
+      const referencesRequest = () =>
+        retryOnContentModified(() =>
+          connection.sendRequest<{ uri: string }[] | null>("textDocument/references", {
+            textDocument: { uri },
+            position,
+            context: { includeDeclaration: true },
+          }),
+        );
+
+      const toPaths = (locations: { uri: string }[] | null): Set<string> =>
+        new Set(
+          (locations ?? []).flatMap((location) =>
+            location.uri.startsWith("file:") ? [normalize(fileURLToPath(location.uri))] : [],
+          ),
+        );
+
+      const sendRename = async (): Promise<WorkspaceEdit | null> => {
+        try {
+          return await retryOnContentModified(() =>
+            connection.sendRequest<WorkspaceEdit | null>("textDocument/rename", {
+              textDocument: { uri },
+              position,
+              newName: request.newName,
+            }),
+          );
+        } catch (error) {
+          if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
+            throw notRenameable();
+          }
+          throw error;
+        }
+      };
+
+      let placeholder: string | undefined;
+      if (hasPrepareProvider) {
+        let prepared: PrepareRenameResponse | null;
+        try {
+          prepared = await retryOnContentModified(() =>
+            connection.sendRequest<PrepareRenameResponse | null>("textDocument/prepareRename", {
+              textDocument: { uri },
+              position,
+            }),
+          );
+        } catch (error) {
+          if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
+            throw notRenameable();
+          }
+          throw error;
+        }
+        if (!prepared) throw notRenameable();
+        if (typeof prepared.placeholder === "string") placeholder = prepared.placeholder;
+      }
+
+      let locations: { uri: string }[] | null;
+      try {
+        locations = await referencesRequest();
+      } catch (error) {
+        if (!(error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND)) throw error;
+        const edit = await sendRename();
+        if (!edit) throw notRenameable();
+        return placeholder === undefined ? { edit } : { edit, placeholder };
+      }
+
+      const deadline = Date.now() + renameVerificationTiming.budgetMs;
+      let previous: Set<string> | undefined;
+      let current = toPaths(locations);
+      for (;;) {
+        const settled = previous !== undefined && samePaths(previous, current);
+        const expired = Date.now() >= deadline;
+        if (settled || expired) {
+          const edit = await sendRename();
+          if (!edit) throw notRenameable();
+          const editPaths = editFilePaths(edit);
+          const missing: string[] = [];
+          const extra: string[] = [];
+          for (const path of current) {
+            if (!editPaths.has(path)) missing.push(path);
+          }
+          for (const path of editPaths) {
+            if (!current.has(path)) extra.push(path);
+          }
+          if (missing.length === 0 && extra.length === 0) {
+            return placeholder === undefined ? { edit } : { edit, placeholder };
+          }
+          if (expired || missing.length > 0) {
+            throw new RenameIncompleteError(missing, extra);
+          }
+          // 收敛后 rename 仍报出 references 没有的文件：references 快照已过时，
+          // 继续轮询到重新收敛后再重发 rename 复检（预算耗尽则向上抛）。
+        }
+        previous = current;
+        await sleep(renameVerificationTiming.pollMs);
+        current = toPaths(await referencesRequest());
+      }
+    },
+    async definition(request: InspectPositionRequest): Promise<InspectLocation[]> {
+      const { uri, position } = await preparePositionRequest(request);
+      return toInspectLocations(
+        await sendInspectRequest<DefinitionResult>("textDocument/definition", {
+          textDocument: { uri },
+          position,
+        }),
+      );
+    },
+    async references(request: InspectPositionRequest): Promise<InspectLocation[]> {
+      const { uri, position } = await preparePositionRequest(request);
+      const locations = await sendInspectRequest<LspLocation[] | null>("textDocument/references", {
+        textDocument: { uri },
+        position,
+        context: { includeDeclaration: true },
+      });
+      return toInspectLocations(locations);
+    },
+    async hover(request: InspectPositionRequest): Promise<Hover | null> {
+      const { uri, position } = await preparePositionRequest(request);
+      return await sendInspectRequest<Hover | null>("textDocument/hover", {
+        textDocument: { uri },
+        position,
+      });
     },
     get diagnostics() {
       const result = new Map<string, Diagnostic[]>();
@@ -760,21 +1299,26 @@ export async function create(input: CreateInput): Promise<LspClient> {
       const normalizedPath = normalize(
         isAbsolute(request.path) ? request.path : resolve(input.directory, request.path),
       );
-      if (request.mode === "document") {
-        await waitForDocumentDiagnostics({
+      waitingForDiagnostics.add(normalizedPath);
+      try {
+        if (request.mode === "document") {
+          await waitForDocumentDiagnostics({
+            path: normalizedPath,
+            version: request.version,
+            after: request.after,
+            signal: request.signal,
+          });
+          return;
+        }
+        await waitForFullDiagnostics({
           path: normalizedPath,
           version: request.version,
           after: request.after,
           signal: request.signal,
         });
-        return;
+      } finally {
+        waitingForDiagnostics.delete(normalizedPath);
       }
-      await waitForFullDiagnostics({
-        path: normalizedPath,
-        version: request.version,
-        after: request.after,
-        signal: request.signal,
-      });
     },
     async shutdown() {
       connection.end();

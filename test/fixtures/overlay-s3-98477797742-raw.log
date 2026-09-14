@@ -1,0 +1,109 @@
+﻿2026-08-27T09:52:09.9393545Z Current runner version: '2.336.0'
+2026-08-27T09:52:09.9410553Z ##[group]Runner Image Provisioner
+2026-08-27T09:52:09.9411203Z Hosted Compute Agent
+2026-08-27T09:52:09.9411638Z Version: 20260819.586
+2026-08-27T09:52:09.9412062Z Commit: 3cc4a88dfa507ef76119ad1bb3eccc6378bb2b76
+2026-08-27T09:52:09.9413991Z ##[endgroup]
+2026-08-27T09:52:09.9414847Z ##[group]Operating System
+2026-08-27T09:52:09.9416315Z ##[endgroup]
+2026-08-27T09:52:09.9416685Z ##[group]Runner Image
+2026-08-27T09:52:09.9420631Z ##[endgroup]
+2026-08-27T09:52:09.9421443Z ##[group]GITHUB_TOKEN Permissions
+2026-08-27T09:52:09.9424359Z ##[endgroup]
+2026-08-27T09:52:10.9912515Z Download action repository 'actions/setup-go@v7' (SHA:b7ad1dad31e06c5925ef5d2fc7ad053ef454303e)
+2026-08-27T09:52:11.6655063Z Complete job name: test
+2026-08-27T09:52:11.7128712Z ##[group]Run actions/checkout@v7
+2026-08-27T09:52:11.7129194Z with:
+2026-08-27T09:52:11.7129494Z   repository: trim21/overlay-s3
+2026-08-27T09:52:11.7131506Z   token: ***
+2026-08-27T09:52:11.7132047Z   ssh-strict: true
+2026-08-27T09:52:11.7135720Z ##[endgroup]
+2026-08-27T09:52:11.7884442Z ##[group]Getting Git version info
+2026-08-27T09:52:11.9116576Z ##[endgroup]
+2026-08-27T09:52:11.9180907Z ##[group]Determining repository object format
+2026-08-27T09:52:11.9182055Z ##[endgroup]
+2026-08-27T09:52:11.9183097Z ##[group]Initializing the repository
+2026-08-27T09:52:12.4082492Z ##[endgroup]
+2026-08-27T09:52:12.4083250Z ##[group]Disabling automatic garbage collection
+2026-08-27T09:52:12.4110312Z ##[endgroup]
+2026-08-27T09:52:12.4110941Z ##[group]Setting up auth
+2026-08-27T09:52:12.5451721Z ##[endgroup]
+2026-08-27T09:52:12.5452468Z ##[group]Fetching the repository
+2026-08-27T09:52:14.1371222Z ##[endgroup]
+2026-08-27T09:52:14.1371772Z ##[group]Determining the checkout info
+2026-08-27T09:52:14.1373604Z ##[endgroup]
+2026-08-27T09:52:14.1439564Z ##[group]Checking out the ref
+2026-08-27T09:52:14.1857840Z ##[endgroup]
+2026-08-27T09:52:14.1886783Z [command]/usr/bin/git log -1 --format=%H
+2026-08-27T09:52:14.1902684Z efd8de04e0a828b91a84fb48275213b80441b6e7
+2026-08-27T09:52:14.2093284Z ##[group]Run actions/setup-go@v7
+2026-08-27T09:52:14.2093586Z with:
+2026-08-27T09:52:14.2093836Z   go-version: 1.27
+2026-08-27T09:52:14.2094066Z   cache: true
+2026-08-27T09:52:14.2094291Z   check-latest: false
+2026-08-27T09:52:14.2096458Z ##[endgroup]
+2026-08-27T09:52:24.7012578Z ##[group]go env
+2026-08-27T09:52:24.8767356Z PKG_CONFIG='pkg-config'
+2026-08-27T09:52:24.8767507Z 
+2026-08-27T09:52:24.8767975Z ##[endgroup]
+2026-08-27T09:52:24.8877461Z ##[group]Run docker run -d --name silo -p 127.0.0.1:9000:9000 \
+2026-08-27T09:52:24.8878015Z [36;1mdocker run -d --name silo -p 127.0.0.1:9000:9000 \[0m
+2026-08-27T09:52:24.8878422Z [36;1m  -e MINIO_ROOT_USER=minioadmin \[0m
+2026-08-27T09:52:24.8878738Z [36;1m  -e MINIO_ROOT_PASSWORD=minioadmin-secret \[0m
+2026-08-27T09:52:24.8879110Z [36;1m  docker.io/pgsty/silo:latest server /data[0m
+2026-08-27T09:52:24.8909523Z ##[endgroup]
+2026-08-27T09:52:34.7698921Z 581c7d2e560dea911c74535ad49a5f7bb6db9eb8b122b4873b5aa2c76f37e175
+2026-08-27T09:52:37.3957946Z silo ready
+2026-08-27T09:52:37.3988644Z ##[group]Run go build ./... && go vet ./...
+2026-08-27T09:52:37.3988989Z [36;1mgo build ./... && go vet ./...[0m
+2026-08-27T09:52:37.4010902Z shell: /usr/bin/bash -e {0}
+2026-08-27T09:52:37.4011180Z env:
+2026-08-27T09:52:37.4011419Z   GOTOOLCHAIN: local
+2026-08-27T09:52:37.4011647Z ##[endgroup]
+2026-08-27T09:52:41.1393285Z ##[group]Run go test ./...
+2026-08-27T09:52:41.1393589Z [36;1mgo test ./...[0m
+2026-08-27T09:52:41.1414064Z shell: /usr/bin/bash -e {0}
+2026-08-27T09:52:41.1414372Z env:
+2026-08-27T09:52:41.1414647Z   GOTOOLCHAIN: local
+2026-08-27T09:52:41.1414902Z ##[endgroup]
+2026-08-27T09:52:44.0371217Z ok  	overlay-s3	0.021s
+2026-08-27T09:52:44.0519545Z ##[group]Run go test -run TestIntegration -v ./...
+2026-08-27T09:52:44.0519911Z [36;1mgo test -run TestIntegration -v ./...[0m
+2026-08-27T09:52:44.0540940Z shell: /usr/bin/bash -e {0}
+2026-08-27T09:52:44.0541628Z env:
+2026-08-27T09:52:44.0541839Z   GOTOOLCHAIN: local
+2026-08-27T09:52:44.0543171Z ##[endgroup]
+2026-08-27T09:52:50.9391287Z PASS
+2026-08-27T09:52:50.9392229Z ok  	overlay-s3	6.568s
+2026-08-27T09:52:50.9545632Z ##[group]Run curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+2026-08-27T09:52:50.9546451Z [36;1mcurl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc[0m
+2026-08-27T09:52:50.9547037Z [36;1mchmod +x /usr/local/bin/mc[0m
+2026-08-27T09:52:50.9547718Z [36;1mmc --version[0m
+2026-08-27T09:52:50.9579279Z shell: /usr/bin/bash -e {0}
+2026-08-27T09:52:50.9580409Z ##[endgroup]
+2026-08-27T09:52:51.4967586Z Copyright (c) 2015-2025 MinIO, Inc.
+2026-08-27T09:52:51.4967942Z License GNU AGPLv3 <https://www.gnu.org/licenses/agpl-3.0.html>
+2026-08-27T09:52:51.5006041Z ##[group]Run go build -o overlay-s3 .
+2026-08-27T09:52:51.5006570Z [36;1mgo build -o overlay-s3 .[0m
+2026-08-27T09:52:51.5006957Z [36;1m./overlay-s3 \[0m
+2026-08-27T09:52:51.5007646Z [36;1m  -listen 127.0.0.1:8080 \[0m
+2026-08-27T09:52:51.5008057Z [36;1m  -overlay-endpoint http://127.0.0.1:9000 \[0m
+2026-08-27T09:52:51.5046023Z   GOTOOLCHAIN: local
+2026-08-27T09:52:51.5046634Z ##[endgroup]
+2026-08-27T09:52:52.5939449Z gateway ready
+2026-08-27T09:52:52.5975122Z ##[group]Run set -euo pipefail
+2026-08-27T09:52:52.5975481Z [36;1mset -euo pipefail[0m
+2026-08-27T09:52:52.5975832Z [36;1mmc alias set gw http://127.0.0.1:8080 demo demo-secret[0m
+2026-08-27T09:52:52.5976235Z [36;1mmc alias set silo http://127.0.0.1:9000 minioadmin minioadmin-secret[0m
+2026-08-27T09:52:52.5976665Z [36;1m[0m
+2026-08-27T09:52:52.6008100Z ##[endgroup]
+2026-08-27T09:52:52.7868115Z mc: <ERROR> Failed to copy `/tmp/up.txt`. missing SignedHeaders
+2026-08-27T09:52:52.7884193Z ##[error]Process completed with exit code 1.
+2026-08-27T09:52:52.7924218Z ##[group]Run docker logs silo 2>&1 | tail -200
+2026-08-27T09:52:52.7924577Z [36;1mdocker logs silo 2>&1 | tail -200[0m
+2026-08-27T09:52:52.7944590Z shell: /usr/bin/bash -e {0}
+2026-08-27T09:52:52.7944879Z env:
+2026-08-27T09:52:52.7945096Z   GOTOOLCHAIN: local
+2026-08-27T09:52:52.7945351Z ##[endgroup]
+2026-08-27T09:52:53.0736616Z Cleaning up orphan processes
+2026-08-27T09:52:53.0952974Z Terminate orphan process: pid (6029) (overlay-s3)

@@ -1,12 +1,13 @@
 /**
- * approval-rules —— bash 命令审核组件（对齐 opencode 的权限方法）：
- * 用 tree-sitter 解析命令（含嵌套 `$(...)`），按 BashArity 生成命令模式
- * （`git checkout main` → `git checkout *`），再用通配匹配对 allow/deny
- * 规则求值。接入 bwrap 的 `dangerouslyDisableSandbox` 审批：命中规则自动
- * 放行/拒绝，未命中才弹审批对话框。
+ * approval-rules —— bash 命令匹配引擎（对齐 opencode 的权限方法）：
+ * 用 tree-sitter 解析命令（含嵌套 `$(...)`），对每条命令的原文做通配
+ * 匹配，对 allow/deny 规则求值。规则匹配不经过任何命令归一——BashArity
+ * 归一模式只用于 "allow forever" 的建议规则（见 approval-suggest.ts）。
+ * 接入 bwrap 的 `dangerouslyDisableSandbox` 审批：命中规则自动
+ * 放行/拒绝，未命中才弹审批对话框。文件输出重定向（`>` / `>>` / `&>`
+ * 等）不会因命令规则自动放行，避免 `echo *` 把 `echo '' > file` 带过。
  *
  * 参考实现：
- * - opencode packages/opencode/src/permission/arity.ts（BashArity 表）
  * - opencode packages/core/src/util/wildcard.ts（通配匹配）
  * - opencode packages/opencode/src/tool/shell.ts（tree-sitter 命令提取）
  */
@@ -27,6 +28,8 @@ export interface ParsedBash {
   commands: BashCommand[];
   /** 语法错误时的提示（解析失败不抛错，退化为无法匹配）。 */
   error?: string;
+  /** 含写入文件的重定向（`>` / `>>` / `&>` / `<>` 等）；fd 复制与纯输入除外。 */
+  hasFileOutputRedirect: boolean;
 }
 
 export type ApprovalAction = "allow" | "deny";
@@ -108,6 +111,27 @@ function extractParts(node: Node): { name: string; args: string[] } {
   return { name: name.join(" "), args };
 }
 
+/** 会打开/截断/追加文件的重定向算子；`>&` / `<&` 是 fd 复制，不算。 */
+const FILE_OUTPUT_REDIRECT_OPS = new Set([">", ">>", ">|", "&>", "&>>"]);
+
+function fileRedirectWritesToFile(node: Node): boolean {
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child) continue;
+    if (FILE_OUTPUT_REDIRECT_OPS.has(child.type)) return true;
+    // `<>` 被解析成 `<` + 含 `>` 的 ERROR
+    if (child.type === "ERROR" && child.text.includes(">")) return true;
+  }
+  return false;
+}
+
+function treeHasFileOutputRedirect(root: Node): boolean {
+  for (const node of root.descendantsOfType("file_redirect")) {
+    if (fileRedirectWritesToFile(node)) return true;
+  }
+  return false;
+}
+
 function collectCommand(node: Node, all: Node[]): BashCommand | undefined {
   const { name, args } = extractParts(node);
   if (!name) return undefined;
@@ -139,41 +163,14 @@ export async function parseBashCommands(command: string): Promise<ParsedBash> {
       const parsed = collectCommand(node, all);
       if (parsed) commands.push(parsed);
     }
-    return { commands };
+    return { commands, hasFileOutputRedirect: treeHasFileOutputRedirect(tree.rootNode) };
   } catch (error) {
     return {
       commands: [],
+      hasFileOutputRedirect: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
-}
-
-// ── BashArity：命令前缀 → token 数（参考 opencode arity.ts）─────────────────
-
-/**
- * 命令前缀 → 定义该命令的 token 数。`git checkout main` → `git` 的 arity 2，
- * 权限模式取前 2 个 token + `*`（`git checkout *`），避免具体参数进规则。
- * 表来自 opencode packages/opencode/src/permission/arity.ts（Apache-2.0），
- * 数据存放在 arity.json（所有 key 带引号）。
- */
-const ARITY = JSON.parse(readFileSync(new URL("arity.json", import.meta.url), "utf8")) as Record<
-  string,
-  number
->;
-
-/**
- * 生成命令的权限模式：BashArity 前缀 + `*`。
- * `git checkout main` → `git checkout *`；未收录的命令 → 命令名 + `*`。
- */
-export function commandPattern(command: BashCommand): string {
-  const tokens = [command.name, ...command.args];
-  for (let len = tokens.length; len > 0; len--) {
-    const prefix = tokens.slice(0, len).join(" ");
-    const arity = ARITY[prefix];
-    if (arity !== undefined) return [...tokens.slice(0, arity), "*"].join(" ");
-  }
-  if (tokens.length === 0) return "*";
-  return [tokens[0], "*"].join(" ");
 }
 
 // ── 通配匹配（参考 opencode wildcard.ts）────────────────────────────────────
@@ -194,38 +191,34 @@ export function matchRule(input: string, pattern: string): boolean {
 // ── 规则求值 ────────────────────────────────────────────────────────────────
 
 /**
- * 命令（含所有嵌套命令）的权限模式列表（命令替换里的命令也展开）。
- * 供规则求值与"allow forever"写规则复用。
- */
-export async function commandPatternsFor(command: string): Promise<string[]> {
-  const parsed = await parseBashCommands(command);
-  const flat: string[] = [];
-  const visit = (cmd: BashCommand) => {
-    flat.push(commandPattern(cmd));
-    for (const nested of cmd.nested) visit(nested);
-  };
-  for (const cmd of parsed.commands) visit(cmd);
-  return flat;
-}
-
-/**
  * 对命令（含所有嵌套命令）求值：
  * - deny 优先：任一命令命中 deny 规则即整体拒绝
+ * - 文件输出重定向不自动放行：即使命令规则全匹配，也返回 undefined 交人审
  * - allow 需全量：所有命令都命中 allow 规则才整体放行，否则返回
  *   undefined（有命令未命中规则，交给人审），避免未允许的命令被同链放行带过。
+ * - 匹配输入是命令原文（tree-sitter command 节点 text，含嵌套逐条展开），
+ *   对齐 opencode shell.ts 的 patterns；通配规则按字面写，`--` 与普通
+ *   token 无区别。
  * 规则内后写优先（findLast，对齐 opencode PermissionV2）。
  */
 export async function evaluateBashApproval(
   command: string,
   rules: readonly ApprovalRule[],
 ): Promise<ApprovalAction | undefined> {
-  const patterns = await commandPatternsFor(command);
-  if (patterns.length === 0) return;
+  const parsed = await parseBashCommands(command);
+  const raws: string[] = [];
+  const visit = (cmd: BashCommand) => {
+    raws.push(cmd.raw);
+    for (const nested of cmd.nested) visit(nested);
+  };
+  for (const cmd of parsed.commands) visit(cmd);
+  if (raws.length === 0) return;
   let allowed = 0;
-  for (const pattern of patterns) {
-    const rule = rules.findLast((r) => matchRule(pattern, r.pattern));
+  for (const raw of raws) {
+    const rule = rules.findLast((r) => matchRule(raw, r.pattern));
     if (rule?.action === "deny") return "deny";
     if (rule?.action === "allow") allowed++;
   }
-  return allowed === patterns.length ? "allow" : undefined;
+  if (parsed.hasFileOutputRedirect) return;
+  return allowed === raws.length ? "allow" : undefined;
 }

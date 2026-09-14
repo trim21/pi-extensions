@@ -21,11 +21,13 @@ The capitalized tools below follow Claude Code behavior with a few deliberate de
 - By default reads the **entire file**, capped at 256 KB (bytes) and a rough 25K-token estimate (4 chars/token, no tokenizer). Whole reads over either cap error with `File content (X) exceeds maximum allowed size/tokens (...) — use offset and limit`; providing `limit` bypasses the byte cap and only the selected range counts toward the token cap.
 - `offset`/`limit` are 1-based positive integers. Out-of-range offset returns `Warning: the file exists but is shorter than the provided offset (N). The file has M lines.`; empty files return `Warning: the file exists but the contents are empty.`
 - Missing file → `File does not exist. Note: your current working directory is <cwd>.` plus a `Did you mean ...?` suggestion (same-base different-extension, or a corrected path under cwd).
+- **Deviation from Claude Code:** when an LSP server is configured for the file (`.pi/lsp.json` or `~/.pi/agent/lsp.json`), Read waits for that file's diagnostics and appends the same block Edit/Write produce; the pendant subtitle carries the counts. Read uses the same resident-document path as Edit/Write, so the read file enters the bounded `maxOpenDocuments` LRU. Without a matching server nothing is appended and no server is started.
 
 ## Edit / Write
 
 - **You must Read a file before editing or overwriting it.** The tool compares a content digest against the last read; after your own Edit/Write the recorded digest is refreshed, so consecutive edits by you are fine. An external change (user edit, linter, another process) triggers `File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.` — re-Read before writing.
 - **Deviation from Claude Code:** staleness is checked by content digest, not mtime.
+- Reported diagnostics: the result ends with `LSP diagnostics detected in this file` followed by a `<diagnostics file="...">` block listing at most 5 entries (ERROR first, then WARN; INFO/HINT are never reported). A truncated block ends with a `... and 3 errors, 4 warnings` line giving the severity breakdown of the entries that are **not** listed, so a block without that line lists every ERROR/WARN in the file. Read uses the same format.
 
 ### Edit specifics
 
@@ -63,7 +65,7 @@ The capitalized tools below follow Claude Code behavior with a few deliberate de
 ## Bash
 
 - Commands run through the bwrap sandbox (modes: `allow-all` / `workspace-write` / `allow-net` / `readonly`), switchable via `/bwrap-*` commands. `dangerouslyDisableSandbox: true` requests one-time unsandboxed execution. Approval flow: commands are parsed (tree-sitter, including nested `$(...)`) and matched against `approvalRules` from `bwrap.json` — an `allow` rule auto-approves, a `deny` rule rejects outright (last matching rule wins), and only unmatched commands show the approval dialog. In headless sessions unsandboxed execution is denied.
-- `timeout` is in milliseconds, default 120000, max 600000. `workdir` overrides the working directory.
+- `timeout` is in milliseconds, default 120000, max 7200000 (2 hours). `workdir` overrides the working directory.
 - **Non-zero exit code is a tool failure**: the error text starts with `Exit code N` followed by the full output (head/tail-truncated at 10000 chars if larger). **Deviation from Claude Code:** no command-semantics special cases — `grep` with no matches (exit 1), `diff` differences, `test` false, etc. all fail like any other non-zero exit.
 - Output is streamed to a file under `agent-dir/tmp/<uuid>.txt` during execution; the tool result only contains the truncated tail (2000 lines / 50 KB). On truncation a note is appended: `[Showing lines X-Y of N. Full output: <path>]` — read that file for the complete output. In a read-only sandbox where the write fails, the result degrades to the in-memory tail only.
 - **Deviation from Claude Code:** no auto-backgrounding on timeout — a timed-out command is killed and the error reports `Command timed out after N milliseconds`.

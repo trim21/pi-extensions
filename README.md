@@ -52,7 +52,9 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
 
 ### 保护目录
 
-`.git`、`.pi`、`.agent` 即使在 `workspace-write` 模式下也始终只读。
+`.pi`、`.agent` 即使在 `workspace-write` 模式下也始终只读；`.git` 同样只读：工作区根是 git 仓库时保护根 `.git`，根不是 git 仓库时才递归扫描嵌套仓库（monorepo 子仓库，跳过 `node_modules`、`.venv` 等包目录）。
+
+可写与保护路径均使用 bwrap 的 `--*-bind-try` 变体：路径不存在时自动忽略该项，而不是让整条命令失败。
 
 ### 运行时命令
 
@@ -78,8 +80,8 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
   "writablePaths": [".", "/tmp", "~/my-projects"],
   // 额外可写路径，与默认值合并（ro-bind）
   "extraWritablePaths": ["~/.config"],
-  // tmpfs 挂载路径（避免写入磁盘）
-  "tmpfsPaths": [],
+  // 沙箱内隐藏的路径：以 / 结尾的视为目录（挂空 tmpfs），否则按文件处理（--ro-bind-try /dev/null）
+  "denyPaths": [],
   // 额外 bwrap 参数
   "extraArgs": ["--die-with-parent"],
   // 全权限执行的自动审批规则：命中规则的命令不弹确认框
@@ -92,7 +94,7 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
 }
 ```
 
-`dangerouslyDisableSandbox: true` 的审批流程：先按 `approvalRules` 匹配（含嵌套 `$(...)` 内的命令，规则后写优先），命中 allow/deny 直接放行/拒绝，未命中才弹确认框。
+`dangerouslyDisableSandbox: true` 的审批流程：先按 `approvalRules` 匹配（含嵌套 `$(...)` 内的命令，规则后写优先），命中 allow/deny 直接放行/拒绝，未命中才弹确认框。含文件输出重定向（`>` / `>>` / `&>` 等）的命令即使命令规则全匹配也不会自动放行，避免 `echo *` 把 `echo '' > file` 带过；管道（`echo | tail`）和 fd 复制（`2>&1`）不受影响。
 
 ### 使用
 
@@ -363,12 +365,20 @@ read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级�
       "bin": "gopls",
       "args": [],
       "cwd": "{root}", // 支持 {root} / {cwd} 模板
+      "env": { "VIRTUAL_ENV": "{root}/.venv", "GITHUB_TOKEN": { "sh": ["gh", "auth", "token"] } }, // 追加到子进程环境变量；string 值支持 {root} / {cwd} 模板与 ${VAR} 引用，{sh} 启动时执行命令取 stdout（失败则服务器启动失败）
       "languageIdByExtension": { ".go": "go" },
       "startupTimeoutMs": 45000,
       "diagnosticsWaitMs": 1500,
-      "initializationOptions": {}, // → initialize 请求
+      "initializationOptions": { "pythonPath": "${VIRTUAL_ENV:-/opt/venv}/bin/python" }, // → initialize 请求；字符串值支持 ${VAR} / ${VAR:-default} 插值
       "settings": {}, // → didChangeConfiguration / workspace/configuration 请求
     },
+  },
+  "maxOpenDocuments": 32, // 驻留文档上限（LRU 容量），缺省 32
+  "watch": {
+    "enabled": true, // 工作区文件监听，缺省 true
+    "debounceMs": "300ms", // 事件去抖，缺省 300ms；也支持 "5s" / "1m"
+    "maxBatch": 500, // 单批事件上限，缺省 500，超出截断并提示一次
+    "ignore": [], // 追加忽略 glob（相对工作区根）
   },
 }
 ```
@@ -380,11 +390,39 @@ read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级�
 - `bin`：可执行文件——绝对路径、相对调用 cwd 的路径，或名字（先在项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin` 找，再走 PATH）
 - `languageIdByExtension`：扩展名 → LSP languageId（didOpen 用）；缺省回退内置映射表
 - `startupTimeoutMs` / `diagnosticsWaitMs`：per-server 超时，覆盖全局配置与默认值
-- `initializationOptions` 与 `settings` 按 LSP 语义分离：前者进 initialize 请求，后者进 didChangeConfiguration / workspace/configuration 请求
+- `env`：追加到 LSP 子进程的环境变量（在 `process.env` 之上合并）。string 值支持 `{root}` / `{cwd}` 模板与 `${VAR}` 环境变量引用；`{ "sh": [...] }` 在服务器启动时执行命令（argv 直接执行、不经 shell，需要 shell 特性时自行包 `["bash", "-c", "..."]`），stdout trim 后作为值，命令失败（非零退出或输出为空）时该服务器启动失败并报错
+- `initializationOptions` 与 `settings` 按 LSP 语义分离：前者进 initialize 请求，后者进 didChangeConfiguration / workspace/configuration 请求；`initializationOptions` 的字符串值（含嵌套对象/数组）在启动时做 `${VAR}` 插值，`${VAR:-default}` 在变量未定义或为空时用 default，未定义且无 default 替换为空字符串；插值时可引用 `env` 里配置的变量
 
-内置默认服务器（typescript / pyright / ruff / clangd）始终存在；`servers` 以 key 为服务器 id 与默认合并——同 key 整体覆盖（整个配置替换默认）、新 key 新增、`"enabled": false` 移除（如 `"clangd": { "enabled": false }`）。executable 的发现逻辑（如 tsserver 路径、venv 里的 python）不内置，需要时用 `bin` / `args` / `settings` 自行表达。
+`env` 的 `{sh}` 命令与 `initializationOptions` 插值可以组合使用，例如用 `gh auth token` 给服务器的 initialize 请求提供 session token：
 
-旧的 `enabled`（白名单）/ `disabled`（排除）与全局超时字段（`initializeTimeoutMs` 等）继续可用。
+```jsonc
+{
+  "servers": {
+    "github-lsp": {
+      "bin": "github-lsp",
+      "args": ["--stdio"],
+      "env": {
+        // 启动时执行 gh auth token，stdout（trim 后）成为环境变量 GITHUB_TOKEN
+        "GITHUB_TOKEN": { "sh": ["gh", "auth", "token"] },
+      },
+      "initializationOptions": {
+        // 插值引用上面命令的输出，随 initialize 请求发给服务器
+        "sessionToken": "${GITHUB_TOKEN}",
+      },
+    },
+  },
+}
+```
+
+命令失败（`gh` 未登录 / 不在 PATH）时该服务器启动失败并报错。
+
+没有内置默认服务器：`servers` 的 key 就是服务器 id，全部来自你的配置，未定义 `servers` 时不启动任何语言服务器。executable 的发现逻辑（如 tsserver 路径、venv 里的 python）不内置，需要时用 `bin` / `args` / `settings` 自行表达。
+
+启用控制只有顶层两处：`enabled`（白名单）与 `disabled`（排除），按服务器 id 生效。`enabled` 里的 id 必须是已配置服务器，否则视为配置错误；`disabled` 里未注册的 id 直接忽略。全局超时字段（`initializeTimeoutMs` 等）同样配在顶层。
+
+顶层 `watch` 段控制工作区文件监听（事件源是会话 cwd 的递归 fs.watch，非本 agent 写入的改动——如 `git checkout`、外部格式化——也会以 `workspace/didChangeWatchedFiles` 批量通知服务器）；内置忽略 `node_modules`、`.git`、`dist`、`build`、`.venv`、`venv`、`target`、`coverage`，`ignore` 可追加。`maxOpenDocuments` 是保持 open 的文档上限（LRU）：超过时最久未使用的文档会被 `didClose`，服务器回落到读磁盘。`watch.enabled: false` 可整体关闭监听，回到仅工具触发同步的现状。
+
+服务器记录里不认识的键会被忽略：历史配置中残留的 `"clangd": { "enabled": false }` 已无任何效果，要禁用某个已配置的服务器请改用顶层 `disabled`。
 
 ---
 

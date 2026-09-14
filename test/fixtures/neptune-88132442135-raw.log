@@ -1,0 +1,84 @@
+﻿2026-07-18T23:00:30.2332812Z Current runner version: '2.335.1'
+2026-07-18T23:00:30.2366006Z ##[group]Runner Image Provisioner
+2026-07-18T23:00:30.2367356Z Hosted Compute Agent
+2026-07-18T23:00:30.2367961Z Version: 20260707.563
+2026-07-18T23:00:30.2368565Z Commit: 02667638d2b423fbc733a8e32a88b44996a3ba6e
+2026-07-18T23:00:30.2371504Z ##[endgroup]
+2026-07-18T23:00:30.2372933Z ##[group]Operating System
+2026-07-18T23:00:30.2375191Z ##[endgroup]
+2026-07-18T23:00:30.2375723Z ##[group]Runner Image
+2026-07-18T23:00:30.2381100Z ##[endgroup]
+2026-07-18T23:00:30.2383012Z ##[group]GITHUB_TOKEN Permissions
+2026-07-18T23:00:30.2386831Z ##[endgroup]
+2026-07-18T23:00:32.5295099Z Getting action download info
+2026-07-18T23:00:32.6911972Z Complete job name: test (windows-latest)
+2026-07-18T23:00:32.8423708Z ##[group]Run actions/checkout@v7.0.0
+2026-07-18T23:00:32.8425147Z with:
+2026-07-18T23:00:32.8425942Z   repository: trim21/neptune
+2026-07-18T23:00:32.8432510Z   token: ***
+2026-07-18T23:00:32.8433244Z   ssh-strict: true
+2026-07-18T23:00:32.8445232Z ##[endgroup]
+2026-07-18T23:00:32.9977714Z ##[group]Getting Git version info
+2026-07-18T23:00:33.2315980Z ##[endgroup]
+2026-07-18T23:00:33.2796177Z ##[group]Determining repository object format
+2026-07-18T23:00:33.2798954Z ##[endgroup]
+2026-07-18T23:00:33.2801156Z ##[group]Initializing the repository
+2026-07-18T23:00:33.3694111Z ##[endgroup]
+2026-07-18T23:00:33.3695492Z ##[group]Disabling automatic garbage collection
+2026-07-18T23:00:33.4023937Z ##[endgroup]
+2026-07-18T23:00:33.4025846Z ##[group]Setting up auth
+2026-07-18T23:00:35.7047827Z ##[endgroup]
+2026-07-18T23:00:35.7048551Z ##[group]Fetching the repository
+2026-07-18T23:00:36.4264205Z ##[endgroup]
+2026-07-18T23:00:36.4264592Z ##[group]Determining the checkout info
+2026-07-18T23:00:36.4265609Z ##[endgroup]
+2026-07-18T23:00:36.4920128Z ##[group]Checking out the ref
+2026-07-18T23:00:36.6246854Z ##[endgroup]
+2026-07-18T23:00:36.6601152Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-07-18T23:00:36.6884539Z 707cccdebda76c195a91aaaf6f6eb8a38f7716a2
+2026-07-18T23:00:36.7324705Z ##[group]Run trim21/actions/setup-go@master
+2026-07-18T23:00:36.7325098Z with:
+2026-07-18T23:00:36.7325283Z   cache-namespace: test
+2026-07-18T23:00:36.7325483Z env:
+2026-07-18T23:00:36.7325647Z   GOTOOLCHAIN: local
+2026-07-18T23:00:36.7325838Z ##[endgroup]
+2026-07-18T23:00:36.7578878Z ##[group]Run actions/setup-go@v6
+2026-07-18T23:00:36.7579131Z with:
+2026-07-18T23:00:36.7579307Z   go-version-file: go.mod
+2026-07-18T23:00:36.7579526Z   cache: false
+2026-07-18T23:00:36.7605564Z   check-latest: false
+2026-07-18T23:00:36.7611752Z ##[endgroup]
+2026-07-18T23:00:38.1449955Z ##[group]go env
+2026-07-18T23:00:40.7357957Z set PKG_CONFIG=pkg-config
+2026-07-18T23:00:40.7358104Z 
+2026-07-18T23:00:40.7358428Z ##[endgroup]
+2026-07-18T23:00:41.2952392Z ##[group]Run actions/cache@v6
+2026-07-18T23:00:41.2952616Z with:
+2026-07-18T23:00:41.2952799Z   path: ~/.cache/go-build
+~/go/pkg
+2026-07-18T23:00:41.2956347Z   key: go-cache-82e13ef9568cc6a8f4da8acd9d3772ea87f015e60d919e969d55cb2ed328ce03-87cf90b1c903abe073afcc031cc7c4f737bcb634065e21586192a2c6e65908b1-test
+2026-07-18T23:00:41.2960254Z ##[endgroup]
+2026-07-18T23:01:09.0847052Z Cache restored successfully
+2026-07-18T23:01:09.1001497Z Cache restored from key: go-cache-82e13ef9568cc6a8f4da8acd9d3772ea87f015e60d919e969d55cb2ed328ce03-87cf90b1c903abe073afcc031cc7c4f737bcb634065e21586192a2c6e65908b1-test
+2026-07-18T23:01:09.1273371Z ##[group]Run go get ./...
+2026-07-18T23:01:09.1273647Z [36;1mgo get ./...[0m
+2026-07-18T23:01:09.1291498Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-07-18T23:01:09.1291887Z env:
+2026-07-18T23:01:09.1292053Z   GOTOOLCHAIN: local
+2026-07-18T23:01:09.1292245Z ##[endgroup]
+2026-07-18T23:01:16.4445452Z ##[group]Run jaxxstorm/action-install-gh-release@v3.0.0
+2026-07-18T23:01:16.4446078Z with:
+2026-07-18T23:01:16.4446270Z   repo: gotestyourself/gotestsum
+2026-07-18T23:01:16.4446504Z   tag: v1.13.0
+2026-07-18T23:01:16.4448866Z   token: ***
+2026-07-18T23:01:16.4449821Z ##[endgroup]
+2026-07-18T23:01:17.5687980Z Successfully installed 
+2026-07-18T23:01:17.5692183Z Binaries available at C:\hostedtoolcache\windows\gotestyourself\gotestsum\v1.13.0\windows-x64
+2026-07-18T23:01:17.5978011Z ##[group]Run gotestsum --format=pkgname --format-hide-empty-pkg -- -short -race -count=1 -coverprofile=coverage.txt -covermode=atomic ./...
+2026-07-18T23:01:17.5979104Z [36;1mgotestsum --format=pkgname --format-hide-empty-pkg -- -short -race -count=1 -coverprofile=coverage.txt -covermode=atomic ./...[0m
+2026-07-18T23:01:17.5994145Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-07-18T23:01:17.5994530Z env:
+2026-07-18T23:01:17.5994700Z   GOTOOLCHAIN: local
+2026-07-18T23:01:17.5995668Z ##[endgroup]
+2026-07-18T23:03:38.7453559Z Removing credentials config 'D:\a\_temp\git-credentials-55289cb2-b3da-4765-9939-251d146564a6.config'
+2026-07-18T23:03:38.7655648Z Cleaning up orphan processes

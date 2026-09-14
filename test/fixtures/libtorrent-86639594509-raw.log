@@ -1,0 +1,69 @@
+﻿2026-07-12T10:14:03.9709461Z Current runner version: '2.335.1'
+2026-07-12T10:14:03.9735834Z ##[group]Runner Image Provisioner
+2026-07-12T10:14:03.9736631Z Hosted Compute Agent
+2026-07-12T10:14:03.9737120Z Version: 20260624.560
+2026-07-12T10:14:03.9737662Z Commit: 925d229a51159bc391ae97e54a2dd1fe20af789d
+2026-07-12T10:14:03.9740010Z ##[endgroup]
+2026-07-12T10:14:03.9741364Z ##[group]Operating System
+2026-07-12T10:14:03.9743364Z ##[endgroup]
+2026-07-12T10:14:03.9743819Z ##[group]Runner Image
+2026-07-12T10:14:03.9748605Z ##[endgroup]
+2026-07-12T10:14:03.9751625Z ##[group]GITHUB_TOKEN Permissions
+2026-07-12T10:14:03.9763226Z ##[endgroup]
+2026-07-12T10:14:04.2088772Z Download action repository 'actions/checkout@v6' (SHA:df4cb1c069e1874edd31b4311f1884172cec0e10)
+2026-07-12T10:14:04.4309573Z Complete job name: Test (webtorrent=off address-model=32 crypto=built-in)
+2026-07-12T10:14:04.5738189Z ##[group]Run actions/checkout@v6
+2026-07-12T10:14:04.5739478Z with:
+2026-07-12T10:14:04.5739996Z   submodules: true
+2026-07-12T10:14:04.5740470Z   fetch-depth: 1
+2026-07-12T10:14:04.5740909Z   filter: tree:0
+2026-07-12T10:14:04.5750299Z ##[endgroup]
+2026-07-12T10:14:04.7237698Z ##[group]Getting Git version info
+2026-07-12T10:14:05.1520484Z ##[endgroup]
+2026-07-12T10:14:05.2147367Z ##[group]Determining repository object format
+2026-07-12T10:14:05.2150589Z ##[endgroup]
+2026-07-12T10:14:05.2151541Z ##[group]Initializing the repository
+2026-07-12T10:14:05.3603422Z ##[endgroup]
+2026-07-12T10:14:05.3604791Z ##[group]Disabling automatic garbage collection
+2026-07-12T10:14:05.3906320Z ##[endgroup]
+2026-07-12T10:14:05.3908267Z ##[group]Setting up auth
+2026-07-12T10:14:08.0315252Z ##[endgroup]
+2026-07-12T10:14:08.0315774Z ##[group]Fetching the repository
+2026-07-12T10:14:08.8770796Z ##[endgroup]
+2026-07-12T10:14:08.8771547Z ##[group]Determining the checkout info
+2026-07-12T10:14:08.8772254Z ##[endgroup]
+2026-07-12T10:14:08.9547020Z ##[group]Checking out the ref
+2026-07-12T10:14:11.2634071Z ##[endgroup]
+2026-07-12T10:14:11.2634623Z ##[group]Setting up auth for fetching submodules
+2026-07-12T10:14:11.4141698Z ##[endgroup]
+2026-07-12T10:14:11.4142124Z ##[group]Fetching submodules
+2026-07-12T10:14:19.6237527Z ##[endgroup]
+2026-07-12T10:14:19.6237956Z ##[group]Persisting credentials for submodules
+2026-07-12T10:14:22.8248601Z ##[endgroup]
+2026-07-12T10:14:22.8624679Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-07-12T10:14:22.8898303Z a147a8de6bbd183259964e4fd4943b8f418682f2
+2026-07-12T10:14:22.9290225Z ##[group]Run git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.91.0 https://github.com/boostorg/boost.git
+2026-07-12T10:14:22.9291568Z [36;1mgit clone --depth=1 --recurse-submodules -j10 --branch=boost-1.91.0 https://github.com/boostorg/boost.git[0m
+2026-07-12T10:14:22.9292310Z [36;1mcd boost[0m
+2026-07-12T10:14:22.9292677Z [36;1mbootstrap.bat[0m
+2026-07-12T10:14:22.9325372Z shell: C:\Windows\system32\cmd.EXE /D /E:ON /V:OFF /S /C "CALL "{0}""
+2026-07-12T10:14:22.9325730Z ##[endgroup]
+2026-07-12T10:16:56.5166183Z     http://www.boost.org/build/
+2026-07-12T10:16:56.5187917Z 
+2026-07-12T10:16:56.5374741Z ##[group]Run cd boost
+2026-07-12T10:16:56.5375051Z [36;1mcd boost[0m
+2026-07-12T10:16:56.5375231Z [36;1m.\b2 headers[0m
+2026-07-12T10:16:56.5398443Z shell: C:\Windows\system32\cmd.EXE /D /E:ON /V:OFF /S /C "CALL "{0}""
+2026-07-12T10:16:56.5398790Z ##[endgroup]
+2026-07-12T10:17:00.4793740Z Performing configuration checks
+2026-07-12T10:17:06.8165962Z 
+2026-07-12T10:17:06.8166425Z ...updated 639 targets...
+2026-07-12T10:17:06.8387293Z ##[group]Run set BOOST_ROOT=%CD%\boost
+2026-07-12T10:17:06.8387659Z [36;1mset BOOST_ROOT=%CD%\boost[0m
+2026-07-12T10:17:06.8387917Z [36;1mset PATH=%BOOST_ROOT%;%PATH%[0m
+2026-07-12T10:17:06.8388175Z [36;1mset PYTHON_INTERPRETER=python[0m
+2026-07-12T10:17:06.8388416Z [36;1mcd test[0m
+2026-07-12T10:17:06.8412648Z ##[endgroup]
+2026-07-12T10:24:07.5812782Z ##[group]test_pe_crypto.cpp.aes_ctr
+2026-07-12T10:24:07.6278440Z 
+2026-07-12T10:24:07.6279493Z ##[error]TEST_ERROR: produce: 0 expect

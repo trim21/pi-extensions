@@ -3,7 +3,12 @@ import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { expandHome, formatDisplayPath, resolveHomePath } from "../src/lib/path.js";
+import {
+  expandHome,
+  formatDisplayPath,
+  formatSubtitlePath,
+  resolveHomePath,
+} from "../src/lib/path.js";
 
 describe("expandHome", () => {
   it("expands ~ and ~/ to the home directory", () => {
@@ -54,5 +59,56 @@ describe("formatDisplayPath", () => {
 
   it("keeps absolute paths outside cwd and home", () => {
     expect(formatDisplayPath(cwd, "/etc/passwd")).toBe("/etc/passwd");
+  });
+});
+
+describe("formatSubtitlePath", () => {
+  const cwd = resolve("/work", "project");
+  // 相对部分由 path.relative 生成，Windows 上是 `\`；`./` 前缀是字面量。
+  const insideCwd = `./${join("src", "app.ts")}`;
+
+  it.skipIf(process.platform === "win32")("uses ./… for short paths inside cwd", () => {
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"))).toBe("./src/app.ts");
+  });
+
+  it("uses ~/… for short paths inside home", () => {
+    const homePath = join(homedir(), "config", "app.json");
+    expect(formatSubtitlePath(cwd, homePath)).toBe(`~/${join("config", "app.json")}`);
+  });
+
+  it("keeps short absolute paths outside cwd and home", () => {
+    expect(formatSubtitlePath(cwd, "/etc/passwd")).toBe("/etc/passwd");
+  });
+
+  it("falls back to parent/basename when the display path is too long", () => {
+    const longPath = resolve(
+      cwd,
+      "src/components/very-long-directory-name-here/deeper/another-long-name/App.module.spec.test.ts",
+    );
+    expect(formatDisplayPath(cwd, longPath).length).toBeGreaterThan(60);
+    expect(formatSubtitlePath(cwd, longPath)).toBe(
+      join("another-long-name", "App.module.spec.test.ts"),
+    );
+  });
+
+  it("falls back to basename when there is no parent directory", () => {
+    expect(formatSubtitlePath("/work/project", "/very-long-filename-that-exceeds-limit.ts")).toBe(
+      "very-long-filename-that-exceeds-limit.ts",
+    );
+  });
+
+  it("appends LSP error and warning counts when provided", () => {
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 3)).toBe(`${insideCwd} (ⓧ 3)`);
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 1)).toBe(`${insideCwd} (ⓧ 1)`);
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0, 2)).toBe(`${insideCwd} (⚠ 2)`);
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 3, 2)).toBe(
+      `${insideCwd} (ⓧ 3 ⚠ 2)`,
+    );
+  });
+
+  it("omits counts when zero or absent", () => {
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0)).toBe(insideCwd);
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"), 0, 0)).toBe(insideCwd);
+    expect(formatSubtitlePath(cwd, resolve(cwd, "src/app.ts"))).toBe(insideCwd);
   });
 });

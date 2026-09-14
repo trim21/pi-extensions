@@ -37,6 +37,7 @@ export default defineConfig(
       "**/__generated__/**",
       "**/generated/**",
       "test/fixtures/**",
+      "src/bwrap/holder.js",
     ],
   },
   eslint.configs.recommended,
@@ -120,6 +121,7 @@ export default defineConfig(
       "require-await": "off",
       "@typescript-eslint/no-non-null-assertion": "error",
       "@typescript-eslint/require-await": "error",
+      "@typescript-eslint/no-unnecessary-condition": "error",
       "@typescript-eslint/no-unsafe-enum-comparison": "off",
       "@typescript-eslint/restrict-plus-operands": ["error", { skipCompoundAssignments: false }],
       "@typescript-eslint/prefer-optional-chain": "off",
@@ -179,6 +181,7 @@ export default defineConfig(
   {
     files: ["test/**/*", "**/*.test.ts"],
     rules: {
+      "@typescript-eslint/no-empty-function": "off",
       "@typescript-eslint/consistent-type-imports": ["error", { disallowTypeAnnotations: false }],
       "@typescript-eslint/require-await": "off",
       "@typescript-eslint/no-unnecessary-condition": "off",
@@ -190,6 +193,7 @@ export default defineConfig(
       "@typescript-eslint/no-unsafe-return": "off",
       "@typescript-eslint/no-explicit-any": "off",
       "unicorn/prefer-event-target": "off",
+      "unicorn/no-await-expression-member": "off",
       "unicorn/no-top-level-assignment-in-function": "off",
       ...sortImport,
     },

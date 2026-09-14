@@ -1,7 +1,8 @@
 import { mkdtempSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,11 +20,7 @@ import {
   findSimilarFile,
   suggestPathUnderCwd,
 } from "../src/claude-code/common.js";
-import claudeCodeFileTools, {
-  exactReplace,
-  FILE_UNCHANGED_STUB,
-  formatReadOutput,
-} from "../src/claude-code/files.js";
+import claudeCodeFileTools, { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
 import claudeCodeGlobTool, { globFiles } from "../src/claude-code/glob.js";
 import claudeCodeGrepTool, {
   sortFilesByMtime,
@@ -60,20 +57,72 @@ function loadTools(): Map<string, RegisteredTool> {
 /** 同 loadTools，额外捕获事件 handler（如 session_start）供测试触发。 */
 function loadToolsWithHandlers(): {
   tools: Map<string, RegisteredTool>;
-  handlers: Map<string, (...args: any[]) => unknown>;
+  handlers: Map<string, ((...args: any[]) => unknown)[]>;
 } {
   const tools = new Map<string, RegisteredTool>();
-  const handlers = new Map<string, (...args: any[]) => unknown>();
+  const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
   claudeCodeTools({
     registerTool(tool: RegisteredTool) {
       tools.set(tool.name, tool);
     },
     registerFlag: vi.fn(),
     registerCommand: vi.fn(),
-    on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+    getFlag: vi.fn(),
+    on: (event: string, handler: (...args: any[]) => unknown) => {
+      const list = handlers.get(event) ?? [];
+      list.push(handler);
+      handlers.set(event, list);
+    },
     exec: vi.fn(),
   } as never);
   return { tools, handlers };
+}
+
+/** 只装 files.ts 的工具与事件 handler；globalConfigPath 指向临时配置以隔离真实全局 lsp.json。 */
+function loadFileToolsWithConfig(globalConfigPath: string): {
+  tools: Map<string, RegisteredTool>;
+  handlers: Map<string, ((...args: any[]) => unknown)[]>;
+} {
+  const tools = new Map<string, RegisteredTool>();
+  const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
+  claudeCodeFileTools(
+    {
+      registerTool(tool: RegisteredTool) {
+        tools.set(tool.name, tool);
+      },
+      registerFlag: vi.fn(),
+      registerCommand: vi.fn(),
+      on(event: string, handler: (...args: any[]) => unknown) {
+        handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+      },
+      exec: vi.fn(),
+    } as never,
+    { globalConfigPath },
+  );
+  return { tools, handlers };
+}
+
+/** 依次触发 session_start handlers（manager 装配 + reads 恢复 + bwrap 装配等）。 */
+async function emitSessionStart(
+  handlers: Map<string, ((...args: any[]) => unknown)[]>,
+  ctx: Record<string, unknown>,
+): Promise<void> {
+  const fullCtx = {
+    cwd: process.cwd(),
+    hasUI: true,
+    sessionManager: { getBranch: () => [] },
+    ...ctx,
+    // ui 浅合并默认值：bwrap / lsp 的装配 handler 依赖 setStatus 与 theme.fg
+    ui: {
+      notify: vi.fn(),
+      setStatus: vi.fn(),
+      theme: { fg: (_k: string, text: string) => text },
+      ...(ctx.ui as Record<string, unknown> | undefined),
+    },
+  };
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler({ type: "session_start", reason: "startup" }, fullCtx);
+  }
 }
 
 /** 用注入的 runtime 单独注册 Bash 工具，测试可预置沙箱模式。 */
@@ -103,6 +152,7 @@ function context(cwd: string, overrides: Record<string, unknown> = {}) {
       select: vi.fn(),
       input: vi.fn(),
     },
+    sessionManager: { getSessionId: () => "test-session" },
     ...overrides,
   };
 }
@@ -128,6 +178,55 @@ describe("Claude Code tool registration", () => {
       "TodoWrite",
       "AskUserQuestion",
     ]);
+  });
+
+  it("registers LSP tools only after session_start with a configured lsp.json", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-tools-lsp-"));
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(
+      join(dir, ".pi", "lsp.json"),
+      JSON.stringify({
+        servers: { mock: { include: ["**/*"], bin: "definitely-not-a-real-bin" } },
+      }),
+    );
+    const { tools, handlers } = loadToolsWithHandlers();
+    expect(tools.has("lsp-rename")).toBe(false);
+    expect(tools.has("lsp-inspect")).toBe(false);
+
+    await emitSessionStart(handlers, {
+      cwd: dir,
+      ui: {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        theme: { fg: (_k: string, text: string) => text },
+      },
+      sessionManager: { getBranch: () => [] },
+    });
+
+    expect(tools.has("lsp-rename")).toBe(true);
+    expect(tools.has("lsp-find-definition")).toBe(true);
+    expect(tools.has("lsp-find-reference")).toBe(true);
+    expect(tools.has("lsp-inspect")).toBe(true);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps LSP tools unregistered when lsp.json validation fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-tools-lsp-bad-"));
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(join(dir, ".pi", "lsp.json"), JSON.stringify({ enabled: ["nope"] }));
+    const { tools, handlers } = loadToolsWithHandlers();
+    const notify = vi.fn();
+
+    await emitSessionStart(handlers, {
+      cwd: dir,
+      ui: { notify },
+      sessionManager: { getBranch: () => [] },
+    });
+
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("nope"), "error");
+    expect(tools.has("lsp-rename")).toBe(false);
+    expect(tools.has("lsp-inspect")).toBe(false);
+    await rm(dir, { recursive: true, force: true });
   });
 
   it("uses Claude Code snake_case schemas", () => {
@@ -167,14 +266,14 @@ describe("Claude Code tool registration", () => {
 });
 
 describe("Read, Edit, and Write", () => {
-  it("formats Read output with tab-prefixed line numbers and no partial notice", () => {
+  it("formats Read output with colon-prefixed line numbers and no partial notice", () => {
     expect(formatReadOutput("one\ntwo\nthree\n", 2, 1)).toEqual({
-      text: "2\ttwo",
+      text: "2: two",
       totalLines: 4,
     });
     // limit 未指定时读取全部
     expect(formatReadOutput("one\ntwo\nthree\n", 2)).toEqual({
-      text: "2\ttwo\n3\tthree\n4\t",
+      text: "2: two\n3: three\n4: ",
       totalLines: 4,
     });
   });
@@ -182,23 +281,31 @@ describe("Read, Edit, and Write", () => {
   it("matches Claude Code line handling: BOM, CRLF, trailing empty line", () => {
     // 尾随换行产生一个尾随空行（totalLines 比编辑器行数多 1）
     expect(formatReadOutput("one\ntwo\n")).toEqual({
-      text: "1\tone\n2\ttwo\n3\t",
+      text: "1: one\n2: two\n3: ",
       totalLines: 3,
     });
     // 无尾随换行同样补一个尾随空行（对齐 readFileInRange 的尾部 fragment）
     expect(formatReadOutput("one\ntwo")).toEqual({
-      text: "1\tone\n2\ttwo\n3\t",
+      text: "1: one\n2: two\n3: ",
       totalLines: 3,
     });
     // CRLF 剥离 \r
     expect(formatReadOutput("one\r\ntwo\r\n")).toEqual({
-      text: "1\tone\n2\ttwo\n3\t",
+      text: "1: one\n2: two\n3: ",
       totalLines: 3,
     });
     // UTF-8 BOM 剥离
     expect(formatReadOutput("\uFEFFone\ntwo\n")).toEqual({
-      text: "1\tone\n2\ttwo\n3\t",
+      text: "1: one\n2: two\n3: ",
       totalLines: 3,
+    });
+  });
+
+  it("keeps tab indentation distinct from the line number prefix (Go)", () => {
+    const go = "package main\n\nfunc main() {\n\tprintln(1)\n}\n";
+    expect(formatReadOutput(go)).toEqual({
+      text: "1: package main\n2: \n3: func main() {\n4: \tprintln(1)\n5: }\n6: ",
+      totalLines: 6,
     });
   });
 
@@ -235,12 +342,14 @@ describe("Read, Edit, and Write", () => {
       ),
     ).rejects.toThrow(/not been read/);
 
-    await call(tools.get("Read")!, { file_path: filePath }, ctx);
-    await call(
+    const readResult = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(readResult.details).toMatchObject({ pendant: { subtitle: "./note.txt" } });
+    const editResult = await call(
       tools.get("Edit")!,
       { file_path: filePath, old_string: "world", new_string: "there" },
       ctx,
     );
+    expect(editResult.details).toMatchObject({ pendant: { subtitle: "./note.txt" } });
     expect(await readFile(filePath, "utf8")).toBe("hello there\n");
   });
 
@@ -514,7 +623,7 @@ describe("Read, Edit, and Write", () => {
       /exceeds maximum allowed size/,
     );
     const partial = await call(tools.get("Read")!, { file_path: filePath, limit: 10 }, ctx);
-    expect(partial.content[0].text).toContain("1\tline-0-");
+    expect(partial.content[0].text).toContain("1: line-0-");
   });
 
   it("rejects reads exceeding the token estimate", async () => {
@@ -549,7 +658,7 @@ describe("Read, Edit, and Write", () => {
 
   it("accepts offset 0 and numbers lines from 0 (Claude Code semantics)", async () => {
     expect(formatReadOutput("one\ntwo\n", 0)).toEqual({
-      text: "0\tone\n1\ttwo\n2\t",
+      text: "0: one\n1: two\n2: ",
       totalLines: 3,
     });
     const directory = await mkdtemp(join(tmpdir(), "cc-read-offset0-"));
@@ -561,10 +670,10 @@ describe("Read, Edit, and Write", () => {
       { file_path: filePath, offset: 0 },
       context(directory),
     );
-    expect(result.content[0].text).toBe("0\tone\n1\ttwo\n2\t");
+    expect(result.content[0].text).toBe("0: one\n1: two\n2: ");
   });
 
-  it("dedupes repeated reads of the same range while the file is unchanged", async () => {
+  it("returns full content on repeated reads of the same range", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-read-dedup-"));
     const filePath = join(directory, "note.txt");
     await writeFile(filePath, "one\ntwo\nthree\n", "utf8");
@@ -572,17 +681,13 @@ describe("Read, Edit, and Write", () => {
     const ctx = context(directory);
 
     const first = await call(tools.get("Read")!, { file_path: filePath }, ctx);
-    expect(first.content[0].text).toContain("1\tone");
-    // 同范围重复读 → stub
+    expect(first.content[0].text).toContain("1: one");
     const second = await call(tools.get("Read")!, { file_path: filePath }, ctx);
-    expect(second.content[0].text).toBe(FILE_UNCHANGED_STUB);
-    // 不同范围不 dedup
-    const partial = await call(tools.get("Read")!, { file_path: filePath, limit: 2 }, ctx);
-    expect(partial.content[0].text).toContain("1\tone");
-    // 文件被外部修改 → 不 dedup，返回新内容
+    expect(second.content[0].text).toBe(first.content[0].text);
+    // 文件被外部修改 → 返回新内容
     await writeFile(filePath, "changed\n", "utf8");
     const third = await call(tools.get("Read")!, { file_path: filePath }, ctx);
-    expect(third.content[0].text).toContain("1\tchanged");
+    expect(third.content[0].text).toContain("1: changed");
   });
 
   it("re-reads after Edit instead of deduping", async () => {
@@ -598,9 +703,9 @@ describe("Read, Edit, and Write", () => {
       { file_path: filePath, old_string: "one", new_string: "ONE" },
       ctx,
     );
-    // Edit 覆盖了 reads 记录（无 offset/limit）→ 同范围 Read 不 dedup，返回新内容
+    // Edit 覆盖了 reads 记录 → 同范围 Read 返回新内容
     const result = await call(tools.get("Read")!, { file_path: filePath }, ctx);
-    expect(result.content[0].text).toContain("1\tONE");
+    expect(result.content[0].text).toContain("1: ONE");
   });
 });
 
@@ -685,7 +790,7 @@ describe("reads state restore on session_start", () => {
     expect(deserializeReads(undefined)).toEqual(new Map());
   });
 
-  it("accepts snapshots carrying Read dedup range fields", () => {
+  it("accepts legacy snapshots with stale Read range fields", () => {
     expect(
       deserializeReads({
         "/a.txt": { digest: "abc", textEditable: true, offset: 1, limit: 10 },
@@ -718,7 +823,15 @@ describe("reads state restore on session_start", () => {
         },
       },
     ];
-    await handlers.get("session_start")!({}, { sessionManager: { getBranch: () => branch } });
+    await emitSessionStart(handlers, {
+      cwd: directory,
+      ui: {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        theme: { fg: (_k: string, text: string) => text },
+      },
+      sessionManager: { getBranch: () => branch },
+    });
 
     // 新进程没有重新 Read，直接 Edit 应成功
     await call(
@@ -747,7 +860,15 @@ describe("reads state restore on session_start", () => {
         },
       },
     ];
-    await handlers.get("session_start")!({}, { sessionManager: { getBranch: () => branch } });
+    await emitSessionStart(handlers, {
+      cwd: directory,
+      ui: {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        theme: { fg: (_k: string, text: string) => text },
+      },
+      sessionManager: { getBranch: () => branch },
+    });
 
     // 进程退出期间文件被外部修改
     await writeFile(filePath, "externally changed and longer\n", "utf8");
@@ -775,7 +896,15 @@ describe("reads state restore on session_start", () => {
         },
       },
     ];
-    await handlers.get("session_start")!({}, { sessionManager: { getBranch: () => readBranch } });
+    await emitSessionStart(handlers, {
+      cwd: directory,
+      ui: {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+        theme: { fg: (_k: string, text: string) => text },
+      },
+      sessionManager: { getBranch: () => readBranch },
+    });
     await call(
       tools.get("Edit")!,
       { file_path: filePath, old_string: "world", new_string: "there" },
@@ -784,7 +913,9 @@ describe("reads state restore on session_start", () => {
     expect(await readFile(filePath, "utf8")).toBe("hello there\n");
 
     // rewind：session_tree 切到一个不含该 Read 的分支，记账应被清空重建
-    await handlers.get("session_tree")!({}, { sessionManager: { getBranch: () => [] } });
+    for (const handler of handlers.get("session_tree") ?? []) {
+      await handler({}, { sessionManager: { getBranch: () => [] } });
+    }
     await expect(
       call(tools.get("Write")!, { file_path: filePath, content: "x\n" }, ctx),
     ).rejects.toThrow(/not been read/);
@@ -1056,50 +1187,98 @@ describe("Bash", () => {
   });
 
   it("uses millisecond timeouts", async () => {
-    await expect(
-      call(bashTool, { command: "sleep 1", timeout: 20 }, context(process.cwd())),
-    ).rejects.toThrow(/20 milliseconds/);
+    const result = await call(
+      bashTool,
+      { command: "sleep 1", timeout: 20 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toBe("Command timed out after 20 milliseconds");
   });
 
   it("force-stops commands that ignore SIGTERM", async () => {
-    await expect(
-      call(
-        bashTool,
-        { command: "trap '' TERM; while :; do sleep 1; done", timeout: 20 },
-        context(process.cwd()),
-      ),
-    ).rejects.toThrow(/20 milliseconds/);
+    const result = await call(
+      bashTool,
+      { command: "trap '' TERM; while :; do sleep 1; done", timeout: 20 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toContain("Command timed out after 20 milliseconds");
   });
 
-  it("fails any non-zero exit with Exit code N, without command semantics", async () => {
-    // grep 无匹配（exit 1）在 CC 里是"正常"，但我们不做语义化特判，一律报错
-    await expect(
-      call(
-        bashTool,
-        { command: "grep definitely-not-present /dev/null", timeout: 5_000 },
-        context(process.cwd()),
-      ),
-    ).rejects.toThrow(/^Exit code 1$/);
+  it("includes partial output before the timeout message", async () => {
+    const result = await call(
+      bashTool,
+      { command: "printf partial; sleep 1", timeout: 20 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toBe("partial\n\nCommand timed out after 20 milliseconds");
+    expect(result.details).toBeUndefined();
+  });
+
+  it("returns partial output with an abort status when aborted", async () => {
+    const controller = new AbortController();
+    const promise = call(
+      bashTool,
+      { command: "printf partial; sleep 1", timeout: 5_000 },
+      context(process.cwd()),
+      controller.signal,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort();
+    const result = await promise;
+    expect(result.content[0].text).toBe("partial\n\nCommand aborted by user");
+  });
+
+  it("returns Exit code N for any non-zero exit, without command semantics", async () => {
+    // grep 无匹配（exit 1）在 CC 里是"正常"，但我们不做语义化特判，一律按失败返回
+    const result = await call(
+      bashTool,
+      { command: "grep definitely-not-present /dev/null", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual(["Exit code 1"]);
+    expect(result.details).toBeUndefined();
   });
 
   it("includes the full output for failed commands", async () => {
-    await expect(
-      call(
-        bashTool,
-        { command: "sh -c 'echo boom; exit 4'", timeout: 5_000 },
-        context(process.cwd()),
-      ),
-    ).rejects.toThrow(/^Exit code 4\nboom\n$/);
+    const result = await call(
+      bashTool,
+      { command: "sh -c 'echo boom; exit 4'", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toBe("Exit code 4\nboom\n");
+  });
+
+  it("appends the sandbox status as an extra content block for failures inside the sandbox", async () => {
+    const runtime = createBwrapRuntime();
+    // runtime 的沙箱状态文本由 bwrap-runtime 的单测断言，这里只验证它作为额外一块被附上
+    vi.spyOn(runtime, "execute").mockResolvedValue({
+      exitCode: 1,
+      sandboxHint: "sandbox status",
+      output: "denied\n",
+      truncation: { truncated: false } as never,
+    });
+    const result = await call(
+      loadBashTool(runtime),
+      { command: "touch /etc/x", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toMatchInlineSnapshot(`
+      [
+        "Exit code 1
+      denied
+      ",
+        "sandbox status",
+      ]
+    `);
   });
 
   it("reports the exit code of the last command in a pipeline", async () => {
-    await expect(
-      call(
-        bashTool,
-        { command: "printf x | rg definitely-not-present", timeout: 5_000 },
-        context(process.cwd()),
-      ),
-    ).rejects.toThrow(/^Exit code 1$/);
+    const result = await call(
+      bashTool,
+      { command: "printf x | rg definitely-not-present", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toBe("Exit code 1");
   });
 
   it("streams large output to a file and returns only the truncated tail", async () => {
@@ -1164,10 +1343,10 @@ describe("TodoWrite and AskUserQuestion", () => {
         },
       },
     ];
-    await handlers.get("session_start")!(
-      {},
-      { sessionManager: { getBranch: () => branch }, ui: { setWidget } },
-    );
+    await emitSessionStart(handlers, {
+      sessionManager: { getBranch: () => branch },
+      ui: { setWidget, notify: vi.fn() },
+    });
 
     expect(setWidget).toHaveBeenCalledWith("claude-code-todos", [
       "Progress: 0/2 (0%)",
@@ -1191,10 +1370,10 @@ describe("TodoWrite and AskUserQuestion", () => {
         },
       },
     ];
-    await handlers.get("session_start")!(
-      {},
-      { sessionManager: { getBranch: () => branch }, ui: { setWidget } },
-    );
+    await emitSessionStart(handlers, {
+      sessionManager: { getBranch: () => branch },
+      ui: { setWidget, notify: vi.fn() },
+    });
 
     expect(setWidget).not.toHaveBeenCalled();
   });
@@ -1323,7 +1502,7 @@ describe("standalone extension entries (spawn-agent -e loading)", () => {
       exec: vi.fn(),
     } as never);
     expect([...tools.keys()]).toEqual(["Read", "Edit", "Write"]);
-    // state 恢复依赖 session 事件，独立入口同样注册（与 index.ts 行为一致）
+    // state 恢复与 LSP 装配都依赖 session 事件，独立入口同样注册（与 index.ts 一致）
     expect(handlers.has("session_start")).toBe(true);
     expect(handlers.has("session_tree")).toBe(true);
   });
@@ -1349,4 +1528,53 @@ describe("standalone extension entries (spawn-agent -e loading)", () => {
     } as never);
     expect([...tools.keys()]).toEqual(["Glob"]);
   });
+});
+
+describe("Read reports LSP diagnostics", () => {
+  const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
+
+  it("appends the diagnostics block for the read file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cc-read-lsp-"));
+    const configPath = join(dir, "lsp.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        servers: {
+          mock: {
+            include: ["**/*.py"],
+            bin: process.execPath,
+            args: [fixture],
+            languageIdByExtension: { ".py": "python" },
+          },
+        },
+      }),
+    );
+    const filePath = join(dir, "x.py");
+    await writeFile(filePath, "x = 1\n", "utf8");
+
+    const { tools, handlers } = loadFileToolsWithConfig(configPath);
+    const ctx = context(dir, {
+      ui: { notify: vi.fn(), setStatus: vi.fn() },
+      sessionManager: { getBranch: () => [], getSessionId: () => "test-session" },
+    });
+    try {
+      for (const handler of handlers.get("session_start") ?? []) {
+        await handler({ type: "session_start", reason: "startup" }, ctx);
+      }
+
+      const result = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+      const text = result.content[0].text as string;
+      expect(text).toContain("1: x = 1");
+      expect(text).toContain("LSP diagnostics detected in this file\n<diagnostics file=");
+      expect(text).toContain('<diagnostics file="');
+      expect(text).toContain("mock error message");
+      expect(result.details.pendant.subtitle).toBe("./x.py (ⓧ 1)");
+    } finally {
+      for (const handler of handlers.get("session_shutdown") ?? []) {
+        await handler({ type: "session_shutdown", reason: "quit" }, ctx);
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

@@ -1,2 +1,0 @@
-# Pre-generated seccomp BPF bytecode — binary, deterministic per arch.
-src/bwrap/seccomp-*.bpf binary -diff

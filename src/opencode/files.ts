@@ -1,13 +1,13 @@
 /**
  * Opencode File Tools —— read / edit / write 统一构建点。
  *
- * 三个工具在同一个 registerFileTools(pi, service) 里注册，共享同一个 LSP
- * service 实例（registerLsp 创建的闭包变量），与 claude-code/files.ts 共享
- * read-snapshot state 的方式一致；不再用模块级全局缓存。
+ * read / edit / write 三个工具在同一个 registerFileTools(pi, service) 里注册，
+ * 共享同一个 LSP service 实例（registerLsp 创建的闭包变量）；lsp-rename 的
+ * 工具壳与 claude-code 共享，同样挂进 registerFileTools。
  *
  * 对齐官方 v1（packages/opencode/src/tool/{read,edit,write}.ts）：
  * - read：流式分行（LF / CRLF / CR）、每行 `N: ` 行号前缀、单行 2000
- *   字符截断、1 起始 offset、目录排序；读取后后台 LSP warm-up。
+ *   字符截断、1 起始 offset、目录排序；读取后等待并报告该文档的诊断。
  *   不接 PDF、不接 <system-reminder>；图片 magic 检测保留。
  * - edit：匹配引擎 + 把 old/new 转到文件换行后再替换；写后等待文档诊断。
  * - write：BOM 保留（source.bom || next.bom）；写后同 edit 的诊断输出。
@@ -29,7 +29,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { type LspService, registerLsp } from "../lib/lsp/lsp.js";
+import { appendLspDiagnosticText } from "../lib/lsp/diagnostic.js";
+import { registerLspInspectTools } from "../lib/lsp/inspect-tool.js";
+import { createLspManager, type LspService, type LspServiceOptions } from "../lib/lsp/lsp.js";
+import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
+import { formatSubtitlePath } from "../lib/path.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { applyEdit, normalizeToLF, stripBom } from "./edit-engine.js";
 
@@ -101,8 +105,8 @@ const IMAGE_SIGNATURES: {
       return (
         startsWithAscii(buf, 0, "BM") &&
         buf.length >= 30 &&
-        (buf[28] ?? 0) === 1 &&
-        [1, 4, 8, 16, 24, 32].includes(buf[28 + 1] ?? 0)
+        buf[28] === 1 &&
+        [1, 4, 8, 16, 24, 32].includes(buf[28 + 1])
       );
     },
     mimeType: "image/bmp",
@@ -291,7 +295,7 @@ async function formatDirectoryEntries(dirPath: string): Promise<string[]> {
   return results;
 }
 
-function registerReadTool(pi: ExtensionAPI, service: LspService): void {
+function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void {
   pi.registerTool({
     name: "read",
     label: "read",
@@ -356,7 +360,7 @@ function registerReadTool(pi: ExtensionAPI, service: LspService): void {
 
         return {
           content: [{ type: "text", text: output }],
-          details: undefined,
+          details: { pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath) } },
         };
       }
 
@@ -384,7 +388,10 @@ function registerReadTool(pi: ExtensionAPI, service: LspService): void {
           { type: "text", text: "Image read successfully" },
           { type: "image", data: base64, mimeType },
         ];
-        return { content, details: undefined };
+        return {
+          content,
+          details: { pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath) } },
+        };
       }
 
       if (isBinaryExtension(absolutePath) || isBinaryFileBySample(await readSample(absolutePath))) {
@@ -424,14 +431,31 @@ function registerReadTool(pi: ExtensionAPI, service: LspService): void {
         outputText = `${header}${numbered}\n\n(End of file - total ${page.count} lines)${footer}`;
       }
 
-      content = [{ type: "text", text: outputText }];
-
-      // opencode: LSP warm-up 是后台任务，失败不影响读取
-      void service.touchFile(absolutePath, ctx.cwd).catch(() => {
-        // 后台 warm-up 失败不影响读取
+      // opencode: 与 edit / write 同一条驻留路径：didOpen 后等待该文件的诊断并报告
+      const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
+        signal,
       });
+      content = [
+        {
+          type: "text",
+          text: appendLspDiagnosticText(outputText, diagnostics.text),
+        },
+      ];
 
-      return { content, details };
+      return {
+        content,
+        details: {
+          ...details,
+          pendant: {
+            subtitle: formatSubtitlePath(
+              ctx.cwd,
+              absolutePath,
+              diagnostics.errorCount,
+              diagnostics.warningCount,
+            ),
+          },
+        },
+      };
     },
   });
 }
@@ -449,7 +473,7 @@ const editSchema = Type.Object({
   ),
 });
 
-function registerEditTool(pi: ExtensionAPI, service: LspService): void {
+function registerEditTool(pi: ExtensionAPI, getService: () => LspService): void {
   pi.registerTool({
     name: "edit",
     label: "edit",
@@ -482,7 +506,7 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
         change: { oldText: oldString, newText: newString, replaceAll },
       });
 
-      const [message, details, diagnosticText] = await withFileMutationQueue(
+      const [message, details, diagnostics] = await withFileMutationQueue(
         absolutePath,
         async () => {
           signal?.throwIfAborted();
@@ -509,13 +533,13 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
             await mkdir(dirname(absolutePath), { recursive: true });
             signal?.throwIfAborted();
             await writeFile(absolutePath, newString, "utf8");
-            const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, {
+            const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
               signal,
             });
             return [
               "Edit applied successfully.",
               { diff: "", patch: "", firstChangedLine: 0 },
-              diagnosticText,
+              diagnostics,
             ] as const;
           }
 
@@ -547,21 +571,32 @@ function registerEditTool(pi: ExtensionAPI, service: LspService): void {
           const diffNew = normalizeToLF(applied.contentNew);
           const diffResult = generateDiffString(diffOld, diffNew);
           const patch = generateUnifiedPatch(filePath, diffOld, diffNew);
-          const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, {
+          const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
             signal,
           });
           return [
             "Edit applied successfully.",
             { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
-            diagnosticText,
+            diagnostics,
           ] as const;
         },
       );
 
-      const text = diagnosticText
-        ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
-        : message;
-      return { content: [{ type: "text" as const, text }], details };
+      const text = appendLspDiagnosticText(message, diagnostics.text);
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          ...details,
+          pendant: {
+            subtitle: formatSubtitlePath(
+              ctx.cwd,
+              absolutePath,
+              diagnostics.errorCount,
+              diagnostics.warningCount,
+            ),
+          },
+        },
+      };
     },
   });
 }
@@ -590,7 +625,7 @@ export function resolveBom(
   return { bom: sourceBom || nextBom, text };
 }
 
-function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
+function registerWriteTool(pi: ExtensionAPI, getService: () => LspService): void {
   pi.registerTool({
     name: "write",
     label: "write",
@@ -614,7 +649,7 @@ function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
       });
       const dir = dirname(absolutePath);
 
-      const [message, details, diagnosticText] = await withFileMutationQueue(
+      const [message, details, diagnostics] = await withFileMutationQueue(
         absolutePath,
         async () => {
           signal?.throwIfAborted();
@@ -639,32 +674,54 @@ function registerWriteTool(pi: ExtensionAPI, service: LspService): void {
           await mkdir(dir, { recursive: true });
           signal?.throwIfAborted();
           await writeFile(absolutePath, desiredBom + nextText, "utf8");
-          const diagnosticText = await service.lspDiagnosticsForFile(absolutePath, ctx.cwd, {
+          const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
             signal,
           });
 
-          return ["Wrote file successfully.", undefined, diagnosticText] as const;
+          return ["Wrote file successfully.", {}, diagnostics] as const;
         },
       );
 
-      const text = diagnosticText
-        ? `${message}\n\nLSP errors detected in this file, please fix:\n${diagnosticText}`
-        : message;
-      return { content: [{ type: "text" as const, text }], details };
+      const text = appendLspDiagnosticText(message, diagnostics.text);
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          ...details,
+          pendant: {
+            subtitle: formatSubtitlePath(
+              ctx.cwd,
+              absolutePath,
+              diagnostics.errorCount,
+              diagnostics.warningCount,
+            ),
+          },
+        },
+      };
     },
   });
 }
 
 // ── 入口 ─────────────────────────────────────────────────────────────────────
 
-export function registerFileTools(pi: ExtensionAPI, service: LspService): void {
-  registerReadTool(pi, service);
-  registerEditTool(pi, service);
-  registerWriteTool(pi, service);
+export function registerFileTools(pi: ExtensionAPI, getService: () => LspService): void {
+  registerReadTool(pi, getService);
+  registerEditTool(pi, getService);
+  registerWriteTool(pi, getService);
+  // lsp-rename / inspect 工具由 manager 的 onEnabled 回调注册，不在这里注册。
 }
 
-/** 独立入口：创建 LSP service（闭包共享给三个工具）并注册。 */
-export default function opencodeFileTools(pi: ExtensionAPI): void {
-  const service = registerLsp(pi);
-  registerFileTools(pi, service);
+/** 独立入口：创建 LSP manager（session_start 时按配置启用）并注册文件工具。 */
+export default function opencodeFileTools(pi: ExtensionAPI, options?: LspServiceOptions): void {
+  const manager = createLspManager(
+    pi,
+    {
+      onEnabled: (pi, service) => {
+        registerLspRenameTool(pi, service);
+        registerLspInspectTools(pi, service);
+      },
+    },
+    options,
+  );
+  // 文件工具无条件注册；service 惰性获取，disabled 时为 no-op。
+  registerFileTools(pi, () => manager.mustLazyGetService());
 }

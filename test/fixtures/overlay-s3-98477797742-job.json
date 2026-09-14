@@ -1,0 +1,140 @@
+{
+"id": 98477797742,
+"run_id": 33060502066,
+"workflow_name": "CI",
+"head_branch": "main",
+"run_url": "https://api.github.com/repos/trim21/overlay-s3/actions/runs/33060502066",
+"run_attempt": 1,
+"node_id": "CR_kwDOT_aq4c8AAAAW7bvxbg",
+"head_sha": "efd8de04e0a828b91a84fb48275213b80441b6e7",
+"url": "https://api.github.com/repos/trim21/overlay-s3/actions/jobs/98477797742",
+"html_url": "https://github.com/trim21/overlay-s3/actions/runs/33060502066/job/98477797742",
+"status": "completed",
+"conclusion": "failure",
+"created_at": "2026-08-27T09:52:06Z",
+"started_at": "2026-08-27T09:52:09Z",
+"completed_at": "2026-08-27T09:52:55Z",
+"name": "test",
+"steps": [
+{
+"name": "Set up job",
+"status": "completed",
+"conclusion": "success",
+"number": 1,
+"started_at": "2026-08-27T09:52:09Z",
+"completed_at": "2026-08-27T09:52:11Z"
+},
+{
+"name": "Run actions/checkout@v7",
+"status": "completed",
+"conclusion": "success",
+"number": 2,
+"started_at": "2026-08-27T09:52:11Z",
+"completed_at": "2026-08-27T09:52:14Z"
+},
+{
+"name": "Run actions/setup-go@v7",
+"status": "completed",
+"conclusion": "success",
+"number": 3,
+"started_at": "2026-08-27T09:52:14Z",
+"completed_at": "2026-08-27T09:52:24Z"
+},
+{
+"name": "Start silo S3 backend",
+"status": "completed",
+"conclusion": "success",
+"number": 4,
+"started_at": "2026-08-27T09:52:24Z",
+"completed_at": "2026-08-27T09:52:37Z"
+},
+{
+"name": "Build and vet",
+"status": "completed",
+"conclusion": "success",
+"number": 5,
+"started_at": "2026-08-27T09:52:37Z",
+"completed_at": "2026-08-27T09:52:41Z"
+},
+{
+"name": "Unit tests",
+"status": "completed",
+"conclusion": "success",
+"number": 6,
+"started_at": "2026-08-27T09:52:41Z",
+"completed_at": "2026-08-27T09:52:44Z"
+},
+{
+"name": "Integration tests against real S3",
+"status": "completed",
+"conclusion": "success",
+"number": 7,
+"started_at": "2026-08-27T09:52:44Z",
+"completed_at": "2026-08-27T09:52:50Z"
+},
+{
+"name": "Install mc",
+"status": "completed",
+"conclusion": "success",
+"number": 8,
+"started_at": "2026-08-27T09:52:50Z",
+"completed_at": "2026-08-27T09:52:51Z"
+},
+{
+"name": "Start overlay-s3 gateway",
+"status": "completed",
+"conclusion": "success",
+"number": 9,
+"started_at": "2026-08-27T09:52:51Z",
+"completed_at": "2026-08-27T09:52:52Z"
+},
+{
+"name": "mc end-to-end (ls / cp / cat)",
+"status": "completed",
+"conclusion": "failure",
+"number": 10,
+"started_at": "2026-08-27T09:52:52Z",
+"completed_at": "2026-08-27T09:52:52Z"
+},
+{
+"name": "Print silo logs",
+"status": "completed",
+"conclusion": "success",
+"number": 11,
+"started_at": "2026-08-27T09:52:52Z",
+"completed_at": "2026-08-27T09:52:52Z"
+},
+{
+"name": "Post Run actions/setup-go@v7",
+"status": "completed",
+"conclusion": "skipped",
+"number": 21,
+"started_at": "2026-08-27T09:52:52Z",
+"completed_at": "2026-08-27T09:52:52Z"
+},
+{
+"name": "Post Run actions/checkout@v7",
+"status": "completed",
+"conclusion": "success",
+"number": 22,
+"started_at": "2026-08-27T09:52:52Z",
+"completed_at": "2026-08-27T09:52:53Z"
+},
+{
+"name": "Complete job",
+"status": "completed",
+"conclusion": "success",
+"number": 23,
+"started_at": "2026-08-27T09:52:53Z",
+"completed_at": "2026-08-27T09:52:53Z"
+}
+],
+"check_run_url": "https://api.github.com/repos/trim21/overlay-s3/check-runs/98477797742",
+"labels": [
+"ubuntu-latest"
+],
+"runner_id": 1000273969,
+"runner_name": "GitHub Actions 1000273969",
+"runner_group_id": 0,
+"runner_group_name": "GitHub Actions"
+}

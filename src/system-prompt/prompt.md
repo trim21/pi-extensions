@@ -67,5 +67,4 @@ In code: default to writing no comments. Never write multi-paragraph docstrings 
 {{skills}}
 {{append}}
 
-Current date: {{date}}
 Current working directory: {{cwd}}

@@ -19,6 +19,7 @@ import { basename, isAbsolute, relative, sep } from "node:path";
 import { generateUnifiedPatch } from "@earendil-works/pi-coding-agent";
 
 import { applyEdit, normalizeToLF } from "../opencode/edit-engine.js";
+import { fenceCodeBlock } from "./markdown.js";
 
 const ALWAYS_ALLOW = ["/tmp"];
 const MAX_PREVIEW_LINES = 100;
@@ -41,11 +42,12 @@ function isPathAllowed(absolutePath: string, cwd: string): boolean {
 /** Wrap patch text in a `diff` code block, truncating very large diffs. */
 function wrapDiff(patch: string): string {
   const lines = patch.split("\n");
-  if (lines.length > MAX_PREVIEW_LINES) {
-    const truncated = lines.slice(0, MAX_PREVIEW_LINES).join("\n");
-    return `\`\`\`diff\n${truncated}\n… (preview truncated to ${MAX_PREVIEW_LINES} lines)\n\`\`\``;
-  }
-  return `\`\`\`diff\n${patch}\n\`\`\``;
+  const body =
+    lines.length > MAX_PREVIEW_LINES
+      ? `${lines.slice(0, MAX_PREVIEW_LINES).join("\n")}\n… (preview truncated to ${MAX_PREVIEW_LINES} lines)`
+      : patch;
+  // fenceCodeBlock 选更长的围栏，避免 patch 内容里的 ``` 提前闭合代码块
+  return fenceCodeBlock(body, "diff");
 }
 
 /** The pending file change, described by the caller from already-parsed args. */
@@ -113,8 +115,7 @@ export interface WriteGuardOptions {
   /** The resolved absolute target path (caller has already parsed its args). */
   absolutePath: string;
   /**
-   * 待审批的变更内容；缺省时（如 aft_refactor/aft_import 无 preview diff）
-   * 审批对话框不展示 diff 预览，仅按路径审批。
+   * 待审批的变更内容；缺省时审批对话框不展示 diff 预览，仅按路径审批。
    */
   change?: PendingChange;
 }
@@ -144,7 +145,7 @@ export async function guardWriteAccess(
     throw new Error(`Path "${absolutePath}" is outside workspace. No UI available for approval.`);
   }
 
-  while (true) {
+  for (;;) {
     const diffPreview = opts.change ? await buildDiffPreview(absolutePath, opts.change) : undefined;
     const title =
       `Model requests write access outside workspace:\n\n` +
@@ -156,16 +157,14 @@ export async function guardWriteAccess(
     const choice = await ctx.ui.select(title, ["Approve once", "Block", "Block with reason"]);
     if (choice === undefined) {
       ctx.abort?.();
-      throw new Error("Write outside workspace cancelled by user.");
+      throw new Error(`user deny ${opts.toolName}: cancelled`);
     }
     if (choice === "Approve once") return;
-    if (choice === "Block") throw new Error("Write outside workspace denied by user.");
+    if (choice === "Block") throw new Error(`user deny ${opts.toolName}: blocked`);
     const feedback = await ctx.ui.input("Why was this write denied?");
     if (feedback === undefined) continue;
     throw new Error(
-      feedback
-        ? `Write outside workspace denied: ${feedback}`
-        : "Write outside workspace denied by user.",
+      feedback ? `user deny ${opts.toolName}: ${feedback}` : `user deny ${opts.toolName}: blocked`,
     );
   }
 }

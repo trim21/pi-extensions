@@ -1,12 +1,13 @@
 /**
  * 配置驱动 LSP 服务器测试（server-config.ts）：
- * - serverConfigSchema 解析（含 enabled:false 简写）
- * - mergeServerConfigs 覆盖 / 新增 / 禁用
- * - ConfigAdapter.findRoot：include glob（相对 root/cwd）、rootMarkers 查找
- * - ConfigAdapter.spawn：bin 解析（绝对路径 / 项目工作区 / PATH）、cwd 模板、
+ * - serverConfigSchema 解析（含未知键透传，不因此拒绝整份配置）
+ * - mergeServerRecords 覆盖 / 新增 / 保留
+ * - serverRoot：root 计算（rootMarkers 向上定位 / workingDir 相对 cwd 解析 / 缺省即 cwd）
+ * - matchesInclude：include glob（相对 root/cwd）、`!` 否定排除
+ * - ConfigAdapter.spawn：bin 解析（绝对路径 / 项目工作区 / PATH）、
  *   initialization / settings / languageIds 分离
- * - 集成：配置 servers 启动 mock LSP server、include 过滤、per-server 超时、
- *   settings 通过 didChangeConfiguration / workspace/configuration 传递
+ * - 集成：配置 servers 启动 mock LSP server、include / workingDir 过滤、
+ *   per-server 超时、settings 通过 didChangeConfiguration / workspace/configuration 传递
  */
 import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -17,12 +18,13 @@ import { fileURLToPath } from "node:url";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 
+import { serverRoot } from "../src/lib/lsp/adapter.js";
 import { create } from "../src/lib/lsp/client.js";
 import { createLspService } from "../src/lib/lsp/lsp.js";
 import {
   ConfigAdapter,
-  defaultServers,
-  mergeServerConfigs,
+  matchesInclude,
+  mergeServerRecords,
   serverConfigSchema,
 } from "../src/lib/lsp/server-config.js";
 
@@ -49,10 +51,10 @@ describe("serverConfigSchema", () => {
   it("解析完整配置", () => {
     const config = parse({
       include: ["**/*.go"],
-      rootMarkers: ["go.mod"],
+      workingDir: "sdk/go",
       bin: "gopls",
       args: [],
-      cwd: "{root}",
+      env: { VIRTUAL_ENV: "/venv" },
       languageIdByExtension: { ".go": "go" },
       startupTimeoutMs: 45_000,
       diagnosticsWaitMs: 1500,
@@ -60,131 +62,184 @@ describe("serverConfigSchema", () => {
       settings: {},
     });
     expect(config.include).toEqual(["**/*.go"]);
+    expect(config.env).toEqual({ VIRTUAL_ENV: "/venv" });
     expect(config.initializationOptions).toEqual({});
   });
 
-  it("enabled:false 简写只用于禁用（其余字段可省略）", () => {
-    const config = parse({ enabled: false });
-    expect(config.enabled).toBe(false);
-    expect(config.bin).toBeUndefined();
+  it("历史配置残留的 per-server enabled 不影响解析（未知键透传）", () => {
+    expect(() => parse({ enabled: false, bin: "x" })).not.toThrow();
   });
 
   it("非法字段（bin 为数字）被 typebox 拒绝", () => {
     expect(() => parse({ bin: 42 })).toThrow();
   });
-});
 
-describe("mergeServerConfigs", () => {
-  it("无用户配置时保留默认", () => {
-    expect(Object.keys(mergeServerConfigs(defaultServers, undefined))).toEqual([
-      "typescript",
-      "pyright",
-      "ruff",
-      "clangd",
+  it("kind 接受 language / linter，缺省 undefined（由 ConfigAdapter 补 language）", () => {
+    expect(parse({ bin: "x", kind: "language" }).kind).toBe("language");
+    expect(parse({ bin: "x", kind: "linter" }).kind).toBe("linter");
+    expect(parse({ bin: "x" }).kind).toBeUndefined();
+  });
+
+  it("kind 非法值被 typebox 拒绝", () => {
+    expect(() => parse({ bin: "x", kind: "formatter" })).toThrow();
+    expect(() => parse({ bin: "x", kind: 42 })).toThrow();
+  });
+
+  it("rootMarkers 解析为字符串数组，空串标记与非数组被拒绝", () => {
+    expect(parse({ bin: "x", rootMarkers: ["pyproject.toml", "setup.py"] }).rootMarkers).toEqual([
+      "pyproject.toml",
+      "setup.py",
     ]);
-  });
-
-  it("同 id 覆盖、新 id 追加", () => {
-    const user = { pyright: parse({ bin: "custom-pyright", include: [] }) };
-    const merged = mergeServerConfigs(defaultServers, user);
-    expect(merged.pyright?.bin).toBe("custom-pyright");
-    expect(Object.keys(merged)).toHaveLength(Object.keys(defaultServers).length);
-  });
-
-  it("同 id 整体替换，未配置的字段不保留默认", () => {
-    const merged = mergeServerConfigs(defaultServers, {
-      pyright: parse({ bin: "custom-pyright" }),
-    });
-    expect(merged.pyright).toEqual(parse({ bin: "custom-pyright" }));
-    expect(merged.pyright?.include).toBeUndefined();
-  });
-
-  it("enabled:false 移除对应 id（包括默认服务器）", () => {
-    const merged = mergeServerConfigs(defaultServers, { clangd: parse({ enabled: false }) });
-    expect(Object.keys(merged)).not.toContain("clangd");
-    expect(Object.keys(merged)).toContain("typescript");
+    expect(() => parse({ bin: "x", rootMarkers: [""] })).toThrow();
+    expect(() => parse({ bin: "x", rootMarkers: "pyproject.toml" })).toThrow();
   });
 });
 
-describe("ConfigAdapter.findRoot", () => {
-  it("include 匹配 + rootMarkers 从上级目录找根", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
-    await writeFile(join(dir, "go.mod"), "module x\n");
-    const nested = join(dir, "pkg", "sub");
-    await mkdir(nested, { recursive: true });
-    const file = join(nested, "main.go");
-    await writeFile(file, "package main\n");
+describe("ConfigAdapter.kind", () => {
+  it("缺省为 language，显式配置透传", () => {
+    expect(new ConfigAdapter("a", parse({ bin: "x" })).kind).toBe("language");
+    expect(new ConfigAdapter("b", parse({ bin: "x", kind: "linter" })).kind).toBe("linter");
+  });
+});
 
-    const adapter = new ConfigAdapter(
-      "gopls",
-      parse({
-        include: ["**/*.go"],
-        rootMarkers: ["go.mod"],
-        bin: "gopls",
-      }),
-    );
-    expect(await adapter.findRoot(file, dir)).toBe(dir);
+describe("ConfigAdapter.rootMarkers", () => {
+  it("缺省为空数组，显式配置透传", () => {
+    expect(new ConfigAdapter("a", parse({ bin: "x" })).rootMarkers).toEqual([]);
+    expect(
+      new ConfigAdapter("b", parse({ bin: "x", rootMarkers: ["go.mod"] })).rootMarkers,
+    ).toEqual(["go.mod"]);
+  });
+});
 
-    const py = join(dir, "x.py");
-    await writeFile(py, "x = 1\n");
-    expect(await adapter.findRoot(py, dir)).toBeUndefined();
-    await rm(dir, { recursive: true, force: true });
+describe("mergeServerRecords", () => {
+  it("无任何 record 时返回 undefined", () => {
+    expect(mergeServerRecords()).toBeUndefined();
+    expect(mergeServerRecords(undefined, undefined)).toBeUndefined();
   });
 
-  it("include 支持相对项目根的 pattern", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
-    await writeFile(join(dir, "go.mod"), "module x\n");
-    const src = join(dir, "src");
-    await mkdir(src);
-    const file = join(src, "main.go");
-    await writeFile(file, "package main\n");
-
-    const adapter = new ConfigAdapter(
-      "gopls",
-      parse({
-        include: ["src/**"],
-        rootMarkers: ["go.mod"],
-        bin: "gopls",
-      }),
+  it("同 id 整体覆盖、新 id 追加、未提及的 id 保留", () => {
+    const merged = mergeServerRecords(
+      { a: parse({ bin: "/global/a", args: ["--x"] }), b: parse({ bin: "/global/b" }) },
+      { a: parse({ bin: "/local/a" }), c: parse({ bin: "/local/c" }) },
     );
-    expect(await adapter.findRoot(file, dir)).toBe(dir);
-    expect(await adapter.findRoot(join(dir, "other", "main.go"), dir)).toBeUndefined();
-    await rm(dir, { recursive: true, force: true });
+    expect(merged).toEqual({
+      a: parse({ bin: "/local/a" }),
+      b: parse({ bin: "/global/b" }),
+      c: parse({ bin: "/local/c" }),
+    });
+  });
+});
+
+describe("serverRoot", () => {
+  it("workingDir 未配置时 root 即调用 cwd", () => {
+    expect(serverRoot({}, "/ws/x.py", "/ws")).toBe("/ws");
   });
 
-  it("include 缺省匹配所有文件", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
-    const file = join(dir, "a.txt");
-    await writeFile(file, "hi\n");
-    const adapter = new ConfigAdapter("x", parse({ bin: "x" }));
-    expect(await adapter.findRoot(file, dir)).toBe(dir);
-    await rm(dir, { recursive: true, force: true });
+  it("workingDir 相对路径按 cwd 解析，绝对路径原样", () => {
+    expect(serverRoot({ workingDir: "sdk/python" }, "/ws/x.py", "/ws")).toBe(
+      join("/ws", "sdk/python"),
+    );
+    expect(serverRoot({ workingDir: "/abs/root" }, "/ws/x.py", "/ws")).toBe("/abs/root");
   });
 
-  it("include 多 pattern 支持 `!` 否定排除", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
-    await writeFile(join(dir, "go.mod"), "module x\n");
-    const file = join(dir, "main.go");
-    await writeFile(file, "package main\n");
-    const testFile = join(dir, "main_test.go");
-    await writeFile(testFile, "package main\n");
+  it("rootMarkers：cwd 未命中时取路径上最外层（最靠近 cwd）的标记目录", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await mkdir(join(dir, "packages", "a", "src"), { recursive: true });
+      await writeFile(join(dir, "packages", "a", "pyproject.toml"), "");
+      const file = join(dir, "packages", "a", "src", "x.py");
+      expect(serverRoot({ rootMarkers: ["pyproject.toml"] }, file, dir)).toBe(
+        join(dir, "packages", "a"),
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 
-    const adapter = new ConfigAdapter(
-      "gopls",
-      parse({
-        include: ["**/*.go", "!**/*_test.go"],
-        rootMarkers: ["go.mod"],
-        bin: "gopls",
-      }),
-    );
-    expect(await adapter.findRoot(file, dir)).toBe(dir);
-    expect(await adapter.findRoot(testFile, dir)).toBeUndefined();
-    await rm(dir, { recursive: true, force: true });
+  it("rootMarkers：cwd 命中标记时 root 恒为 cwd（子目录标记不生效）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await mkdir(join(dir, "packages", "a", "src"), { recursive: true });
+      await writeFile(join(dir, "pyproject.toml"), "");
+      await writeFile(join(dir, "packages", "a", "pyproject.toml"), "");
+      const file = join(dir, "packages", "a", "src", "x.py");
+      expect(serverRoot({ rootMarkers: ["pyproject.toml"] }, file, dir)).toBe(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rootMarkers：嵌套项目取最外层命中的标记目录", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await mkdir(join(dir, "proj", "sub", "src"), { recursive: true });
+      await writeFile(join(dir, "proj", "package.json"), "");
+      await writeFile(join(dir, "proj", "sub", "package.json"), "");
+      const file = join(dir, "proj", "sub", "src", "x.ts");
+      expect(serverRoot({ rootMarkers: ["package.json"] }, file, dir)).toBe(join(dir, "proj"));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rootMarkers：目录名标记（.git）同样命中", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await mkdir(join(dir, "repo", ".git"), { recursive: true });
+      const file = join(dir, "repo", "x.py");
+      expect(serverRoot({ rootMarkers: [".git"] }, file, dir)).toBe(join(dir, "repo"));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rootMarkers：全部未命中回退 cwd", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await mkdir(join(dir, "src"), { recursive: true });
+      const file = join(dir, "src", "x.py");
+      expect(serverRoot({ rootMarkers: ["pyproject.toml"] }, file, dir)).toBe(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rootMarkers：cwd 之外的路径回退 cwd（搜索不越界）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-root-"));
+    try {
+      await writeFile(join(dir, "pyproject.toml"), "");
+      expect(serverRoot({ rootMarkers: ["pyproject.toml"] }, join(dir, "x.py"), dir)).toBe(dir);
+      expect(serverRoot({ rootMarkers: ["pyproject.toml"] }, "/elsewhere/x.py", dir)).toBe(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("matchesInclude", () => {
+  it("相对 root 的 pattern，任一候选命中即可", () => {
+    expect(matchesInclude(["**/*.go"], "/ws/src/main.go", "/ws", "/ws")).toBe(true);
+    expect(matchesInclude(["**/*.go"], "/ws/x.py", "/ws", "/ws")).toBe(false);
+  });
+
+  it("支持相对项目根的子路径 pattern", () => {
+    expect(matchesInclude(["src/**"], "/ws/src/main.go", "/ws", "/ws")).toBe(true);
+    expect(matchesInclude(["src/**"], "/ws/other/main.go", "/ws", "/ws")).toBe(false);
+  });
+
+  it("缺省匹配所有文件", () => {
+    expect(matchesInclude([], "/ws/a.txt", "/ws", "/ws")).toBe(true);
+  });
+
+  it("多 pattern 支持 `!` 否定排除", () => {
+    const patterns = ["**/*.go", "!**/*_test.go"];
+    expect(matchesInclude(patterns, "/ws/main.go", "/ws", "/ws")).toBe(true);
+    expect(matchesInclude(patterns, "/ws/main_test.go", "/ws", "/ws")).toBe(false);
   });
 });
 
 describe("ConfigAdapter.spawn", () => {
-  it("bin 绝对路径直接使用，cwd 模板与 settings/languageIds 传递", async () => {
+  it("bin 绝对路径直接使用，settings/languageIds 传递", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
     const sub = join(dir, "nested");
     await mkdir(sub);
@@ -194,7 +249,6 @@ describe("ConfigAdapter.spawn", () => {
       parse({
         bin: process.execPath,
         args: [fixture],
-        cwd: "{root}",
         languageIdByExtension: { ".py": "python" },
         initializationOptions: { pythonPath: "/venv/python" },
         settings: { python: { pythonPath: "/venv/python" } },
@@ -241,14 +295,155 @@ describe("ConfigAdapter.spawn", () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
     const missing = new ConfigAdapter("x", parse({ bin: "definitely-not-a-real-lsp-bin" }));
     expect(await missing.spawn(dir, dir)).toBeUndefined();
-    const noBin = new ConfigAdapter("y", parse({ enabled: false }));
+    const noBin = new ConfigAdapter("y", parse({}));
     expect(await noBin.spawn(dir, dir)).toBeUndefined();
     await rm(dir, { recursive: true, force: true });
   });
+
+  it("env 传给子进程，值支持 {root} / {cwd} 模板与环境变量引用", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const logFile = join(dir, "env.json");
+    vi.stubEnv("PATH_SUFFIX", "/extra");
+    try {
+      const script = [
+        `require("node:fs").writeFileSync(${JSON.stringify(logFile)}`,
+        ` JSON.stringify({VIRTUAL_ENV: process.env.VIRTUAL_ENV`,
+        ` PATH_APPEND: process.env.PATH_APPEND`,
+        ` FROM_UNDEF: process.env.FROM_UNDEF}))`,
+      ].join(",");
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", script],
+          env: {
+            VIRTUAL_ENV: "{root}/.venv",
+            PATH_APPEND: "${PATH_SUFFIX}",
+            FROM_UNDEF: "${MOCK_TEST_UNDEF_VAR:-fallback}",
+          },
+        }),
+      );
+      const handle = await adapter.spawn(dir, dir);
+      await new Promise((resolve) => handle!.process.once("exit", resolve));
+      const env = JSON.parse(await readFile(logFile, "utf8"));
+      expect(env.VIRTUAL_ENV).toBe(join(dir, ".venv"));
+      expect(env.PATH_APPEND).toBe("/extra");
+      expect(env.FROM_UNDEF).toBe("fallback");
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("initializationOptions 字符串值做 ${VAR} / ${VAR:-default} 深插值", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    vi.stubEnv("MOCK_TEST_PY", "/stubbed/venv");
+    try {
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          initializationOptions: {
+            pythonPath: "${MOCK_TEST_PY}/bin/python",
+            fallback: "${MOCK_TEST_UNDEF_VAR:-/default/venv}",
+            unset: "${MOCK_TEST_UNDEF_VAR}",
+            nested: { list: ["${MOCK_TEST_PY}"] },
+            count: 42,
+          },
+        }),
+      );
+      const handle = await adapter.spawn(dir, dir);
+      expect(handle?.initialization).toEqual({
+        pythonPath: "/stubbed/venv/bin/python",
+        fallback: "/default/venv",
+        unset: "",
+        nested: { list: ["/stubbed/venv"] },
+        count: 42,
+      });
+      handle?.process.kill();
+      await new Promise((resolve) => handle!.process.once("exit", resolve));
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("initializationOptions 插值可引用配置 env 里的变量", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const adapter = new ConfigAdapter(
+      "mock",
+      parse({
+        bin: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 10000)"],
+        env: { MOCK_TEST_CONFIG_ENV: "/config/venv" },
+        initializationOptions: { pythonPath: "${MOCK_TEST_CONFIG_ENV}/bin/python" },
+      }),
+    );
+    const handle = await adapter.spawn(dir, dir);
+    expect(handle?.initialization).toEqual({ pythonPath: "/config/venv/bin/python" });
+    handle?.process.kill();
+    await new Promise((resolve) => handle!.process.once("exit", resolve));
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("env {sh} 执行命令取 stdout（trim），命令在 spawn cwd 下运行，可被 initializationOptions 引用", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const adapter = new ConfigAdapter(
+      "mock",
+      parse({
+        bin: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 10000)"],
+        env: {
+          TOKEN: {
+            sh: [
+              process.execPath,
+              "-e",
+              String.raw`require("node:fs").writeFileSync("cwd.txt", process.cwd());console.log(" secret\n")`,
+            ],
+          },
+        },
+        initializationOptions: { token: "${TOKEN}" },
+      }),
+    );
+    const handle = await adapter.spawn(dir, dir);
+    expect(await readFile(join(dir, "cwd.txt"), "utf8")).toBe(dir);
+    expect(handle?.initialization).toEqual({ token: "secret" });
+    handle?.process.kill();
+    await new Promise((resolve) => handle!.process.once("exit", resolve));
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("env {sh} 命令失败（非零退出 / 空输出）时 spawn 抛错", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    try {
+      const failed = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          env: { TOKEN: { sh: [process.execPath, "-e", "console.error('boom');process.exit(3)"] } },
+        }),
+      );
+      await expect(failed.spawn(dir, dir)).rejects.toThrow(/exit code 3: boom/);
+
+      const empty = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          env: { TOKEN: { sh: [process.execPath, "-e", "process.exit(0)"] } },
+        }),
+      );
+      await expect(empty.spawn(dir, dir)).rejects.toThrow(/produced empty output/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
-// 禁用内置默认服务器，隔离出只跑配置里 mock 服务器的场景（避免本机安装的
-// pyright/ruff 等真实服务器干扰断言与拖慢测试）。
+// 没有内置默认服务器：只写入本次 mock servers，并用空的全局配置路径
+// 隔离本机 ~/.pi/agent/lsp.json。
 async function withConfig(
   dir: string,
   servers: Record<string, unknown>,
@@ -259,7 +454,6 @@ async function withConfig(
     JSON.stringify({
       version: 1,
       servers,
-      disabled: Object.keys(defaultServers),
     }),
   );
   return createLspService(undefined, join(dir, "no-global.json"));
@@ -273,16 +467,16 @@ describe("config servers integration", () => {
     const service = await withConfig(dir, {
       mock: {
         include: ["**/*.py"],
-        rootMarkers: [],
         bin: process.execPath,
         args: [fixture],
-        cwd: "{root}",
         languageIdByExtension: { ".py": "python" },
       },
     });
     try {
       const report = await service.lspDiagnosticsForFile(file, dir);
-      expect(report).toContain("mock error message");
+      expect(report.text).toContain("mock error message");
+      expect(report.errorCount).toBe(1);
+      expect(report.warningCount).toBe(0);
     } finally {
       await service.shutdownAll();
       await rm(dir, { recursive: true, force: true });
@@ -298,10 +492,8 @@ describe("config servers integration", () => {
     const service = await withConfig(dir, {
       mock: {
         include: ["**/*.go"],
-        rootMarkers: [],
         bin: process.execPath,
         args: [fixture],
-        cwd: "{root}",
         languageIdByExtension: { ".go": "go" },
       },
     });
@@ -317,6 +509,71 @@ describe("config servers integration", () => {
     }
   });
 
+  it("workingDir 限定 root：目录内文件启动服务器，目录外不处理", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const sub = join(dir, "sdk", "python");
+    await mkdir(sub, { recursive: true });
+    const inner = join(sub, "a.py");
+    await writeFile(inner, "x = 1\n");
+    const outer = join(dir, "b.py");
+    await writeFile(outer, "x = 1\n");
+    const service = await withConfig(dir, {
+      mock: {
+        include: ["**/*.py"],
+        workingDir: "sdk/python",
+        bin: process.execPath,
+        args: [fixture],
+        languageIdByExtension: { ".py": "python" },
+      },
+    });
+    try {
+      await service.touchFile(inner, dir, "document");
+      await service.touchFile(outer, dir, "document");
+      const all = await service.diagnostics();
+      expect(all).toHaveProperty(inner);
+      expect(all).not.toHaveProperty(outer);
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rootMarkers：子项目各自定位 root，同一服务器产生多个实例", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const a = join(dir, "packages", "a");
+    const b = join(dir, "packages", "b");
+    await mkdir(a, { recursive: true });
+    await mkdir(b, { recursive: true });
+    await writeFile(join(a, "pyproject.toml"), "");
+    await writeFile(join(b, "pyproject.toml"), "");
+    const fileA = join(a, "x.py");
+    const fileB = join(b, "y.py");
+    await writeFile(fileA, "x = 1\n");
+    await writeFile(fileB, "y = 1\n");
+    const adapter = new ConfigAdapter(
+      "mock",
+      parse({
+        include: ["**/*.py"],
+        rootMarkers: ["pyproject.toml"],
+        bin: process.execPath,
+        args: [fixture],
+        languageIdByExtension: { ".py": "python" },
+      }),
+    );
+    const spawn = vi.spyOn(adapter, "spawn");
+    const service = createLspService([adapter], join(dir, "no-global.json"));
+    try {
+      const reportA = await service.lspDiagnosticsForFile(fileA, dir);
+      const reportB = await service.lspDiagnosticsForFile(fileB, dir);
+      expect(reportA.text).toContain("mock error message");
+      expect(reportB.text).toContain("mock error message");
+      expect(spawn.mock.calls.map(([root]) => root).toSorted()).toEqual([a, b].toSorted());
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("startupTimeoutMs 覆盖默认 initialize 超时（不应答时快速失败）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
     const file = join(dir, "x.py");
@@ -324,10 +581,8 @@ describe("config servers integration", () => {
     const service = await withConfig(dir, {
       mock: {
         include: ["**/*.py"],
-        rootMarkers: [],
         bin: process.execPath,
         args: ["-e", "setTimeout(() => process.exit(0), 10000)"],
-        cwd: "{root}",
         languageIdByExtension: { ".py": "python" },
         startupTimeoutMs: 200,
       },

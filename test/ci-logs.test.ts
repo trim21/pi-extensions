@@ -1,34 +1,31 @@
 /**
- * Tests for the `read-github-ci-logs` rendering core — the pure functions
- * `renderJobLogs` / `renderStepLog` / `cleanStepOutput` used by the tool's
- * `execute()`.
+ * Tests for the `read-github-ci-logs` core — `jobLogIndex` / `stepLineSpans`,
+ * the pure functions behind the tool's `execute()`.
  *
- * Fixtures are a real workflow run (trim21/php-serialize #31026014828, PR #303),
- * so the snapshots lock the exact output shape: without `step` the tool returns
- * a JSON array of jobs `[{ name, steps: [{ name, output? }] }]` where only
- * failed steps carry an `output`; with `step` (and `job`) it returns that
- * step's complete log as plain text.
+ * Fixtures are a real workflow run (trim21/php-serialize #31026014828, PR #303):
  * `php-serialize-92374541920-raw.log` is the failing `lint` job and
- * `php-serialize-92374541741-raw.log` the failing `test` job.
+ * `php-serialize-92374541741-raw.log` the failing `test` job. The tool hands the
+ * model each step's line range in the raw log file, so the tests focus on those
+ * ranges resolving to the right blocks, plus the cache path derived from the
+ * job's own `run_url` / `run_id`.
  *
  * Run: npx vitest run test/ci-logs.test.ts
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 import {
-  type CiLogsJob,
-  cleanStepOutput,
   extractStepFromLog,
-  renderJobLogs,
-  renderStepLog,
-  stripAnsi,
-  writeLogFile,
+  jobLogIndex,
+  jobLogPath,
+  repoFromRunUrl,
+  stepLineSpans,
 } from "../src/gh-readonly.js";
+import { type RunJob } from "../src/lib/github.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, "fixtures");
@@ -37,449 +34,422 @@ function loadFixture(name: string): string {
   return readFileSync(join(fixturesDir, name), "utf8");
 }
 
-const jobs = (
-  JSON.parse(loadFixture("php-serialize-31026014828-jobs.json")) as { jobs: CiLogsJob[] }
-).jobs;
+const jobs = (JSON.parse(loadFixture("php-serialize-31026014828-jobs.json")) as { jobs: RunJob[] })
+  .jobs;
 const lintRawLog = loadFixture("php-serialize-92374541920-raw.log");
 const testRawLog = loadFixture("php-serialize-92374541741-raw.log");
 
 const lintJob = jobs.find((j) => j.id === 92374541920)!;
 const testJob = jobs.find((j) => j.id === 92374541741)!;
 
-function fetchJobLog(jobId: number): Promise<string> {
-  switch (jobId) {
-    case 92374541920: {
-      return Promise.resolve(lintRawLog);
-    }
-    case 92374541741: {
-      return Promise.resolve(testRawLog);
-    }
-    default: {
-      return Promise.reject(new Error(`no fixture for job ${jobId}`));
-    }
-  }
+function loadJob(name: string): RunJob {
+  return JSON.parse(loadFixture(name)) as RunJob;
 }
 
-describe("cleanStepOutput", () => {
-  it("strips timestamps, ANSI escapes and group markers", () => {
-    const raw = [
-      "\uFEFF2026-08-05T16:36:08.1842645Z ##[group]Run npx prettier --check ./",
-      "2026-08-05T16:36:08.1843040Z \u001B[36;1mnpx prettier --check ./\u001B[0m",
-      "2026-08-05T16:36:08.1868383Z shell: /usr/bin/bash -e {0}",
-      "2026-08-05T16:36:08.1869541Z ##[endgroup]",
-      "2026-08-05T16:36:09.2942526Z Checking formatting...",
-      "2026-08-05T16:36:09.8046392Z [\u001B[33mwarn\u001B[39m] pnpm-lock.yaml",
-      "2026-08-05T16:36:10.0260911Z ##[error]Process completed with exit code 1.",
-    ].join("\n");
-
-    expect(cleanStepOutput(raw)).toBe(
-      [
-        "npx prettier --check ./",
-        "shell: /usr/bin/bash -e {0}",
-        "Checking formatting...",
-        "[warn] pnpm-lock.yaml",
-        "##[error]Process completed with exit code 1.",
-      ].join("\n"),
-    );
+/**
+ * Step number → the `##[group]` header its span starts at, `<preamble>` for the
+ * runner-setup block before the first header, and `null` when the step has no
+ * block at all. This is what the tool promises the model: one block per step
+ * that actually produced log output.
+ */
+function stepBlocks(log: string, job: RunJob): [number, string | null][] {
+  const spans = stepLineSpans(log, job.steps);
+  const lines = log.split("\n");
+  return job.steps.map((s) => {
+    const span = spans.get(s.number);
+    if (span === undefined) return [s.number, null];
+    const line = (lines[span.start] ?? "").replace(/^\uFEFF?\S+Z /, "").replace(/\r$/, "");
+    return [s.number, line.startsWith("##[group]") ? line.slice("##[group]".length) : "<preamble>"];
   });
-});
+}
 
-describe("renderJobLogs", () => {
-  it("returns a JSON array of jobs; failed steps carry output", async () => {
-    const result = await renderJobLogs({ runId: "31026014828" }, jobs, fetchJobLog);
-    expect(result.content).toHaveLength(1);
-    expect(result.content[0].type).toBe("text");
-    // must be parseable JSON with the expected shape
-    const parsed = JSON.parse(result.content[0].text) as {
-      name: string;
-      steps: { name: string; output?: string }[];
-    }[];
-    expect(parsed.map((j) => j.name)).toEqual(["test", "build", "lint"]);
-    for (const job of parsed) {
+/** The text a model gets by reading a step's line range out of the raw file. */
+function readStepRange(log: string, job: RunJob, stepNumber: number): string | null {
+  const step = jobLogIndex(job, log).steps.find((s) => s.number === stepNumber);
+  if (step?.start_line === undefined || step.end_line === undefined) return null;
+  return log
+    .split("\n")
+    .slice(step.start_line - 1, step.end_line)
+    .join("\n")
+    .trimEnd();
+}
+
+describe("jobLogIndex", () => {
+  it("indexes a job's steps against its raw log file", () => {
+    const index = jobLogIndex(lintJob, lintRawLog);
+    expect(index).toMatchObject({
+      name: "lint",
+      id: 92374541920,
+      status: "completed",
+      conclusion: "failure",
+      log_file: jobLogPath("trim21/php-serialize", "31026014828", 92374541920),
+    });
+    expect(index.steps.map((s) => s.number)).toEqual(lintJob.steps.map((s) => s.number));
+
+    // every emitted range is inside the file and ordered
+    const lines = lintRawLog.split("\n").length;
+    for (const step of index.steps) {
+      if (step.start_line === undefined) continue;
+      expect(step.start_line).toBeGreaterThan(0);
+      expect(step.end_line!).toBeGreaterThanOrEqual(step.start_line);
+      expect(step.end_line!).toBeLessThanOrEqual(lines);
+    }
+  });
+
+  it("gives every step's range the same text as the extraction helper", () => {
+    for (const [job, log] of [
+      [lintJob, lintRawLog],
+      [testJob, testRawLog],
+    ] as const) {
       for (const step of job.steps) {
-        expect(typeof step.name).toBe("string");
-        if (step.output !== undefined) expect(typeof step.output).toBe("string");
+        const expected = extractStepFromLog(log, step.number, job.steps);
+        if (expected === null) {
+          // steps that never ran carry no range at all
+          expect(readStepRange(log, job, step.number)).toBeNull();
+          continue;
+        }
+        expect(readStepRange(log, job, step.number)).toBe(expected);
       }
     }
-    expect(result).toMatchSnapshot();
   });
 
-  it("filters to a single job with job=lint", async () => {
-    const result = await renderJobLogs({ runId: "31026014828", job: "lint" }, jobs, fetchJobLog);
-    const parsed = JSON.parse(result.content[0].text) as { name: string }[];
-    expect(parsed.map((j) => j.name)).toEqual(["lint"]);
-    expect(result).toMatchSnapshot();
+  it("leaves skipped steps without a range", () => {
+    // lint step 7 ("Run npx tsc --pretty") was skipped after step 6 failed
+    const index = jobLogIndex(lintJob, lintRawLog);
+    const skipped = index.steps.find((s) => s.number === 7)!;
+    expect(skipped.conclusion).toBe("skipped");
+    expect(skipped.start_line).toBeUndefined();
+    expect(skipped.end_line).toBeUndefined();
   });
 
-  it("reports an unknown job name", async () => {
-    const result = await renderJobLogs(
-      { runId: "31026014828", job: "no-such-job" },
-      jobs,
-      fetchJobLog,
-    );
-    expect(result).toMatchSnapshot();
-  });
-
-  it("reports an empty job list", async () => {
-    const result = await renderJobLogs({ runId: "31026014828" }, [], fetchJobLog);
-    expect(result).toMatchSnapshot();
+  it("returns a JSON-serializable index", () => {
+    const index = jobLogIndex(lintJob, lintRawLog);
+    expect(structuredClone(index)).toEqual(index);
   });
 });
 
-describe("renderStepLog", () => {
-  it("requires job when fetching a step's logs", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", step: "Run npx prettier --check ./" },
-      jobs,
-      fetchJobLog,
+describe("cache path", () => {
+  it("derives the cache path from the job's repo/run ids", () => {
+    expect(jobLogPath("trim21/php-serialize", "31026014828", 92374541920)).toBe(
+      join(
+        homedir(),
+        ".cache",
+        "pi",
+        "github",
+        "ci-logs",
+        "trim21",
+        "php-serialize",
+        "31026014828",
+        "92374541920.log",
+      ),
     );
-    expect(result).toMatchSnapshot();
+    expect(jobLogIndex(lintJob, lintRawLog).log_file).toBe(
+      jobLogPath("trim21/php-serialize", "31026014828", 92374541920),
+    );
   });
 
-  it("returns a failing step's complete plain-text log (lint step 6)", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", job: "lint", step: "Run npx prettier --check ./" },
-      jobs,
-      fetchJobLog,
-    );
-    expect(result).toMatchSnapshot();
+  it("reads owner/repo out of run_url, keeping GitHub's canonical casing", () => {
+    expect(
+      repoFromRunUrl(
+        "https://api.github.com/repos/DefinitelyTyped/DefinitelyTyped/actions/runs/34756539354",
+      ),
+    ).toBe("DefinitelyTyped/DefinitelyTyped");
+    // GHES serves the API under an instance-specific prefix before /repos
+    expect(
+      repoFromRunUrl("https://ghe.example.com/api/v3/repos/acme/widgets/actions/runs/42"),
+    ).toBe("acme/widgets");
   });
 
-  it("returns a passing step's complete plain-text log (lint step 5)", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", job: "lint", step: "Run pnpm install --frozen-lockfile" },
-      jobs,
-      fetchJobLog,
-    );
-    expect(result).toMatchSnapshot();
+  it("rejects a run_url without a /repos/<owner>/<repo> pair", () => {
+    expect(() => repoFromRunUrl("https://api.github.com/user")).toThrow(/unexpected run_url/);
   });
 
-  it("matches job by id", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", job: "92374541920", step: "Run npx prettier --check ./" },
-      jobs,
-      fetchJobLog,
-    );
-    expect(result).toMatchSnapshot();
-  });
-
-  it("reports an unknown step name", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", job: "lint", step: "no-such-step" },
-      jobs,
-      fetchJobLog,
-    );
-    expect(result).toMatchSnapshot();
-  });
-
-  it("reports an unknown job name", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", job: "no-such-job", step: "Run npx prettier --check ./" },
-      jobs,
-      fetchJobLog,
-    );
-    expect(result).toMatchSnapshot();
+  it("rejects a repo without exactly one slash", () => {
+    expect(() => jobLogPath("trim21", "1", 2)).toThrow(/invalid repository/);
   });
 });
 
-describe("renderStepLog (test job 92374541741)", () => {
-  it("returns the failing test step's log (test step 6)", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", job: "92374541741", step: "Run pnpm test --coverage" },
-      jobs,
-      fetchJobLog,
-    );
-    expect(result).toMatchSnapshot();
+describe("step blocks resolved from the raw log", () => {
+  it("step 1 (Set up job) starts at line 1", () => {
+    const index = jobLogIndex(lintJob, lintRawLog);
+    expect(index.steps[0]).toMatchObject({ number: 1, name: "Set up job", start_line: 1 });
   });
 
-  it("extracts explicitly named action step (test step 4: Setup node)", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", job: "test", step: "Setup node" },
-      jobs,
-      fetchJobLog,
-    );
-    expect(result).toMatchSnapshot();
-  });
-
-  it("honors offset within a step log", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", job: "test", step: "Run pnpm test --coverage", offset: 5 },
-      jobs,
-      fetchJobLog,
-    );
-    expect(result).toMatchSnapshot();
-  });
-
-  it("reports offset beyond the step log length", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", job: "test", step: "Run pnpm test --coverage", offset: 9999 },
-      jobs,
-      fetchJobLog,
-    );
-    expect(result).toMatchSnapshot();
-  });
-});
-
-describe("step log extraction integrity (lint job)", () => {
-  it("failing step 6 contains the prettier error output", () => {
-    const log = extractStepFromLog(lintRawLog, 6, lintJob.steps);
-    expect(log).not.toBeNull();
-    expect(log).toContain("##[error]Process completed with exit code 1.");
-    expect(log).toContain("pnpm-lock.yaml");
+  it("failing step 6 contains the prettier failure", () => {
+    const text = readStepRange(lintRawLog, lintJob, 6)!;
+    expect(text).toContain("##[group]Run npx prettier --check ./");
+    expect(text).toContain("##[error]Process completed with exit code 1.");
+    expect(text).toContain("pnpm-lock.yaml");
   });
 
   it("step 5 (pnpm install) contains its own output only", () => {
-    const log = extractStepFromLog(lintRawLog, 5, lintJob.steps);
-    expect(log).not.toBeNull();
-    expect(log).toContain("##[group]Run pnpm install --frozen-lockfile");
-    expect(log).not.toContain("prettier --check");
+    const text = readStepRange(lintRawLog, lintJob, 5)!;
+    expect(text).toContain("##[group]Run pnpm install --frozen-lockfile");
+    expect(text).not.toContain("prettier --check");
   });
 
-  it("skipped steps (not present in the log) return null", () => {
-    // lint step 7 was skipped because step 6 failed — no "Run npx tsc" group in the log
-    expect(extractStepFromLog(lintRawLog, 7, lintJob.steps)).toBeNull();
-  });
-
-  it("explicitly named action steps (Setup node) extract from the matching Run group", () => {
+  it("explicitly named action step (Setup node) resolves to the matching Run group", () => {
     // API step 4 is named "Setup node" but the log group is "Run actions/setup-node@v7"
-    const log = extractStepFromLog(lintRawLog, 4, lintJob.steps);
-    expect(log).not.toBeNull();
-    expect(log).toContain("##[group]Run actions/setup-node@v7");
+    const text = readStepRange(lintRawLog, lintJob, 4)!;
+    expect(text).toContain("##[group]Run actions/setup-node@v7");
+  });
+
+  it("test job: failing step 6 contains the test failure", () => {
+    const text = readStepRange(testRawLog, testJob, 6)!;
+    expect(text).toContain("##[group]Run pnpm test --coverage");
+    expect(text).toContain("##[error]Process completed with exit code 1.");
+  });
+
+  it("test job: skipped step 7 (Upload Coverage to Codecov) has no range", () => {
+    expect(readStepRange(testRawLog, testJob, 7)).toBeNull();
   });
 });
 
-describe("test job extraction", () => {
-  it("failing step 6 (pnpm test --coverage) contains the failure", () => {
-    const log = extractStepFromLog(testRawLog, 6, testJob.steps);
-    expect(log).not.toBeNull();
-    expect(log).toContain("##[group]Run pnpm test --coverage");
-    expect(log).toContain("##[error]Process completed with exit code 1.");
-  });
-
-  it("explicitly named step 4 (Setup node) extracts its Run group", () => {
-    const log = extractStepFromLog(testRawLog, 4, testJob.steps);
-    expect(log).not.toBeNull();
-    expect(log).toContain("##[group]Run actions/setup-node@v7");
-    expect(log).not.toContain("pnpm install");
-  });
-
-  it("skipped step 7 (Upload Coverage to Codecov) returns null", () => {
-    expect(extractStepFromLog(testRawLog, 7, testJob.steps)).toBeNull();
-  });
-});
-
-describe("composite action step extraction (winflexbison cibuildwheel)", () => {
+describe("composite action step ranges (winflexbison cibuildwheel)", () => {
   // Regression: composite actions emit their internal steps as extra depth-1
-  // "Run " groups AFTER the composite's own ##[endgroup]. The extractor must
-  // absorb them into the composite step's span instead of treating them as
-  // step boundaries, otherwise the composite step's log is truncated.
+  // "Run " groups AFTER the composite's own ##[endgroup]. The range must absorb
+  // them instead of ending at the first internal group.
   const rawLog = loadFixture("winflexbison-cibuildwheel-raw.log");
-  const steps = [
-    { number: 1, name: "Set up job" },
-    { number: 2, name: "Run actions/download-artifact@v8" },
-    { number: 3, name: "Run mkdir -p package" },
-    { number: 4, name: "Run astral-sh/setup-uv@v9.0.0" },
-    { number: 5, name: "Run pypa/cibuildwheel@v4.2.0" },
-    { number: 13, name: "Post Run pypa/cibuildwheel@v4.2.0" },
-    { number: 15, name: "Complete job" },
-  ];
+  const job: RunJob = {
+    id: 1,
+    run_id: 1,
+    run_url: "https://api.github.com/repos/winflexbison/winflexbison/actions/runs/1",
+    name: "cibuildwheel",
+    status: "completed",
+    conclusion: "success",
+    html_url: null,
+    steps: [
+      { number: 1, name: "Set up job", status: "completed", conclusion: "success" },
+      {
+        number: 2,
+        name: "Run actions/download-artifact@v8",
+        status: "completed",
+        conclusion: "success",
+      },
+      { number: 3, name: "Run mkdir -p package", status: "completed", conclusion: "success" },
+      {
+        number: 4,
+        name: "Run astral-sh/setup-uv@v9.0.0",
+        status: "completed",
+        conclusion: "success",
+      },
+      {
+        number: 5,
+        name: "Run pypa/cibuildwheel@v4.2.0",
+        status: "completed",
+        conclusion: "success",
+      },
+      {
+        number: 13,
+        name: "Post Run pypa/cibuildwheel@v4.2.0",
+        status: "completed",
+        conclusion: "success",
+      },
+      { number: 15, name: "Complete job", status: "completed", conclusion: "success" },
+    ],
+  };
 
   it("step 5 (cibuildwheel) includes its internal composite groups", () => {
-    const log = extractStepFromLog(rawLog, 5, steps);
-    expect(log).not.toBeNull();
-    expect(log).toContain("##[group]Run pypa/cibuildwheel@v4.2.0");
-    expect(log).toContain("##[group]Run actions/setup-python@");
-    expect(log).toContain("Building wheel...");
+    const text = readStepRange(rawLog, job, 5)!;
+    expect(text).toContain("##[group]Run pypa/cibuildwheel@v4.2.0");
+    expect(text).toContain("##[group]Run actions/setup-python@");
+    expect(text).toContain("Building wheel...");
   });
 
   it("preceding step 4 ends where step 5 begins", () => {
-    const log = extractStepFromLog(rawLog, 4, steps);
-    expect(log).not.toBeNull();
-    expect(log).toContain("##[group]Run astral-sh/setup-uv@v9.0.0");
-    expect(log).not.toContain("cibuildwheel");
+    const text = readStepRange(rawLog, job, 4)!;
+    expect(text).toContain("##[group]Run astral-sh/setup-uv@v9.0.0");
+    expect(text).not.toContain("cibuildwheel");
+
+    const step4 = stepLineSpans(rawLog, job.steps).get(4)!;
+    const step5 = stepLineSpans(rawLog, job.steps).get(5)!;
+    expect(step4.end).toBeLessThanOrEqual(step5.start);
   });
 });
 
-describe("stripAnsi", () => {
-  it("removes the BOM and ANSI escapes but keeps timestamps and group markers", () => {
-    const raw = [
-      "\uFEFF2026-08-05T16:36:08.1842645Z ##[group]Run npx prettier --check ./",
-      "2026-08-05T16:36:08.1843040Z \u001B[36;1mnpx prettier --check ./\u001B[0m",
-      "2026-08-05T16:36:09.2942526Z Checking formatting...",
-    ].join("\n");
+// ── real logs from public repositories ──────────────────────────────────────
+//
+// These are trimmed excerpts of real job logs (public repos), keeping every
+// `##[group]` / `##[endgroup]` line plus a few output lines per block, so line
+// numbers differ from the originals while the structure and timestamps do not.
+// Each one covers a shape the older fixtures missed.
 
-    expect(stripAnsi(raw)).toBe(
+describe("axonhub — every step has a custom name (no name matching possible)", () => {
+  // looplj/axonhub run 32805492887 job 97674749621. Every step is declared with
+  // `name:`, so no API step name equals its `##[group]Run <action-or-command>`
+  // header — the previous name-based matcher gave all 11 steps the same span
+  // from the first header to EOF.
+  const job = loadJob("axonhub-97674749621-job.json");
+  const log = loadFixture("axonhub-97674749621-raw.log");
+
+  it("gives each executed step its own header block", () => {
+    expect(stepBlocks(log, job)).toEqual([
+      [1, "<preamble>"],
+      [2, "Run actions/checkout@v7"],
+      [3, "Run printf '%s\\n' \"${BASE_VERSION}-unstable.${BUILD_DATE}\" > internal/build/VERSION"],
+      [4, "Run docker/setup-buildx-action@v4"],
+      [5, "Run docker/login-action@v4"],
+      [6, "Run docker/metadata-action@v6"],
+      [7, "Run docker/build-push-action@v7"],
+      // post/complete steps never emit a header of their own in this log
+      [11, null],
+      [12, null],
+      [13, null],
+      [14, null],
+      [15, null],
+    ]);
+  });
+
+  it("absorbs the action's own groups into the enclosing step", () => {
+    const checkout = readStepRange(log, job, 2)!;
+    expect(checkout).toContain("##[group]Getting Git version info");
+    expect(checkout).toContain("##[group]Removing auth");
+    expect(checkout).not.toContain("Docker info");
+
+    const buildx = readStepRange(log, job, 4)!;
+    expect(buildx).toContain("##[group]Docker info");
+    expect(buildx).not.toContain("##[group]Run docker/login-action@v4");
+  });
+});
+
+describe("libtorrent — CRLF log, no name matches, last group never closed", () => {
+  // arvidn/libtorrent run 29188748619 job 86639594509 (Windows runner: CRLF).
+  const job = loadJob("libtorrent-86639594509-job.json");
+  const log = loadFixture("libtorrent-86639594509-raw.log");
+
+  it("is a CRLF log", () => {
+    expect(log).toContain("\r\n");
+  });
+
+  it("gives each executed step its own header block", () => {
+    expect(stepBlocks(log, job)).toEqual([
+      [1, "<preamble>"],
+      [2, "Run actions/checkout@v6"],
       [
-        "2026-08-05T16:36:08.1842645Z ##[group]Run npx prettier --check ./",
-        "2026-08-05T16:36:08.1843040Z npx prettier --check ./",
-        "2026-08-05T16:36:09.2942526Z Checking formatting...",
-      ].join("\n"),
-    );
+        3,
+        "Run git clone --depth=1 --recurse-submodules -j10 --branch=boost-1.91.0 https://github.com/boostorg/boost.git",
+      ],
+      [4, "Run cd boost"],
+      [5, String.raw`Run set BOOST_ROOT=%CD%\boost`],
+      // skipped, post and complete steps have no block
+      [6, null],
+      [12, null],
+      [13, null],
+    ]);
+  });
+
+  it("keeps the trailing unclosed group inside the last step", () => {
+    expect(readStepRange(log, job, 5)).toContain("##[group]test_pe_crypto.cpp.aes_ctr");
   });
 });
 
-describe("renderStepLog full", () => {
-  // 600 output lines — beyond the default 500-line cap, so the difference
-  // between `full` and the default truncation is observable.
-  const bigStepLog = [
-    "2026-08-05T16:36:08.1842645Z ##[group]Run npx prettier --check ./",
-    ...Array.from({ length: 600 }, (_, i) => `2026-08-05T16:36:08.1842645Z output line ${i}`),
-    "2026-08-05T16:36:08.1842645Z ##[endgroup]",
-  ].join("\n");
-  const fetchBig = () => Promise.resolve(bigStepLog);
+describe("neptune — CRLF log with composite internals that look like headers", () => {
+  // trim21/neptune run 29664454918 job 88132442135. Step 3 is a composite
+  // action whose internal steps are emitted as depth-1 `Run ` groups; a later
+  // step must not claim them.
+  const job = loadJob("neptune-88132442135-job.json");
+  const log = loadFixture("neptune-88132442135-raw.log");
 
-  it("full=true returns the complete output past the default cap", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", job: "lint", step: "Run npx prettier --check ./", full: true },
-      jobs,
-      fetchBig,
-    );
-    const text = result.content[0].text;
-    expect(text.split("\n")).toHaveLength(600);
-    expect(text).toContain("output line 599");
-    expect(result.details).toMatchObject({
-      truncated: false,
-      full: true,
-      totalLines: 600,
-      shownLines: 600,
-    });
+  it("is a CRLF log", () => {
+    expect(log).toContain("\r\n");
   });
 
-  it("without full the same log is truncated to the default cap", async () => {
-    const result = await renderStepLog(
-      { runId: "31026014828", job: "lint", step: "Run npx prettier --check ./" },
-      jobs,
-      fetchBig,
-    );
-    const text = result.content[0].text;
-    expect(text.split("\n")).toHaveLength(500);
-    expect(result.details.truncated).toBe(true);
-    expect(text).not.toContain("output line 599");
-  });
-});
-
-describe("renderJobLogs full", () => {
-  it("full=true expands every step's output, including successful ones", async () => {
-    const result = await renderJobLogs(
-      { runId: "31026014828", job: "lint", full: true },
-      jobs,
-      fetchJobLog,
-    );
-    const parsed = JSON.parse(result.content[0].text) as {
-      name: string;
-      steps: { name: string; output?: string }[];
-    }[];
-    expect(parsed).toHaveLength(1);
-    const steps = new Map(parsed[0].steps.map((s) => [s.name, s]));
-
-    // successful steps carry output under full
-    expect(steps.get("Run pnpm install --frozen-lockfile")?.output).toBeDefined();
-    expect(steps.get("Run actions/checkout@v7")?.output).toBeDefined();
-    // skipped steps that never ran in the log have no group → no output
-    expect(steps.get("Run npx tsc --pretty")?.output).toBeUndefined();
-
-    expect(result.details.full).toBe(true);
-    expect(result.details.summary).toContain("full, untruncated");
+  it("skips the composite's internal groups when matching later steps", () => {
+    expect(stepBlocks(log, job)).toEqual([
+      [1, "<preamble>"],
+      [2, "Run actions/checkout@v7.0.0"],
+      [3, "Run trim21/actions/setup-go@master"],
+      [4, "Run jaxxstorm/action-install-gh-release@v3.0.0"],
+      [
+        5,
+        "Run gotestsum --format=pkgname --format-hide-empty-pkg -- -short -race -count=1 -coverprofile=coverage.txt -covermode=atomic ./...",
+      ],
+      [6, null],
+      [7, null],
+      [8, null],
+      [9, null],
+      [10, null],
+      [11, null],
+      [12, null],
+      [23, null],
+      [24, null],
+      [25, null],
+    ]);
   });
 
-  it("without full, successful steps carry no output", async () => {
-    const result = await renderJobLogs({ runId: "31026014828", job: "lint" }, jobs, fetchJobLog);
-    const parsed = JSON.parse(result.content[0].text) as {
-      steps: { name: string; output?: string }[];
-    }[];
-    const steps = new Map(parsed[0].steps.map((s) => [s.name, s]));
-    expect(steps.get("Run pnpm install --frozen-lockfile")?.output).toBeUndefined();
+  it("absorbs the composite's internal steps into the composite step", () => {
+    const setup = readStepRange(log, job, 3)!;
+    expect(setup).toContain("##[group]Run actions/setup-go@v6");
+    expect(setup).toContain("##[group]Run actions/cache@v6");
+    expect(setup).toContain("##[group]Run go get ./...");
+    expect(setup).not.toContain("action-install-gh-release");
   });
 });
 
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), "ci-logs-test-"));
-}
+describe("opendal — a skipped step must not take a running step's block", () => {
+  // apache/opendal run 30707827656 job 91390443085. "Clear build" appears three
+  // times (twice executed, once skipped) and "Run actions/checkout@v7" twice, so
+  // name matching alone hands a skipped step a block that belongs to a step that
+  // really ran.
+  const job = loadJob("opendal-91390443085-job.json");
+  const log = loadFixture("opendal-91390443085-raw.log");
 
-describe("writeLogFile", () => {
-  it("writes a job's complete log (timestamps kept, ANSI stripped)", async () => {
-    const dir = tempDir();
-    try {
-      const outputFile = join(dir, "nested", "lint.log");
-      const result = await writeLogFile(
-        { runId: "31026014828", job: "lint", outputFile },
-        jobs,
-        fetchJobLog,
-        undefined,
-        {},
-      );
-      expect(result.details).toMatchObject({
-        lines: expect.any(Number),
-        bytes: expect.any(Number),
-      });
-
-      const written = readFileSync(join(dir, "nested", "lint.log"), "utf8");
-      expect(written).toContain("##[group]Run npx prettier --check ./");
-      expect(written).toContain("2026-08-05T16:36:");
-      expect(written).not.toContain("\u001B[");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it("maps only the steps that produced output", () => {
+    expect(stepBlocks(log, job)).toEqual([
+      [1, "<preamble>"],
+      [2, "Run actions/checkout@v7"],
+      [3, "Run pnpm/action-setup@v6"],
+      [4, "Run actions/setup-node@v6"],
+      [5, "Run npm install -g --force corepack && corepack enable"],
+      [6, "Run pnpm install --frozen-lockfile"],
+      [7, "Run actions/download-artifact@v8"],
+      [8, "Run # Useful for debugging"],
+      [9, "Run actions/cache@v6"],
+      [10, "Run pnpm build"],
+      [11, null],
+      [12, "Run rm -rf ./build"],
+      [13, null],
+      [14, null],
+      [15, null],
+      [16, null],
+      [17, null],
+      [18, "Run pnpm build"],
+      [19, null],
+      [20, "Run rm -rf ./build"],
+      [21, "Run pnpm build"],
+      [22, null],
+      [41, null],
+      [42, null],
+      [43, null],
+      [44, null],
+      [45, null],
+    ]);
   });
+});
 
-  it("writes a single step's cleaned output", async () => {
-    const dir = tempDir();
-    try {
-      const outputFile = join(dir, "step6.log");
-      const result = await writeLogFile(
-        {
-          runId: "31026014828",
-          job: "lint",
-          step: "Run npx prettier --check ./",
-          outputFile,
-        },
-        jobs,
-        fetchJobLog,
-        undefined,
-        {},
-      );
-      expect(result.details).toMatchObject({ lines: expect.any(Number) });
+describe("overlay-s3 — several steps starting in the same second", () => {
+  // trim21/overlay-s3 run 33060502066 job 98477797742. The API truncates step
+  // timestamps to whole seconds, so the failing step 10, step 11 and the post
+  // steps all start at 09:52:52; the blocks must still follow step order.
+  const job = loadJob("overlay-s3-98477797742-job.json");
+  const log = loadFixture("overlay-s3-98477797742-raw.log");
 
-      const written = readFileSync(join(dir, "step6.log"), "utf8");
-      expect(written).toContain("##[error]Process completed with exit code 1.");
-      expect(written).not.toContain("##[group]");
-      expect(written).not.toContain("2026-08-05T16:36:");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("requires a unique job when the run has several", async () => {
-    const result = await writeLogFile(
-      { runId: "31026014828", outputFile: join(tmpdir(), "x.log") },
-      jobs,
-      fetchJobLog,
-      undefined,
-      {},
-    );
-    expect(result.content[0].text).toContain("matches 3 jobs");
-  });
-
-  it("reports an unknown job", async () => {
-    const result = await writeLogFile(
-      { runId: "31026014828", job: "no-such-job", outputFile: join(tmpdir(), "x.log") },
-      jobs,
-      fetchJobLog,
-      undefined,
-      {},
-    );
-    expect(result.content[0].text).toContain('Job "no-such-job" not found');
-  });
-
-  it("reports a queued job", async () => {
-    const queuedJobs = [{ ...jobs[0], status: "queued" }];
-    const result = await writeLogFile(
-      { runId: "31026014828", job: "test", outputFile: join(tmpdir(), "x.log") },
-      queuedJobs,
-      fetchJobLog,
-      undefined,
-      {},
-    );
-    expect(result.content[0].text).toContain("still queued");
+  it("keeps the failing step on its own block", () => {
+    expect(stepBlocks(log, job)).toEqual([
+      [1, "<preamble>"],
+      [2, "Run actions/checkout@v7"],
+      [3, "Run actions/setup-go@v7"],
+      [4, "Run docker run -d --name silo -p 127.0.0.1:9000:9000 \\"],
+      [5, "Run go build ./... && go vet ./..."],
+      [6, "Run go test ./..."],
+      [7, "Run go test -run TestIntegration -v ./..."],
+      [8, "Run curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc"],
+      [9, "Run go build -o overlay-s3 ."],
+      [10, "Run set -euo pipefail"],
+      [11, "Run docker logs silo 2>&1 | tail -200"],
+      [21, null],
+      [22, null],
+      [23, null],
+    ]);
   });
 });

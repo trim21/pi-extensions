@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, type WriteStream } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
   type AgentToolUpdateCallback,
-  createLocalBashOperations,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
@@ -13,26 +12,19 @@ import {
   truncateTail,
   type TruncationResult,
 } from "@earendil-works/pi-coding-agent";
+import { throttle } from "lodash-es";
 import { type TObject, Type } from "typebox";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
+import { fenceCodeBlock } from "../lib/markdown.js";
 import { formatDisplayPath } from "../lib/path.js";
-import {
-  type CheckboxAction,
-  type SelectAction,
-  selectCheckboxActions,
-  selectWithOptionalInput,
-} from "../lib/ui.js";
-import {
-  type ApprovalRule,
-  commandPatternsFor,
-  evaluateBashApproval,
-  matchRule,
-} from "./approval-rules.js";
+import { type SelectAction, selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
+import { type ApprovalRule, evaluateBashApproval, matchRule } from "./approval-rules.js";
+import { commandPatternsFor } from "./approval-suggest.js";
 import {
   type BwrapMode,
-  createBwrapBashOperations,
   findBwrap,
+  findMihomo,
   getBwrapConfigPaths,
   loadBwrapConfig,
   resolveBwrap,
@@ -41,6 +33,7 @@ import {
   resolveHeadlessBwrap,
 } from "./core.js";
 import { dcgSuggestion } from "./dcg-scan.js";
+import { loadSandboxConfig, runInSandbox } from "./sandbox.js";
 
 export type EscalationDecision = { kind: "dialog" } | { kind: "deny"; reason: string };
 
@@ -57,24 +50,19 @@ export function resolveEscalation(opts: { hasUI: boolean }): EscalationDecision 
 
 /** 全权限审批对话框的选项 label（也作为 switch 匹配键与测试引用）。 */
 export const ALLOW_ONCE = "Allow once";
-export const ALLOW_FOREVER = "Allow forever";
 export const DENY = "Deny";
 export const DENY_WITH_REASON = "Deny with reason";
-
-/** 审批对话框选项：允许一次 / 永久允许 / 拒绝 / 拒绝并附理由。 */
-export const FULL_ACCESS_CHOICES: readonly SelectAction[] = [
-  { label: ALLOW_ONCE },
-  { label: ALLOW_FOREVER },
-  { label: DENY },
-  { label: DENY_WITH_REASON, inputPrompt: "Why was this denied?" },
-];
+/** 第一层的折叠入口：进入按 pattern 勾选持久化规则的子菜单。 */
+export const EDIT_RULES = "Edit approval rules";
+/** 规则子菜单的返回项：结束勾选，回到第一层做放行/拒绝决策。 */
+export const BACK = "Back";
 
 /**
  * 全权限审批 UI 的决策结果：业务层（execute/approveFullAccess）据此
  * 决定放行、拒绝并持久化勾选的规则，UI 层不直接产生副作用。
  */
 export interface FullAccessUIDecision {
-  /** 用户选择的动作 label（ALLOW_ONCE / ALLOW_FOREVER / DENY / DENY_WITH_REASON）。 */
+  /** 用户选择的动作 label（ALLOW_ONCE / DENY / DENY_WITH_REASON）。 */
   result: string;
   /** 用户勾选、需持久化为 allow 规则的 pattern；未勾选时为空数组。 */
   foreverApprovedPattern: string[];
@@ -87,7 +75,7 @@ export interface BwrapExecutionRequest {
   command: string;
   timeout?: number;
   requestFullAccess?: boolean;
-  requestFullAccessReason?: string;
+  description?: string;
   /** 解析后的实际执行目录；缺省时与 ctx.cwd 相同。ctx.cwd 始终是 session 工作区。 */
   cwd?: string;
   signal?: AbortSignal;
@@ -103,11 +91,45 @@ export interface BwrapExecutionRequest {
  */
 export interface BwrapExecutionResult {
   exitCode: number | null;
+  /** 沙箱状态说明（写边界 + 网络层级），失败时由上层工具作为独立信息块附上；未沙箱执行时为 undefined。 */
+  sandboxHint: string | undefined;
   /** 截断后的输出（尾部），未截断时为完整输出；空输出为空字符串。 */
   output: string;
   /** 完整输出的文件路径；无输出时不存在。 */
   fullOutputPath?: string;
   truncation: TruncationResult;
+}
+
+/**
+ * 超时/中断时命令终止前已捕获的部分输出快照（截断后的文本 + 落盘信息）。
+ * 展示格式（输出在前、状态在最后）由上层 Bash 工具按各自风格拼接。
+ */
+export interface BashExecutionPartial {
+  output: string;
+  truncation: TruncationResult;
+  fullOutputPath?: string;
+}
+
+/** 命令超时或中断（abort signal）时抛出的错误，携带部分输出供上层展示。 */
+export class BashInterruptedError extends Error {
+  readonly kind: "timeout" | "aborted";
+  readonly partial: BashExecutionPartial;
+  readonly sandboxHint: string | undefined;
+
+  constructor(
+    kind: "timeout" | "aborted",
+    message: string,
+    partial: BashExecutionPartial,
+    sandboxHint: string | undefined,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.kind = kind;
+    this.partial = partial;
+    this.sandboxHint = sandboxHint;
+    // 对齐标准错误分类：中断=AbortError（用户取消），超时=TimeoutError
+    this.name = kind === "aborted" ? "AbortError" : "TimeoutError";
+  }
 }
 
 function escapeHtml(text: string): string {
@@ -116,12 +138,6 @@ function escapeHtml(text: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
-}
-
-function fenceCodeBlock(code: string): string {
-  const longestRun = Math.max(...(code.match(/`+/g)?.map((match) => match.length) ?? [0]));
-  const fence = "`".repeat(Math.max(3, longestRun + 1));
-  return `${fence}\n${code}\n${fence}`;
 }
 
 /** 进度推送的节流间隔（对齐 pi 内置 bash 工具的 100ms）。 */
@@ -141,7 +157,7 @@ function countNewlines(data: Buffer): number {
 
 /**
  * 合并 stdout/stderr 的流式输出累积器：输出在运行时就直接写入
- * agent-dir/tmp/{uuid}.txt（完整内容），内存只保留尾部缓冲。
+ * agent-dir/tmp/{sessionId}/{uuid}.txt（完整内容），内存只保留尾部缓冲。
  * 大输出不会撑爆内存；最终结果只返回截断后的文本。
  */
 class BashOutput {
@@ -151,13 +167,18 @@ class BashOutput {
   private tailBytes = 0;
   private totalBytes = 0;
   private totalLines = 0;
+  private readonly sessionId: string;
   filePath: string | undefined;
+
+  constructor(sessionId: string) {
+    this.sessionId = sessionId;
+  }
 
   append(data: Buffer): void {
     this.totalBytes += data.length;
     this.totalLines += countNewlines(data);
     if (!this.stream) {
-      const dir = join(getAgentDir(), "tmp");
+      const dir = join(getAgentDir(), "tmp", this.sessionId);
       mkdirSync(dir, { recursive: true });
       this.filePath = join(dir, `${randomUUID()}.txt`);
       this.stream = createWriteStream(this.filePath, { flags: "w" });
@@ -192,6 +213,10 @@ class BashOutput {
         resolve();
       });
     });
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
   }
 
   /** 尾部文本（截断结果的候选，未截断时即完整输出）。 */
@@ -229,15 +254,53 @@ function notifyMode(
     "allow-all": "allow-all: sandbox off, network on",
     "workspace-write": "workspace-write: sandbox on, network off",
     "allow-net": "allow-net: sandbox on, network on, workspace writable",
+    "net-allowlist": "net-allowlist: sandbox on, network filtered by allowlist",
     readonly: "readonly: sandbox on, network off, read-only fs",
   };
   ctx.ui.notify(labels[mode], "info");
+}
+
+/** 沙箱默认写边界：根只读、工作区与 /tmp 可写、.git 只读。不展开用户配置的额外可写路径。 */
+const SANDBOX_WRITE_RULES = "/ is read-only, /tmp/ and ./ are writable, ./.git/ is read-only";
+
+/** 网络层级：关 / 只放行白名单 / 完全放开（白名单域名本身不列出，对判断失败无用）。 */
+function describeNetwork(resolved: ResolvedBwrap): string {
+  if (!resolved.network) return "network access is off";
+  if (resolved.networkAllowlist.length > 0)
+    return "network access is limited to allowlisted addresses";
+  return "network access is unrestricted";
+}
+
+/** 命令没经沙箱时沿用 prompt 里的说法，给出在沙盒外重跑的手段。 */
+const SANDBOX_ESCAPE_HATCH =
+  "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.";
+
+/**
+ * 命令失败时作为独立信息块附上的沙箱状态：默认写边界 + 网络层级，以及在沙盒外重跑的手段。
+ * 写边界只说沙箱布局（不展开用户配置的可写路径），网络只说层级（不列白名单域名）。
+ * 命令没经沙箱（allow-all、审批通过的全权限、Windows）时返回 undefined：
+ * 没有沙箱就没什么可提示的。
+ */
+export function describeSandbox(resolved: ResolvedBwrap, unsandboxed: boolean): string | undefined {
+  if (unsandboxed) return undefined;
+  const writes = resolved.mode === "readonly" ? "the filesystem is read-only" : SANDBOX_WRITE_RULES;
+  return [
+    `[Sandbox] This command ran in a sandbox: ${writes}; ${describeNetwork(resolved)}.`,
+    SANDBOX_ESCAPE_HATCH,
+  ].join("\n");
+}
+
+/** 失败结果里附加的沙箱状态块；未沙箱执行（hint 为 undefined）时没有这一块。 */
+export function sandboxHintBlock(hint: string | undefined): { type: "text"; text: string }[] {
+  return hint === undefined ? [] : [{ type: "text", text: hint }];
 }
 
 export class BwrapRuntime {
   private resolved: ResolvedBwrap | undefined;
   private sandboxDisabled = false;
   private bwrapUnavailable = false;
+  /** net-allowlist 首次执行时解析一次 mihomo 路径，之后随 runtime 复用，不逐命令扫描 PATH。 */
+  private mihomoPath: string | undefined;
 
   setup(pi: ExtensionAPI): void {
     pi.registerFlag("no-bwrap", {
@@ -308,7 +371,7 @@ export class BwrapRuntime {
   }
 
   setMode(cwd: string, mode: BwrapMode): ResolvedBwrap {
-    this.resolved = resolveBwrap({ ...loadBwrapConfig(cwd), mode });
+    this.resolved = loadSandboxConfig({ workspace: cwd, mode });
     this.sandboxDisabled = false;
     return this.resolved;
   }
@@ -349,87 +412,113 @@ export class BwrapRuntime {
         throw new Error(`Command denied by bwrap approval rule: ${request.command}`);
       }
       if (decision === undefined) {
-        await this.approveFullAccess(
-          request.ctx,
-          request.command,
-          request.requestFullAccessReason,
-          execCwd,
-        );
+        await this.approveFullAccess(request.ctx, request.command, request.description, execCwd);
       }
     }
-    const operations =
-      isWindows || needsApproval || !runtime.bwrapEnabled
-        ? createLocalBashOperations()
-        : createBwrapBashOperations(runtime, workspace);
-    const output = new BashOutput();
+    // 不经沙箱的三种情形：Windows（无 bubblewrap）、审批通过的全权限、allow-all 模式
+    const local = isWindows || needsApproval || !runtime.bwrapEnabled;
+    // mihomoPath 是 ResolvedBwrap 的 override 语义：首次 net-allowlist 执行时解析
+    // 一次存入私有字段，之后写回 resolved 直达 createNetworkStack，不逐命令扫描 PATH
+    if (runtime.network && runtime.networkAllowlist.length > 0) {
+      runtime.mihomoPath ??= this.mihomoPath ?? findMihomo();
+      this.mihomoPath = runtime.mihomoPath;
+    }
+    // 命令失败时附带的沙箱状态（写边界 + 网络层级），由上层拼进错误文本
+    const sandboxHint = describeSandbox(runtime, local);
+    await using output = new BashOutput(request.ctx.sessionManager.getSessionId());
     const { onUpdate } = request;
 
-    // 流式进度：节流推送尾部快照（对齐 pi 内置 bash 的实时输出体验）
-    let updateTimer: ReturnType<typeof setTimeout> | undefined;
-    let dirty = false;
-    let lastUpdateAt = 0;
-    const emitUpdate = () => {
-      if (!onUpdate || !dirty) return;
-      dirty = false;
-      lastUpdateAt = Date.now();
-      onUpdate({
-        content: [{ type: "text", text: output.tailSnapshot() }],
-        details: undefined,
-      });
-    };
-    const scheduleUpdate = () => {
-      if (!onUpdate) return;
-      dirty = true;
-      const delay = BASH_UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
-      if (delay <= 0) {
-        if (updateTimer) clearTimeout(updateTimer);
-        updateTimer = undefined;
-        emitUpdate();
-        return;
-      }
-      if (updateTimer) return;
-      updateTimer = setTimeout(() => {
-        updateTimer = undefined;
-        emitUpdate();
-      }, delay);
-    };
+    // 流式进度：限流推送尾部快照（对齐 pi 内置 bash 的实时输出体验）
+    const emitUpdate = throttle(
+      () => {
+        onUpdate?.({
+          content: [{ type: "text", text: output.tailSnapshot() }],
+          details: undefined,
+        });
+      },
+      BASH_UPDATE_THROTTLE_MS,
+      { trailing: true },
+    );
 
     try {
-      if (onUpdate) onUpdate({ content: [], details: undefined });
-      const { exitCode } = await operations.exec(request.command, execCwd, {
+      onUpdate?.({ content: [], details: undefined });
+      const { exitCode } = await runInSandbox(runtime, {
+        workspace,
+        commandCwd: execCwd,
+        command: request.command,
+        unsandboxed: local,
         onData: (data) => {
           output.append(data);
-          scheduleUpdate();
+          emitUpdate();
         },
         signal: request.signal,
         timeout: request.timeout,
       });
-      await output.close();
-      const truncation = truncateTail(output.tailText());
+      const partial = await this.finalizeOutput(output);
       return {
         exitCode,
-        output: truncation.content,
-        ...(output.filePath && { fullOutputPath: output.filePath }),
-        // 用精确统计值覆盖尾部缓冲的估算（提示文本的行数/字节数要准确）
-        truncation: { ...truncation, ...output.stats },
+        sandboxHint,
+        output: partial.output,
+        ...(partial.fullOutputPath && { fullOutputPath: partial.fullOutputPath }),
+        truncation: partial.truncation,
       };
     } catch (error) {
-      // 底层统一把超时/中断转成可读文案（对齐 pi 内置 bash 工具）
-      if (error instanceof Error && error.message.startsWith("timeout:")) {
-        throw new Error(
+      // 超时/中断：把命令终止前已捕获的输出附在错误上（文本 + 落盘路径），
+      // 展示时输出在前、状态在最后（对齐 pi 内置 bash），避免只报超时丢输出
+      // 超时识别：优先 name=TimeoutError（对齐标准错误分类），
+      // 兼容 pi local ops 抛的 `timeout:N`（name=Error）
+      if (
+        error instanceof Error &&
+        (error.name === "TimeoutError" || error.message.startsWith("timeout:"))
+      ) {
+        const partial = await this.finalizeOutput(output);
+        throw new BashInterruptedError(
+          "timeout",
           `Command timed out after ${error.message.slice("timeout:".length)} seconds`,
-          { cause: error },
+          partial,
+          sandboxHint,
+          error,
         );
       }
-      if (error instanceof Error && error.message === "aborted") {
-        throw new Error("Command aborted", { cause: error });
+      // 中断识别：优先 name=AbortError（throwIfAborted/signal.reason），
+      // 兼容 pi local ops 抛的 new Error("aborted")
+      if (error instanceof Error && (error.name === "AbortError" || error.message === "aborted")) {
+        const partial = await this.finalizeOutput(output);
+        throw new BashInterruptedError(
+          "aborted",
+          "Command aborted by user",
+          partial,
+          sandboxHint,
+          error,
+        );
       }
       throw error;
     } finally {
-      if (updateTimer) clearTimeout(updateTimer);
-      if (onUpdate && dirty) emitUpdate();
-      await output.close();
+      emitUpdate.flush();
+      emitUpdate.cancel();
     }
+  }
+
+  /** 关闭输出流并返回截断后的快照；未截断时删除临时文件（成功与超时/中断路径共用）。 */
+  private async finalizeOutput(output: BashOutput): Promise<BashExecutionPartial> {
+    await output.close();
+    const truncation = truncateTail(output.tailText());
+    // 未截断：完整输出已直接返回给模型，临时文件没有用途，删掉避免
+    // agent-dir/tmp 堆积无主文件（删除失败只残留文件，不影响命令结果）
+    if (!truncation.truncated && output.filePath) {
+      try {
+        await unlink(output.filePath);
+      } catch {
+        // 删除失败（如沙箱只读）：best-effort，命令结果不受影响
+      }
+      output.filePath = undefined;
+    }
+    return {
+      output: truncation.content,
+      ...(output.filePath && { fullOutputPath: output.filePath }),
+      // 用精确统计值覆盖尾部缓冲的估算（提示文本的行数/字节数要准确）
+      truncation: { ...truncation, ...output.stats },
+    };
   }
 
   private resolve(ctx: Pick<ExtensionContext, "cwd" | "hasUI">): ResolvedBwrap {
@@ -462,10 +551,6 @@ export class BwrapRuntime {
         }
         return;
       }
-      case ALLOW_FOREVER: {
-        await this.persistAllowRule(ctx, command, foreverApprovedPattern);
-        return;
-      }
       case DENY: {
         if (foreverApprovedPattern.length > 0) {
           await this.persistAllowRule(ctx, command, foreverApprovedPattern);
@@ -479,8 +564,8 @@ export class BwrapRuntime {
         const feedback = decision.reason?.trim() ?? "";
         throw new Error(
           feedback
-            ? `User denied unsandboxed execution: ${feedback}`
-            : "User denied unsandboxed execution.",
+            ? `User denied command execution with reason: ${feedback}`
+            : "User denied command execution.",
         );
       }
     }
@@ -497,25 +582,29 @@ export class BwrapRuntime {
     reason: string | undefined,
     execCwd: string,
   ): Promise<FullAccessUIDecision | undefined> {
-    // 弹框前解析命令的持久化规则（勾选的 pattern 会写入），在弹框里以
-    // checkbox 列出：`echo 1 | head` → `echo *`、`head *`，逐项决定是否
-    // allow forever，避免用户对"永久允许"持久化什么一无所知。
+    // 弹框前解析命令的持久化规则：`echo 1 | head` → `echo *`、`head *`。
+    // 持久化规则的勾选折叠进 EDIT_RULES 子菜单，主决策列表只保留放行/拒绝，
+    // 避免一屏 checkbox 淹没决策项。
     const patterns = await commandPatternsFor(command);
-    // checkbox 只列出未命中 allow 规则的 pattern：已提前允许的部分自动放行，
+    // 子菜单只列出未命中 allow 规则的 pattern：已提前允许的部分自动放行，
     // 无需再展示或重复勾选持久化（deny 命中的命令在 evaluate 阶段已被拒绝）。
     const rules = this.resolve(ctx).approvalRules;
-    const unallowedPatterns = patterns.filter((pattern) => {
-      const rule = rules.findLast((r) => matchRule(pattern, r.pattern));
-      return rule?.action !== "allow";
-    });
+    const unallowedPatterns = [
+      ...new Set(
+        patterns.filter((pattern) => {
+          const rule = rules.findLast((r) => matchRule(pattern, r.pattern));
+          return rule?.action !== "allow";
+        }),
+      ),
+    ];
     // dcg 扫描建议是可选的参考文本：未安装时静默跳过；已安装但扫描失败
     // 时 notify 提示，弹窗本身与无 dcg 时一致
     const outcome = await dcgSuggestion(command);
     if (outcome.kind === "failed") {
       ctx.ui.notify(`dcg 扫描失败，本次无破坏性命令建议: ${outcome.detail}`, "warning");
     }
-    // 弹框主体按行组织（'\n' join），便于 review；suggestion 与规则说明
-    // 块带前导空行 + 尾部 "---" 分隔，输出与历史逐字符一致。
+    // 弹框主体按行组织（'\n' join），便于 review；suggestion 块带前导空行 +
+    // 尾部 "---" 分隔。
     const lines: string[] = [
       "Allow this command to run without sandbox?",
       "---",
@@ -526,13 +615,6 @@ export class BwrapRuntime {
     if (outcome.kind === "suggestion") {
       lines.push("", outcome.suggestion.text, "---");
     }
-    if (unallowedPatterns.length > 0) {
-      lines.push(
-        "",
-        "勾选规则将持久化为允许规则（后续同模式命令自动放行），未勾选规则仅本次处理:",
-        "---",
-      );
-    }
     lines.push(fenceCodeBlock(command));
     // 执行目录与工作区不同时，提示实际执行目录（execCwd 是解析后的绝对路径，
     // 显示用 pretty path 风格：home 内 `~/…`，否则绝对路径）
@@ -541,51 +623,51 @@ export class BwrapRuntime {
     }
     const description = lines.join("\n");
 
-    // 解析失败（无 pattern 可勾选）：保持单选对话框（Allow forever 是空操作）
-    if (patterns.length === 0) {
-      // 单选：允许一次 / 永久允许（写入规则）/ 拒绝 / 拒绝并附理由（弹输入框）
-      const verdict = await selectWithOptionalInput(description, FULL_ACCESS_CHOICES, ctx.ui, {
+    // 主决策列表：允许一次 / 拒绝 / 拒绝并附理由。有可持久化的 pattern 时
+    // 追加折叠入口，进入子菜单逐项勾选。
+    const actions: SelectAction[] = [
+      { label: ALLOW_ONCE },
+      { label: DENY },
+      { label: DENY_WITH_REASON, inputPrompt: "Why was this denied?" },
+    ];
+    if (unallowedPatterns.length > 0) {
+      actions.push({ label: EDIT_RULES });
+    }
+    // 子菜单沿用同一份说明，并补上勾选规则的语义提示。
+    const editDescription = [
+      "勾选要持久化为允许规则的命令模式（后续同模式命令自动放行，未勾选仅本次处理）:",
+      "---",
+      "",
+      description,
+    ].join("\n");
+
+    // 两层循环：子菜单勾选后回到主决策，直到用户在 Allow once / Deny 系列中做出
+    // 选择。勾选的规则在放行时持久化；Deny 系列同样持久化（用户确认该模式可信，
+    // 只是本次命令不执行）。子菜单关闭 = 返回主决策；主决策关闭 = 取消（上层按拒绝处理）。
+    let selected: string[] = [];
+    for (;;) {
+      const pending =
+        selected.length > 0
+          ? `\n\n将持久化为允许规则: ${selected.map((pattern) => escapeHtml(pattern)).join(", ")}`
+          : "";
+      const verdict = await selectWithOptionalInput(description + pending, actions, ctx.ui, {
         signal: ctx.signal,
       });
-      // 关闭对话框 = 中断并拒绝，不循环重问
       if (verdict === undefined) return undefined;
-      return {
-        result: verdict.label,
-        foreverApprovedPattern: [],
-        reason: verdict.input,
-      };
+      if (verdict.label !== EDIT_RULES) {
+        return {
+          result: verdict.label,
+          foreverApprovedPattern: selected,
+          reason: verdict.input,
+        };
+      }
+      selected = await selectMultiple(
+        editDescription,
+        unallowedPatterns.map((pattern) => ({ label: pattern })),
+        ctx.ui,
+        { signal: ctx.signal, doneLabel: BACK },
+      );
     }
-
-    // 每个识别到的 pattern 一个 checkbox：勾选 = 持久化为 allow 规则。
-    // Allow once = 执行本次并持久化勾选的规则；Deny 系列 = 拒绝本次，
-    // 勾选的规则仍持久化（用户确认该模式可信，只是本次命令不执行）。
-    const actions = [
-      { action: "allow-once", label: ALLOW_ONCE },
-      { action: "deny", label: DENY },
-      {
-        action: "deny-with-reason",
-        label: DENY_WITH_REASON,
-        inputPrompt: "Why was this denied?",
-      },
-    ] as const satisfies readonly CheckboxAction<"allow-once" | "deny" | "deny-with-reason">[];
-    const verdict = await selectCheckboxActions(
-      description,
-      [...new Set(unallowedPatterns)].map((pattern) => ({ label: pattern })),
-      actions,
-      ctx.ui,
-      { signal: ctx.signal },
-    );
-    if (verdict === undefined) return undefined;
-    const resultByAction = {
-      "allow-once": ALLOW_ONCE,
-      deny: DENY,
-      "deny-with-reason": DENY_WITH_REASON,
-    } as const;
-    return {
-      result: resultByAction[verdict.action],
-      foreverApprovedPattern: verdict.selected,
-      reason: verdict.input,
-    };
   }
 
   /** 把命令的权限模式写入项目 bwrap.json 的 approvalRules（allow forever）。 */
@@ -640,10 +722,22 @@ export class BwrapRuntime {
         description: "Sandbox on, network on, workspace writable",
         flags: Type.Object({}),
       },
+      "bwrap-net-allowlist": {
+        name: "bwrap-net-allowlist",
+        usage: "",
+        description: "Sandbox on, network filtered by allowlist, workspace writable",
+        flags: Type.Object({}),
+      },
       "bwrap-readonly": {
         name: "bwrap-readonly",
         usage: "",
         description: "Sandbox on, network off, no writes",
+        flags: Type.Object({}),
+      },
+      "bwrap-reload": {
+        name: "bwrap-reload",
+        usage: "",
+        description: "Reload bwrap config and restart the network stack",
         flags: Type.Object({}),
       },
     } as const satisfies Record<string, CommandSpec<TObject>>;
@@ -667,9 +761,9 @@ export class BwrapRuntime {
           const writable = runtime.writablePaths.map((path) =>
             resolveBwrapPath(path, commandCtx.cwd),
           );
-          const tmpfs = runtime.tmpfsPaths.map((path) => resolveBwrapPath(path, commandCtx.cwd));
+          const deny = runtime.denyPaths.map((path) => resolveBwrapPath(path, commandCtx.cwd));
           commandCtx.ui.notify(
-            `bwrap ${runtime.mode} ${runtime.network ? "net" : "no-net"} write:[${writable.join(", ")}] tmpfs:[${tmpfs.join(", ") || "-"}]`,
+            `bwrap ${runtime.mode} ${runtime.network ? "net" : "no-net"} write:[${writable.join(", ")}] deny:[${deny.join(", ") || "-"}]`,
             "info",
           );
         }),
@@ -679,6 +773,7 @@ export class BwrapRuntime {
       ["bwrap-allow-all", "allow-all"],
       ["bwrap-workspace-write", "workspace-write"],
       ["bwrap-allow-net", "allow-net"],
+      ["bwrap-net-allowlist", "net-allowlist"],
       ["bwrap-readonly", "readonly"],
     ] as const) {
       pi.registerCommand(name, {
@@ -689,6 +784,22 @@ export class BwrapRuntime {
           ),
       });
     }
+
+    pi.registerCommand("bwrap-reload", {
+      description: specs["bwrap-reload"].description,
+      handler: (args, ctx) =>
+        this.runCommand(pi, specs["bwrap-reload"], args, ctx, (commandCtx) => {
+          this.reload(commandCtx);
+        }),
+    });
+  }
+
+  private reload(ctx: ExtensionCommandContext): void {
+    this.resolved = undefined;
+    this.bwrapUnavailable = false;
+    const runtime = this.resolve(ctx);
+    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${runtime.mode}`));
+    ctx.ui.notify(`bwrap config reloaded (mode: ${runtime.mode})`, "info");
   }
 
   private switchMode(pi: ExtensionAPI, mode: BwrapMode, ctx: ExtensionCommandContext): void {

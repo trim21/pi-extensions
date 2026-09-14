@@ -4,7 +4,7 @@
 
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /**
  * Expand a leading `~` to the user's home directory.
@@ -47,6 +47,14 @@ export async function resolveWorkdir(workdir: string, baseDir: string): Promise<
   return target;
 }
 
+/** 解析 `~` 前缀与相对路径（相对调用 cwd）；绝对路径原样返回。 */
+export function resolvePathArg(cwd: string, input: string): string {
+  if (input === "~" || input.startsWith("~/")) {
+    return join(homedir(), input.slice(1));
+  }
+  return isAbsolute(input) ? input : resolve(cwd, input);
+}
+
 /** 人类可读的显示路径：cwd 内用 `./…`，home 内用 `~/…`，否则原样绝对路径。 */
 export function formatDisplayPath(cwd: string, filePath: string): string {
   const relToCwd = relative(cwd, filePath);
@@ -58,4 +66,35 @@ export function formatDisplayPath(cwd: string, filePath: string): string {
     return `~/${relToHome}`;
   }
   return filePath;
+}
+
+/** subtitle 中路径的最大显示长度，超过时退化为 `parent/basename`。 */
+export const MAX_SUBTITLE_PATH_LENGTH = 30;
+
+function shortenSubtitlePath(filePath: string, display: string): string {
+  if (display.length <= MAX_SUBTITLE_PATH_LENGTH) return display;
+  const name = basename(filePath);
+  const parentDir = dirname(filePath);
+  const parentName = basename(parentDir);
+  if (parentName === "" || parentName === "." || parentDir === parentName) return name;
+  return join(parentName, name);
+}
+
+function formatSubtitleCounts(errorCount?: number, warningCount?: number): string {
+  const parts: string[] = [];
+  if (errorCount) parts.push(`ⓧ ${errorCount}`);
+  if (warningCount) parts.push(`⚠ ${warningCount}`);
+  return parts.join(" ");
+}
+
+/** subtitle 用的显示路径：优先 `./…` / `~/…` / 绝对路径，过长时显示上一级目录加文件名。 */
+export function formatSubtitlePath(
+  cwd: string,
+  filePath: string,
+  errorCount?: number,
+  warningCount?: number,
+): string {
+  const pathText = shortenSubtitlePath(filePath, formatDisplayPath(cwd, filePath));
+  const counts = formatSubtitleCounts(errorCount, warningCount);
+  return counts ? `${pathText} (${counts})` : pathText;
 }
