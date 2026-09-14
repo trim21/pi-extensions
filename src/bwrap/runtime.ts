@@ -17,7 +17,7 @@ import { type TObject, Type } from "typebox";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
 import { fenceCodeBlock } from "../lib/markdown.js";
-import { formatDisplayPath } from "../lib/path.js";
+import { formatDisplayPath, resolveHomePath } from "../lib/path.js";
 import { type SelectAction, selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
 import { type ApprovalRule, evaluateBashApproval, matchRule } from "./approval-rules.js";
 import { commandPatternsFor } from "./approval-suggest.js";
@@ -91,6 +91,8 @@ export interface BwrapExecutionRequest {
  */
 export interface BwrapExecutionResult {
   exitCode: number | null;
+  /** 只描述写边界（工作区外能否写）与网络层级（关 / 白名单 / 放开），不含具体域名；未沙箱执行时为 undefined。 */
+  sandboxHint: string | undefined;
   /** 截断后的输出（尾部），未截断时为完整输出；空输出为空字符串。 */
   output: string;
   /** 完整输出的文件路径；无输出时不存在。 */
@@ -112,16 +114,19 @@ export interface BashExecutionPartial {
 export class BashInterruptedError extends Error {
   readonly kind: "timeout" | "aborted";
   readonly partial: BashExecutionPartial;
+  readonly sandboxHint: string | undefined;
 
   constructor(
     kind: "timeout" | "aborted",
     message: string,
     partial: BashExecutionPartial,
+    sandboxHint: string | undefined,
     cause: unknown,
   ) {
     super(message, { cause });
     this.kind = kind;
     this.partial = partial;
+    this.sandboxHint = sandboxHint;
     // 对齐标准错误分类：中断=AbortError（用户取消），超时=TimeoutError
     this.name = kind === "aborted" ? "AbortError" : "TimeoutError";
   }
@@ -255,6 +260,67 @@ function notifyMode(
   ctx.ui.notify(labels[mode], "info");
 }
 
+/** 沙箱内允许写入的根目录（与沙箱层同基准：相对 workspace 解析 "."、`~` 与相对路径）。 */
+function writableRoots(resolved: ResolvedBwrap, workspace: string): string[] {
+  const writable = [...resolved.writablePaths, ...resolved.extraWritablePaths].map((path) =>
+    resolveHomePath(path, workspace),
+  );
+  return [...new Set(writable)];
+}
+
+/** 网络层级：关 / 只放行白名单 / 完全放开（白名单域名本身不列出，对判断失败无用）。 */
+function describeNetwork(resolved: ResolvedBwrap): string {
+  if (!resolved.network) return "network access is off";
+  if (resolved.networkAllowlist.length > 0)
+    return "network access is limited to allowlisted addresses";
+  return "network access is unrestricted";
+}
+
+export interface SandboxHintInput {
+  /** writablePaths 中 "." 的解析基准，也是可写根目录的显示基准。 */
+  workspace: string;
+  /** 本次命令是否绕过沙箱（Windows、审批通过的全权限、allow-all）。 */
+  unsandboxed: boolean;
+}
+
+/** 命令没经沙箱时沿用 prompt 里的说法，给出在沙盒外重跑的手段。 */
+const SANDBOX_ESCAPE_HATCH =
+  "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.";
+
+/**
+ * 命令失败时附在错误文本后的沙箱状态：写边界（可写根目录、.git 只读）+ 网络层级，
+ * 以及在沙盒外重跑的手段。只报层级不列白名单域名。
+ * 命令没经沙箱（allow-all、审批通过的全权限、Windows）时返回 undefined：
+ * 没有沙箱就没什么可提示的。
+ */
+export function describeSandbox(
+  resolved: ResolvedBwrap,
+  input: SandboxHintInput,
+): string | undefined {
+  if (input.unsandboxed) return undefined;
+  const roots = writableRoots(resolved, input.workspace);
+  const clauses = [
+    roots.length === 0
+      ? "the filesystem is read-only"
+      : `writes are limited to ${roots.map((path) => formatDisplayPath(input.workspace, path)).join(", ")}`,
+    // .git 只读保护只在工作区本身可写时才有区分度（readonly 下整个文件系统都不可写）
+    ...(roots.includes(input.workspace) ? [".git is read-only"] : []),
+    describeNetwork(resolved),
+  ];
+  return [
+    `[Sandbox] This command ran in a sandbox: ${clauses.join("; ")}.`,
+    SANDBOX_ESCAPE_HATCH,
+  ].join("\n");
+}
+
+/**
+ * 把沙箱状态拼到失败文本后（未沙箱执行时保持原文）。失败文本常以换行结尾，
+ * 先 trimEnd 保证状态与命令输出之间只有一个空行。
+ */
+export function appendSandboxHint(text: string, hint: string | undefined): string {
+  return hint === undefined ? text : `${text.trimEnd()}\n\n${hint}`;
+}
+
 export class BwrapRuntime {
   private resolved: ResolvedBwrap | undefined;
   private sandboxDisabled = false;
@@ -383,6 +449,8 @@ export class BwrapRuntime {
       runtime.mihomoPath ??= this.mihomoPath ?? findMihomo();
       this.mihomoPath = runtime.mihomoPath;
     }
+    // 命令失败时附带的沙箱状态（写边界 + 网络层级），由上层拼进错误文本
+    const sandboxHint = describeSandbox(runtime, { workspace, unsandboxed: local });
     await using output = new BashOutput(request.ctx.sessionManager.getSessionId());
     const { onUpdate } = request;
 
@@ -415,6 +483,7 @@ export class BwrapRuntime {
       const partial = await this.finalizeOutput(output);
       return {
         exitCode,
+        sandboxHint,
         output: partial.output,
         ...(partial.fullOutputPath && { fullOutputPath: partial.fullOutputPath }),
         truncation: partial.truncation,
@@ -433,6 +502,7 @@ export class BwrapRuntime {
           "timeout",
           `Command timed out after ${error.message.slice("timeout:".length)} seconds`,
           partial,
+          sandboxHint,
           error,
         );
       }
@@ -440,7 +510,13 @@ export class BwrapRuntime {
       // 兼容 pi local ops 抛的 new Error("aborted")
       if (error instanceof Error && (error.name === "AbortError" || error.message === "aborted")) {
         const partial = await this.finalizeOutput(output);
-        throw new BashInterruptedError("aborted", "Command aborted by user", partial, error);
+        throw new BashInterruptedError(
+          "aborted",
+          "Command aborted by user",
+          partial,
+          sandboxHint,
+          error,
+        );
       }
       throw error;
     } finally {

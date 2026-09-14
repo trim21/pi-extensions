@@ -6,7 +6,11 @@ import { basename, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { type BwrapRuntime, createBwrapRuntime } from "../src/bwrap/runtime.js";
+import {
+  BashInterruptedError,
+  type BwrapRuntime,
+  createBwrapRuntime,
+} from "../src/bwrap/runtime.js";
 import opencodeBash from "../src/opencode/bash.js";
 
 interface RegisteredTool {
@@ -16,6 +20,12 @@ interface RegisteredTool {
 }
 
 const SESSION_ID = "test-session";
+
+/** 沙箱内执行时失败附带的沙箱状态（测试用 runtime 走 allow-all，需注入才可断言）。 */
+const SANDBOX_HINT = [
+  "[Sandbox] This command ran in a sandbox: writes are limited to /tmp; network access is off.",
+  "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.",
+].join("\n");
 
 beforeAll(() => {
   // Bash 输出运行时落盘到 agent-dir/tmp/{session-id}：测试环境指向可写的临时目录
@@ -86,6 +96,50 @@ describe("opencode bash", () => {
       "Command exited with code 4.",
     ]);
     expect(result.details).toMatchObject({ exitCode: 4, truncated: false });
+  });
+
+  it("appends the sandbox status line when the command failed inside the sandbox", async () => {
+    const { tool, runtime } = loadBashTool();
+    vi.spyOn(runtime, "execute").mockResolvedValue({
+      exitCode: 4,
+      sandboxHint: SANDBOX_HINT,
+      output: "boom\n",
+      truncation: { truncated: false } as never,
+    });
+    const result = await tool.execute(
+      "id",
+      { command: "x", timeout: 5_000 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "boom\n",
+      `Command exited with code 4.\n\n${SANDBOX_HINT}`,
+    ]);
+  });
+
+  it("appends the sandbox status line to timeouts inside the sandbox", async () => {
+    const { tool, runtime } = loadBashTool();
+    vi.spyOn(runtime, "execute").mockRejectedValue(
+      new BashInterruptedError(
+        "timeout",
+        "still here",
+        { output: "partial", truncation: { truncated: false } as never },
+        SANDBOX_HINT,
+        new Error("timed out"),
+      ),
+    );
+    const result = await tool.execute(
+      "id",
+      { command: "x", timeout: 20 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toBe(
+      `partial\n\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.\n\n${SANDBOX_HINT}`,
+    );
   });
 
   it("returns a timeout message instead of throwing", async () => {

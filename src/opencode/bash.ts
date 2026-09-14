@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, TruncationResult } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { BashInterruptedError, type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
+import {
+  appendSandboxHint,
+  BashInterruptedError,
+  type BwrapRuntime,
+  createBwrapRuntime,
+} from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -106,9 +111,13 @@ export default function opencodeBash(
             error.partial.truncation,
             error.partial.fullOutputPath,
           );
+          // 超时附带沙箱状态（可能是网络限制让命令挂住）；中断是用户主动取消，与沙箱无关
           const status =
             error.kind === "timeout"
-              ? `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`
+              ? appendSandboxHint(
+                  `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
+                  error.sandboxHint,
+                )
               : "Command aborted by user";
           const full = text ? `${text}\n\n${status}` : status;
           // 对齐上游 opencode：超时与中断都不抛错，输出与状态文本一起返回
@@ -123,10 +132,16 @@ export default function opencodeBash(
       // 命令失败（非 0 退出码）不抛错：输出与状态文本一起返回
       let text = result.output || "(no output)";
       text = appendTruncationNotice(text, result.truncation, result.fullOutputPath);
+      const failed = result.exitCode !== 0 && result.exitCode !== null;
+      // 失败时附带沙箱状态：命令可能是被沙箱的写边界或网络限制挡住的
+      const status = appendSandboxHint(
+        `Command exited with code ${result.exitCode}.`,
+        failed ? result.sandboxHint : undefined,
+      );
       return {
         content: [
           { type: "text" as const, text },
-          { type: "text" as const, text: `Command exited with code ${result.exitCode}.` },
+          { type: "text" as const, text: status },
         ],
         details: {
           exitCode: result.exitCode,

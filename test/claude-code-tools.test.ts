@@ -1243,6 +1243,27 @@ describe("Bash", () => {
     ).rejects.toThrow(/^Exit code 4\nboom\n$/);
   });
 
+  it("appends the sandbox status line when the command failed inside the sandbox", async () => {
+    const runtime = createBwrapRuntime();
+    const sandboxHint = [
+      "[Sandbox] This command ran in a sandbox: writes are limited to /tmp; network access is off.",
+      "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.",
+    ].join("\n");
+    vi.spyOn(runtime, "execute").mockResolvedValue({
+      exitCode: 1,
+      sandboxHint,
+      output: "denied\n",
+      truncation: { truncated: false } as never,
+    });
+    await expect(
+      call(
+        loadBashTool(runtime),
+        { command: "touch /etc/x", timeout: 5_000 },
+        context(process.cwd()),
+      ),
+    ).rejects.toThrow(`Exit code 1\ndenied\n\n${sandboxHint}`);
+  });
+
   it("reports the exit code of the last command in a pipeline", async () => {
     await expect(
       call(

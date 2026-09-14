@@ -10,7 +10,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { BashInterruptedError, type BwrapRuntime, createBwrapRuntime } from "../bwrap/runtime.js";
+import {
+  appendSandboxHint,
+  BashInterruptedError,
+  type BwrapRuntime,
+  createBwrapRuntime,
+} from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -151,10 +156,10 @@ export function registerShellTools(
             const full = text ? `${text}\n\nCommand aborted by user` : "Command aborted by user";
             return { content: [{ type: "text", text: full }], details: undefined };
           }
-          const full = text
+          const status = text
             ? `${text}\n\nCommand timed out after ${timeout} milliseconds`
             : `Command timed out after ${timeout} milliseconds`;
-          throw new Error(full, { cause: error });
+          throw new Error(appendSandboxHint(status, error.sandboxHint), { cause: error });
         }
         throw error;
       }
@@ -165,9 +170,11 @@ export function registerShellTools(
         const full = result.fullOutputPath
           ? await readFile(result.fullOutputPath, "utf8")
           : result.output;
-        throw new Error(formatBashError(result.exitCode, full), {
-          cause: result,
-        });
+        // 失败时附带沙箱状态：命令可能是被沙箱的写边界或网络限制挡住的
+        throw new Error(
+          appendSandboxHint(formatBashError(result.exitCode, full), result.sandboxHint),
+          { cause: result },
+        );
       }
       return formatBashSuccess(result);
     },

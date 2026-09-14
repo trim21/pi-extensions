@@ -43,6 +43,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   };
 });
 
+import { type BwrapConfig, resolveBwrap } from "../src/bwrap/core.js";
 import {
   ALLOW_ONCE,
   BACK,
@@ -50,6 +51,7 @@ import {
   createBwrapRuntime,
   DENY,
   DENY_WITH_REASON,
+  describeSandbox,
   EDIT_RULES,
 } from "../src/bwrap/runtime.js";
 
@@ -844,6 +846,8 @@ describe("Windows (no bwrap): every command requires approval", () => {
     });
     expect(result).toMatchObject({ exitCode: 0 });
     expect(result.output).toContain("printf windows");
+    // 审批通过的全权限命令不在沙箱里跑：没有沙箱可提示
+    expect(result.sandboxHint).toBeUndefined();
     expect(select).not.toHaveBeenCalled();
   });
 
@@ -871,5 +875,64 @@ describe("Windows (no bwrap): every command requires approval", () => {
         ctx: { cwd: process.cwd(), hasUI: false } as never,
       }),
     ).rejects.toThrow(/no UI is available/);
+  });
+});
+
+describe("describeSandbox", () => {
+  const workspace = "/work/project";
+  const baseConfig: BwrapConfig = {
+    mode: "workspace-write",
+    writablePaths: [".", "/tmp"],
+    extraWritablePaths: [],
+    denyPaths: [],
+    extraArgs: [],
+    networkAllowlist: [],
+  };
+  const ESCAPE_HATCH =
+    "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.";
+  function render(overrides: Partial<BwrapConfig>, unsandboxed = false): string | undefined {
+    return describeSandbox(resolveBwrap({ ...baseConfig, ...overrides }), {
+      workspace,
+      unsandboxed,
+    });
+  }
+
+  it("reports the workspace-write boundary: workspace plus /tmp writable, .git read-only, no network", () => {
+    expect(render({})).toBe(
+      `[Sandbox] This command ran in a sandbox: writes are limited to /work/project, /tmp; .git is read-only; network access is off.\n${ESCAPE_HATCH}`,
+    );
+  });
+
+  it("reports read-only mode as a read-only filesystem, without the .git remark", () => {
+    expect(render({ mode: "readonly" })).toBe(
+      `[Sandbox] This command ran in a sandbox: the filesystem is read-only; network access is off.\n${ESCAPE_HATCH}`,
+    );
+  });
+
+  it("separates unrestricted network from an allowlist", () => {
+    expect(render({ mode: "allow-net" })).toContain("network access is unrestricted");
+    expect(render({ mode: "net-allowlist", networkAllowlist: ["example.com"] })).toContain(
+      "network access is limited to allowlisted addresses",
+    );
+    // allowlist 域名不出现在提示里
+    expect(render({ mode: "net-allowlist", networkAllowlist: ["example.com"] })).not.toContain(
+      "example.com",
+    );
+  });
+
+  it("lists every writable root, with ~ and workspace-relative paths shortened", () => {
+    expect(
+      render({
+        writablePaths: ["."],
+        extraWritablePaths: ["/data", "sub", "~/cache", "/data"],
+      }),
+    ).toBe(
+      `[Sandbox] This command ran in a sandbox: writes are limited to /work/project, /data, ./sub, ~/cache; .git is read-only; network access is off.\n${ESCAPE_HATCH}`,
+    );
+  });
+
+  it("returns no hint when the command ran outside the sandbox", () => {
+    expect(render({ mode: "workspace-write" }, true)).toBeUndefined();
+    expect(render({ mode: "allow-all" }, true)).toBeUndefined();
   });
 });
