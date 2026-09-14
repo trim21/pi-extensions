@@ -11,10 +11,10 @@ import {
 import { Type } from "typebox";
 
 import {
-  appendSandboxHint,
   BashInterruptedError,
   type BwrapRuntime,
   createBwrapRuntime,
+  sandboxHintBlock,
 } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
 
@@ -156,25 +156,31 @@ export function registerShellTools(
             const full = text ? `${text}\n\nCommand aborted by user` : "Command aborted by user";
             return { content: [{ type: "text", text: full }], details: undefined };
           }
-          const status = text
+          const full = text
             ? `${text}\n\nCommand timed out after ${timeout} milliseconds`
             : `Command timed out after ${timeout} milliseconds`;
-          throw new Error(appendSandboxHint(status, error.sandboxHint), { cause: error });
+          return {
+            content: [{ type: "text", text: full }, ...sandboxHintBlock(error.sandboxHint)],
+            details: undefined,
+          };
         }
         throw error;
       }
 
-      // 对齐 Claude Code：非 0 退出码视为错误（不做 grep/find 等命令语义化特判，
-      // 任何非 0 都抛错）；错误文本用完整输出（从落盘文件读取，必要时头尾截断）
+      // 对齐 Claude Code：非 0 退出码都算失败（不做 grep/find 等命令语义化特判）。
+      // 失败是命令的正常结果而不是异常：与成功一样 return，文本用完整输出
+      // （从落盘文件读取，必要时头尾截断），沙箱状态另行附一块
       if (result.exitCode !== 0 && result.exitCode !== null) {
         const full = result.fullOutputPath
           ? await readFile(result.fullOutputPath, "utf8")
           : result.output;
-        // 失败时附带沙箱状态：命令可能是被沙箱的写边界或网络限制挡住的
-        throw new Error(
-          appendSandboxHint(formatBashError(result.exitCode, full), result.sandboxHint),
-          { cause: result },
-        );
+        return {
+          content: [
+            { type: "text", text: formatBashError(result.exitCode, full) },
+            ...sandboxHintBlock(result.sandboxHint),
+          ],
+          details: undefined,
+        };
       }
       return formatBashSuccess(result);
     },

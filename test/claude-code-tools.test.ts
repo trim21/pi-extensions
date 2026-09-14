@@ -1187,25 +1187,31 @@ describe("Bash", () => {
   });
 
   it("uses millisecond timeouts", async () => {
-    await expect(
-      call(bashTool, { command: "sleep 1", timeout: 20 }, context(process.cwd())),
-    ).rejects.toThrow(/20 milliseconds/);
+    const result = await call(
+      bashTool,
+      { command: "sleep 1", timeout: 20 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toBe("Command timed out after 20 milliseconds");
   });
 
   it("force-stops commands that ignore SIGTERM", async () => {
-    await expect(
-      call(
-        bashTool,
-        { command: "trap '' TERM; while :; do sleep 1; done", timeout: 20 },
-        context(process.cwd()),
-      ),
-    ).rejects.toThrow(/20 milliseconds/);
+    const result = await call(
+      bashTool,
+      { command: "trap '' TERM; while :; do sleep 1; done", timeout: 20 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toContain("Command timed out after 20 milliseconds");
   });
 
   it("includes partial output before the timeout message", async () => {
-    await expect(
-      call(bashTool, { command: "printf partial; sleep 1", timeout: 20 }, context(process.cwd())),
-    ).rejects.toThrow(/^partial\n\nCommand timed out after 20 milliseconds$/);
+    const result = await call(
+      bashTool,
+      { command: "printf partial; sleep 1", timeout: 20 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toBe("partial\n\nCommand timed out after 20 milliseconds");
+    expect(result.details).toBeUndefined();
   });
 
   it("returns partial output with an abort status when aborted", async () => {
@@ -1222,31 +1228,30 @@ describe("Bash", () => {
     expect(result.content[0].text).toBe("partial\n\nCommand aborted by user");
   });
 
-  it("fails any non-zero exit with Exit code N, without command semantics", async () => {
-    // grep 无匹配（exit 1）在 CC 里是"正常"，但我们不做语义化特判，一律报错
-    await expect(
-      call(
-        bashTool,
-        { command: "grep definitely-not-present /dev/null", timeout: 5_000 },
-        context(process.cwd()),
-      ),
-    ).rejects.toThrow(/^Exit code 1$/);
+  it("returns Exit code N for any non-zero exit, without command semantics", async () => {
+    // grep 无匹配（exit 1）在 CC 里是"正常"，但我们不做语义化特判，一律按失败返回
+    const result = await call(
+      bashTool,
+      { command: "grep definitely-not-present /dev/null", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual(["Exit code 1"]);
+    expect(result.details).toBeUndefined();
   });
 
   it("includes the full output for failed commands", async () => {
-    await expect(
-      call(
-        bashTool,
-        { command: "sh -c 'echo boom; exit 4'", timeout: 5_000 },
-        context(process.cwd()),
-      ),
-    ).rejects.toThrow(/^Exit code 4\nboom\n$/);
+    const result = await call(
+      bashTool,
+      { command: "sh -c 'echo boom; exit 4'", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toBe("Exit code 4\nboom\n");
   });
 
-  it("appends the sandbox status line when the command failed inside the sandbox", async () => {
+  it("appends the sandbox status as an extra content block for failures inside the sandbox", async () => {
     const runtime = createBwrapRuntime();
     const sandboxHint = [
-      "[Sandbox] This command ran in a sandbox: writes are limited to /tmp; network access is off.",
+      "[Sandbox] This command ran in a sandbox: / is read-only, ./ is writable, ./.git/ is read-only; network access is off.",
       "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.",
     ].join("\n");
     vi.spyOn(runtime, "execute").mockResolvedValue({
@@ -1255,23 +1260,24 @@ describe("Bash", () => {
       output: "denied\n",
       truncation: { truncated: false } as never,
     });
-    await expect(
-      call(
-        loadBashTool(runtime),
-        { command: "touch /etc/x", timeout: 5_000 },
-        context(process.cwd()),
-      ),
-    ).rejects.toThrow(`Exit code 1\ndenied\n\n${sandboxHint}`);
+    const result = await call(
+      loadBashTool(runtime),
+      { command: "touch /etc/x", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "Exit code 1\ndenied\n",
+      sandboxHint,
+    ]);
   });
 
   it("reports the exit code of the last command in a pipeline", async () => {
-    await expect(
-      call(
-        bashTool,
-        { command: "printf x | rg definitely-not-present", timeout: 5_000 },
-        context(process.cwd()),
-      ),
-    ).rejects.toThrow(/^Exit code 1$/);
+    const result = await call(
+      bashTool,
+      { command: "printf x | rg definitely-not-present", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content[0].text).toBe("Exit code 1");
   });
 
   it("streams large output to a file and returns only the truncated tail", async () => {

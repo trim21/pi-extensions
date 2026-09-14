@@ -21,12 +21,6 @@ interface RegisteredTool {
 
 const SESSION_ID = "test-session";
 
-/** 沙箱内执行时失败附带的沙箱状态（测试用 runtime 走 allow-all，需注入才可断言）。 */
-const SANDBOX_HINT = [
-  "[Sandbox] This command ran in a sandbox: writes are limited to /tmp; network access is off.",
-  "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.",
-].join("\n");
-
 beforeAll(() => {
   // Bash 输出运行时落盘到 agent-dir/tmp/{session-id}：测试环境指向可写的临时目录
   process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "cc-opencode-bash-"));
@@ -98,11 +92,15 @@ describe("opencode bash", () => {
     expect(result.details).toMatchObject({ exitCode: 4, truncated: false });
   });
 
-  it("appends the sandbox status line when the command failed inside the sandbox", async () => {
+  it("appends the sandbox status as an extra content block for failures inside the sandbox", async () => {
     const { tool, runtime } = loadBashTool();
+    const sandboxHint = [
+      "[Sandbox] This command ran in a sandbox: / is read-only, ./ is writable, ./.git/ is read-only; network access is off.",
+      "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.",
+    ].join("\n");
     vi.spyOn(runtime, "execute").mockResolvedValue({
       exitCode: 4,
-      sandboxHint: SANDBOX_HINT,
+      sandboxHint,
       output: "boom\n",
       truncation: { truncated: false } as never,
     });
@@ -115,18 +113,41 @@ describe("opencode bash", () => {
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
       "boom\n",
-      `Command exited with code 4.\n\n${SANDBOX_HINT}`,
+      "Command exited with code 4.",
+      sandboxHint,
     ]);
   });
 
-  it("appends the sandbox status line to timeouts inside the sandbox", async () => {
+  it("does not append the sandbox status for successful commands", async () => {
     const { tool, runtime } = loadBashTool();
+    vi.spyOn(runtime, "execute").mockResolvedValue({
+      exitCode: 0,
+      sandboxHint: "sandbox status",
+      output: "done",
+      truncation: { truncated: false } as never,
+    });
+    const result = await tool.execute(
+      "id",
+      { command: "x", timeout: 5_000 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "done",
+      "Command exited with code 0.",
+    ]);
+  });
+
+  it("appends the sandbox status when the command timed out inside the sandbox", async () => {
+    const { tool, runtime } = loadBashTool();
+    const sandboxHint = "sandbox status";
     vi.spyOn(runtime, "execute").mockRejectedValue(
       new BashInterruptedError(
         "timeout",
         "still here",
         { output: "partial", truncation: { truncated: false } as never },
-        SANDBOX_HINT,
+        sandboxHint,
         new Error("timed out"),
       ),
     );
@@ -137,9 +158,10 @@ describe("opencode bash", () => {
       undefined,
       context(process.cwd()),
     );
-    expect(result.content[0].text).toBe(
-      `partial\n\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.\n\n${SANDBOX_HINT}`,
-    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "partial\n\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
+      sandboxHint,
+    ]);
   });
 
   it("returns a timeout message instead of throwing", async () => {

@@ -5,10 +5,10 @@ import type { ExtensionAPI, TruncationResult } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 
 import {
-  appendSandboxHint,
   BashInterruptedError,
   type BwrapRuntime,
   createBwrapRuntime,
+  sandboxHintBlock,
 } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
 
@@ -111,18 +111,18 @@ export default function opencodeBash(
             error.partial.truncation,
             error.partial.fullOutputPath,
           );
-          // 超时附带沙箱状态（可能是网络限制让命令挂住）；中断是用户主动取消，与沙箱无关
           const status =
             error.kind === "timeout"
-              ? appendSandboxHint(
-                  `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
-                  error.sandboxHint,
-                )
+              ? `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`
               : "Command aborted by user";
           const full = text ? `${text}\n\n${status}` : status;
-          // 对齐上游 opencode：超时与中断都不抛错，输出与状态文本一起返回
+          // 对齐上游 opencode：超时与中断都不抛错，输出与状态文本一起返回；
+          // 超时可能是沙箱的网络限制导致的，附加沙箱状态（用户中断与沙箱无关）
           return {
-            content: [{ type: "text" as const, text: full }],
+            content: [
+              { type: "text" as const, text: full },
+              ...sandboxHintBlock(error.kind === "timeout" ? error.sandboxHint : undefined),
+            ],
             details: error.kind === "timeout" ? { timeout: true } : {},
           };
         }
@@ -133,15 +133,12 @@ export default function opencodeBash(
       let text = result.output || "(no output)";
       text = appendTruncationNotice(text, result.truncation, result.fullOutputPath);
       const failed = result.exitCode !== 0 && result.exitCode !== null;
-      // 失败时附带沙箱状态：命令可能是被沙箱的写边界或网络限制挡住的
-      const status = appendSandboxHint(
-        `Command exited with code ${result.exitCode}.`,
-        failed ? result.sandboxHint : undefined,
-      );
       return {
         content: [
           { type: "text" as const, text },
-          { type: "text" as const, text: status },
+          { type: "text" as const, text: `Command exited with code ${result.exitCode}.` },
+          // 失败可能是被沙箱的写边界或网络限制挡住的，附一块沙箱状态
+          ...sandboxHintBlock(failed ? result.sandboxHint : undefined),
         ],
         details: {
           exitCode: result.exitCode,

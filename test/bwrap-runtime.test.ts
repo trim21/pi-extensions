@@ -846,8 +846,6 @@ describe("Windows (no bwrap): every command requires approval", () => {
     });
     expect(result).toMatchObject({ exitCode: 0 });
     expect(result.output).toContain("printf windows");
-    // 审批通过的全权限命令不在沙箱里跑：没有沙箱可提示
-    expect(result.sandboxHint).toBeUndefined();
     expect(select).not.toHaveBeenCalled();
   });
 
@@ -879,7 +877,6 @@ describe("Windows (no bwrap): every command requires approval", () => {
 });
 
 describe("describeSandbox", () => {
-  const workspace = "/work/project";
   const baseConfig: BwrapConfig = {
     mode: "workspace-write",
     writablePaths: [".", "/tmp"],
@@ -891,19 +888,16 @@ describe("describeSandbox", () => {
   const ESCAPE_HATCH =
     "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.";
   function render(overrides: Partial<BwrapConfig>, unsandboxed = false): string | undefined {
-    return describeSandbox(resolveBwrap({ ...baseConfig, ...overrides }), {
-      workspace,
-      unsandboxed,
-    });
+    return describeSandbox(resolveBwrap({ ...baseConfig, ...overrides }), unsandboxed);
   }
 
-  it("reports the workspace-write boundary: workspace plus /tmp writable, .git read-only, no network", () => {
+  it("reports the default write boundary: / read-only, ./ writable, ./.git/ read-only", () => {
     expect(render({})).toBe(
-      `[Sandbox] This command ran in a sandbox: writes are limited to /work/project, /tmp; .git is read-only; network access is off.\n${ESCAPE_HATCH}`,
+      `[Sandbox] This command ran in a sandbox: / is read-only, ./ is writable, ./.git/ is read-only; network access is off.\n${ESCAPE_HATCH}`,
     );
   });
 
-  it("reports read-only mode as a read-only filesystem, without the .git remark", () => {
+  it("reports read-only mode as a read-only filesystem", () => {
     expect(render({ mode: "readonly" })).toBe(
       `[Sandbox] This command ran in a sandbox: the filesystem is read-only; network access is off.\n${ESCAPE_HATCH}`,
     );
@@ -920,14 +914,14 @@ describe("describeSandbox", () => {
     );
   });
 
-  it("lists every writable root, with ~ and workspace-relative paths shortened", () => {
+  it("ignores configured extra writable paths: the hint describes the default layout", () => {
     expect(
       render({
         writablePaths: ["."],
-        extraWritablePaths: ["/data", "sub", "~/cache", "/data"],
+        extraWritablePaths: ["/data", "sub", "~/cache"],
       }),
     ).toBe(
-      `[Sandbox] This command ran in a sandbox: writes are limited to /work/project, /data, ./sub, ~/cache; .git is read-only; network access is off.\n${ESCAPE_HATCH}`,
+      `[Sandbox] This command ran in a sandbox: / is read-only, ./ is writable, ./.git/ is read-only; network access is off.\n${ESCAPE_HATCH}`,
     );
   });
 
