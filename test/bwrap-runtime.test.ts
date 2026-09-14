@@ -885,22 +885,22 @@ describe("describeSandbox", () => {
     extraArgs: [],
     networkAllowlist: [],
   };
-  const ESCAPE_HATCH =
-    "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.";
   function render(overrides: Partial<BwrapConfig>, unsandboxed = false): string | undefined {
     return describeSandbox(resolveBwrap({ ...baseConfig, ...overrides }), unsandboxed);
   }
 
-  it("reports the default write boundary: / read-only, ./ writable, ./.git/ read-only", () => {
-    expect(render({})).toBe(
-      `[Sandbox] This command ran in a sandbox: / is read-only, ./ is writable, ./.git/ is read-only; network access is off.\n${ESCAPE_HATCH}`,
-    );
+  it("reports the default write boundary: / read-only, /tmp/ and ./ writable, ./.git/ read-only", () => {
+    expect(render({})).toMatchInlineSnapshot(`
+      "[Sandbox] This command ran in a sandbox: / is read-only, /tmp/ and ./ are writable, ./.git/ is read-only; network access is off.
+      [Sandbox] If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request."
+    `);
   });
 
   it("reports read-only mode as a read-only filesystem", () => {
-    expect(render({ mode: "readonly" })).toBe(
-      `[Sandbox] This command ran in a sandbox: the filesystem is read-only; network access is off.\n${ESCAPE_HATCH}`,
-    );
+    expect(render({ mode: "readonly" })).toMatchInlineSnapshot(`
+      "[Sandbox] This command ran in a sandbox: the filesystem is read-only; network access is off.
+      [Sandbox] If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request."
+    `);
   });
 
   it("separates unrestricted network from an allowlist", () => {
@@ -920,9 +920,10 @@ describe("describeSandbox", () => {
         writablePaths: ["."],
         extraWritablePaths: ["/data", "sub", "~/cache"],
       }),
-    ).toBe(
-      `[Sandbox] This command ran in a sandbox: / is read-only, ./ is writable, ./.git/ is read-only; network access is off.\n${ESCAPE_HATCH}`,
-    );
+    ).toMatchInlineSnapshot(`
+      "[Sandbox] This command ran in a sandbox: / is read-only, /tmp/ and ./ are writable, ./.git/ is read-only; network access is off.
+      [Sandbox] If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request."
+    `);
   });
 
   it("returns no hint when the command ran outside the sandbox", () => {

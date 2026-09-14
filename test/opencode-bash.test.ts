@@ -94,13 +94,10 @@ describe("opencode bash", () => {
 
   it("appends the sandbox status as an extra content block for failures inside the sandbox", async () => {
     const { tool, runtime } = loadBashTool();
-    const sandboxHint = [
-      "[Sandbox] This command ran in a sandbox: / is read-only, ./ is writable, ./.git/ is read-only; network access is off.",
-      "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.",
-    ].join("\n");
+    // runtime 的沙箱状态文本由 bwrap-runtime 的单测断言，这里只验证它作为额外一块被附上
     vi.spyOn(runtime, "execute").mockResolvedValue({
       exitCode: 4,
-      sandboxHint,
+      sandboxHint: "sandbox status",
       output: "boom\n",
       truncation: { truncated: false } as never,
     });
@@ -111,11 +108,14 @@ describe("opencode bash", () => {
       undefined,
       context(process.cwd()),
     );
-    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "boom\n",
-      "Command exited with code 4.",
-      sandboxHint,
-    ]);
+    expect(result.content.map((block: { text: string }) => block.text)).toMatchInlineSnapshot(`
+      [
+        "boom
+      ",
+        "Command exited with code 4.",
+        "sandbox status",
+      ]
+    `);
   });
 
   it("does not append the sandbox status for successful commands", async () => {
@@ -133,21 +133,22 @@ describe("opencode bash", () => {
       undefined,
       context(process.cwd()),
     );
-    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "done",
-      "Command exited with code 0.",
-    ]);
+    expect(result.content.map((block: { text: string }) => block.text)).toMatchInlineSnapshot(`
+      [
+        "done",
+        "Command exited with code 0.",
+      ]
+    `);
   });
 
   it("appends the sandbox status when the command timed out inside the sandbox", async () => {
     const { tool, runtime } = loadBashTool();
-    const sandboxHint = "sandbox status";
     vi.spyOn(runtime, "execute").mockRejectedValue(
       new BashInterruptedError(
         "timeout",
         "still here",
         { output: "partial", truncation: { truncated: false } as never },
-        sandboxHint,
+        "sandbox status",
         new Error("timed out"),
       ),
     );
@@ -158,10 +159,14 @@ describe("opencode bash", () => {
       undefined,
       context(process.cwd()),
     );
-    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "partial\n\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
-      sandboxHint,
-    ]);
+    expect(result.content.map((block: { text: string }) => block.text)).toMatchInlineSnapshot(`
+      [
+        "partial
+
+      Command exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
+        "sandbox status",
+      ]
+    `);
   });
 
   it("returns a timeout message instead of throwing", async () => {

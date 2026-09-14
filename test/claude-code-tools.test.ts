@@ -1250,13 +1250,10 @@ describe("Bash", () => {
 
   it("appends the sandbox status as an extra content block for failures inside the sandbox", async () => {
     const runtime = createBwrapRuntime();
-    const sandboxHint = [
-      "[Sandbox] This command ran in a sandbox: / is read-only, ./ is writable, ./.git/ is read-only; network access is off.",
-      "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.",
-    ].join("\n");
+    // runtime 的沙箱状态文本由 bwrap-runtime 的单测断言，这里只验证它作为额外一块被附上
     vi.spyOn(runtime, "execute").mockResolvedValue({
       exitCode: 1,
-      sandboxHint,
+      sandboxHint: "sandbox status",
       output: "denied\n",
       truncation: { truncated: false } as never,
     });
@@ -1265,10 +1262,14 @@ describe("Bash", () => {
       { command: "touch /etc/x", timeout: 5_000 },
       context(process.cwd()),
     );
-    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "Exit code 1\ndenied\n",
-      sandboxHint,
-    ]);
+    expect(result.content.map((block: { text: string }) => block.text)).toMatchInlineSnapshot(`
+      [
+        "Exit code 1
+      denied
+      ",
+        "sandbox status",
+      ]
+    `);
   });
 
   it("reports the exit code of the last command in a pipeline", async () => {

@@ -260,8 +260,8 @@ function notifyMode(
   ctx.ui.notify(labels[mode], "info");
 }
 
-/** 沙箱默认写边界：根只读、工作区可写、.git 只读。不展开用户配置的额外可写路径。 */
-const SANDBOX_WRITE_RULES = "/ is read-only, ./ is writable, ./.git/ is read-only";
+/** 沙箱默认写边界：根只读、工作区与 /tmp 可写、.git 只读。不展开用户配置的额外可写路径。 */
+const SANDBOX_WRITE_RULES = "/ is read-only, /tmp/ and ./ are writable, ./.git/ is read-only";
 
 /** 网络层级：关 / 只放行白名单 / 完全放开（白名单域名本身不列出，对判断失败无用）。 */
 function describeNetwork(resolved: ResolvedBwrap): string {
