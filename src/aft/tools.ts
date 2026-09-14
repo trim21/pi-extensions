@@ -41,6 +41,14 @@ const SEARCH_PROMPT = readFileSync(
   fileURLToPath(new URL("search.md", import.meta.url)),
   "utf8",
 ).trim();
+/**
+ * 四个工具共用的使用准则，挂在结构入口 aft_outline 上注入一次：pi 的
+ * promptGuidelines 是 per-tool 的，而这条讲的是整个 AFT 工具集的分工。
+ */
+const AFT_GUIDELINES = readFileSync(
+  fileURLToPath(new URL("guidelines.md", import.meta.url)),
+  "utf8",
+).trim();
 
 export interface AftToolContext {
   cwd: string;
@@ -124,7 +132,7 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
       "target 为目录时默认返回扁平文件树（语言、顶层符号数、字节大小）；传 files: false 可改回符号大纲。",
     ].join("\n"),
     promptSnippet: "Output structural outline of a file/directory",
-    promptGuidelines: [OUTLINE_PROMPT],
+    promptGuidelines: [OUTLINE_PROMPT, AFT_GUIDELINES],
     parameters: OutlineParams,
     async execute(_id, params, signal, _onUpdate, extCtx) {
       const target = coerceTargetParam(params.target);
