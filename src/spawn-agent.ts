@@ -532,7 +532,8 @@ export default function spawnAgent(pi: ExtensionAPI) {
     name: "spawn-agent",
     label: "spawn-agent",
     description: [
-      "Delegate a task to a subagent running in a separate pi process with an isolated context window.",
+      "Delegate a task to a subagent that runs in an isolated session with its own context window, inside this pi process rather than a separate one.",
+      "The call blocks until the subagent finishes its turn; its final output comes back as the tool result.",
       "The `agent` parameter must be one of the available subagent types listed in the system prompt.",
       `Subagents run read-only (${DEFAULT_TOOLS.join(", ")}) unless the agent declares an explicit toolset.`,
     ].join(" "),
