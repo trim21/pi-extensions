@@ -1256,7 +1256,9 @@ describe("Bash", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     controller.abort();
     const result = await promise;
-    expect(result.content[0].text).toBe("partial\n\nCommand aborted by user");
+    expect(result.content[0].text).toMatch(
+      /^partial\n\nCommand aborted by user after \d+\.\d seconds$/,
+    );
   });
 
   it("returns Exit code N for any non-zero exit, without command semantics", async () => {

@@ -115,21 +115,33 @@ export class BashInterruptedError extends Error {
   readonly kind: "timeout" | "aborted";
   readonly partial: BashExecutionPartial;
   readonly sandboxHint: string | undefined;
+  /**
+   * 命令实际运行时长（毫秒）：从审批结束、命令真正开始执行算到终止，
+   * 不含审批弹窗等用户 UI 交互耗时。
+   */
+  readonly elapsedMs: number;
 
   constructor(
     kind: "timeout" | "aborted",
     message: string,
     partial: BashExecutionPartial,
     sandboxHint: string | undefined,
+    elapsedMs: number,
     cause: unknown,
   ) {
     super(message, { cause });
     this.kind = kind;
     this.partial = partial;
     this.sandboxHint = sandboxHint;
+    this.elapsedMs = elapsedMs;
     // 对齐标准错误分类：中断=AbortError（用户取消），超时=TimeoutError
     this.name = kind === "aborted" ? "AbortError" : "TimeoutError";
   }
+}
+
+/** 命令运行时长的展示文案（秒，一位小数），超时/中断状态文本共用。 */
+export function formatElapsedSeconds(elapsedMs: number): string {
+  return `${(elapsedMs / 1000).toFixed(1)} seconds`;
 }
 
 function escapeHtml(text: string): string {
@@ -425,6 +437,8 @@ export class BwrapRuntime {
     }
     // 命令失败时附带的沙箱状态（写边界 + 网络层级），由上层拼进错误文本
     const sandboxHint = describeSandbox(runtime, local);
+    // 计时起点放在审批之后：审批弹窗的等待时长属于用户 UI 操作，不是命令运行时间
+    const startedAt = Date.now();
     await using output = new BashOutput(request.ctx.sessionManager.getSessionId());
     const { onUpdate } = request;
 
@@ -463,6 +477,7 @@ export class BwrapRuntime {
         truncation: partial.truncation,
       };
     } catch (error) {
+      const elapsedMs = Date.now() - startedAt;
       // 超时/中断：把命令终止前已捕获的输出附在错误上（文本 + 落盘路径），
       // 展示时输出在前、状态在最后（对齐 pi 内置 bash），避免只报超时丢输出
       // 超时识别：优先 name=TimeoutError（对齐标准错误分类），
@@ -477,6 +492,7 @@ export class BwrapRuntime {
           `Command timed out after ${error.message.slice("timeout:".length)} seconds`,
           partial,
           sandboxHint,
+          elapsedMs,
           error,
         );
       }
@@ -489,6 +505,7 @@ export class BwrapRuntime {
           "Command aborted by user",
           partial,
           sandboxHint,
+          elapsedMs,
           error,
         );
       }

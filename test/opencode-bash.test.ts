@@ -149,6 +149,7 @@ describe("opencode bash", () => {
         "still here",
         { output: "partial", truncation: { truncated: false } as never },
         "sandbox status",
+        20,
         new Error("timed out"),
       ),
     );
@@ -213,7 +214,7 @@ describe("opencode bash", () => {
     controller.abort();
     const result = await promise;
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "partial\n\nCommand aborted by user",
+      expect.stringMatching(/^partial\n\nCommand aborted by user after \d+\.\d seconds$/),
     ]);
     expect(result.details).toEqual({});
   });

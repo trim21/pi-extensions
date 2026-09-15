@@ -14,6 +14,7 @@ import {
   BashInterruptedError,
   type BwrapRuntime,
   createBwrapRuntime,
+  formatElapsedSeconds,
   sandboxHintBlock,
 } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
@@ -152,9 +153,13 @@ export function registerShellTools(
             error.partial.fullOutputPath,
           );
           if (error.kind === "aborted") {
-            // 用户取消：直接返回已捕获的输出，不抛错
-            const full = text ? `${text}\n\nCommand aborted by user` : "Command aborted by user";
-            return { content: [{ type: "text", text: full }], details: undefined };
+            // 用户取消：直接返回已捕获的输出，不抛错；时长只算命令真正运行的时间，
+            // 不含审批弹窗等 UI 交互
+            const status = `Command aborted by user after ${formatElapsedSeconds(error.elapsedMs)}`;
+            return {
+              content: [{ type: "text", text: text ? `${text}\n\n${status}` : status }],
+              details: undefined,
+            };
           }
           const full = text
             ? `${text}\n\nCommand timed out after ${timeout} milliseconds`

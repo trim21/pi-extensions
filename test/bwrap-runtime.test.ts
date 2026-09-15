@@ -47,6 +47,7 @@ import { type BwrapConfig, resolveBwrap } from "../src/bwrap/core.js";
 import {
   ALLOW_ONCE,
   BACK,
+  BashInterruptedError,
   type BwrapRuntime,
   createBwrapRuntime,
   DENY,
@@ -218,12 +219,39 @@ describe("BwrapRuntime", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 100));
     controller.abort();
-    await expect(promise).rejects.toMatchObject({
+    const abortError = (await promise.catch((error: unknown) => error)) as BashInterruptedError;
+    expect(abortError).toBeInstanceOf(BashInterruptedError);
+    expect(abortError).toMatchObject({
       kind: "aborted",
       name: "AbortError",
       message: "Command aborted by user",
-      partial: { output: "partial" },
     });
+    expect(abortError.partial.output).toBe("partial");
+    expect(abortError.elapsedMs).toBeGreaterThanOrEqual(100);
+  });
+
+  it("excludes the approval dialog wait from the aborted duration", async () => {
+    const { runtime } = setupRuntime();
+    runtime.setMode(process.cwd(), "workspace-write");
+    const controller = new AbortController();
+    // 审批弹窗停留 200ms 才放行：这段等待是用户 UI 操作，不属于命令运行时间
+    const select = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return ALLOW_ONCE;
+    });
+    const promise = runtime.execute({
+      toolCallId: "test",
+      command: "printf partial; sleep 5",
+      requestFullAccess: true,
+      signal: controller.signal,
+      ctx: fullAccessContext({ select, input: vi.fn() }, vi.fn(), process.cwd()),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    controller.abort();
+    const abortError = (await promise.catch((error: unknown) => error)) as BashInterruptedError;
+    expect(select).toHaveBeenCalled();
+    expect(abortError.kind).toBe("aborted");
+    expect(abortError.elapsedMs).toBeLessThan(150);
   });
 
   it("rejects full-access requests before execution without a UI", async () => {
