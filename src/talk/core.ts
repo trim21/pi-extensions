@@ -148,6 +148,8 @@ export class TalkCore {
   private sweeper: ReturnType<typeof setInterval> | undefined;
   private initialDrain: ReturnType<typeof setTimeout> | undefined;
   private lastDeliveryFailureAt = 0;
+  /** 已上报故障的后台动作名；成功一次后移除，允许再次上报（见 runInBackground）。 */
+  private readonly backgroundFailuresReported = new Set<string>();
 
   constructor(options: TalkCoreOptions) {
     this.storage = options.storage;
@@ -168,11 +170,18 @@ export class TalkCore {
   // ── Lifecycle ──────────────────────────────────────────────────────────
 
   async start(self: AgentRecord): Promise<void> {
-    await this.storage.init();
     // Record the process start time so presence can rule out pid reuse later.
     const pidStart = readStartTime(self.pid);
     this.self = pidStart === undefined ? self : { ...self, pidStart };
-    await writeRecord(this.storage, this.self);
+    try {
+      await this.storage.init();
+      await writeRecord(this.storage, this.self);
+    } catch (error) {
+      // 注册失败不是致命错误：本进程的 talk 工具照常可用，只是对等方看不到本
+      // agent。调用方（pi 的 session_start 回调）是 fire-and-forget，抛出去就是
+      // unhandled rejection，pi 会整体退出。
+      this.notifyBackgroundFailure("registration", error);
+    }
     try {
       await sweep(this.storage, this.now());
     } catch {
@@ -181,13 +190,13 @@ export class TalkCore {
     this.startInboxPoll();
     // Reclaim dead records periodically, not just at startup.
     this.sweeper = setInterval(() => {
-      void sweep(this.storage, this.now());
+      this.runInBackground("record sweep", () => sweep(this.storage, this.now()));
     }, SWEEP_INTERVAL_MS);
     this.sweeper.unref();
     // Drain mail queued while offline — deferred: delivering during
     // session_start races the agent's own first turn.
     const initial = setTimeout(() => {
-      void this.checkInbox();
+      this.runInBackground("inbox poll", () => this.checkInbox());
     }, INITIAL_DRAIN_DELAY_MS);
     initial.unref();
     this.initialDrain = initial;
@@ -235,10 +244,38 @@ export class TalkCore {
     }
   }
 
+  /**
+   * 后台动作失败的上报：同一个动作只报一次（轮询间隔只有几秒，持续失败会刷屏），
+   * 该动作下次成功后再失败会重新上报。通知通道本身出错也不能逃逸。
+   */
+  private notifyBackgroundFailure(action: string, error: unknown): void {
+    if (this.backgroundFailuresReported.has(action)) return;
+    this.backgroundFailuresReported.add(action);
+    const detail = error instanceof Error ? error.message : String(error);
+    try {
+      this.events.notify(`talk: ${action} failed: ${detail}`);
+    } catch {
+      // 通知通道不可用（如陈旧会话）：无处上报，也绝不能让它变成 rejection
+    }
+  }
+
+  /**
+   * 后台动作的 fire-and-forget 包装：收件箱轮询、记录回收与 presence 监视都没有
+   * 调用方可以 await，rejection 逃逸出去就是 unhandled rejection —— pi 会因此整体
+   * 退出（LSP 扩展踩过同一个坑）。这类失败只上报，agent 继续运行。
+   */
+  private runInBackground(action: string, task: () => Promise<void>): void {
+    void task()
+      .then(() => this.backgroundFailuresReported.delete(action))
+      .catch((error: unknown) => {
+        this.notifyBackgroundFailure(action, error);
+      });
+  }
+
   private startInboxPoll(): void {
     if (this.inboxPoll) return;
     this.inboxPoll = setInterval(() => {
-      void this.checkInbox();
+      this.runInBackground("inbox poll", () => this.checkInbox());
     }, INBOX_POLL_MS);
     this.inboxPoll.unref();
   }
@@ -752,7 +789,7 @@ export class TalkCore {
   private startWatchPoller(): void {
     if (this.watchPoller) return;
     this.watchPoller = setInterval(() => {
-      void this.pollWatched();
+      this.runInBackground("presence watch", () => this.pollWatched());
     }, WATCH_POLL_MS);
     this.watchPoller.unref();
   }

@@ -187,7 +187,16 @@ export default function talk(pi: ExtensionAPI) {
       lastSeenAt: now,
       status: "idle",
     };
-    void core.start(self).then(() => refreshGroupStatus(ctx.ui));
+    // core.start 内部的注册失败会自己上报（见 core.ts 的 notifyBackgroundFailure）；
+    // 这里再兜一层：这是 fire-and-forget 调用，没有任何调用方 await，rejection
+    // 逃逸出去就是 unhandled rejection，pi 会整体退出。
+    void core
+      .start(self)
+      .then(() => refreshGroupStatus(ctx.ui))
+      .catch(() => {
+        // 注册失败由 core 上报，refreshGroupStatus 内部也有 try/catch；
+        // 这里只保证不再抛（含会话已切走时 ctx 变 stale 的情况）
+      });
   });
 
   pi.on("agent_start", () => core.setWorking());

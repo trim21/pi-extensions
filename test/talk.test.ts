@@ -61,9 +61,8 @@ function makeStorage(): { storage: SqliteTalkStorage } {
 }
 
 afterEach(async () => {
-  // 顺序很重要：先停掉 core 的轮询定时器（否则会访问已关闭的 storage 并
-  // 产生 unhandled rejection），再关闭 SQLite 句柄，最后删目录——Windows 上
-  // 被占用的目录无法删除（EPERM）。
+  // 顺序很重要：先停掉 core 的轮询定时器（不让它们继续访问已关闭的 storage），
+  // 再关闭 SQLite 句柄，最后删目录——Windows 上被占用的目录无法删除（EPERM）。
   await Promise.allSettled(cores.map((core) => core.stop()));
   cores.length = 0;
   for (const storage of storages) {
@@ -1084,4 +1083,32 @@ describe("TalkCore", () => {
     const records = await listRecords(storage);
     expect(records.map((r) => r.addr)).not.toContain("aaaaaaaaaaaa");
   });
+
+  it("后台轮询失败只上报一次，且不会变成 unhandled rejection", async () => {
+    const { storage } = makeStorage();
+    // 收件箱轮询走 listKeys：让它失败，模拟 storage 不可用（数据库被占/已关闭）
+    vi.spyOn(storage, "listKeys").mockRejectedValue(new Error("inbox unavailable"));
+    const notifications: string[] = [];
+    const core = new TalkCore({
+      storage,
+      events: {
+        deliver: () => true,
+        notify: (content) => {
+          notifications.push(content);
+        },
+      },
+    });
+    cores.push(core);
+
+    // start 本身不能抛：它是 pi 的 session_start 回调里的 fire-and-forget 调用
+    await expect(core.start(makeSelf("aaaaaaaaaaaa"))).resolves.toBeUndefined();
+    // 初始 drain（1.2s）失败 → 上报一次
+    await vi.waitFor(() => expect(notifications).toHaveLength(1), { timeout: 5_000 });
+    expect(notifications[0]).toContain("talk: inbox poll failed");
+    expect(notifications[0]).toContain("inbox unavailable");
+
+    // 再等一轮收件箱轮询（INBOX_POLL_MS = 3s）：第二次失败不再重复上报
+    await new Promise((resolve) => setTimeout(resolve, 3_500));
+    expect(notifications).toHaveLength(1);
+  }, 20_000);
 });
