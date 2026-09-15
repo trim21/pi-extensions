@@ -320,6 +320,24 @@ describe("Read, Edit, and Write", () => {
     });
   });
 
+  it("reads from the end of the file with a negative offset (tail -n semantics)", () => {
+    // offset=-2 等价 tail -n 2，行号仍为绝对行号
+    expect(formatReadOutput("one\ntwo\nthree\n", -2)).toEqual({
+      text: "3: three\n4: ",
+      totalLines: 4,
+    });
+    // 负 offset + limit：最后 N 行的前 limit 行
+    expect(formatReadOutput("one\ntwo\nthree\n", -2, 1)).toEqual({
+      text: "3: three",
+      totalLines: 4,
+    });
+    // 负 offset 超出文件长度时钳到文件开头（与 tail 一致，不告警）
+    expect(formatReadOutput("one\ntwo\nthree\n", -100)).toEqual({
+      text: "1: one\n2: two\n3: three\n4: ",
+      totalLines: 4,
+    });
+  });
+
   it("performs only exact replacements and enforces uniqueness", () => {
     expect(exactReplace("a b a", "b", "B")).toBe("a B a");
     expect(() => exactReplace("a b a", "a", "A")).toThrow(/2 matches/);
@@ -366,6 +384,19 @@ describe("Read, Edit, and Write", () => {
       ctx,
     );
     expect(await readFile(filePath, "utf8")).toBe("one\ntwo\nTHREE\n");
+  });
+
+  it("reads the end of a file with a negative offset", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-tail-"));
+    const filePath = join(directory, "log.txt");
+    await writeFile(filePath, "one\ntwo\nthree\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+    const result = await call(tools.get("Read")!, { file_path: filePath, offset: -2 }, ctx);
+    const text = result.content[0].text as string;
+    expect(text).toContain("3: three");
+    expect(text).toContain("4: ");
+    expect(text).not.toContain("1: one");
   });
 
   it("requires a new Read after an external file change", async () => {

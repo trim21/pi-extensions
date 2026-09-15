@@ -118,6 +118,10 @@ function splitFileLines(content: string): string[] {
  * 的 `N\t` 前缀——tab 分隔符在 Go 等 tab 缩进语言里会与内容缩进连排，模型
  * 易误判多一层缩进。limit 未指定时读取全部。无 PARTIAL 提示、无单行截断
  * （由 execute 层的字节/token 上限兜底）。
+ *
+ * offset 为负数时从文件末尾倒数（`offset=-5` 等价 `tail -n 5`），超出文件
+ * 长度时钳到文件开头（与 tail 一致，不告警）。输出行号始终为绝对行号；
+ * offset=0 的「行号从 0 起」是对齐 Claude Code lineOffset 的历史语义。
  */
 export function formatReadOutput(
   content: string,
@@ -138,11 +142,11 @@ export function formatReadOutput(
       totalLines,
     };
   }
-  // offset=0 时从第一行开始、行号从 0 起（对齐 Claude Code 的 lineOffset 语义）
-  const startIndex = offset === 0 ? 0 : offset - 1;
+  const startIndex = offset === 0 ? 0 : offset > 0 ? offset - 1 : Math.max(totalLines + offset, 0);
+  const firstLine = offset === 0 ? 0 : startIndex + 1;
   const selected =
     limit === undefined ? lines.slice(startIndex) : lines.slice(startIndex, startIndex + limit);
-  const text = selected.map((line, index) => `${offset + index}: ${line}`).join("\n");
+  const text = selected.map((line, index) => `${firstLine + index}: ${line}`).join("\n");
   return { text, totalLines };
 }
 
@@ -234,6 +238,7 @@ export function registerFileTools(
       "Reads a file from the local filesystem. You can access any file directly using this tool.",
       "Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.",
       "The file_path parameter must be an absolute path. By default, it reads the entire file; files over 256 KB or 25K tokens require offset and limit.",
+      "Read parts of files with offset and limit instead of running head/tail via Bash: a positive offset is the starting line number, a negative offset counts from the end of the file (offset=-5 reads the last 5 lines, like tail -n 5).",
       "Results use cat -n style line numbers starting at 1. Images are returned visually.",
       "This tool reads files, not directories.",
     ].join("\n"),
@@ -243,9 +248,12 @@ export function registerFileTools(
       {
         file_path: Type.String({ description: "The absolute path to the file to read" }),
         offset: Type.Optional(
-          Type.Number({ description: "The line number to start reading from" }),
+          Type.Integer({
+            description:
+              "The line number to start reading from. A negative value counts from the end of the file (offset=-5 starts 5 lines before EOF).",
+          }),
         ),
-        limit: Type.Optional(Type.Number({ description: "The number of lines to read" })),
+        limit: Type.Optional(Type.Integer({ description: "The number of lines to read" })),
         pages: Type.Optional(
           Type.String({ description: 'Page range for PDF files (for example "1-5" or "3")' }),
         ),
@@ -255,11 +263,8 @@ export function registerFileTools(
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const filePath = requireAbsolutePath(params.file_path);
-      if (
-        params.offset !== undefined &&
-        (!Number.isSafeInteger(params.offset) || params.offset < 0)
-      ) {
-        throw new Error("offset must be a non-negative integer");
+      if (params.offset !== undefined && !Number.isSafeInteger(params.offset)) {
+        throw new Error("offset must be an integer");
       }
       if (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit < 1)) {
         throw new Error("limit must be a positive integer");
