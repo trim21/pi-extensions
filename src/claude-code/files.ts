@@ -120,9 +120,10 @@ function splitFileLines(content: string): string[] {
  * 易误判多一层缩进。limit 未指定时读取全部。无 PARTIAL 提示、无单行截断
  * （由 execute 层的字节/token 上限兜底）。
  *
- * offset 为负数时从文件末尾倒数（`offset=-5` 等价 `tail -n 5`），超出文件
- * 长度时钳到文件开头（与 tail 一致，不告警）。输出行号始终为绝对行号；
- * offset=0 的「行号从 0 起」是对齐 Claude Code lineOffset 的历史语义。
+ * offset 为负数时从文件末尾倒数（`offset=-5` 等价 `tail -n 5`）——倒数按**真实
+ * 行**计算，splitFileLines 补出的尾随幻影行不算一行也不在输出里；超出文件长度时
+ * 钳到文件开头（与 tail 一致，不告警）。输出行号始终为绝对行号；offset=0 的
+ * 「行号从 0 起」是对齐 Claude Code lineOffset 的历史语义。
  */
 export function formatReadOutput(
   content: string,
@@ -143,10 +144,18 @@ export function formatReadOutput(
       totalLines,
     };
   }
-  const startIndex = offset === 0 ? 0 : offset > 0 ? offset - 1 : Math.max(totalLines + offset, 0);
+  // 尾随幻影行（splitFileLines 补的那个 \n）不对应文件内容：负 offset 按真实行
+  // 从末尾倒数，窗口也不含它，否则 `offset=-1` 只会读到一个空行。
+  const realLines = totalLines - 1;
+  const fromTail = offset < 0;
+  const startIndex = fromTail ? Math.max(realLines + offset, 0) : offset === 0 ? 0 : offset - 1;
   const firstLine = offset === 0 ? 0 : startIndex + 1;
-  const selected =
-    limit === undefined ? lines.slice(startIndex) : lines.slice(startIndex, startIndex + limit);
+  const endIndex = fromTail
+    ? Math.min(limit === undefined ? realLines : startIndex + limit, realLines)
+    : limit === undefined
+      ? totalLines
+      : startIndex + limit;
+  const selected = lines.slice(startIndex, endIndex);
   const text = selected.map((line, index) => `${firstLine + index}: ${line}`).join("\n");
   return { text, totalLines };
 }

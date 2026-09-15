@@ -321,21 +321,48 @@ describe("Read, Edit, and Write", () => {
   });
 
   it("reads from the end of the file with a negative offset (tail -n semantics)", () => {
-    // offset=-2 等价 tail -n 2，行号仍为绝对行号
-    expect(formatReadOutput("one\ntwo\nthree\n", -2)).toEqual({
-      text: "3: three\n4: ",
+    // offset=-1 等价 tail -n 1：只取最后一个真实行，不含尾随幻影空行
+    expect(formatReadOutput("one\ntwo\nthree\n", -1)).toEqual({
+      text: "3: three",
       totalLines: 4,
     });
-    // 负 offset + limit：最后 N 行的前 limit 行
+    // offset=-2 等价 tail -n 2，行号仍为绝对行号
+    expect(formatReadOutput("one\ntwo\nthree\n", -2)).toEqual({
+      text: "2: two\n3: three",
+      totalLines: 4,
+    });
+    // 负 offset + limit：取末尾窗口的前 limit 行
     expect(formatReadOutput("one\ntwo\nthree\n", -2, 1)).toEqual({
-      text: "3: three",
+      text: "2: two",
+      totalLines: 4,
+    });
+    // offset=-3 恰好取满全部真实行
+    expect(formatReadOutput("one\ntwo\nthree\n", -3)).toEqual({
+      text: "1: one\n2: two\n3: three",
       totalLines: 4,
     });
     // 负 offset 超出文件长度时钳到文件开头（与 tail 一致，不告警）
     expect(formatReadOutput("one\ntwo\nthree\n", -100)).toEqual({
-      text: "1: one\n2: two\n3: three\n4: ",
+      text: "1: one\n2: two\n3: three",
       totalLines: 4,
     });
+    // 无尾随换行的文件同样按真实行倒数
+    expect(formatReadOutput("one\ntwo\nthree", -1)).toEqual({
+      text: "3: three",
+      totalLines: 4,
+    });
+    // 只含一个换行的文件：倒数到的唯一真实行是空行
+    expect(formatReadOutput("\n", -1)).toEqual({
+      text: "1: ",
+      totalLines: 2,
+    });
+  });
+
+  it("keeps the last real line reachable with offset=-1 (no phantom trailing line)", () => {
+    // 回归：倒数窗口曾把 splitFileLines 补出的尾随幻影空行也算作一行，
+    // offset=-1 只读到那个空行、offset=-N 少读一行真实内容。
+    expect(formatReadOutput("one\ntwo\nthree\n", -1).text).toBe("3: three");
+    expect(formatReadOutput("only\n", -1).text).toBe("1: only");
   });
 
   it("performs only exact replacements and enforces uniqueness", () => {
@@ -392,11 +419,20 @@ describe("Read, Edit, and Write", () => {
     await writeFile(filePath, "one\ntwo\nthree\n", "utf8");
     const tools = loadTools();
     const ctx = context(directory);
-    const result = await call(tools.get("Read")!, { file_path: filePath, offset: -2 }, ctx);
-    const text = result.content[0].text as string;
-    expect(text).toContain("3: three");
-    expect(text).toContain("4: ");
-    expect(text).not.toContain("1: one");
+
+    // 最后一行读到的必须是真实内容（回归：曾只读到尾随幻影空行）
+    const last = await call(tools.get("Read")!, { file_path: filePath, offset: -1 }, ctx);
+    const lastText = last.content[0].text as string;
+    expect(lastText).toContain("3: three");
+    expect(lastText).not.toMatch(/^4: /m);
+    expect(lastText).not.toContain("2: two");
+
+    const lastTwo = await call(tools.get("Read")!, { file_path: filePath, offset: -2 }, ctx);
+    const lastTwoText = lastTwo.content[0].text as string;
+    expect(lastTwoText).toContain("2: two");
+    expect(lastTwoText).toContain("3: three");
+    expect(lastTwoText).not.toContain("1: one");
+    expect(lastTwoText).not.toMatch(/^4: /m);
   });
 
   it("requires a new Read after an external file change", async () => {
