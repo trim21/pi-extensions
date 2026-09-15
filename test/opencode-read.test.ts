@@ -124,6 +124,24 @@ describe("readLines", () => {
     expect(page).toMatchObject({ raw: [], count: 0, more: false, offset: 1 });
   });
 
+  it("中止信号在流式扫描中生效（正读与 tail 路径）", async () => {
+    const path = await write("abort.txt", "a\nb\nc\n");
+    // 已中止的 signal：扫描到第一行就抛出，不把整个文件读完
+    await expect(
+      readLines(path, { offset: 1, limit: 2000, signal: AbortSignal.abort() }),
+    ).rejects.toThrow(/abort/i);
+    await expect(
+      readLines(path, { offset: -2, limit: 2000, signal: AbortSignal.abort() }),
+    ).rejects.toThrow(/abort/i);
+    // 未中止时照常返回
+    const page = await readLines(path, {
+      offset: -2,
+      limit: 2000,
+      signal: new AbortController().signal,
+    });
+    expect(page).toMatchObject({ raw: ["b", "c"], count: 3 });
+  });
+
   it("honors the byte cap inside the tail window", async () => {
     const path = await write("tail-bytes.txt", "aaaa\nbbbb\ncccc");
     const page = await readLines(path, { offset: -2, limit: 2000, maxBytes: 5 });

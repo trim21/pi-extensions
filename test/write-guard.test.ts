@@ -223,18 +223,35 @@ interface GuardCtx {
   cwd: string;
   hasUI: boolean;
   ui?: {
-    select: (title: string, options: string[]) => Promise<string | undefined>;
-    input: (title: string, placeholder?: string) => Promise<string | undefined>;
+    select: (
+      title: string,
+      options: string[],
+      opts?: { signal?: AbortSignal },
+    ) => Promise<string | undefined>;
+    input: (
+      title: string,
+      placeholder?: string,
+      opts?: { signal?: AbortSignal },
+    ) => Promise<string | undefined>;
   };
   abort?: () => void;
 }
+
+/** writeOptions 的附加字段（目前只有 signal）。 */
+type WriteOptionsOverrides = Partial<{ signal: AbortSignal }>;
 
 function ctxWith(over: Partial<GuardCtx>): GuardCtx {
   return { cwd: WS_DIR, hasUI: true, ...over };
 }
 
-function writeOptions(absolutePath: string) {
-  return { toolName: "write", absolutePath, change: { oldText: "", newText: "x" }, policy };
+function writeOptions(absolutePath: string, over: WriteOptionsOverrides = {}) {
+  return {
+    toolName: "write",
+    absolutePath,
+    change: { oldText: "", newText: "x" },
+    policy,
+    ...over,
+  };
 }
 
 describe("guardWriteAccess", () => {
@@ -269,6 +286,7 @@ describe("guardWriteAccess", () => {
       expect(select).toHaveBeenCalledWith(
         expect.stringContaining("Model requests write access outside workspace"),
         expect.arrayContaining(["Approve once", "Block", "Block with reason"]),
+        { signal: undefined },
       );
     },
   );
@@ -290,6 +308,27 @@ describe("guardWriteAccess", () => {
       guardWriteAccess(ctxWith({ ui: { select, input } }), writeOptions(OUTSIDE)),
     ).rejects.toThrow("user deny write: not allowed");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "把调用方的中止信号透传给审批对话框（选择框与理由输入框）",
+    async () => {
+      const controller = new AbortController();
+      const select = vi.fn(async () => "Block with reason");
+      const input = vi.fn(async () => "not allowed");
+      await expect(
+        guardWriteAccess(ctxWith({ ui: { select, input } }), {
+          ...writeOptions(OUTSIDE),
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow("user deny write: not allowed");
+      type SelectCall = [string, string[], { signal?: AbortSignal }?];
+      type InputCall = [string, string | undefined, { signal?: AbortSignal }?];
+      const selectOptions = (select.mock.calls[0] as unknown as SelectCall)[2];
+      const inputOptions = (input.mock.calls[0] as unknown as InputCall)[2];
+      expect(selectOptions).toEqual({ signal: controller.signal });
+      expect(inputOptions).toEqual({ signal: controller.signal });
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "retries the dialog when the reason input is cancelled",

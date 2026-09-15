@@ -351,6 +351,7 @@ export function registerFileTools(
       // 与 Edit / Write 同一条驻留路径：didOpen 后等待该文件的诊断并报告
       const diagnostics = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
         notify: (message, level) => ctx.ui.notify(message, level),
+        signal,
       });
       return {
         content: [
@@ -411,6 +412,7 @@ export function registerFileTools(
           replaceAll: params.replace_all,
         },
         policy,
+        signal,
       });
       const [message, details, diagnostics] = await withFileMutationQueue<
         [string, FileToolDetails, DiagnosticReport]
@@ -544,6 +546,7 @@ export function registerFileTools(
         signal?.throwIfAborted();
         const diagnostics = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
           notify: (message, level) => ctx.ui.notify(message, level),
+          signal,
         });
         return [
           text,
@@ -607,6 +610,7 @@ export function registerFileTools(
         absolutePath: filePath,
         change: { oldText: "", newText: params.content },
         policy,
+        signal,
       });
       const [message, details, diagnostics] = await withFileMutationQueue<
         [string, FileToolDetails, DiagnosticReport]
@@ -641,6 +645,7 @@ export function registerFileTools(
         signal?.throwIfAborted();
         const diagnostics = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
           notify: (message, level) => ctx.ui.notify(message, level),
+          signal,
         });
         return [
           text,

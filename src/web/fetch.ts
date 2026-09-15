@@ -343,7 +343,12 @@ export default function webFetchTool(pi: ExtensionAPI): void {
       // 落盘位置的审批与写文件工具同一套：工作区与 /tmp 自动放行，其余问用户。
       // 放在 try 外面，拒绝的原因（user deny）不该被改写成「抓取失败」。
       if (destination !== undefined) {
-        await guardWriteAccess(ctx, { toolName: "web_fetch", absolutePath: destination, policy });
+        await guardWriteAccess(ctx, {
+          toolName: "web_fetch",
+          absolutePath: destination,
+          policy,
+          signal,
+        });
       }
 
       try {

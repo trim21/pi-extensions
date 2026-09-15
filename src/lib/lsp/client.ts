@@ -14,6 +14,7 @@ import { extname, isAbsolute, normalize, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  CancellationTokenSource,
   createMessageConnection,
   type MessageConnection,
   ResponseError,
@@ -161,6 +162,8 @@ export interface RenameSymbolRequest {
   line: number;
   character: number;
   newName: string;
+  /** 调用方取消信号：中止时立刻放弃等待并通知服务器取消。 */
+  signal?: AbortSignal;
 }
 
 export interface RenameSymbolResult {
@@ -174,6 +177,8 @@ export interface InspectPositionRequest {
   path: string;
   line: number;
   character: number;
+  /** 调用方取消信号：中止时立刻放弃等待并通知服务器取消。 */
+  signal?: AbortSignal;
 }
 
 /** definition / references 归一化后的位置（0-based；1-based 格式化由工具层负责）。 */
@@ -432,6 +437,31 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** 中止请求时的拒绝原因：沿用 signal.reason（默认是 name=AbortError 的 DOMException）。 */
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error("The operation was aborted");
+}
+
+/** 可中止的 sleep：中止时以 signal.reason 拒绝，而不是白等到轮询间隔结束。 */
+function sleepWithSignal(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (!signal) return sleep(ms);
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(abortReason(signal));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 /** pull 诊断失败后的重试间隔。 */
 const PULL_RETRY_INTERVAL_MS = 100;
@@ -1109,9 +1139,49 @@ export async function create(input: CreateInput): Promise<LspClient> {
     };
   };
 
-  const sendInspectRequest = async <T>(method: string, message: object): Promise<T> => {
+  /**
+   * 发一次可取消的请求：signal 中止时既通过 CancellationToken 让服务器停下
+   * （$/cancelRequest），也立刻以 signal.reason（默认 AbortError）拒绝本地
+   * promise——服务器可能永远不回应，工具调用不能就这么挂着。
+   */
+  async function sendAbortableRequest<T>(
+    method: string,
+    params: object,
+    signal: AbortSignal | undefined,
+  ): Promise<T> {
+    if (!signal) return await connection.sendRequest<T>(method, params);
+    if (signal.aborted) throw abortReason(signal);
+    const source = new CancellationTokenSource();
+    const aborted = Promise.withResolvers<never>();
+    // 中止可能恰好在请求已返回之后才触发：那时 race 已经结算，而这个 promise 的
+    // rejection 没人再看——提前挂一个空 catch，否则它会变成 unhandled rejection
+    // （pi 会因此整体退出）。
+    void aborted.promise.catch(() => {
+      /* 失败路径由 race 处理 */
+    });
+    const onAbort = (): void => {
+      source.cancel();
+      aborted.reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
     try {
-      return await retryOnContentModified(() => connection.sendRequest<T>(method, message));
+      return await Promise.race([
+        connection.sendRequest<T>(method, params, source.token),
+        aborted.promise,
+      ]);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      source.dispose();
+    }
+  }
+
+  const sendInspectRequest = async <T>(
+    method: string,
+    message: object,
+    signal?: AbortSignal,
+  ): Promise<T> => {
+    try {
+      return await retryOnContentModified(() => sendAbortableRequest<T>(method, message, signal));
     } catch (error) {
       if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
         throw new LspMethodNotSupportedError(input.serverID, method);
@@ -1206,11 +1276,15 @@ export async function create(input: CreateInput): Promise<LspClient> {
       // 与编辑器行为一致。
       const referencesRequest = () =>
         retryOnContentModified(() =>
-          connection.sendRequest<{ uri: string }[] | null>("textDocument/references", {
-            textDocument: { uri },
-            position,
-            context: { includeDeclaration: true },
-          }),
+          sendAbortableRequest<{ uri: string }[] | null>(
+            "textDocument/references",
+            {
+              textDocument: { uri },
+              position,
+              context: { includeDeclaration: true },
+            },
+            request.signal,
+          ),
         );
 
       const toPaths = (locations: { uri: string }[] | null): Set<string> =>
@@ -1223,11 +1297,15 @@ export async function create(input: CreateInput): Promise<LspClient> {
       const sendRename = async (): Promise<WorkspaceEdit | null> => {
         try {
           return await retryOnContentModified(() =>
-            connection.sendRequest<WorkspaceEdit | null>("textDocument/rename", {
-              textDocument: { uri },
-              position,
-              newName: request.newName,
-            }),
+            sendAbortableRequest<WorkspaceEdit | null>(
+              "textDocument/rename",
+              {
+                textDocument: { uri },
+                position,
+                newName: request.newName,
+              },
+              request.signal,
+            ),
           );
         } catch (error) {
           if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
@@ -1242,10 +1320,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
         let prepared: PrepareRenameResponse | null;
         try {
           prepared = await retryOnContentModified(() =>
-            connection.sendRequest<PrepareRenameResponse | null>("textDocument/prepareRename", {
-              textDocument: { uri },
-              position,
-            }),
+            sendAbortableRequest<PrepareRenameResponse | null>(
+              "textDocument/prepareRename",
+              { textDocument: { uri }, position },
+              request.signal,
+            ),
           );
         } catch (error) {
           if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
@@ -1271,6 +1350,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
       let previous: Set<string> | undefined;
       let current = toPaths(locations);
       for (;;) {
+        request.signal?.throwIfAborted();
         const settled = previous !== undefined && samePaths(previous, current);
         const expired = Date.now() >= deadline;
         if (settled || expired) {
@@ -1295,34 +1375,40 @@ export async function create(input: CreateInput): Promise<LspClient> {
           // 继续轮询到重新收敛后再重发 rename 复检（预算耗尽则向上抛）。
         }
         previous = current;
-        await sleep(renameVerificationTiming.pollMs);
+        await sleepWithSignal(renameVerificationTiming.pollMs, request.signal);
         current = toPaths(await referencesRequest());
       }
     },
     async definition(request: InspectPositionRequest): Promise<InspectLocation[]> {
       const { uri, position } = await preparePositionRequest(request);
       return toInspectLocations(
-        await sendInspectRequest<DefinitionResult>("textDocument/definition", {
-          textDocument: { uri },
-          position,
-        }),
+        await sendInspectRequest<DefinitionResult>(
+          "textDocument/definition",
+          { textDocument: { uri }, position },
+          request.signal,
+        ),
       );
     },
     async references(request: InspectPositionRequest): Promise<InspectLocation[]> {
       const { uri, position } = await preparePositionRequest(request);
-      const locations = await sendInspectRequest<LspLocation[] | null>("textDocument/references", {
-        textDocument: { uri },
-        position,
-        context: { includeDeclaration: true },
-      });
+      const locations = await sendInspectRequest<LspLocation[] | null>(
+        "textDocument/references",
+        {
+          textDocument: { uri },
+          position,
+          context: { includeDeclaration: true },
+        },
+        request.signal,
+      );
       return toInspectLocations(locations);
     },
     async hover(request: InspectPositionRequest): Promise<Hover | null> {
       const { uri, position } = await preparePositionRequest(request);
-      return await sendInspectRequest<Hover | null>("textDocument/hover", {
-        textDocument: { uri },
-        position,
-      });
+      return await sendInspectRequest<Hover | null>(
+        "textDocument/hover",
+        { textDocument: { uri }, position },
+        request.signal,
+      );
     },
     get diagnostics() {
       const result = new Map<string, Diagnostic[]>();

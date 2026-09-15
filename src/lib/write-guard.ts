@@ -108,8 +108,16 @@ export interface WriteGuardContext {
   hasUI: boolean;
   abort?: () => void;
   ui?: {
-    select: (title: string, options: string[]) => Promise<string | undefined>;
-    input: (title: string, placeholder?: string) => Promise<string | undefined>;
+    select: (
+      title: string,
+      options: string[],
+      opts?: { signal?: AbortSignal },
+    ) => Promise<string | undefined>;
+    input: (
+      title: string,
+      placeholder?: string,
+      opts?: { signal?: AbortSignal },
+    ) => Promise<string | undefined>;
   };
 }
 
@@ -123,6 +131,8 @@ export interface WriteGuardOptions {
   change?: PendingChange;
   /** 调用方所在扩展入口持有的非沙盒请求策略（跨入口一致时绑同一个 pi.events）。 */
   policy: RequestPolicy;
+  /** 工具调用的中止信号：透传给审批对话框，工具被取消时对话框一起关掉。 */
+  signal?: AbortSignal;
 }
 
 /**
@@ -165,14 +175,18 @@ export async function guardWriteAccess(
       (diffPreview ? `\n${diffPreview}\n` : "") +
       `\nAllow?`;
 
-    const choice = await ctx.ui.select(title, ["Approve once", "Block", "Block with reason"]);
+    const choice = await ctx.ui.select(title, ["Approve once", "Block", "Block with reason"], {
+      signal: opts.signal,
+    });
     if (choice === undefined) {
       ctx.abort?.();
       throw new Error(`user deny ${opts.toolName}: cancelled`);
     }
     if (choice === "Approve once") return;
     if (choice === "Block") throw new Error(`user deny ${opts.toolName}: blocked`);
-    const feedback = await ctx.ui.input("Why was this write denied?");
+    const feedback = await ctx.ui.input("Why was this write denied?", undefined, {
+      signal: opts.signal,
+    });
     if (feedback === undefined) continue;
     throw new Error(
       feedback ? `user deny ${opts.toolName}: ${feedback}` : `user deny ${opts.toolName}: blocked`,

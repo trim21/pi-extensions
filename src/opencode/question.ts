@@ -110,7 +110,11 @@ function dialogTitle(q: Question): string {
   return q.header ? `${q.header}: ${q.question}` : q.question;
 }
 
-async function askSingle(q: Question, ctx: ExtensionContext): Promise<Answer> {
+async function askSingle(
+  q: Question,
+  ctx: ExtensionContext,
+  signal: AbortSignal | undefined,
+): Promise<Answer> {
   const title = dialogTitle(q);
   const result = await selectWithOptionalInput(
     title,
@@ -119,17 +123,22 @@ async function askSingle(q: Question, ctx: ExtensionContext): Promise<Answer> {
       { label: CUSTOM_LABEL, inputPrompt: "Type your answer…" },
     ],
     ctx.ui,
+    { signal },
   );
   if (result === undefined) return [];
   return result.prompted ? (result.input ? [result.input] : []) : [result.label];
 }
 
-async function askMultiple(q: Question, ctx: ExtensionContext): Promise<Answer> {
+async function askMultiple(
+  q: Question,
+  ctx: ExtensionContext,
+  signal: AbortSignal | undefined,
+): Promise<Answer> {
   const selected = await selectMultiple(
     dialogTitle(q),
     q.options.map((o) => ({ label: o.label })),
     ctx.ui,
-    { doneLabel: DONE_LABEL },
+    { signal, doneLabel: DONE_LABEL },
   );
   return selected;
 }
@@ -145,7 +154,7 @@ export default function question(pi: ExtensionAPI) {
     // 交互式提问不能与其他工具并行弹出，逐个串行执行
     executionMode: "sequential",
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (!ctx.hasUI) {
         throw new Error("Cannot ask questions: interactive UI is not available in this mode");
       }
@@ -153,7 +162,11 @@ export default function question(pi: ExtensionAPI) {
 
       const answers: Answer[] = [];
       for (const q of questions) {
-        answers.push(q.multiple ? await askMultiple(q, ctx) : await askSingle(q, ctx));
+        // 每个问题前检查一次：上一轮对话框期间被取消时不再弹下一个
+        signal?.throwIfAborted();
+        answers.push(
+          q.multiple ? await askMultiple(q, ctx, signal) : await askSingle(q, ctx, signal),
+        );
       }
 
       return {

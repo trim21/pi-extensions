@@ -62,9 +62,14 @@ const q = (over: Partial<Question>): Question => ({
 
 const SKIP: string | undefined = undefined;
 
+/** ui.select / ui.input 的第三个参数（对话框选项）。 */
+interface SelectOptions {
+  signal?: AbortSignal;
+}
+
 function ctxWith(ui: {
-  select?: (t: string, o: string[]) => Promise<string | undefined>;
-  input?: (t: string, p?: string) => Promise<string | undefined>;
+  select?: (t: string, o: string[], options?: SelectOptions) => Promise<string | undefined>;
+  input?: (t: string, p?: string, options?: SelectOptions) => Promise<string | undefined>;
 }) {
   return {
     hasUI: true,
@@ -253,5 +258,53 @@ describe("execute", () => {
         ui: ctxWith({}).ui,
       }),
     ).rejects.toThrow(/interactive UI/);
+  });
+
+  it("把中止信号透传给对话框，并在已中止时不再弹框", async () => {
+    const { tool } = loadTool();
+    const controller = new AbortController();
+    const signals: (AbortSignal | undefined)[] = [];
+    const select = vi.fn(async (_title: string, _options: string[], options?: SelectOptions) => {
+      signals.push(options?.signal);
+      return "B";
+    });
+
+    await tool.execute(
+      "id",
+      { questions: [q({})] },
+      controller.signal,
+      undefined,
+      ctxWith({ select }),
+    );
+    expect(signals).toEqual([controller.signal]);
+
+    // 多选：循环里每一轮 select 都带同一个 signal
+    const multiSelect = vi.fn(
+      async (_title: string, _options: string[], options?: SelectOptions) => {
+        signals.push(options?.signal);
+        return DONE_LABEL;
+      },
+    );
+    await tool.execute(
+      "id",
+      { questions: [q({ multiple: true })] },
+      controller.signal,
+      undefined,
+      ctxWith({ select: multiSelect }),
+    );
+    expect(signals.at(-1)).toBe(controller.signal);
+
+    // 已中止：直接以 AbortError 拒绝，不弹任何对话框
+    const callsBefore = select.mock.calls.length;
+    await expect(
+      tool.execute(
+        "id",
+        { questions: [q({})] },
+        AbortSignal.abort(),
+        undefined,
+        ctxWith({ select }),
+      ),
+    ).rejects.toThrow(/abort/i);
+    expect(select.mock.calls.length).toBe(callsBefore);
   });
 });

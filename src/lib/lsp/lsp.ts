@@ -965,6 +965,7 @@ export function createLspService(
           line: request.line,
           character: request.character,
           newName: request.newName,
+          signal: request.options?.signal,
         });
         return {
           serverID: client.serverID,
@@ -972,6 +973,8 @@ export function createLspService(
           ...(result.placeholder !== undefined && { placeholder: result.placeholder }),
         };
       } catch (error) {
+        // 调用方取消不是"服务器无法重命名"：直接向上抛
+        request.options?.signal?.throwIfAborted();
         failures.push({ serverID: client.serverID, error });
       }
     }
@@ -1006,7 +1009,12 @@ export function createLspService(
     }
     const failures: { serverID: string; error: unknown }[] = [];
     for (const client of clients) {
-      const position = { path: request.file, line: request.line, character: request.character };
+      const position = {
+        path: request.file,
+        line: request.line,
+        character: request.character,
+        signal: request.options?.signal,
+      };
       try {
         if (request.query === "hover") {
           const hover = await client.hover(position);
@@ -1022,6 +1030,8 @@ export function createLspService(
           locations,
         } as LspInspectResult<Q>;
       } catch (error) {
+        // 调用方取消不是"服务器失败"：直接向上抛，别折叠成 all-servers-failed
+        request.options?.signal?.throwIfAborted();
         failures.push({ serverID: client.serverID, error });
       }
     }

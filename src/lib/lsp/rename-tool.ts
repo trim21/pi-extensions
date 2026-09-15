@@ -195,6 +195,7 @@ export function registerLspRenameTool(
           absolutePath: fileEdit.path,
           change: { oldText: fileEdit.oldText, newText: fileEdit.newText },
           policy: options.policy,
+          signal,
         });
       }
 

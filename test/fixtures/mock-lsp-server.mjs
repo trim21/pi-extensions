@@ -24,7 +24,13 @@
 //   rename:1      第 1 次 textDocument/rename 返回 ContentModified，之后正常
 // env MOCK_DIAGNOSTICS_NEVER=1 时不推送任何诊断，也不实现 pull，
 // 用于让 waitForDiagnostics 一直停在等待状态（驻留 LRU 淘汰的挂死回归）。
+// env MOCK_HANG_METHODS（逗号分隔的请求方法）时不回应这些请求，
+// 用于验证调用方中止时客户端是否立刻放弃等待并发送 $/cancelRequest。
+// env MOCK_ECHO_REQUESTS=1 时把请求（带 id 的消息）也回显到 stderr，
+// 便于断言"请求已发出 / 收到取消"。
 const diagnosticsNever = process.env.MOCK_DIAGNOSTICS_NEVER === "1";
+const hangMethods = (process.env.MOCK_HANG_METHODS ?? "").split(",").filter(Boolean);
+const echoRequests = process.env.MOCK_ECHO_REQUESTS === "1";
 const renameMode = process.env.MOCK_RENAME_MODE ?? "";
 const referencesMode = process.env.MOCK_REFERENCES_MODE ?? "";
 let referencesCalls = 0;
@@ -90,10 +96,12 @@ function sendContentModifiedIfConfigured(method, msg) {
 }
 
 function handle(msg) {
-  // 通知回传（请求/响应带 id，通知不带）
-  if (msg.id === undefined && msg.method !== undefined) {
+  // 通知回传（请求/响应带 id，通知不带）；开了 MOCK_ECHO_REQUESTS 时请求也回显
+  if (msg.method !== undefined && (msg.id === undefined || echoRequests)) {
     process.stderr.write(JSON.stringify({ method: msg.method, params: msg.params }) + "\n");
   }
+  // 挂起的请求：不回应（既不发结果也不发错误），调用方只能自己中止
+  if (msg.id !== undefined && msg.method !== undefined && hangMethods.includes(msg.method)) return;
   if (msg.method === "initialize") {
     const capabilities = { textDocumentSync: 1 };
     if (["ok", "ok_extra", "null_prepare", "null_rename"].includes(renameMode)) {

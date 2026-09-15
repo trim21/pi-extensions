@@ -201,7 +201,7 @@ export interface LinePage {
  */
 export async function readLines(
   filePath: string,
-  opts: { offset: number; limit: number; maxBytes?: number },
+  opts: { offset: number; limit: number; maxBytes?: number; signal?: AbortSignal },
 ): Promise<LinePage> {
   if (opts.offset < 0) return readTailLines(filePath, opts);
   const start = opts.offset - 1;
@@ -216,6 +216,8 @@ export async function readLines(
   const rl = createInterface({ input: stream, crlfDelay: Infinity });
   try {
     for await (const text of rl) {
+      // 大文件的全量扫描可能持续数秒：每行检查一次取消，别等到读完才响应
+      opts.signal?.throwIfAborted();
       count += 1;
       if (count <= start) continue;
 
@@ -250,7 +252,7 @@ export async function readLines(
  */
 async function readTailLines(
   filePath: string,
-  opts: { offset: number; limit: number; maxBytes?: number },
+  opts: { offset: number; limit: number; maxBytes?: number; signal?: AbortSignal },
 ): Promise<LinePage> {
   const windowSize = -opts.offset;
   const window: string[] = [];
@@ -261,6 +263,7 @@ async function readTailLines(
   const rl = createInterface({ input: stream, crlfDelay: Infinity });
   try {
     for await (const text of rl) {
+      opts.signal?.throwIfAborted();
       count += 1;
       const line =
         text.length > MAX_LINE_LENGTH ? text.slice(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : text;
@@ -279,6 +282,7 @@ async function readTailLines(
   let cut = false;
   let more = false;
   for (const line of window.slice(head)) {
+    opts.signal?.throwIfAborted();
     if (raw.length >= opts.limit) {
       more = true;
       break;
@@ -467,6 +471,7 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void 
       const page = await readLines(absolutePath, {
         offset: effectiveOffset,
         limit: limit ?? DEFAULT_MAX_LINES,
+        signal,
       });
 
       if (page.count < page.offset && !(page.count === 0 && page.offset === 1)) {
@@ -571,6 +576,7 @@ function registerEditTool(
         absolutePath,
         change: { oldText: oldString, newText: newString, replaceAll },
         policy,
+        signal,
       });
 
       const [message, details, diagnostics] = await withFileMutationQueue(
@@ -718,6 +724,7 @@ function registerWriteTool(
         absolutePath,
         change: { oldText: "", newText: content },
         policy,
+        signal,
       });
       const dir = dirname(absolutePath);
 
