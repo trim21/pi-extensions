@@ -31,6 +31,7 @@ import {
   type AppliedFileEdit,
   canonicalizeEdit,
   expandWorkspaceEdit,
+  type LspPosition,
   symbolCandidates,
 } from "./rename.js";
 
@@ -117,7 +118,12 @@ export function registerLspRenameTool(
           `Symbol "${params.symbol}" not found on line ${params.line} of ${filePath}. Read the file again and locate the symbol.`,
         );
       }
-      const successes: { result: Awaited<ReturnType<typeof service.rename>> }[] = [];
+      // 探测结果必须与候选成对记录：失败的候选不会进 successes，若按下标去取，
+      // 后面的成功结果会被错配给前面的候选——消歧提示就会指向别的符号的列号。
+      const successes: {
+        candidate: LspPosition;
+        result: Awaited<ReturnType<typeof service.rename>>;
+      }[] = [];
       const notPossibleErrors: string[] = [];
       for (const candidate of candidates) {
         signal?.throwIfAborted();
@@ -130,7 +136,7 @@ export function registerLspRenameTool(
             newName: params.new_name,
             options: requestOptions,
           });
-          successes.push({ result });
+          successes.push({ candidate, result });
         } catch (error) {
           if (error instanceof RenameNotPossibleError) {
             notPossibleErrors.push(error.message);
@@ -150,15 +156,13 @@ export function registerLspRenameTool(
       // 同一符号的多次出现编辑集合一致；不一致即为不同符号 → 要求补 character
       const groups = new Map<
         string,
-        { result: (typeof successes)[number]["result"]; candidates: typeof candidates }
+        { result: (typeof successes)[number]["result"]; candidates: LspPosition[] }
       >();
-      for (const [index, candidate] of candidates.entries()) {
-        const entry = successes.at(index);
-        if (!entry) continue;
-        const key = canonicalizeEdit(entry.result.edit);
+      for (const { candidate, result: probe } of successes) {
+        const key = canonicalizeEdit(probe.edit);
         const group = groups.get(key);
         if (group) group.candidates.push(candidate);
-        else groups.set(key, { result: entry.result, candidates: [candidate] });
+        else groups.set(key, { result: probe, candidates: [candidate] });
       }
       if (groups.size > 1) {
         const listing = [...groups.values()]
