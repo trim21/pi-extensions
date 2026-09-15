@@ -22,6 +22,9 @@
 // count 为 0 或 "always" 表示一直返回）：
 //   references:2  前 2 次 textDocument/references 返回 ContentModified，之后正常
 //   rename:1      第 1 次 textDocument/rename 返回 ContentModified，之后正常
+// env MOCK_DIAGNOSTICS_NEVER=1 时不推送任何诊断，也不实现 pull，
+// 用于让 waitForDiagnostics 一直停在等待状态（驻留 LRU 淘汰的挂死回归）。
+const diagnosticsNever = process.env.MOCK_DIAGNOSTICS_NEVER === "1";
 const renameMode = process.env.MOCK_RENAME_MODE ?? "";
 const referencesMode = process.env.MOCK_REFERENCES_MODE ?? "";
 let referencesCalls = 0;
@@ -141,6 +144,7 @@ function handle(msg) {
     return;
   }
   if (msg.method === "textDocument/didOpen") {
+    if (diagnosticsNever) return;
     const uri = msg.params.textDocument.uri;
     setTimeout(() => {
       send({
@@ -161,6 +165,7 @@ function handle(msg) {
     return;
   }
   if (msg.method === "textDocument/didChange") {
+    if (diagnosticsNever) return;
     // 模拟慢服务器：重算耗时 300ms 后才推送基于新内容的结果
     const uri = msg.params.textDocument.uri;
     setTimeout(() => {

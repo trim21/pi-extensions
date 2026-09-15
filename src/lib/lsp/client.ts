@@ -457,6 +457,37 @@ function stopProcess(process: LspServerHandle["process"]): Promise<void> {
   });
 }
 
+/**
+ * 驻留文档超容量时的淘汰计划（纯函数，见 create 里的 evictExcess）：
+ * - `stale`：lruOrder 里已不在 files 的陈旧 key（被 watchedFiles 的 didClose 移出），
+ *   不占容量，直接回收；
+ * - `evict`：按使用顺序（最久未用在前）应 didClose 的路径。
+ *
+ * 容量是**尽力而为**的上限：正在等诊断的文档必须留到诊断收集完（关闭会抹掉
+ * 本次写入的诊断结果），因此可淘汰项不足时宁可少淘汰几个（甚至一个都不淘汰），
+ * 把收敛留给后续 openDocument。调用方的淘汰循环必须单次有界——等待窗口内的文档
+ * 若被当成"稍后重试"的对象，就是同步自旋（那部分代码里没有 await），会把事件
+ * 循环整个锁死。
+ */
+export function evictionPlan(options: {
+  /** lruOrder 的迭代序：最久未用在前。 */
+  order: readonly string[];
+  /** 该路径是否仍在驻留集合（files）里。 */
+  isResident: (path: string) => boolean;
+  /** 该路径是否正在等诊断。 */
+  isWaiting: (path: string) => boolean;
+  maxOpenDocuments: number;
+}): { stale: string[]; evict: string[] } {
+  const stale: string[] = [];
+  const evictable: string[] = [];
+  for (const path of options.order) {
+    if (!options.isResident(path)) stale.push(path);
+    else if (!options.isWaiting(path)) evictable.push(path);
+  }
+  const excess = options.order.length - stale.length - options.maxOpenDocuments;
+  return { stale, evict: excess > 0 ? evictable.slice(0, excess) : [] };
+}
+
 export async function create(input: CreateInput): Promise<LspClient> {
   const diagnosticsDebounceMs = input.diagnosticsDebounceMs ?? clientDefaults.diagnosticsDebounceMs;
   const diagnosticsDocumentWaitTimeoutMs =
@@ -655,24 +686,29 @@ export async function create(input: CreateInput): Promise<LspClient> {
     lruOrder.set(path, Date.now());
   };
 
-  /** 超过容量时淘汰最久未使用的文档（didClose 并移出驻留集合）。 */
+  /**
+   * 超过容量时淘汰最久未使用的文档（didClose 并移出驻留集合）。
+   *
+   * 单次有界遍历：容量是尽力而为的上限——等待诊断的文档要留到诊断收集完，可淘汰
+   * 项不足时就少淘汰（见 evictionPlan）。不要写成"跳过等待项再重试"的循环：等待
+   * 窗口内的文档可能占满驻留集合（例如某路径的等待尚未结束时它又被重新打开），
+   * 那时重试分支没有 await，等于同步自旋。
+   */
   async function evictExcess(): Promise<void> {
-    while (lruOrder.size > maxOpenDocuments) {
-      const oldest = lruOrder.keys().next().value;
-      if (oldest === undefined) return;
-      lruOrder.delete(oldest);
-      const document = files[oldest];
-      if (document === undefined) continue;
-      if (waitingForDiagnostics.has(oldest)) {
-        // 防御：等待中的文档挪到 MRU，等下轮再淘汰（正常不会发生，刚 touch 即 MRU）
-        touch(oldest);
-        continue;
-      }
+    const plan = evictionPlan({
+      order: [...lruOrder.keys()],
+      isResident: (path) => files[path] !== undefined,
+      isWaiting: (path) => waitingForDiagnostics.has(path),
+      maxOpenDocuments,
+    });
+    for (const path of plan.stale) lruOrder.delete(path);
+    for (const path of plan.evict) {
+      lruOrder.delete(path);
       await connection.sendNotification("textDocument/didClose", {
-        textDocument: { uri: pathToFileURL(oldest).href },
+        textDocument: { uri: pathToFileURL(path).href },
       });
-      delete files[oldest];
-      documentVersions.delete(oldest);
+      delete files[path];
+      documentVersions.delete(path);
     }
   }
 

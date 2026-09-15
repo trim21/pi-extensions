@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   create,
+  evictionPlan,
   RenameIncompleteError,
   RenameNotPossibleError,
   renameVerificationTiming,
@@ -37,6 +38,19 @@ function spawnMock(env?: Record<string, string>) {
     }
   });
   return { proc, notifications };
+}
+
+/**
+ * 淘汰计划断言的简写：`order` 是 lruOrder 的迭代序（最久未用在前）；
+ * `resident` 缺省表示 order 全部仍驻留，`waiting` 缺省为空。
+ */
+function plan(order: string[], options: { resident?: string[]; waiting?: string[]; max: number }) {
+  return evictionPlan({
+    order,
+    isResident: (path) => (options.resident ?? order).includes(path),
+    isWaiting: (path) => (options.waiting ?? []).includes(path),
+    maxOpenDocuments: options.max,
+  });
 }
 
 describe("lsp client", () => {
@@ -362,6 +376,66 @@ describe("lsp client watched files", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+});
+
+describe("驻留淘汰：容量上限与等待诊断的文档", () => {
+  it("容量内不动任何文档，超出时按使用顺序淘汰最久未用者", () => {
+    expect(plan(["a", "b"], { max: 2 })).toEqual({ stale: [], evict: [] });
+    expect(plan(["a", "b", "c"], { max: 2 })).toEqual({ stale: [], evict: ["a"] });
+    expect(plan(["a", "b", "c"], { max: 1 })).toEqual({ stale: [], evict: ["a", "b"] });
+  });
+
+  it("等待诊断的文档不淘汰；可淘汰项不足时宁可少淘汰，绝不重试自旋", () => {
+    // 容量 1、3 个驻留、b 在等诊断：跳过 b，淘汰 a 与 c 回到容量
+    expect(plan(["a", "b", "c"], { waiting: ["b"], max: 1 })).toEqual({
+      stale: [],
+      evict: ["a", "c"],
+    });
+    // 1 个可淘汰项却缺 2 个容量：只淘汰这一个，不做第二轮
+    expect(plan(["a", "b", "c"], { waiting: ["b", "c"], max: 1 })).toEqual({
+      stale: [],
+      evict: ["a"],
+    });
+    // 全部在等诊断：没有任何可淘汰项（旧实现在这里同步自旋）
+    expect(plan(["a", "b", "c"], { waiting: ["a", "b", "c"], max: 2 })).toEqual({
+      stale: [],
+      evict: [],
+    });
+  });
+
+  it("回收不在驻留集合里的陈旧 key，且它们不占容量", () => {
+    // c 已被 watchedFiles 的 didClose 移出 files：只回收它，不需要淘汰 a、b
+    expect(plan(["a", "b", "c"], { resident: ["a", "b"], max: 2 })).toEqual({
+      stale: ["c"],
+      evict: [],
+    });
+    // 陈旧 key 不计入容量：删掉 c 之后仍超出 1 个 → 淘汰最久未用的 a
+    expect(plan(["a", "b", "c"], { resident: ["a", "b"], max: 1 })).toEqual({
+      stale: ["c"],
+      evict: ["a"],
+    });
+  });
+
+  it("等待诊断的文档占满驻留集合时，重新打开同一路径不再挂死", async () => {
+    // 旧实现（"跳过等待项，下一轮再淘汰"的 while 循环）会在这条路径上同步自旋，
+    // 同一进程内无法用超时中断，故放到子进程里跑并在超时后强杀：被杀 = 回归。
+    const driver = fileURLToPath(new URL("fixtures/lsp-evict-driver.mjs", import.meta.url));
+    const child = spawn(process.execPath, [driver], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    const killer = setTimeout(() => child.kill("SIGKILL"), 20_000);
+    const { code, signal } = await new Promise<{ code: number | null; signal: string | null }>(
+      (resolve) => {
+        child.once("close", (code, signal) => resolve({ code, signal }));
+      },
+    );
+    clearTimeout(killer);
+    expect(signal, `驱动进程被强杀，淘汰循环疑似重新自旋：${stderr}`).toBeNull();
+    expect(code, stderr).toBe(0);
+    expect(stdout).toContain("OK");
+  }, 30_000);
 });
 
 describe("lsp client renameSymbol", () => {
