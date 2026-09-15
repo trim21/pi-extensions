@@ -1254,7 +1254,20 @@ export async function create(input: CreateInput): Promise<LspClient> {
       );
       const uri = pathToFileURL(resolvedPath).href;
       // rename 前强制同步磁盘内容，保证服务器基于最新文本计算编辑
-      await openDocument({ path: resolvedPath });
+      const version = await openDocument({ path: resolvedPath });
+      // 索引就绪栅栏：项目异步加载完成前，服务器对 references 的答复只包含当前
+      // 打开的文件（尚未发现其它文件），而"连续两次一致"会把它误判成"索引已收
+      // 敛"，于是 rename 漏掉跨文件引用——CI 上实测到（失败那次 3.0s 返回、只改
+      // 1 个文件，而通过的 7.9s）。服务器为本文件产生的第一份诊断报告要等项目加
+      // 载完成，用它当就绪信号；本会话已经收到过报告（文档早已驻留）时不再等待，
+      // 免得给常见路径白加延迟。
+      if (!published.has(resolvedPath) && !pullDiagnostics.has(resolvedPath)) {
+        await waitForDocumentDiagnostics({
+          path: resolvedPath,
+          version,
+          signal: request.signal,
+        });
+      }
       const position = { line: request.line, character: request.character };
       const at = `${resolvedPath}:${request.line + 1}:${request.character + 1}`;
       const notRenameable = () =>

@@ -158,8 +158,11 @@ describe.each(Object.entries(ENTRIES))(
         await emitSessionStart(directory);
         const ctx = context(directory);
 
-        // 不做预热：renameSymbol 前置的 textDocument/references 请求会阻塞到
-        // typescript-language-server 完成项目加载（响应即同步点），覆盖校验 + 重试保证跨文件引用完整。
+        // 不做预热：renameSymbol 内的索引就绪栅栏会先等服务器对本文档的第一份
+        // 诊断报告（项目加载完成才产生），再开始 references 收敛判定，覆盖校验 +
+        // 重试保证跨文件引用完整。注意"references 返回即项目已加载"并不成立：
+        // 加载期间它只返回当前打开的文件，连续两次一致会被误判为收敛（CI 上实测
+        // 漏改 main.ts）。
         const result = await call(
           tools.get("lsp-rename")!,
           { file_path: libPath, line: 1, symbol: "greet", new_name: "farewell" },

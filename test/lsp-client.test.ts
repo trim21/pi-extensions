@@ -591,6 +591,38 @@ describe("lsp client renameSymbol", () => {
     }
   });
 
+  it("项目仍在加载（references 只报当前文件）时不急着收敛：等首份诊断后拿到完整 edit", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    // 模拟 CI 上实测到的时序：项目异步加载期间 references 只返回当前文件，
+    // 且这个"残缺答案"能稳定出现两次以上；首份诊断推送（加载完成的信号）
+    // 比它晚 800ms。
+    const proc = spawn(process.execPath, [fixture], {
+      env: {
+        ...process.env,
+        MOCK_RENAME_MODE: "ok",
+        MOCK_REFERENCES_MODE: "cold_until_push",
+        MOCK_PUSH_DELAY_MS: "800",
+      },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      const result = await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
+      const uris = Object.keys(result.edit.changes ?? {});
+      expect(uris).toHaveLength(2);
+      expect(uris).toContain(pathToFileURL(join(dir, "extra-a.py")).href);
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("references 稳定但 rename 漏文件：预算耗尽抛 RenameIncompleteError", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
     const file = join(dir, "a.py");

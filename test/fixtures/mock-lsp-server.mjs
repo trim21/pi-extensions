@@ -18,6 +18,10 @@
 //                   rename 在 references 调用 ≥2 次后覆盖两者 → 收敛后成功
 //   catch_up_late  references 前 2 次返回 [self]，第 3 次起返回 [self, extra]
 //   stable_self    references 稳定返回 [self]（配合 rename 多报文件，永不追上）
+//   cold_until_push references 在首份诊断推送之前只返回 [self]（模拟项目仍在
+//                   异步加载、服务器还没发现其它文件），推送之后返回 [self, extra]
+// env MOCK_PUSH_DELAY_MS 延迟 didOpen 后的诊断推送（默认 50ms；配合
+//   cold_until_push 模拟"加载慢"的服务器）
 // env MOCK_CONTENT_MODIFIED 控制 ContentModified(-32801) 响应（逗号分隔 "method:count"，
 // count 为 0 或 "always" 表示一直返回）：
 //   references:2  前 2 次 textDocument/references 返回 ContentModified，之后正常
@@ -33,7 +37,10 @@ const hangMethods = (process.env.MOCK_HANG_METHODS ?? "").split(",").filter(Bool
 const echoRequests = process.env.MOCK_ECHO_REQUESTS === "1";
 const renameMode = process.env.MOCK_RENAME_MODE ?? "";
 const referencesMode = process.env.MOCK_REFERENCES_MODE ?? "";
+const pushDelayMs = Number(process.env.MOCK_PUSH_DELAY_MS ?? "50");
 let referencesCalls = 0;
+// 项目"加载完成"的标志：首份诊断已推送（cold_until_push 以此为分界）
+let projectLoaded = false;
 const contentModifiedSpec = Object.fromEntries(
   (process.env.MOCK_CONTENT_MODIFIED ?? "")
     .split(",")
@@ -152,9 +159,13 @@ function handle(msg) {
     return;
   }
   if (msg.method === "textDocument/didOpen") {
-    if (diagnosticsNever) return;
+    if (diagnosticsNever) {
+      projectLoaded = true;
+      return;
+    }
     const uri = msg.params.textDocument.uri;
     setTimeout(() => {
+      projectLoaded = true;
       send({
         jsonrpc: "2.0",
         method: "textDocument/publishDiagnostics",
@@ -169,7 +180,7 @@ function handle(msg) {
           ],
         },
       });
-    }, 50);
+    }, pushDelayMs);
     return;
   }
   if (msg.method === "textDocument/didChange") {
@@ -216,7 +227,9 @@ function handle(msg) {
           ? referencesCalls >= 2
           : referencesMode === "catch_up_late"
             ? referencesCalls >= 3
-            : true;
+            : referencesMode === "cold_until_push"
+              ? projectLoaded
+              : true;
     send({
       jsonrpc: "2.0",
       id: msg.id,
@@ -231,7 +244,9 @@ function handle(msg) {
     // ok_extra：rename 无条件覆盖两者（配合 catch_up_late 最终成功，
     //           或配合 stable_self 验证 rename 超集永不收敛时抛错）
     const referencesCoverExtra =
-      renameMode === "ok_extra" || (referencesMode === "grow_then_settle" && referencesCalls >= 2);
+      renameMode === "ok_extra" ||
+      (referencesMode === "grow_then_settle" && referencesCalls >= 2) ||
+      (referencesMode === "cold_until_push" && projectLoaded);
     const changes = {
       [msg.params.textDocument.uri]: [
         {
