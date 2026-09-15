@@ -99,6 +99,36 @@ describe("readLines", () => {
     const page = await readLines(path, { offset: 1, limit: 2000 });
     expect(page.raw).toEqual(["one", "two"]);
   });
+
+  it("reads the end of a file with a negative offset (tail -n semantics)", async () => {
+    const path = await write("tail.txt", "1\n2\n3\n4\n5");
+    const page = await readLines(path, { offset: -2, limit: 2000 });
+    expect(page).toMatchObject({ raw: ["4", "5"], count: 5, cut: false, more: false, offset: 4 });
+  });
+
+  it("applies limit to the tail window and reports more", async () => {
+    const path = await write("tail-limit.txt", "1\n2\n3\n4\n5");
+    const page = await readLines(path, { offset: -3, limit: 1 });
+    expect(page).toMatchObject({ raw: ["3"], count: 5, cut: false, more: true, offset: 3 });
+  });
+
+  it("clamps a negative offset beyond the file length to the first line", async () => {
+    const path = await write("tail-clamp.txt", "1\n2\n3");
+    const page = await readLines(path, { offset: -100, limit: 2000 });
+    expect(page).toMatchObject({ raw: ["1", "2", "3"], count: 3, more: false, offset: 1 });
+  });
+
+  it("handles a negative offset on an empty file", async () => {
+    const path = await write("tail-empty.txt", "");
+    const page = await readLines(path, { offset: -1, limit: 2000 });
+    expect(page).toMatchObject({ raw: [], count: 0, more: false, offset: 1 });
+  });
+
+  it("honors the byte cap inside the tail window", async () => {
+    const path = await write("tail-bytes.txt", "aaaa\nbbbb\ncccc");
+    const page = await readLines(path, { offset: -2, limit: 2000, maxBytes: 5 });
+    expect(page).toMatchObject({ raw: ["bbbb"], count: 3, cut: true, more: true, offset: 2 });
+  });
 });
 
 // ── execute ───────────────────────────────────────────────────────────────────
@@ -198,6 +228,44 @@ describe("opencode read execute", () => {
     expect(text).not.toContain("1: one");
   });
 
+  it("reads the end of a file with a negative offset", async () => {
+    const tool = loadTool();
+    const result = await tool.execute(
+      "id",
+      { filePath: textFile, offset: -2 },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const text = result.content[0].text;
+    expect(text).toContain("4: four");
+    expect(text).toContain("5: five");
+    expect(text).not.toContain("1: one");
+    expect(text).toContain("(End of file - total 5 lines)");
+  });
+
+  it("continues from a negative-offset read with a positive offset", async () => {
+    const tool = loadTool();
+    const first = await tool.execute(
+      "id",
+      { filePath: textFile, offset: -3, limit: 1 },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(first.content[0].text).toContain("Showing lines 3-3 of 5. Use offset=4 to continue.");
+
+    const next = await tool.execute(
+      "id",
+      { filePath: textFile, offset: 4 },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(next.content[0].text).toContain("4: four");
+    expect(next.content[0].text).toContain("5: five");
+  });
+
   it("treats offset 0 as 1", async () => {
     const tool = loadTool();
     const result = await tool.execute(
@@ -275,6 +343,21 @@ describe("opencode read execute", () => {
     expect(text).toContain(
       "(Showing 1 of 3 entries. Use 'offset' parameter to read beyond entry 3)",
     );
+  });
+
+  it("reads the last directory entries with a negative offset", async () => {
+    const listing = join(dir, "listing");
+    const tool = loadTool();
+    const result = await tool.execute(
+      "id",
+      { filePath: listing, offset: -1 },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const text = result.content[0].text;
+    expect(text).toContain("zeta.txt");
+    expect(text).not.toContain("alpha.txt");
   });
 
   it("suggests similarly-named files when the path is missing", async () => {

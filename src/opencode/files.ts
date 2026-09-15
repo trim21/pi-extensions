@@ -192,11 +192,17 @@ export interface LinePage {
  * - per-line truncation to MAX_LINE_LENGTH
  * - line cap via maxLines (more): keep scanning so count is the file total
  * - byte cap via maxBytes (cut): stop immediately
+ *
+ * offset 为负数时从文件末尾倒数（`offset=-2` 等价 `tail -n 2`）：流式单遍
+ * 扫描全程只保留末尾窗口，返回前把 offset 换算为正的绝对起始行号
+ * （`totalLines + offset + 1`，超出文件长度时钳到 1），行号/续读提示与
+ * 正向语义一致。
  */
 export async function readLines(
   filePath: string,
   opts: { offset: number; limit: number; maxBytes?: number },
 ): Promise<LinePage> {
+  if (opts.offset < 0) return readTailLines(filePath, opts);
   const start = opts.offset - 1;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   const raw: string[] = [];
@@ -234,6 +240,59 @@ export async function readLines(
   }
 
   return { raw, count, cut, more, offset: opts.offset };
+}
+
+/**
+ * tail 语义的负 offset 实现：单遍流式扫描，环形缓冲只保留末尾 K 行
+ * （K = -offset），扫完后对窗口应用 limit 与字节上限，避免为取末尾几行
+ * 而把整个文件驻留内存。
+ */
+async function readTailLines(
+  filePath: string,
+  opts: { offset: number; limit: number; maxBytes?: number },
+): Promise<LinePage> {
+  const windowSize = -opts.offset;
+  const window: string[] = [];
+  let head = 0;
+  let count = 0;
+
+  const stream = createReadStream(filePath, { encoding: "utf8" });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const text of rl) {
+      count += 1;
+      const line =
+        text.length > MAX_LINE_LENGTH ? text.slice(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : text;
+      window.push(line);
+      if (window.length > windowSize) head += 1;
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+
+  const offset = Math.max(count + opts.offset + 1, 1);
+  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+  const raw: string[] = [];
+  let bytes = 0;
+  let cut = false;
+  let more = false;
+  for (const line of window.slice(head)) {
+    if (raw.length >= opts.limit) {
+      more = true;
+      break;
+    }
+    const size = Buffer.byteLength(line, "utf8") + (raw.length > 0 ? 1 : 0);
+    if (bytes + size > maxBytes) {
+      cut = true;
+      more = true;
+      break;
+    }
+    raw.push(line);
+    bytes += size;
+  }
+
+  return { raw, count, cut, more, offset };
 }
 
 function truncationFromPage(page: LinePage): TruncationResult {
@@ -299,15 +358,17 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void 
   pi.registerTool({
     name: "read",
     label: "read",
-    description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
+    description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. A negative offset counts from the end of the file (offset=-2 reads the last 2 lines). When you need the full file, continue with offset until complete.`,
     promptSnippet: "Read file contents",
-    promptGuidelines: ["Use read to examine files instead of cat or sed."],
+    promptGuidelines: [
+      "Use read to examine files instead of cat, sed, or tail. A negative offset reads from the end of the file (offset=-2 reads the last 2 lines).",
+    ],
     parameters: Type.Object({
       filePath: Type.String({ description: "The absolute path to the file or directory to read" }),
       offset: Type.Optional(
         Type.Integer({
-          minimum: 0,
-          description: "The line number to start reading from (1-indexed)",
+          description:
+            "The line number to start reading from (1-indexed; 0 is treated as 1). A negative value counts from the end of the file (offset=-2 reads the last 2 lines).",
         }),
       ),
       limit: Type.Optional(
@@ -340,9 +401,9 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void 
       if (fileStat.isDirectory()) {
         const entries = await formatDirectoryEntries(absolutePath);
         const limitVal = limit ?? DEFAULT_MAX_LINES;
-        // opencode: params.offset || 1（0 视为 1）
+        // opencode: params.offset || 1（0 视为 1）；负数从末尾倒数
         const offsetVal = offset || 1;
-        const start = offsetVal - 1;
+        const start = offsetVal < 0 ? Math.max(entries.length + offsetVal, 0) : offsetVal - 1;
         const sliced = entries.slice(start, start + limitVal);
         const totalEntries = entries.length;
         const truncated = start + sliced.length < totalEntries;
