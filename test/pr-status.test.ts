@@ -1,5 +1,6 @@
 /**
- * Tests for `read-github-pr-status` (`GhClient.prStatus`) — it must return the
+ * Tests for `read-github-pr-status` (the handler in `src/gh/tools/read-pr-status.ts`) —
+ * it must return the
  * current checks of the PR's head commit immediately, without polling, and each
  * Actions-backed check has to carry the `run_id` / `job_id` that lead to its log.
  *
@@ -24,7 +25,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import { GhClient } from "../src/gh-readonly.js";
+import { GhClient, prStatus } from "../src/gh-readonly.js";
 import { type FixtureRoutes, type GithubCassette, githubCassette } from "./github-fixtures.js";
 
 /** Fake `gh auth token` process. */
@@ -90,14 +91,14 @@ function routes(): FixtureRoutes {
 }
 
 /** Run one toolcall through a client wired to the recorded responses. */
-function prStatus(api: GithubCassette, params: { number: number | string; repo?: string }) {
-  return new GhClient(api.fetch).prStatus({ params, ctx: {} });
+function callPrStatus(api: GithubCassette, params: { number: number | string; repo?: string }) {
+  return prStatus(new GhClient(api.fetch), { params, ctx: {} });
 }
 
 describe("read-github-pr-status", () => {
   it("reports every check of the head commit with its run/job ids", async () => {
     const api = githubCassette(routes());
-    const result = await prStatus(api, { number: PR_NUMBER, repo: "trim21/pi-extensions" });
+    const result = await callPrStatus(api, { number: PR_NUMBER, repo: "trim21/pi-extensions" });
     // expectations come from the response this run served (replayed or recorded)
     const pull = api.body<PullFixture>(PULL_ROUTE);
     const combinedStatus = api.body<CombinedStatusFixture>(STATUS_ROUTE);
@@ -160,7 +161,7 @@ describe("read-github-pr-status", () => {
 
   it("returns the snapshot immediately instead of polling", async () => {
     const api = githubCassette(routes());
-    await prStatus(api, { number: PR_NUMBER, repo: "trim21/pi-extensions" });
+    await callPrStatus(api, { number: PR_NUMBER, repo: "trim21/pi-extensions" });
 
     // one request per read (PR, commit statuses, check runs, run events) — a
     // polling implementation would repeat the check reads until they settle
@@ -172,9 +173,9 @@ describe("read-github-pr-status", () => {
 
   it("rejects a non-numeric PR number instead of asking the API", async () => {
     const api = githubCassette({});
-    await expect(prStatus(api, { number: "abc", repo: "trim21/pi-extensions" })).rejects.toThrow(
-      /invalid number/,
-    );
+    await expect(
+      callPrStatus(api, { number: "abc", repo: "trim21/pi-extensions" }),
+    ).rejects.toThrow(/invalid number/);
     expect(api.calls).toEqual([]);
   });
 });
