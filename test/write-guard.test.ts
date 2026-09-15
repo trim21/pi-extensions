@@ -14,8 +14,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { requestPolicy } from "../src/lib/request-policy.js";
 import { buildDiffPreview, guardWriteAccess } from "../src/lib/write-guard.js";
 
 const SNAPSHOT_DIR = join(tmpdir(), "write-guard-inline-snapshot");
@@ -234,6 +235,11 @@ function writeOptions(absolutePath: string) {
 }
 
 describe("guardWriteAccess", () => {
+  afterEach(() => {
+    // 非沙盒请求策略是进程级单例：用例之间必须复位
+    requestPolicy.setDenyRequests(false);
+  });
+
   it("auto-allows writes inside the workspace", async () => {
     await expect(guardWriteAccess(ctxWith({}), writeOptions(INSIDE))).resolves.toBeUndefined();
   });
@@ -323,6 +329,33 @@ describe("guardWriteAccess", () => {
       }),
     ).rejects.toThrow("user deny test-tool: blocked");
   });
+
+  it("refuses outside writes without a dialog while non-sandbox requests are denied", async () => {
+    requestPolicy.setDenyRequests(true);
+    const select = vi.fn();
+    await expect(
+      guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), writeOptions(OUTSIDE)),
+    ).rejects.toThrow("user deny write: blocked");
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("still auto-allows workspace writes while non-sandbox requests are denied", async () => {
+    requestPolicy.setDenyRequests(true);
+    await expect(guardWriteAccess(ctxWith({}), writeOptions(INSIDE))).resolves.toBeUndefined();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "asks for approval again once the policy is off",
+    async () => {
+      requestPolicy.setDenyRequests(true);
+      requestPolicy.setDenyRequests(false);
+      const select = vi.fn(async () => "Approve once");
+      await expect(
+        guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), writeOptions(OUTSIDE)),
+      ).resolves.toBeUndefined();
+      expect(select).toHaveBeenCalled();
+    },
+  );
 
   it.skipIf(process.platform === "win32")("shows a diff preview for an outside edit", async () => {
     const select = vi.fn(async (title: string) => {

@@ -55,6 +55,7 @@ import {
   describeSandbox,
   EDIT_RULES,
 } from "../src/bwrap/runtime.js";
+import { requestPolicy } from "../src/lib/request-policy.js";
 
 beforeAll(() => {
   // Bash 输出运行时落盘到 agent-dir/tmp：测试环境指向可写的临时目录
@@ -94,11 +95,45 @@ function startSession(runtime: BwrapRuntime, pi: { on: ReturnType<typeof vi.fn> 
   handler({}, { cwd: process.cwd(), hasUI: true, ui });
 }
 
+/** 调用已注册的 /bwrap-* 命令处理器（runCommand → handler(args, ctx)）。 */
+async function runBwrapCommand(
+  pi: { registerCommand: ReturnType<typeof vi.fn> },
+  name: string,
+  ctx: unknown,
+): Promise<void> {
+  const call = pi.registerCommand.mock.calls.find((c) => c[0] === name);
+  if (!call) throw new Error(`command not registered: ${name}`);
+  const { handler } = call[1] as { handler: (args: string, ctx: unknown) => Promise<void> };
+  await handler("", ctx);
+}
+
+/** 命令 handler 的 ctx：只用到 cwd / hasUI / ui（notify + setStatus + theme）。 */
+function commandContext(cwd = process.cwd()) {
+  const ui = {
+    notify: vi.fn(),
+    setStatus: vi.fn(),
+    theme: { fg: (_color: string, text: string) => text },
+  };
+  return { ctx: { cwd, hasUI: true, ui } as never, ui };
+}
+
+/** 调用 before_agent_start 处理器并返回注入后的 system prompt。 */
+function beforeAgentStart(pi: { on: ReturnType<typeof vi.fn> }, cwd = process.cwd()): string {
+  const call = pi.on.mock.calls.find((c) => c[0] === "before_agent_start");
+  const handler = call?.[1] as (
+    event: { systemPrompt: string },
+    ctx: { cwd: string; hasUI: boolean },
+  ) => { systemPrompt: string } | undefined;
+  return handler({ systemPrompt: "base" }, { cwd, hasUI: true })?.systemPrompt ?? "";
+}
+
 describe("BwrapRuntime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     localCreateMock.mockReset();
     dcgSuggestionMock.mockReset();
+    // 非沙盒请求策略是进程级单例：用例之间必须复位，避免互相影响
+    requestPolicy.setDenyRequests(false);
     // 默认视为 dcg 未安装：静默跳过，不影响任何审批断言
     dcgSuggestionMock.mockResolvedValue({ kind: "not-installed" });
   });
@@ -109,6 +144,8 @@ describe("BwrapRuntime", () => {
     expect(pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
     expect(pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
     expect(pi.registerCommand).toHaveBeenCalledWith("bwrap-readonly", expect.any(Object));
+    expect(pi.registerCommand).toHaveBeenCalledWith("bwrap-deny-request", expect.any(Object));
+    expect(pi.registerCommand).toHaveBeenCalledWith("bwrap-allow-request", expect.any(Object));
   });
 
   describe("bwrap binary unavailable", () => {
@@ -775,6 +812,114 @@ describe("BwrapRuntime", () => {
         approvalRules: { action: string; pattern: string }[];
       };
       expect(config.approvalRules).toEqual([{ action: "allow", pattern: "printf *" }]);
+    });
+  });
+
+  describe("unsandboxed request policy", () => {
+    it("denies a full-access request without a dialog after /bwrap-deny-request", async () => {
+      const { runtime, pi } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const { ctx, ui } = commandContext();
+      await runBwrapCommand(pi, "bwrap-deny-request", ctx);
+      expect(ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("denied without approval"),
+        "info",
+      );
+      expect(ui.setStatus).toHaveBeenCalledWith(
+        "bwrap",
+        "bwrap: workspace-write (requests denied)",
+      );
+
+      const select = vi.fn();
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "printf nope",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input: vi.fn() }),
+        }),
+        // 与用户在审批框点 Deny（无理由）完全相同的错误
+      ).rejects.toThrow("User denied unsandboxed execution.");
+      expect(select).not.toHaveBeenCalled();
+    });
+
+    it("denies full-access requests even when an allow rule matches", async () => {
+      writeFileSync(
+        join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+        JSON.stringify({ approvalRules: [{ action: "allow", pattern: "printf *" }] }),
+      );
+      const { runtime, pi } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      await runBwrapCommand(pi, "bwrap-deny-request", commandContext().ctx);
+
+      const select = vi.fn();
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "printf allowed-by-rule",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input: vi.fn() }),
+        }),
+      ).rejects.toThrow("User denied unsandboxed execution.");
+      expect(select).not.toHaveBeenCalled();
+      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
+    });
+
+    it("leaves sandboxed commands untouched while requests are denied", async () => {
+      const { runtime, pi } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      await runBwrapCommand(pi, "bwrap-deny-request", commandContext().ctx);
+      // 策略只作用于非沙盒请求：普通命令仍走沙箱路径（沙箱可用时正常完成，
+      // bwrap 缺失时以安装提示失败），两种结果都不是策略拒绝
+      const select = vi.fn();
+      const outcome = await runtime
+        .execute({
+          toolCallId: "test",
+          command: "printf sandboxed",
+          ctx: fullAccessContext({ select, input: vi.fn() }),
+        })
+        .catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
+      expect(select).not.toHaveBeenCalled();
+      expect(outcome).not.toBe("User denied unsandboxed execution.");
+    });
+
+    it("restores the approval dialog after /bwrap-allow-request", async () => {
+      const { runtime, pi } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      await runBwrapCommand(pi, "bwrap-deny-request", commandContext().ctx);
+      const { ctx, ui } = commandContext();
+      await runBwrapCommand(pi, "bwrap-allow-request", ctx);
+      expect(ui.notify).toHaveBeenCalledWith(
+        "Non-sandbox requests require user approval again.",
+        "info",
+      );
+
+      const select = vi.fn(async () => ALLOW_ONCE);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf back",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }),
+      });
+      expect(select).toHaveBeenCalled();
+      expect(result).toMatchObject({ exitCode: 0, output: "back" });
+    });
+
+    it("announces the denied policy in the injected system prompt", async () => {
+      const { pi } = setupRuntime();
+      expect(beforeAgentStart(pi)).not.toContain("currently denied by the user");
+      await runBwrapCommand(pi, "bwrap-deny-request", commandContext().ctx);
+      expect(beforeAgentStart(pi)).toContain(
+        "`dangerouslyDisableSandbox` and writes outside the workspace are refused without approval",
+      );
+    });
+
+    it("re-enables approval on the next session start", async () => {
+      const { runtime, pi } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      await runBwrapCommand(pi, "bwrap-deny-request", commandContext().ctx);
+      startSession(runtime, pi);
+      expect(beforeAgentStart(pi)).not.toContain("currently denied");
     });
   });
 });

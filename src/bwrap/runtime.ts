@@ -18,6 +18,7 @@ import { type TObject, Type } from "typebox";
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
 import { fenceCodeBlock } from "../lib/markdown.js";
 import { formatDisplayPath } from "../lib/path.js";
+import { requestPolicy } from "../lib/request-policy.js";
 import { type SelectAction, selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
 import { type ApprovalRule, evaluateBashApproval, matchRule } from "./approval-rules.js";
 import { commandPatternsFor } from "./approval-suggest.js";
@@ -283,6 +284,12 @@ function describeNetwork(resolved: ResolvedBwrap): string {
   return "network access is unrestricted";
 }
 
+/**
+ * 用户无理由拒绝非沙盒请求的文案。`/bwrap-deny-request` 生效时的拒绝必须与
+ * 用户在审批框点 Deny 完全一致——模型看到的是一次普通拒绝，而不是另一套错误语义。
+ */
+const UNSANDBOXED_DENIED = "User denied unsandboxed execution.";
+
 /** 命令没经沙箱时沿用 prompt 里的说法，给出在沙盒外重跑的手段。 */
 const SANDBOX_ESCAPE_HATCH =
   "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.";
@@ -325,6 +332,7 @@ export class BwrapRuntime {
       this.sandboxDisabled = pi.getFlag("no-bwrap") === true && ctx.hasUI;
       this.resolved = undefined;
       this.bwrapUnavailable = false;
+      requestPolicy.setDenyRequests(false);
       if (process.platform === "win32") {
         // Windows 没有 bubblewrap：不做 bwrap 检测、不显示 bwrap 状态，
         // 每条 bash 命令在 execute 时逐条人工审批，模型无需知道 bwrap 的存在。
@@ -346,7 +354,7 @@ export class BwrapRuntime {
           return;
         }
       }
-      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${runtime.mode}`));
+      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(runtime.mode)));
       ctx.ui.notify(
         runtime.bwrapEnabled
           ? `bwrap initialized (${runtime.mode})`
@@ -373,9 +381,14 @@ export class BwrapRuntime {
         !isWindows && this.bwrapUnavailable
           ? " bwrap is unavailable (binary not found): bash commands are refused unless the user explicitly approves unsandboxed execution."
           : "";
+      const denyRequestsText =
+        !isWindows && requestPolicy.deniesRequests()
+          ? " Unsandboxed execution is currently denied by the user: `dangerouslyDisableSandbox` and writes outside the workspace are refused without approval."
+          : "";
       return {
         systemPrompt:
-          event.systemPrompt + `\n\n## Command Execution\n${modeText}${unavailableText}\n`,
+          event.systemPrompt +
+          `\n\n## Command Execution\n${modeText}${unavailableText}${denyRequestsText}\n`,
       };
     });
 
@@ -418,6 +431,11 @@ export class BwrapRuntime {
     // （allow-all 模式是显式 opt-out，仍直接执行）。
     const needsApproval = request.requestFullAccess === true || (isWindows && runtime.bwrapEnabled);
     if (needsApproval && runtime.bwrapEnabled) {
+      // /bwrap-deny-request：非沙盒请求直接拒绝——审批规则与审批框都不再参与，
+      // 拒绝文案与用户点 Deny 相同，直到用户用 /bwrap-allow-request 恢复审批。
+      if (request.requestFullAccess === true && requestPolicy.deniesRequests()) {
+        throw new Error(UNSANDBOXED_DENIED);
+      }
       // 先按 approvalRules 自动判定：allow 直接放行，deny 直接拒绝，未命中才弹框
       const decision = await evaluateBashApproval(request.command, runtime.approvalRules);
       if (decision === "deny") {
@@ -572,7 +590,7 @@ export class BwrapRuntime {
         if (foreverApprovedPattern.length > 0) {
           await this.persistAllowRule(ctx, command, foreverApprovedPattern);
         }
-        throw new Error("User denied unsandboxed execution.");
+        throw new Error(UNSANDBOXED_DENIED);
       }
       case DENY_WITH_REASON: {
         if (foreverApprovedPattern.length > 0) {
@@ -757,6 +775,18 @@ export class BwrapRuntime {
         description: "Reload bwrap config and restart the network stack",
         flags: Type.Object({}),
       },
+      "bwrap-deny-request": {
+        name: "bwrap-deny-request",
+        usage: "",
+        description: "Deny unsandboxed execution requests without approval",
+        flags: Type.Object({}),
+      },
+      "bwrap-allow-request": {
+        name: "bwrap-allow-request",
+        usage: "",
+        description: "Require user approval for unsandboxed execution requests again",
+        flags: Type.Object({}),
+      },
     } as const satisfies Record<string, CommandSpec<TObject>>;
 
     pi.registerCommand("bwrap", {
@@ -809,13 +839,26 @@ export class BwrapRuntime {
           this.reload(commandCtx);
         }),
     });
+
+    for (const [name, deny] of [
+      ["bwrap-deny-request", true],
+      ["bwrap-allow-request", false],
+    ] as const) {
+      pi.registerCommand(name, {
+        description: specs[name].description,
+        handler: (args, ctx) =>
+          this.runCommand(pi, specs[name], args, ctx, (commandCtx) =>
+            this.setDenyRequests(deny, commandCtx),
+          ),
+      });
+    }
   }
 
   private reload(ctx: ExtensionCommandContext): void {
     this.resolved = undefined;
     this.bwrapUnavailable = false;
     const runtime = this.resolve(ctx);
-    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${runtime.mode}`));
+    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(runtime.mode)));
     ctx.ui.notify(`bwrap config reloaded (mode: ${runtime.mode})`, "info");
   }
 
@@ -825,13 +868,36 @@ export class BwrapRuntime {
       return;
     }
     this.setMode(ctx.cwd, mode);
-    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", `bwrap: ${mode}`));
+    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(mode)));
     notifyMode(ctx, mode);
     pi.sendMessage({
       customType: "info",
       content: `Bwrap sandbox mode changed to "${mode}".`,
       display: true,
     });
+  }
+
+  /** 状态行文案：模式 + 非沙盒请求策略（拒绝时标注，便于解释模型的请求为何被拒）。 */
+  private statusLabel(mode: BwrapMode): string {
+    return `bwrap: ${mode}${requestPolicy.deniesRequests() ? " (requests denied)" : ""}`;
+  }
+
+  /**
+   * 切换非沙盒请求策略：拒绝时模型的提权请求（bash 的 `dangerouslyDisableSandbox`、
+   * 编辑类工具的工作区外写入）直接按用户拒绝处理，不再弹审批框。
+   */
+  private setDenyRequests(deny: boolean, ctx: ExtensionCommandContext): void {
+    requestPolicy.setDenyRequests(deny);
+    ctx.ui.notify(
+      deny
+        ? "Non-sandbox requests are denied without approval; /bwrap-allow-request restores approval."
+        : "Non-sandbox requests require user approval again.",
+      "info",
+    );
+    const runtime = this.resolve(ctx);
+    if (ctx.hasUI && runtime.bwrapEnabled && !this.bwrapUnavailable) {
+      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(runtime.mode)));
+    }
   }
 
   private runCommand(

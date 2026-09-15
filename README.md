@@ -50,6 +50,10 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
 
 建议模型不确定时先尝试沙箱模式，若因沙箱限制失败，再以完整权限重试。
 
+另一条提权路径是编辑类工具（`Edit` / `Write` / `lsp-rename` / `web_fetch`）写工作区外路径，同样经审批框放行。
+
+对话中执行 `/bwrap-deny-request` 后，上述两类提权请求都不再弹审批框，直接按用户无理由拒绝处理（bash 报 `User denied unsandboxed execution.`，编辑类工具报 `user deny <tool>: blocked`）；`/bwrap-allow-request` 恢复审批。该开关只影响提权路径，沙箱内可执行的命令与工作区内写入不受影响，新会话开始时复位。
+
 ### 保护目录
 
 `.pi`、`.agent` 即使在 `workspace-write` 模式下也始终只读；`.git` 同样只读：工作区根是 git 仓库时保护根 `.git`，根不是 git 仓库时才递归扫描嵌套仓库（monorepo 子仓库，跳过 `node_modules`、`.venv` 等包目录）。
@@ -62,6 +66,8 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
 - `/bwrap-allow-all` — 切换到 allow-all 模式
 - `/bwrap-workspace-write` — 切换到 workspace-write 模式
 - `/bwrap-readonly` — 切换到 readonly 模式
+- `/bwrap-deny-request` — 拒绝模型的非沙盒请求，不再弹审批框
+- `/bwrap-allow-request` — 恢复非沙盒请求的审批
 
 ### 配置
 

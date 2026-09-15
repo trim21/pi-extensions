@@ -8,6 +8,8 @@
  * - Headless sessions (no UI) reject outside writes outright.
  * - Windows (no sandbox fallback): writes are restricted to the workspace;
  *   outside paths are rejected outright, with no approval path.
+ * - `/bwrap-deny-request` (non-sandbox request policy) refuses outside writes
+ *   outright, with the same error as the user picking "Block".
  *
  * Callers have already parsed their tool arguments, so the guard only takes the
  * resolved pieces: the raw target path and the pending change (oldText/newText).
@@ -20,6 +22,7 @@ import { generateUnifiedPatch } from "@earendil-works/pi-coding-agent";
 
 import { applyEdit, normalizeToLF } from "../opencode/edit-engine.js";
 import { fenceCodeBlock } from "./markdown.js";
+import { requestPolicy } from "./request-policy.js";
 
 const ALWAYS_ALLOW = ["/tmp"];
 const MAX_PREVIEW_LINES = 100;
@@ -132,6 +135,12 @@ export async function guardWriteAccess(
   if (!ctx) return;
   const { absolutePath } = opts;
   if (isPathAllowed(absolutePath, ctx.cwd)) return;
+
+  // 非沙盒请求策略生效时不弹审批框：工作区外写入按用户点 "Block"（无理由）处理。
+  // 放在 win32 / 无 UI 分支之前，策略优先级高于各平台的降级路径。
+  if (requestPolicy.deniesRequests()) {
+    throw new Error(`user deny ${opts.toolName}: blocked`);
+  }
 
   if (process.platform === "win32") {
     // Windows 上退化为「只能写工作区」：无沙箱兜底，工作区外写入一律拒绝，
