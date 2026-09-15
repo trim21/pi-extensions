@@ -20,6 +20,7 @@ import { createLspManager, type LspService, type LspServiceOptions } from "../li
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import type { ToolPendant } from "../lib/pendant.ts";
+import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import {
   type ClaudeCodeState,
@@ -230,6 +231,7 @@ export function registerFileTools(
   pi: ExtensionAPI,
   state: ClaudeCodeState,
   getService: () => LspService,
+  policy: RequestPolicy,
 ): void {
   pi.registerTool({
     name: "Read",
@@ -399,6 +401,7 @@ export function registerFileTools(
           newText: params.new_string,
           replaceAll: params.replace_all,
         },
+        policy,
       });
       const [message, details, diagnostics] = await withFileMutationQueue<
         [string, FileToolDetails, DiagnosticReport]
@@ -594,6 +597,7 @@ export function registerFileTools(
         toolName: "Write",
         absolutePath: filePath,
         change: { oldText: "", newText: params.content },
+        policy,
       });
       const [message, details, diagnostics] = await withFileMutationQueue<
         [string, FileToolDetails, DiagnosticReport]
@@ -686,14 +690,25 @@ function restoreFileReads(
   }
 }
 
+export interface ClaudeCodeFileToolOptions extends LspServiceOptions {
+  /** 与 bash runtime 共享的非沙盒请求策略；独立入口不传，自建一份。 */
+  policy?: RequestPolicy;
+}
+
 /**
  * 独立扩展入口：files.ts 可单独经 `-e claude-code/files.ts` 加载（spawn-agent
  * 子代理把 Read/Edit/Write 工具名映射到本文件），无需经 index.ts。reads
  * state 归本文件所有：扩展实例内创建，并随 session 事件从历史分支恢复，
  * 与主进程 index.ts 聚合加载时的行为一致。
  */
-export default function claudeCodeFileTools(pi: ExtensionAPI, options?: LspServiceOptions): void {
+export default function claudeCodeFileTools(
+  pi: ExtensionAPI,
+  options?: ClaudeCodeFileToolOptions,
+): void {
   const state = createClaudeCodeState();
+  // 聚合入口（index.ts）注入与 bash runtime 共享的那一份；独立入口（spawn-agent
+  // 按工具名 `-e` 加载本文件）自建一份，靠 pi.events 跟随同一开关。
+  const policy = options?.policy ?? createRequestPolicy(pi.events);
 
   // LSP 专属工具（lsp-rename / inspect 族）仅在 lsp.json 存在 enabled 服务器时
   // 注册（session_start 校验后）；本工具集跟踪 read-before-write 状态，rename
@@ -703,6 +718,7 @@ export default function claudeCodeFileTools(pi: ExtensionAPI, options?: LspServi
     {
       onEnabled: (pi, service) => {
         registerLspRenameTool(pi, service, {
+          policy,
           recordReads: async (applied) => {
             const reads: Record<string, FileSnapshot> = {};
             for (const fileEdit of applied) {
@@ -736,5 +752,5 @@ export default function claudeCodeFileTools(pi: ExtensionAPI, options?: LspServi
   });
 
   // 文件工具无条件注册；service 惰性获取，disabled 时为 no-op。
-  registerFileTools(pi, state, () => manager.mustLazyGetService());
+  registerFileTools(pi, state, () => manager.mustLazyGetService(), policy);
 }

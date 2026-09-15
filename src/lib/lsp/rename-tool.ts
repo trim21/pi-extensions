@@ -23,6 +23,7 @@ import { Type } from "typebox";
 
 import { resolvePathArg } from "../path.js";
 import type { ToolPendant } from "../pendant.ts";
+import type { RequestPolicy } from "../request-policy.js";
 import { guardWriteAccess } from "../write-guard.js";
 import { RenameNotPossibleError } from "./client.js";
 import type { LspService } from "./lsp.js";
@@ -33,7 +34,9 @@ import {
   symbolCandidates,
 } from "./rename.js";
 
-export interface LspRenameHooks {
+export interface LspRenameOptions {
+  /** 调用方所在扩展入口的非沙盒请求策略（与文件工具的 write-guard 同一份）。 */
+  policy: RequestPolicy;
   /**
    * rename 落盘后对每个被修改文件做已读记账；返回的 map 随 details.reads
    * 持久化，供 session 恢复时重放。不跟踪已读状态的工具集不提供该 hook。
@@ -49,7 +52,7 @@ const LSP_RENAME_PROMPT = readFileSync(
 export function registerLspRenameTool(
   pi: ExtensionAPI,
   service: LspService,
-  hooks: LspRenameHooks = {},
+  options: LspRenameOptions,
 ): void {
   pi.registerTool({
     name: "lsp-rename",
@@ -100,7 +103,7 @@ export function registerLspRenameTool(
 
       const notify = (message: string, level: "info" | "warning" | "error") =>
         ctx.ui.notify(message, level);
-      const options = { notify, signal };
+      const requestOptions = { notify, signal };
 
       // ── 按 symbol 名枚举行内候选，逐候选探测与消歧 ────────────────────────
       const candidates = symbolCandidates(
@@ -125,7 +128,7 @@ export function registerLspRenameTool(
             line: candidate.line,
             character: candidate.character,
             newName: params.new_name,
-            options,
+            options: requestOptions,
           });
           successes.push({ result });
         } catch (error) {
@@ -187,6 +190,7 @@ export function registerLspRenameTool(
           toolName: "lsp-rename",
           absolutePath: fileEdit.path,
           change: { oldText: fileEdit.oldText, newText: fileEdit.newText },
+          policy: options.policy,
         });
       }
 
@@ -199,7 +203,8 @@ export function registerLspRenameTool(
           `### ${fileEdit.path} (${fileEdit.changeCount} edit(s))\n\n\`\`\`diff\n${generateDiffString(fileEdit.oldText, fileEdit.newText).diff}\n\`\`\``,
         );
       }
-      const reads = hooks.recordReads === undefined ? undefined : await hooks.recordReads(applied);
+      const reads =
+        options.recordReads === undefined ? undefined : await options.recordReads(applied);
 
       let diagnosticText = "";
       for (const fileEdit of applied) {

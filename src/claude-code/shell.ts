@@ -18,6 +18,7 @@ import {
   sandboxHintBlock,
 } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
+import { createRequestPolicy } from "../lib/request-policy.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 7_200_000;
@@ -85,7 +86,7 @@ export function formatBashSuccess(result: Awaited<ReturnType<BwrapRuntime["execu
  */
 export function registerShellTools(
   pi: ExtensionAPI,
-  runtime: BwrapRuntime = createBwrapRuntime(),
+  runtime: BwrapRuntime = createBwrapRuntime(createRequestPolicy(pi.events)),
 ): void {
   runtime.setup(pi);
   pi.registerTool({

@@ -14,6 +14,8 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { createBwrapRuntime } from "../bwrap/runtime.js";
+import { createRequestPolicy } from "../lib/request-policy.js";
 import opencodeBash from "./bash.js";
 import opencodeFileTools from "./files.js";
 import opencodeQuestion from "./question.js";
@@ -40,8 +42,11 @@ export { default as opencodeQuestion } from "./question.js";
 export { default as opencodeTodo } from "./todo.js";
 
 export default function opencode(pi: ExtensionAPI) {
-  opencodeFileTools(pi);
+  // 非沙盒请求策略由本入口创建，注入文件工具与 bash runtime 共享同一份；
+  // 独立入口（web/fetch.ts 等）各自创建一份并经 pi.events 保持同步。
+  const policy = createRequestPolicy(pi.events);
+  opencodeFileTools(pi, { policy });
   opencodeTodo(pi);
   opencodeQuestion(pi);
-  opencodeBash(pi);
+  opencodeBash(pi, createBwrapRuntime(policy));
 }

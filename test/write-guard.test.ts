@@ -14,9 +14,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { requestPolicy } from "../src/lib/request-policy.js";
+import { createRequestPolicy, type RequestPolicy } from "../src/lib/request-policy.js";
 import { buildDiffPreview, guardWriteAccess } from "../src/lib/write-guard.js";
 
 const SNAPSHOT_DIR = join(tmpdir(), "write-guard-inline-snapshot");
@@ -28,8 +28,11 @@ let WS_DIR: string;
 let INSIDE: string;
 let OUTSIDE: string;
 let TMP_FILE: string;
+/** 每个用例一份策略实例（策略由调用方持有，不再是模块级单例）。 */
+let policy: RequestPolicy;
 
 beforeEach(async () => {
+  policy = createRequestPolicy();
   await rm(SNAPSHOT_DIR, { recursive: true, force: true });
   await mkdir(SNAPSHOT_DIR, { recursive: true });
 
@@ -231,15 +234,10 @@ function ctxWith(over: Partial<GuardCtx>): GuardCtx {
 }
 
 function writeOptions(absolutePath: string) {
-  return { toolName: "write", absolutePath, change: { oldText: "", newText: "x" } };
+  return { toolName: "write", absolutePath, change: { oldText: "", newText: "x" }, policy };
 }
 
 describe("guardWriteAccess", () => {
-  afterEach(() => {
-    // 非沙盒请求策略是进程级单例：用例之间必须复位
-    requestPolicy.setDenyRequests(false);
-  });
-
   it("auto-allows writes inside the workspace", async () => {
     await expect(guardWriteAccess(ctxWith({}), writeOptions(INSIDE))).resolves.toBeUndefined();
   });
@@ -326,12 +324,13 @@ describe("guardWriteAccess", () => {
       guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), {
         toolName: "test-tool",
         absolutePath: OUTSIDE,
+        policy,
       }),
     ).rejects.toThrow("user deny test-tool: blocked");
   });
 
   it("refuses outside writes without a dialog while non-sandbox requests are denied", async () => {
-    requestPolicy.setDenyRequests(true);
+    policy.setDenyRequests(true);
     const select = vi.fn();
     await expect(
       guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), writeOptions(OUTSIDE)),
@@ -340,15 +339,15 @@ describe("guardWriteAccess", () => {
   });
 
   it("still auto-allows workspace writes while non-sandbox requests are denied", async () => {
-    requestPolicy.setDenyRequests(true);
+    policy.setDenyRequests(true);
     await expect(guardWriteAccess(ctxWith({}), writeOptions(INSIDE))).resolves.toBeUndefined();
   });
 
   it.skipIf(process.platform === "win32")(
     "asks for approval again once the policy is off",
     async () => {
-      requestPolicy.setDenyRequests(true);
-      requestPolicy.setDenyRequests(false);
+      policy.setDenyRequests(true);
+      policy.setDenyRequests(false);
       const select = vi.fn(async () => "Approve once");
       await expect(
         guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), writeOptions(OUTSIDE)),
@@ -367,6 +366,7 @@ describe("guardWriteAccess", () => {
         toolName: "edit",
         absolutePath: OUTSIDE,
         change: { oldText: "two", newText: "TWO" },
+        policy,
       }),
     ).resolves.toBeUndefined();
   });

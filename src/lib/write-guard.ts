@@ -22,7 +22,7 @@ import { generateUnifiedPatch } from "@earendil-works/pi-coding-agent";
 
 import { applyEdit, normalizeToLF } from "../opencode/edit-engine.js";
 import { fenceCodeBlock } from "./markdown.js";
-import { requestPolicy } from "./request-policy.js";
+import type { RequestPolicy } from "./request-policy.js";
 
 const ALWAYS_ALLOW = ["/tmp"];
 const MAX_PREVIEW_LINES = 100;
@@ -121,6 +121,8 @@ export interface WriteGuardOptions {
    * 待审批的变更内容；缺省时审批对话框不展示 diff 预览，仅按路径审批。
    */
   change?: PendingChange;
+  /** 调用方所在扩展入口持有的非沙盒请求策略（跨入口一致时绑同一个 pi.events）。 */
+  policy: RequestPolicy;
 }
 
 /**
@@ -138,7 +140,7 @@ export async function guardWriteAccess(
 
   // 非沙盒请求策略生效时不弹审批框：工作区外写入按用户点 "Block"（无理由）处理。
   // 放在 win32 / 无 UI 分支之前，策略优先级高于各平台的降级路径。
-  if (requestPolicy.deniesRequests()) {
+  if (opts.policy.deniesRequests()) {
     throw new Error(`user deny ${opts.toolName}: blocked`);
   }
 

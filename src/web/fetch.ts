@@ -23,6 +23,7 @@ import { Type } from "typebox";
 
 import { resolvePathArg } from "../lib/path.js";
 import { createHttpProxy } from "../lib/proxy.js";
+import { createRequestPolicy } from "../lib/request-policy.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 
 const httpProxy = createHttpProxy();
@@ -310,6 +311,9 @@ function truncateMarkdown(text: string): { text: string; truncated: boolean } {
 }
 
 export default function webFetchTool(pi: ExtensionAPI): void {
+  // 本工具是独立扩展入口（pi 给每个入口单独建 jiti 实例），自建一份非沙盒请求
+  // 策略并订阅 pi.events：/bwrap-deny-request 在 bash 入口切换时会同步过来。
+  const policy = createRequestPolicy(pi.events);
   pi.registerTool({
     name: "web_fetch",
     label: "Web Fetch",
@@ -339,7 +343,7 @@ export default function webFetchTool(pi: ExtensionAPI): void {
       // 落盘位置的审批与写文件工具同一套：工作区与 /tmp 自动放行，其余问用户。
       // 放在 try 外面，拒绝的原因（user deny）不该被改写成「抓取失败」。
       if (destination !== undefined) {
-        await guardWriteAccess(ctx, { toolName: "web_fetch", absolutePath: destination });
+        await guardWriteAccess(ctx, { toolName: "web_fetch", absolutePath: destination, policy });
       }
 
       try {

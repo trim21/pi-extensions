@@ -34,6 +34,7 @@ import { registerLspInspectTools } from "../lib/lsp/inspect-tool.js";
 import { createLspManager, type LspService, type LspServiceOptions } from "../lib/lsp/lsp.js";
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
+import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { applyEdit, normalizeToLF, stripBom } from "./edit-engine.js";
 
@@ -534,7 +535,11 @@ const editSchema = Type.Object({
   ),
 });
 
-function registerEditTool(pi: ExtensionAPI, getService: () => LspService): void {
+function registerEditTool(
+  pi: ExtensionAPI,
+  getService: () => LspService,
+  policy: RequestPolicy,
+): void {
   pi.registerTool({
     name: "edit",
     label: "edit",
@@ -565,6 +570,7 @@ function registerEditTool(pi: ExtensionAPI, getService: () => LspService): void 
         toolName: "edit",
         absolutePath,
         change: { oldText: oldString, newText: newString, replaceAll },
+        policy,
       });
 
       const [message, details, diagnostics] = await withFileMutationQueue(
@@ -686,7 +692,11 @@ export function resolveBom(
   return { bom: sourceBom || nextBom, text };
 }
 
-function registerWriteTool(pi: ExtensionAPI, getService: () => LspService): void {
+function registerWriteTool(
+  pi: ExtensionAPI,
+  getService: () => LspService,
+  policy: RequestPolicy,
+): void {
   pi.registerTool({
     name: "write",
     label: "write",
@@ -707,6 +717,7 @@ function registerWriteTool(pi: ExtensionAPI, getService: () => LspService): void
         toolName: "write",
         absolutePath,
         change: { oldText: "", newText: content },
+        policy,
       });
       const dir = dirname(absolutePath);
 
@@ -764,25 +775,40 @@ function registerWriteTool(pi: ExtensionAPI, getService: () => LspService): void
 
 // ── 入口 ─────────────────────────────────────────────────────────────────────
 
-export function registerFileTools(pi: ExtensionAPI, getService: () => LspService): void {
+export function registerFileTools(
+  pi: ExtensionAPI,
+  getService: () => LspService,
+  policy: RequestPolicy,
+): void {
   registerReadTool(pi, getService);
-  registerEditTool(pi, getService);
-  registerWriteTool(pi, getService);
+  registerEditTool(pi, getService, policy);
+  registerWriteTool(pi, getService, policy);
   // lsp-rename / inspect 工具由 manager 的 onEnabled 回调注册，不在这里注册。
 }
 
+export interface OpencodeFileToolOptions extends LspServiceOptions {
+  /** 与 bash runtime 共享的非沙盒请求策略；独立入口不传，自建一份。 */
+  policy?: RequestPolicy;
+}
+
 /** 独立入口：创建 LSP manager（session_start 时按配置启用）并注册文件工具。 */
-export default function opencodeFileTools(pi: ExtensionAPI, options?: LspServiceOptions): void {
+export default function opencodeFileTools(
+  pi: ExtensionAPI,
+  options?: OpencodeFileToolOptions,
+): void {
+  // 聚合入口（index.ts）注入与 bash runtime 共享的那一份；独立入口自建并靠
+  // pi.events 跟随同一开关。
+  const policy = options?.policy ?? createRequestPolicy(pi.events);
   const manager = createLspManager(
     pi,
     {
       onEnabled: (pi, service) => {
-        registerLspRenameTool(pi, service);
+        registerLspRenameTool(pi, service, { policy });
         registerLspInspectTools(pi, service);
       },
     },
     options,
   );
   // 文件工具无条件注册；service 惰性获取，disabled 时为 no-op。
-  registerFileTools(pi, () => manager.mustLazyGetService());
+  registerFileTools(pi, () => manager.mustLazyGetService(), policy);
 }

@@ -12,6 +12,7 @@ import {
   sandboxHintBlock,
 } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
+import { createRequestPolicy } from "../lib/request-policy.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 7_200_000;
@@ -41,7 +42,7 @@ function appendTruncationNotice(
  */
 export default function opencodeBash(
   pi: ExtensionAPI,
-  runtime: BwrapRuntime = createBwrapRuntime(),
+  runtime: BwrapRuntime = createBwrapRuntime(createRequestPolicy(pi.events)),
 ): void {
   // 每个扩展实例持有自己的 runtime：不依赖模块级全局状态，状态随扩展
   // 实例生命周期（进程启动 / /reload / session 切换时工厂重建即重置）。

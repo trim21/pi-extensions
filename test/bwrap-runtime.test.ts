@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/bwrap/core.js", async (importOriginal) => {
@@ -55,15 +56,15 @@ import {
   describeSandbox,
   EDIT_RULES,
 } from "../src/bwrap/runtime.js";
-import { requestPolicy } from "../src/lib/request-policy.js";
+import { createRequestPolicy, type RequestPolicy } from "../src/lib/request-policy.js";
 
 beforeAll(() => {
   // Bash 输出运行时落盘到 agent-dir/tmp：测试环境指向可写的临时目录
   process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "cc-bwrap-agent-dir-"));
 });
 
-function setupRuntime() {
-  const runtime = createBwrapRuntime();
+function setupRuntime(policy: RequestPolicy = createRequestPolicy()) {
+  const runtime = createBwrapRuntime(policy);
   const pi = {
     getFlag: vi.fn(() => false),
     registerFlag: vi.fn(),
@@ -132,8 +133,6 @@ describe("BwrapRuntime", () => {
     vi.restoreAllMocks();
     localCreateMock.mockReset();
     dcgSuggestionMock.mockReset();
-    // 非沙盒请求策略是进程级单例：用例之间必须复位，避免互相影响
-    requestPolicy.setDenyRequests(false);
     // 默认视为 dcg 未安装：静默跳过，不影响任何审批断言
     dcgSuggestionMock.mockResolvedValue({ kind: "not-installed" });
   });
@@ -912,6 +911,23 @@ describe("BwrapRuntime", () => {
       expect(beforeAgentStart(pi)).toContain(
         "`dangerouslyDisableSandbox` and writes outside the workspace are refused without approval",
       );
+    });
+
+    it("broadcasts the switch to other entries' policy copies", async () => {
+      // web_fetch 之类独立扩展入口各有自己的一份策略，只有经 pi.events 广播后
+      // 同一开关才对它们生效（pi 给每个入口单独建 jiti 实例，模块级状态不共享）。
+      const bus = createEventBus();
+      const otherEntry = createRequestPolicy(bus);
+      const { runtime, pi } = setupRuntime(createRequestPolicy(bus));
+      runtime.setMode(process.cwd(), "workspace-write");
+
+      await runBwrapCommand(pi, "bwrap-deny-request", commandContext().ctx);
+      expect(otherEntry.deniesRequests()).toBe(true);
+      // /bwrap-deny-request 的拒绝生效在其它入口的写入审批上
+      expect(beforeAgentStart(pi)).toContain("currently denied by the user");
+
+      await runBwrapCommand(pi, "bwrap-allow-request", commandContext().ctx);
+      expect(otherEntry.deniesRequests()).toBe(false);
     });
 
     it("re-enables approval on the next session start", async () => {

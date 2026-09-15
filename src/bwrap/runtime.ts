@@ -18,7 +18,7 @@ import { type TObject, Type } from "typebox";
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
 import { fenceCodeBlock } from "../lib/markdown.js";
 import { formatDisplayPath } from "../lib/path.js";
-import { requestPolicy } from "../lib/request-policy.js";
+import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
 import { type SelectAction, selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
 import { type ApprovalRule, evaluateBashApproval, matchRule } from "./approval-rules.js";
 import { commandPatternsFor } from "./approval-suggest.js";
@@ -320,6 +320,15 @@ export class BwrapRuntime {
   private bwrapUnavailable = false;
   /** net-allowlist 首次执行时解析一次 mihomo 路径，之后随 runtime 复用，不逐命令扫描 PATH。 */
   private mihomoPath: string | undefined;
+  /**
+   * 非沙盒请求策略由创建方注入：聚合入口把它与文件工具的 write-guard 共享同一实例，
+   * 独立入口各持一份、经 pi.events 同步。
+   */
+  private readonly policy: RequestPolicy;
+
+  constructor(policy: RequestPolicy) {
+    this.policy = policy;
+  }
 
   setup(pi: ExtensionAPI): void {
     pi.registerFlag("no-bwrap", {
@@ -332,7 +341,7 @@ export class BwrapRuntime {
       this.sandboxDisabled = pi.getFlag("no-bwrap") === true && ctx.hasUI;
       this.resolved = undefined;
       this.bwrapUnavailable = false;
-      requestPolicy.setDenyRequests(false);
+      this.policy.setDenyRequests(false);
       if (process.platform === "win32") {
         // Windows 没有 bubblewrap：不做 bwrap 检测、不显示 bwrap 状态，
         // 每条 bash 命令在 execute 时逐条人工审批，模型无需知道 bwrap 的存在。
@@ -382,7 +391,7 @@ export class BwrapRuntime {
           ? " bwrap is unavailable (binary not found): bash commands are refused unless the user explicitly approves unsandboxed execution."
           : "";
       const denyRequestsText =
-        !isWindows && requestPolicy.deniesRequests()
+        !isWindows && this.policy.deniesRequests()
           ? " Unsandboxed execution is currently denied by the user: `dangerouslyDisableSandbox` and writes outside the workspace are refused without approval."
           : "";
       return {
@@ -433,7 +442,7 @@ export class BwrapRuntime {
     if (needsApproval && runtime.bwrapEnabled) {
       // /bwrap-deny-request：非沙盒请求直接拒绝——审批规则与审批框都不再参与，
       // 拒绝文案与用户点 Deny 相同，直到用户用 /bwrap-allow-request 恢复审批。
-      if (request.requestFullAccess === true && requestPolicy.deniesRequests()) {
+      if (request.requestFullAccess === true && this.policy.deniesRequests()) {
         throw new Error(UNSANDBOXED_DENIED);
       }
       // 先按 approvalRules 自动判定：allow 直接放行，deny 直接拒绝，未命中才弹框
@@ -879,7 +888,7 @@ export class BwrapRuntime {
 
   /** 状态行文案：模式 + 非沙盒请求策略（拒绝时标注，便于解释模型的请求为何被拒）。 */
   private statusLabel(mode: BwrapMode): string {
-    return `bwrap: ${mode}${requestPolicy.deniesRequests() ? " (requests denied)" : ""}`;
+    return `bwrap: ${mode}${this.policy.deniesRequests() ? " (requests denied)" : ""}`;
   }
 
   /**
@@ -887,7 +896,7 @@ export class BwrapRuntime {
    * 编辑类工具的工作区外写入）直接按用户拒绝处理，不再弹审批框。
    */
   private setDenyRequests(deny: boolean, ctx: ExtensionCommandContext): void {
-    requestPolicy.setDenyRequests(deny);
+    this.policy.setDenyRequests(deny);
     ctx.ui.notify(
       deny
         ? "Non-sandbox requests are denied without approval; /bwrap-allow-request restores approval."
@@ -916,6 +925,7 @@ export class BwrapRuntime {
   }
 }
 
-export function createBwrapRuntime(): BwrapRuntime {
-  return new BwrapRuntime();
+/** 缺省自建一份不跨入口同步的策略；入口通常显式传入 `createRequestPolicy(pi.events)`。 */
+export function createBwrapRuntime(policy: RequestPolicy = createRequestPolicy()): BwrapRuntime {
+  return new BwrapRuntime(policy);
 }
