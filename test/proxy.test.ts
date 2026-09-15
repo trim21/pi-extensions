@@ -1,7 +1,7 @@
 /**
- * Tests for the gh-readonly proxy layer (src/lib/gh-proxy.ts): gh.json parsing,
+ * Tests for the shared proxy layer (src/lib/proxy.ts): proxy.json parsing,
  * environment fallback, the variables injected into `gh` child processes, and
- * the fetch handed to octokit's `request.fetch`.
+ * the fetch handed to octokit's `request.fetch` (and to web_fetch).
  *
  * The fetch tests run against loopback servers: a minimal HTTP proxy
  * (CONNECT tunneling, like undici's ProxyAgent expects) and a fake origin.
@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createGhProxy, parseGhProxyConfig, proxyEnvVars } from "../src/lib/gh-proxy.js";
+import { createHttpProxy, parseProxyConfig, proxyEnvVars } from "../src/lib/proxy.js";
 
 interface ReceivedRequest {
   method: string;
@@ -136,22 +136,20 @@ function collectRequest(
   };
 }
 
-describe("parseGhProxyConfig", () => {
+describe("parseProxyConfig", () => {
   it("trims proxy and noProxy", () => {
-    expect(
-      parseGhProxyConfig({ proxy: " http://127.0.0.1:7890 ", noProxy: " localhost " }),
-    ).toEqual({
+    expect(parseProxyConfig({ proxy: " http://127.0.0.1:7890 ", noProxy: " localhost " })).toEqual({
       proxy: "http://127.0.0.1:7890",
       noProxy: "localhost",
     });
   });
 
   it("drops empty values", () => {
-    expect(parseGhProxyConfig({ proxy: "  ", noProxy: "" })).toEqual({});
+    expect(parseProxyConfig({ proxy: "  ", noProxy: "" })).toEqual({});
   });
 
   it("rejects non-string fields", () => {
-    expect(() => parseGhProxyConfig({ proxy: 7890 })).toThrow(/proxy/);
+    expect(() => parseProxyConfig({ proxy: 7890 })).toThrow(/proxy/);
   });
 });
 
@@ -174,11 +172,11 @@ describe("proxyEnvVars", () => {
   });
 });
 
-describe("createGhProxy", () => {
+describe("createHttpProxy", () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "gh-proxy-"));
+    dir = await mkdtemp(join(tmpdir(), "proxy-"));
   });
 
   afterEach(async () => {
@@ -186,24 +184,24 @@ describe("createGhProxy", () => {
   });
 
   function configPath(): string {
-    return join(dir, "gh.json");
+    return join(dir, "proxy.json");
   }
 
   it("treats a missing config file as unconfigured", () => {
-    const proxy = createGhProxy(configPath(), {});
+    const proxy = createHttpProxy(configPath(), {});
     expect(proxy.settings).toEqual({});
     expect(proxy.env).toEqual({});
   });
 
   it("reads proxy settings from the config file", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: "http://127.0.0.1:7890" }));
-    const proxy = createGhProxy(configPath(), {});
+    const proxy = createHttpProxy(configPath(), {});
     expect(proxy.settings).toEqual({ proxy: "http://127.0.0.1:7890" });
     expect(proxy.env).toMatchObject({ HTTPS_PROXY: "http://127.0.0.1:7890" });
   });
 
   it("falls back to the standard environment variables", () => {
-    const proxy = createGhProxy(configPath(), {
+    const proxy = createHttpProxy(configPath(), {
       HTTPS_PROXY: "http://env:8080",
       NO_PROXY: "localhost",
     });
@@ -212,48 +210,48 @@ describe("createGhProxy", () => {
 
   it("prefers the config file over the environment", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: "http://config:7890" }));
-    const proxy = createGhProxy(configPath(), { HTTPS_PROXY: "http://env:8080" });
+    const proxy = createHttpProxy(configPath(), { HTTPS_PROXY: "http://env:8080" });
     expect(proxy.env.HTTPS_PROXY).toBe("http://config:7890");
   });
 
   it("falls back to the environment for the fields the config leaves out", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: "http://config:7890" }));
-    const proxy = createGhProxy(configPath(), { NO_PROXY: "localhost" });
+    const proxy = createHttpProxy(configPath(), { NO_PROXY: "localhost" });
     expect(proxy.env.NO_PROXY).toBe("localhost");
   });
 
   // 配置在扩展加载时读一次；写错了就直接抛，让进程启动即失败而不是静默直连。
   it("throws on broken JSON", async () => {
     await writeFile(configPath(), "{not json");
-    expect(() => createGhProxy(configPath(), {})).toThrow(/gh\.json/);
+    expect(() => createHttpProxy(configPath(), {})).toThrow(/proxy\.json/);
   });
 
   it("throws on schema violations", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: 7890 }));
-    expect(() => createGhProxy(configPath(), {})).toThrow(/proxy/);
+    expect(() => createHttpProxy(configPath(), {})).toThrow(/proxy/);
   });
 
   it("throws on unsupported proxy protocols", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: "socks5://127.0.0.1:1080" }));
-    expect(() => createGhProxy(configPath(), {})).toThrow(/unsupported proxy protocol/);
+    expect(() => createHttpProxy(configPath(), {})).toThrow(/unsupported proxy protocol/);
   });
 
   it("reads the config file once, at construction", async () => {
     await writeFile(configPath(), JSON.stringify({ proxy: "http://first:1" }));
-    const proxy = createGhProxy(configPath(), {});
+    const proxy = createHttpProxy(configPath(), {});
     expect(proxy.env.HTTPS_PROXY).toBe("http://first:1");
     await writeFile(configPath(), JSON.stringify({ proxy: "http://second:2" }));
     expect(proxy.env.HTTPS_PROXY).toBe("http://first:1");
   });
 });
 
-describe("createGhProxy fetch", () => {
+describe("createHttpProxy fetch", () => {
   let dir: string;
   let origin: Awaited<ReturnType<typeof startOrigin>>;
   let proxy: Awaited<ReturnType<typeof startProxy>>;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "gh-proxy-fetch-"));
+    dir = await mkdtemp(join(tmpdir(), "proxy-fetch-"));
     origin = await startOrigin();
     proxy = await startProxy();
   });
@@ -266,14 +264,14 @@ describe("createGhProxy fetch", () => {
 
   async function configuredProxy(
     settings: Record<string, string>,
-  ): Promise<ReturnType<typeof createGhProxy>> {
-    const path = join(dir, "gh.json");
+  ): Promise<ReturnType<typeof createHttpProxy>> {
+    const path = join(dir, "proxy.json");
     await writeFile(path, JSON.stringify(settings));
-    return createGhProxy(path, {});
+    return createHttpProxy(path, {});
   }
 
   it("uses the global fetch when no proxy is configured", async () => {
-    const client = createGhProxy(join(dir, "missing.json"), {});
+    const client = createHttpProxy(join(dir, "missing.json"), {});
     const response = await client.fetch(`${origin.url}/direct`);
     expect(response.status).toBe(201);
     expect(origin.requests[0]?.url).toBe("/direct");
@@ -320,14 +318,14 @@ describe("createGhProxy fetch", () => {
   });
 
   it("honours a global fetch replaced after the first request", async () => {
-    const client = createGhProxy(join(dir, "missing.json"), {});
+    const client = createHttpProxy(join(dir, "missing.json"), {});
     const first = vi.spyOn(globalThis, "fetch");
     await client.fetch(`${origin.url}/first`);
     expect(origin.requests.map((r) => r.url)).toEqual(["/first"]);
     first.mockRestore();
 
     // Regression: caching `globalThis.fetch` on the first call kept the
-    // replacement from taking effect (same module-level ghProxy instance is
+    // replacement from taking effect (same module-level httpProxy instance is
     // reused for the whole session).
     const second = vi.spyOn(globalThis, "fetch");
     await client.fetch(`${origin.url}/second`);

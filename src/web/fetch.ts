@@ -1,13 +1,19 @@
 /**
- * `web_fetch` 工具：抓取 URL 并提取正文为 markdown。
+ * `web_fetch` 工具：抓取 URL 并提取正文为 markdown，或按 `output_path` 原样落盘。
  *
  * SSRF 防护：DNS 预解析 + 拒绝私有/保留地址 + 每跳重定向重新校验，
  * 防止把 agent 变成内网探测口。正文提取用 readability 主内容算法。
  *
+ * 出网走 `src/lib/proxy.ts` 的代理层（~/.pi/agent/proxy.json，回退 HTTPS_PROXY 等环境
+ * 变量）：Node 的全局 fetch 不认代理环境变量，GitHub 的用户附件、release 资产这类只在
+ * 代理可达的 host 上，必须从这里挂出去，否则沙箱内一律 fetch failed。
+ *
  * 本文件是独立扩展入口（见 package.json 的 pi.extensions），可在配置里单独禁用。
  */
 import { lookup } from "node:dns/promises";
+import { mkdir, open, rm } from "node:fs/promises";
 import { isIP } from "node:net";
+import { dirname } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Readability } from "@mozilla/readability";
@@ -15,9 +21,17 @@ import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 import { Type } from "typebox";
 
+import { resolvePathArg } from "../lib/path.js";
+import { createHttpProxy } from "../lib/proxy.js";
+import { guardWriteAccess } from "../lib/write-guard.js";
+
+const httpProxy = createHttpProxy();
+
 const MAX_REDIRECTS = 5;
 const TIMEOUT_MS = 30_000;
 const MAX_BYTES = 5 * 1024 * 1024;
+/** 落盘模式的上限：附件、镜像、release 资产都比网页大得多，文本模式仍用 MAX_BYTES。 */
+const MAX_FILE_BYTES = 200 * 1024 * 1024;
 const MIN_USEFUL_CONTENT = 200;
 const MAX_MARKDOWN_BYTES = 100 * 1024;
 
@@ -84,12 +98,20 @@ interface FetchedPage {
   markdown: string;
 }
 
-/** 手动跟随重定向，每跳重新做 SSRF 校验（防 DNS rebinding 简化处理） */
+/** 落盘结果：最终 URL、本地路径、响应的 content-type 与写出的字节数。 */
+interface SavedFile {
+  url: string;
+  filePath: string;
+  contentType: string;
+  bytes: number;
+}
+
+/** 手动跟随重定向，每跳重新做 SSRF 校验（防 DNS rebinding 简化处理）。 */
 async function fetchWithRedirects(
   url: URL,
   signal: AbortSignal | undefined,
-  fetchFn: typeof fetch = fetch,
-): Promise<Response> {
+  fetchFn: typeof fetch = httpProxy.fetch,
+): Promise<{ response: Response; url: URL }> {
   let current = url;
   for (let redirects = 0; ; redirects++) {
     await assertPublicHostname(current.hostname);
@@ -109,11 +131,19 @@ async function fetchWithRedirects(
       }
       continue;
     }
-    return response;
+    return { response, url: current };
   }
 }
 
-export async function fetchPage(url: string, signal?: AbortSignal): Promise<FetchedPage> {
+/** 已确认 2xx 的响应，连同手动重定向后跟踪到的最终地址。 */
+interface OpenedResponse {
+  response: Response;
+  /** 手动重定向下 `response.url` 可能是空的，最终地址由重定向循环给出。 */
+  url: string;
+}
+
+/** 校验 URL、逐跳跟随重定向、要求 2xx；响应体怎么处理由调用方决定。 */
+async function openResponse(url: string, signal?: AbortSignal): Promise<OpenedResponse> {
   let target: URL;
   try {
     target = new URL(url);
@@ -124,10 +154,15 @@ export async function fetchPage(url: string, signal?: AbortSignal): Promise<Fetc
     throw new Error(`只支持 http/https，收到: ${target.protocol}`);
   }
 
-  const response = await fetchWithRedirects(target, signal);
+  const { response, url: finalUrl } = await fetchWithRedirects(target, signal);
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} ${response.statusText}`);
   }
+  return { response, url: finalUrl.href };
+}
+
+export async function fetchPage(url: string, signal?: AbortSignal): Promise<FetchedPage> {
+  const { response, url: finalUrl } = await openResponse(url, signal);
   const contentType = response.headers.get("content-type") ?? "";
   const category = classifyContentType(contentType);
   if (category === null) {
@@ -155,10 +190,58 @@ export async function fetchPage(url: string, signal?: AbortSignal): Promise<Fetc
   }
 
   if (category === "html") {
-    return extractMarkdown(body, response.url);
+    return extractMarkdown(body, finalUrl);
   }
   // JSON / XML / text/*：原样返回
-  return { url: response.url, title: response.url, markdown: body.trim() };
+  return { url: finalUrl, title: finalUrl, markdown: body.trim() };
+}
+
+/**
+ * 把响应体原样写进 `filePath`（二进制安全：不做 content-type 白名单、不解码、不转换），
+ * 用于 GitHub 用户附件、release 资产这类不能当正文读的下载。
+ * 任何一步失败都会删掉半成品，不留下看着完整其实截断的文件。
+ */
+export async function saveUrlToFile(
+  url: string,
+  filePath: string,
+  signal?: AbortSignal,
+): Promise<SavedFile> {
+  const { response, url: finalUrl } = await openResponse(url, signal);
+
+  const declaredLength = Number(response.headers.get("content-length") ?? "0");
+  if (declaredLength > MAX_FILE_BYTES) {
+    throw new Error(`文件过大 (${declaredLength} bytes)，上限 ${MAX_FILE_BYTES}`);
+  }
+
+  await mkdir(dirname(filePath), { recursive: true });
+  const handle = await open(filePath, "w");
+  let bytes = 0;
+  try {
+    if (response.body) {
+      const reader = response.body.getReader();
+      for (;;) {
+        const chunk = (await reader.read()) as { done: boolean; value: Uint8Array };
+        if (chunk.done) break;
+        bytes += chunk.value.byteLength;
+        if (bytes > MAX_FILE_BYTES) {
+          throw new Error(`文件过大，上限 ${MAX_FILE_BYTES} bytes`);
+        }
+        await handle.write(chunk.value);
+      }
+    }
+  } catch (error) {
+    await handle.close();
+    await rm(filePath, { force: true });
+    throw error;
+  }
+  await handle.close();
+
+  return {
+    url: finalUrl,
+    filePath,
+    contentType: response.headers.get("content-type") ?? "",
+    bytes,
+  };
 }
 
 /** 按 mime 主体分类响应；html 走 readability，其余文本类原样返回 */
@@ -232,14 +315,48 @@ export default function webFetchTool(pi: ExtensionAPI): void {
     label: "Web Fetch",
     description:
       "Fetch a URL and return its content as markdown (HTML pages) or raw text " +
-      "(JSON/XML/plain-text API responses). SSRF-protected: refuses private/internal " +
-      "addresses.",
-    promptSnippet: "Fetch a web page or API response",
+      "(JSON/XML/plain-text API responses). With output_path the body is saved to that " +
+      "file verbatim instead — any content type, no extraction, no truncation — and the " +
+      "result is the JSON summary {url, file_path, content_type, bytes} rather than the " +
+      "content; use it for images, logs and other attachments (GitHub user-attachments " +
+      "links from issue bodies, release assets, raw files). Give the file the extension " +
+      "matching the response's content_type: the Read tool decides image support by " +
+      "extension. Requests honour the proxy in ~/.pi/agent/proxy.json, so they reach hosts " +
+      "the shell sandbox blocks. SSRF-protected: refuses private/internal addresses.",
+    promptSnippet: "Fetch a web page, API response, or download a file",
     parameters: Type.Object({
       url: Type.String({ description: "The URL to fetch" }),
+      output_path: Type.Optional(
+        Type.String({
+          description:
+            "Save the response body to this path verbatim instead of returning it (absolute, or relative to the session cwd; ~ is expanded). Parent directories are created and an existing file is overwritten.",
+        }),
+      ),
     }),
-    async execute(_id, params, signal) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      const destination =
+        params.output_path === undefined ? undefined : resolvePathArg(ctx.cwd, params.output_path);
+      // 落盘位置的审批与写文件工具同一套：工作区与 /tmp 自动放行，其余问用户。
+      // 放在 try 外面，拒绝的原因（user deny）不该被改写成「抓取失败」。
+      if (destination !== undefined) {
+        await guardWriteAccess(ctx, { toolName: "web_fetch", absolutePath: destination });
+      }
+
       try {
+        if (destination !== undefined) {
+          const file = await saveUrlToFile(params.url, destination, signal);
+          const payload = {
+            url: file.url,
+            file_path: file.filePath,
+            content_type: file.contentType,
+            bytes: file.bytes,
+          };
+          return {
+            content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+            details: payload,
+          };
+        }
+
         const page = await fetchPage(params.url, signal);
         const { text, truncated } = truncateMarkdown(page.markdown);
         const details: Record<string, unknown> = {

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-GitHub 只读工具集：issue / PR / release / 仓库信息查询与 CI 日志下载以系统 `gh` CLI 为后端，PR checks 与 Actions run/job 查询走 GitHub REST（octokit）；只读不产生任何写入；`gh` 缺失或 Windows 平台时不注册工具（而非工具调用失败）。
+GitHub 只读工具集：issue / PR / release / 仓库信息查询与 CI 日志、release 资产下载以系统 `gh` CLI 为后端，PR checks 与 Actions run/job 查询走 GitHub REST（octokit）；只读指不修改 GitHub 上的资源，本地产物只写进 `~/.cache/pi/github/` 下的缓存目录；`gh` 缺失或 Windows 平台时不注册工具（而非工具调用失败）。
 
 ## Requirements
 
@@ -121,6 +121,48 @@ GitHub 只读工具集：issue / PR / release / 仓库信息查询与 CI 日志�
 - **WHEN** 重复读取同一 runId:jobId 的日志
 - **THEN** 命中磁盘缓存（`~/.cache/pi/github/ci-logs/<owner>/<repo>/<runId>/<jobId>.log`），同一 job 的请求串行化
 
+### Requirement: release 资产下载
+
+`download-github-release-assets` 用 `gh` 的凭据把一个 release 的资产拉到本地，私有仓库与二进制包都能拿到，不受 shell 沙箱的网络白名单限制。后端就是 `gh release download`：glob 语义、鉴权、重定向全部由它负责，工具只做参数组装与结果枚举。
+
+输出（`content` 里的 JSON 文本）：
+
+```json
+{
+  "repo": "cli/cli",
+  "tag": "v2.100.0",
+  "dir": "/home/user/.cache/pi/github/releases/cli/cli/v2.100.0",
+  "files": [
+    {
+      "name": "gh_2.100.0_checksums.txt",
+      "path": "/home/user/.cache/pi/github/releases/cli/cli/v2.100.0/gh_2.100.0_checksums.txt",
+      "bytes": 1971
+    }
+  ]
+}
+```
+
+#### Scenario: 参数与缺省
+
+- **WHEN** 调用 `download-github-release-assets`
+- **THEN** `repo` 可选（缺省用当前目录解析）、`tag` 可选（缺省 latest release，由 `gh release view --json tagName,assets` 解析出真实 tag）、`pattern` 可选（逗号分隔的 glob，缺省拉全部资产）、`archive` 可选（`zip` / `tar.gz`，拉源码包而不是资产）；`pattern` 与 `archive` 互斥，同时给出直接报错，不交给 `gh` 猜
+
+#### Scenario: 落盘目录与缓存复用
+
+- **WHEN** 资产下载成功
+- **THEN** 文件写入 `~/.cache/pi/github/releases/<owner>/<repo>/<tag>/`（`releaseAssetDir` 统一计算；tag 是 git ref 名、可以含 `/`，只有单个路径段安全的字符保留，`..` 这类段整体降级为 `_`，因此 tag 逃不出自己的目录），命令恒带 `--skip-existing`：目录里已有的文件不重下、不覆盖，因此重复调用是幂等的
+- **AND** 结果 `files` 列出目录里**当前**的全部普通文件（含此前已缓存的），带 `path` 与 `bytes`，内容不回显
+
+#### Scenario: pattern 未命中时给出可选资产名
+
+- **WHEN** `gh release download` 因 `--pattern` 没匹配到任何资产而失败
+- **THEN** 抛错，消息点名该 release 实际有哪些资产名，让调用方下一次就能改对 pattern；`gh` 的措辞变了就退化为原样抛出它的错误（不猜、不假装成功）
+
+#### Scenario: release 没有资产
+
+- **WHEN** 拉取成功但目录里一个文件都没有，且请求的不是源码包
+- **THEN** 返回说明性文本（该 release 无资产，可改用 `archive`），`details.available_assets` 为空数组
+
 ### Requirement: 状态快照与 run 级等待
 
 状态检查与 run 级等待工具的分工：快照即返不等待，run 级等待阻塞到单个 workflow run 结束。PR checks 的阻塞等待独立成 spec（见 `openspec/specs/wait-github-pr-checks/`）。
@@ -137,7 +179,7 @@ GitHub 只读工具集：issue / PR / release / 仓库信息查询与 CI 日志�
 
 ## Implementation
 
-所有工具经 `src/gh-readonly.ts` 的 `runGh` 封装：`spawn("gh", args, { shell: false })`，env 注入 `GH_PAGER=cat`，默认超时 10 分钟，超时 / 中止先 SIGTERM、5 秒后 SIGKILL。
+所有工具经 `src/gh-readonly.ts` 的 `runGh` 封装：`spawn("gh", args, { shell: false })`，env 注入 `GH_PAGER=cat` 与代理变量，默认超时 10 分钟，超时 / 中止先 SIGTERM、5 秒后 SIGKILL。
 
 - **注册门控**：Windows 或 PATH 无 `gh` 时不注册工具（notify warning / error）。
 - **输出截断**：`gh` stdout 统一截断为 2000 行 / 50KB，details 带 `truncated` 标志（`read-github-ci-logs` 不再产出长文本，只返回 JSON 索引）。
@@ -145,7 +187,9 @@ GitHub 只读工具集：issue / PR / release / 仓库信息查询与 CI 日志�
 - **repo 缺省**：未指定 `repo` 时用当前目录解析（`gh repo view --json nameWithOwner`）。
 - **octokit 读取**：`read-github-pr-status` / `wait-github-pr-checks` / `wait-github-commit-checks` 的 checks，以及 `get-github-workflow-jobs` 与 `read-github-ci-logs` 的 job 元数据，都走 `src/lib/github.ts` 的 octokit 客户端（`GithubChecksClient`：`pullHead` / `headSha` / `statuses` / `checkRuns` / `runJobs` / `job`）；job 列表用 `octokit.paginate` 跟随 Link 分页，因此没有 30 条上限；`run_id` / `job_id` 由 check run 的 `details_url`（`/actions/runs/<run_id>/job/<job_id>`）解析。
 - **CI 日志**：`read-github-ci-logs` 只取 `job_id` / `repo?`；job 元数据走 octokit（`actions.getJobForWorkflowRun`），日志走 `gh api .../actions/jobs/<jobId>/logs`（GitHub 只有按 job id 取日志的端点，没有按 job 名称的），响应原样写入 `~/.cache/pi/github/ci-logs/<owner>/<repo>/<runId>/<jobId>.log`（`jobLogPath` 统一计算；owner/repo 由 `repoFromRunUrl` 解析 job 的 `run_url` 得出，用 GitHub 规范化后的仓库大小写，不受调用方传入的 `repo` 字符串影响），同一 job 的请求经 `createSeqState` 串行化。step 行号由 `stepLineSpans` 得出：先收集深度 1 的 `##[group]Run …` / `##[group]Post Run …` header（每个真正执行过的 step 一个），再与 API steps 做**保序最优匹配**——名字相等记 4 分，header 时间戳落在 step `started_at` 之后 5s 内按距离记分（runner 约在 0.01–1.6s 后写 header，而 API 时间戳只到秒），只有得分大于 0 才配对，匹配不到就不给行号（不猜）。因此：自定义 `name:` 的 step 没有名字证据仍能靠时间戳命中；skipped 的 step 不参与匹配（它不会产生 header，否则会抢走同名的、真正跑过的 step 的块）；复合 action 的内部 step header 对任何 API step 都没有证据，不被认领，自然归入外层 step 的区间；「Set up job」拥有第一个 header 之前的 runner 前言。工具不清洗、不截断、不回显日志内容。
+- **release 资产**：`download-github-release-assets` 先 `gh release view [tag] --json tagName,assets` 解析出真实 tag 与该 release 的资产清单（缺 `tag` 时 gh 自己取 latest，tag 不存在时它就在这里报错），再 `gh release download <tag> --repo … [--pattern …] [--archive …] --dir <releaseAssetDir> --skip-existing`（argv 由纯函数 `releaseDownloadArgs` 组装，pattern 由 `releasePatterns` 按逗号切分）；结果由目录实读得出（`listReleaseFiles`：普通文件 + `stat` 大小，按名排序），不信 `gh` 的输出。pattern 未命中靠匹配 `gh` 的 `no assets match the file pattern` 判定来补资产名，措辞变化只是退回原样报错，不影响判定。
+- **代理**：`gh` 子进程与 octokit 请求共用 `src/lib/proxy.ts` 的代理层（配置 `~/.pi/agent/proxy.json`，回退 `HTTPS_PROXY` 等环境变量），在扩展加载时读一次；配置写错直接抛，不带着被忽略的配置静默直连。`web_fetch` 用同一个模块的 `fetch`（见 `openspec/specs/web/spec.md`）。
 - **等待工具**：`wait-github-pr-checks` 的轮询、判定与报告见 `openspec/specs/wait-github-pr-checks/spec.md`（octokit 客户端在 `src/lib/github.ts`）；`watch-github-run` 仍为单次 `gh run watch`。
 - 无重试逻辑；`read-github-pr-comments` 的 `reviews=true` 并行调 `gh api` 拿 reviews + comments。
 
-涉及文件：`src/gh-readonly.ts`、`src/lib/github.ts`。工具使用路径（PR / commit → 失败 check → job → 日志）见 skill `src/skills/github-ci-logs/SKILL.md`。
+涉及文件：`src/gh-readonly.ts`、`src/lib/github.ts`、`src/lib/proxy.ts`。工具使用路径（PR / commit → 失败 check → job → 日志）见 skill `src/skills/github-ci-logs/SKILL.md`。

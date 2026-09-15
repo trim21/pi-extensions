@@ -18,6 +18,7 @@
  *   - read-github-repo: Get repo info
  *   - list-github-releases: List releases
  *   - read-github-release: Get release details
+ *   - download-github-release-assets: Download a release's assets with gh credentials
  *   - wait-github-pr-checks: Watch PR CI checks
  *   - wait-github-commit-checks: Watch CI checks of a commit (no PR required)
  *   - watch-github-run: Watch a workflow run
@@ -29,14 +30,14 @@
  *   cp gh-readonly.ts .pi/extensions/
  *
  * Proxy (for the gh CLI and for the octokit-backed search/checks requests):
- *   ~/.pi/agent/gh.json: { "proxy": "http://127.0.0.1:7890", "noProxy": "localhost" }
+ *   ~/.pi/agent/proxy.json: { "proxy": "http://127.0.0.1:7890", "noProxy": "localhost" }
  *   HTTPS_PROXY / HTTP_PROXY / ALL_PROXY and NO_PROXY are used instead for the
  *   fields the config file leaves out. The config is read once per process.
  */
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 
@@ -44,7 +45,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
-import { createGhProxy } from "./lib/gh-proxy.js";
 import {
   type ActionJob,
   type CheckRun,
@@ -57,13 +57,14 @@ import {
   type RunJob,
 } from "./lib/github.js";
 import { type ToolPendant } from "./lib/pendant.js";
+import { createHttpProxy } from "./lib/proxy.js";
 import { createSeqState } from "./lib/seq-state.js";
 
 /**
- * 代理配置（~/.pi/agent/gh.json，回退到 HTTP(S)_PROXY 环境变量）在本模块内共享：
+ * 代理配置（~/.pi/agent/proxy.json，回退到 HTTP(S)_PROXY 环境变量）在本模块内共享：
  * `gh` 子进程与 octokit 请求都从这里取，配置只在首次使用时读一次。
  */
-const ghProxy = createGhProxy();
+const httpProxy = createHttpProxy();
 
 interface GhResult {
   stdout: string;
@@ -111,7 +112,7 @@ export function runGh(
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       // gh 是 Go 程序，只认环境变量形式的代理配置；ctx.env 最后合并，调用方可覆盖。
-      env: { ...process.env, ...ghProxy.env, ...ctx.env, GH_PAGER: "cat" },
+      env: { ...process.env, ...httpProxy.env, ...ctx.env, GH_PAGER: "cat" },
     });
 
     let stdout = "";
@@ -302,6 +303,12 @@ const repoViewSchema = Type.Object({ nameWithOwner: Type.String() });
 
 const prHeadSchema = Type.Object({ headRefOid: Type.String() });
 
+/** `gh release view --json tagName,assets` 里本工具真正读取的字段。 */
+const releaseViewSchema = Type.Object({
+  tagName: Type.String(),
+  assets: Type.Array(Type.Object({ name: Type.String(), size: Type.Number() })),
+});
+
 function truncate(
   text: string,
   maxLines = 2000,
@@ -442,6 +449,19 @@ export function repoFromRunUrl(runUrl: string): string {
 export function jobLogPath(repo: string, runId: string, jobId: number): string {
   const { owner, repo: name } = splitRepo(repo);
   return join(homedir(), ".cache", "pi", "github", "ci-logs", owner, name, runId, `${jobId}.log`);
+}
+
+/**
+ * Directory the release assets of one release are downloaded into:
+ * `~/.cache/pi/github/releases/<owner>/<repo>/<tag>/`.
+ *
+ * A tag is a git ref name and may contain `/`; only the characters that are safe
+ * in one path segment survive, so a tag can never escape its own directory.
+ */
+export function releaseAssetDir(repo: string, tag: string): string {
+  const { owner, repo: name } = splitRepo(repo);
+  const safeTag = tag.replaceAll(/[^A-Za-z0-9._+-]/g, "_").replace(/^\.+$/, "_");
+  return join(homedir(), ".cache", "pi", "github", "releases", owner, name, safeTag);
 }
 
 async function getJobLog(
@@ -1163,6 +1183,13 @@ interface CommitChecksWaitParams {
   fail_fast?: boolean;
 }
 
+interface ReleaseDownloadParams {
+  repo?: string;
+  tag?: string;
+  pattern?: string;
+  archive?: "zip" | "tar.gz";
+}
+
 /** What a toolcall handler receives from the framework. */
 export interface ToolCall<Params> {
   params: Params;
@@ -1185,7 +1212,7 @@ export class GhClient {
   private readonly search: GithubSearch;
   private readonly checks: GithubChecksClient;
 
-  constructor(fetchImpl: typeof globalThis.fetch = ghProxy.fetch) {
+  constructor(fetchImpl: typeof globalThis.fetch = httpProxy.fetch) {
     this.fetch = fetchImpl;
     this.search = createGithubSearch({ fetch: fetchImpl });
     this.checks = createGithubChecks({ fetch: fetchImpl });
@@ -1432,6 +1459,155 @@ export class GhClient {
       },
     };
   }
+}
+
+// ── release asset download ───────────────────────────────────────────────────
+
+/** One regular file in a release's download directory. */
+interface ReleaseFile {
+  name: string;
+  path: string;
+  bytes: number;
+}
+
+/** Split the comma-separated `pattern` toolcall parameter into gh pattern values. */
+export function releasePatterns(pattern: string | undefined): string[] {
+  if (pattern === undefined) return [];
+  return pattern
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value !== "");
+}
+
+/**
+ * The `gh release download` argv. `--skip-existing` is always on: the download
+ * directory is a cache, and rewriting a file that is already there would pull
+ * the ground out from under anything reading it.
+ */
+export function releaseDownloadArgs(options: {
+  tag: string;
+  repo: string;
+  dir: string;
+  patterns: readonly string[];
+  archive?: "zip" | "tar.gz";
+}): string[] {
+  const { tag, repo, dir, patterns, archive } = options;
+  const args = ["release", "download", tag, ...repoArgs(repo)];
+  if (archive !== undefined) args.push("--archive", archive);
+  for (const pattern of patterns) args.push("--pattern", pattern);
+  args.push("--dir", dir, "--skip-existing");
+  return args;
+}
+
+/** Regular files directly inside `dir`, with their sizes, sorted by name. */
+async function listReleaseFiles(dir: string): Promise<ReleaseFile[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: ReleaseFile[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const path = join(dir, entry.name);
+    const info = await stat(path);
+    files.push({ name: entry.name, path, bytes: info.size });
+  }
+  return files.toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * `gh release download` answers this exact message when a `--pattern` matched no
+ * asset. It is the only signal the CLI offers, so the enrichment below degrades
+ * to gh's own error (still thrown) if the wording ever changes.
+ */
+const GH_NO_ASSET_MATCH = "no assets match the file pattern";
+
+/**
+ * `download-github-release-assets`: fetch a release's assets (or source archive)
+ * into `releaseAssetDir` with the gh credentials, so private repositories work
+ * and the shell sandbox's network limits do not apply.
+ *
+ * The tag is resolved through `gh release view` before downloading: a tag that
+ * does not exist and a pattern that matched nothing are different answers, and
+ * the release's own asset names are what the model needs to fix the second one.
+ */
+export async function downloadReleaseAssets(
+  call: ToolCall<ReleaseDownloadParams>,
+): Promise<ToolResult> {
+  const { params, ctx, signal } = call;
+  const patterns = releasePatterns(params.pattern);
+  if (params.archive !== undefined && patterns.length > 0) {
+    throw new Error(
+      "pattern and archive are mutually exclusive (pick asset globs or the source archive)",
+    );
+  }
+
+  const effectiveRepo = await resolveRepo(params.repo, signal, ctx.cwd, params);
+  const view = Value.Parse(
+    releaseViewSchema,
+    JSON.parse(
+      await ghExec(
+        [
+          "release",
+          "view",
+          ...(params.tag === undefined ? [] : [params.tag]),
+          ...repoArgs(effectiveRepo),
+          "--json",
+          "tagName,assets",
+        ],
+        { cwd: ctx.cwd, signal, input: params },
+      ),
+    ),
+  );
+
+  const assetNames = view.assets.map((asset) => asset.name);
+  const dir = releaseAssetDir(effectiveRepo, view.tagName);
+  await mkdir(dir, { recursive: true });
+  try {
+    await ghExec(
+      releaseDownloadArgs({
+        tag: view.tagName,
+        repo: effectiveRepo,
+        dir,
+        patterns,
+        ...(params.archive !== undefined && { archive: params.archive }),
+      }),
+      { cwd: ctx.cwd, signal, input: params },
+    );
+  } catch (error) {
+    // gh names the fault but not the choices; the release's asset list turns a
+    // dead end into the next toolcall.
+    if (error instanceof GhError && error.stderr.includes(GH_NO_ASSET_MATCH)) {
+      throw new Error(
+        `no asset of ${effectiveRepo}@${view.tagName} matched ${JSON.stringify(patterns)}; the release has: ${assetNames.join(", ") || "(no assets)"}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+
+  const files = await listReleaseFiles(dir);
+  const payload = { repo: effectiveRepo, tag: view.tagName, dir, files };
+  const pendant = subtitlePendant({ repo: effectiveRepo, tag: view.tagName }, "tag");
+
+  if (files.length === 0 && params.archive === undefined) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Nothing to download from ${effectiveRepo}@${view.tagName}: the release has no assets (try archive for the source tarball)`,
+        },
+      ],
+      details: {
+        ...payload,
+        available_assets: assetNames,
+        input: params,
+        ...(pendant && { pendant }),
+      },
+    };
+  }
+
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+    details: { ...payload, input: params, ...(pendant && { pendant }) },
+  };
 }
 
 // ── tools ────────────────────────────────────────────────────────────────────
@@ -1850,6 +2026,40 @@ export default function ghReadonlyTools(pi: ExtensionAPI) {
       );
       result.details.pendant = subtitlePendant(params, "tag");
       return result;
+    },
+  });
+
+  // ── download-github-release-assets ────────────────────────────────────────
+  pi.registerTool({
+    name: "download-github-release-assets",
+    label: "GitHub Release Download",
+    description:
+      "Download a GitHub release's assets (or its source archive) into " +
+      "~/.cache/pi/github/releases/<owner>/<repo>/<tag>/ using the gh CLI's credentials, " +
+      "so private repositories and large binaries work where a plain HTTP fetch cannot. " +
+      "Files already in that directory are kept, never re-fetched. The result is the JSON " +
+      "summary {repo, tag, dir, files:[{name, path, bytes}]} listing everything now in the " +
+      "directory; file contents are not echoed. Read the entries you need from `path`.",
+    promptSnippet: "Download GitHub release assets",
+    parameters: Type.Object({
+      repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
+      tag: Type.Optional(
+        Type.String({ description: "Release tag (defaults to the latest release)" }),
+      ),
+      pattern: Type.Optional(
+        Type.String({
+          description:
+            'Comma-separated glob patterns for asset names, e.g. "*.tar.gz,*.deb" (default: every asset)',
+        }),
+      ),
+      archive: Type.Optional(
+        Type.Union([Type.Literal("zip"), Type.Literal("tar.gz")], {
+          description: "Download the release's source archive instead of its assets",
+        }),
+      ),
+    }),
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      return downloadReleaseAssets({ params, ctx, signal });
     },
   });
 

@@ -1,16 +1,19 @@
 /**
- * gh-readonly 的代理配置与请求层。
+ * HTTP 代理层：gh-readonly 与 web_fetch 共用的出网配置。
  *
  * 配置来源（配置文件优先，未写的字段回退到环境变量）：
- *   - ~/.pi/agent/gh.json: { "proxy": "http://127.0.0.1:7890", "noProxy": "localhost,.corp" }
+ *   - ~/.pi/agent/proxy.json: { "proxy": "http://127.0.0.1:7890", "noProxy": "localhost,.corp" }
  *   - HTTPS_PROXY / HTTP_PROXY / ALL_PROXY（小写变体同样接受）、NO_PROXY
  *
- * 两条出口共用同一份配置，且在扩展加载时一次性读完：
- *   - gh CLI 子进程：env 给出要注入子进程的 HTTP(S)_PROXY / NO_PROXY 等变量
- *   - octokit 请求：fetch 是挂了代理 dispatcher 的 fetch；未配置代理时就是全局 fetch
+ * 这份配置是全局出网代理，不专属 GitHub：gh 子进程、octokit 请求、web_fetch 都走它。
  *
- * 配置有错（JSON 语法错、字段类型不符、proxy 不是 http(s) URL）直接抛错——扩展
- * 加载即失败，而不是带着一份被忽略的配置静默直连。
+ * 三条出口共用同一份配置，且在扩展加载时一次性读完：
+ *   - gh CLI 子进程：env 给出要注入子进程的 HTTP(S)_PROXY / NO_PROXY 等变量
+ *   - octokit 请求：fetch 是挂了代理 dispatcher 的 fetch（octokit 只认自定义 fetch）
+ *   - web_fetch：同样用 fetch（Node 的全局 fetch 不认 HTTPS_PROXY 环境变量）
+ *
+ * 未配置代理时 fetch 就是全局 fetch。配置有错（JSON 语法错、字段类型不符、proxy 不是
+ * http(s) URL）直接抛错——扩展加载即失败，而不是带着一份被忽略的配置静默直连。
  */
 
 import { readFileSync } from "node:fs";
@@ -22,25 +25,25 @@ import { EnvHttpProxyAgent } from "undici";
 
 import { parseWithSchema } from "./parse-with-schema.js";
 
-const ghConfigSchema = Type.Object({
+const proxyConfigSchema = Type.Object({
   proxy: Type.Optional(Type.String()),
   noProxy: Type.Optional(Type.String()),
 });
 
-export interface GhProxySettings {
+export interface HttpProxySettings {
   /** 代理 URL（http/https）；undefined 表示不使用代理。 */
   proxy?: string;
   /** 不走代理的 host 列表（逗号分隔），语义同 NO_PROXY。 */
   noProxy?: string;
 }
 
-export function ghProxyConfigPath(): string {
-  return join(homedir(), ".pi", "agent", "gh.json");
+export function proxyConfigPath(): string {
+  return join(homedir(), ".pi", "agent", "proxy.json");
 }
 
-/** 解析 gh.json 的内容；字段类型不符时抛出带字段路径的错误。 */
-export function parseGhProxyConfig(value: unknown): GhProxySettings {
-  const parsed = parseWithSchema(ghConfigSchema, value);
+/** 解析 proxy.json 的内容；字段类型不符时抛出带字段路径的错误。 */
+export function parseProxyConfig(value: unknown): HttpProxySettings {
+  const parsed = parseWithSchema(proxyConfigSchema, value);
   const proxy = parsed.proxy?.trim();
   const noProxy = parsed.noProxy?.trim();
   return { ...(proxy && { proxy }), ...(noProxy && { noProxy }) };
@@ -84,10 +87,10 @@ function normalizeProxy(value: string): string {
  * 这里是仓库里允许的同步例外）。文件不存在 = 未配置；文件读不了、JSON 非法或
  * 字段不符都直接抛。
  */
-export function readGhProxySettings(
-  configPath: string = ghProxyConfigPath(),
+export function readProxySettings(
+  configPath: string = proxyConfigPath(),
   env: NodeJS.ProcessEnv = process.env,
-): GhProxySettings {
+): HttpProxySettings {
   let raw: string | undefined;
   try {
     raw = readFileSync(configPath, "utf8");
@@ -99,10 +102,10 @@ export function readGhProxySettings(
     }
   }
 
-  let file: GhProxySettings = {};
+  let file: HttpProxySettings = {};
   if (raw !== undefined) {
     try {
-      file = parseGhProxyConfig(JSON.parse(raw));
+      file = parseProxyConfig(JSON.parse(raw));
     } catch (error) {
       throw new Error(`${configPath}: ${error instanceof Error ? error.message : String(error)}`, {
         cause: error,
@@ -119,7 +122,7 @@ export function readGhProxySettings(
 }
 
 /** 要注入 gh 子进程的代理环境变量；未配置代理时为空对象（子进程继承父进程环境）。 */
-export function proxyEnvVars(settings: GhProxySettings): NodeJS.ProcessEnv {
+export function proxyEnvVars(settings: HttpProxySettings): NodeJS.ProcessEnv {
   const { proxy, noProxy } = settings;
   if (!proxy) return {};
   return {
@@ -154,9 +157,9 @@ function createProxyDispatcher(
   }) as unknown as NonNullable<RequestInit["dispatcher"]>;
 }
 
-export interface GhProxy {
+export interface HttpProxy {
   /** 生效的代理设置（配置文件与环境变量合并后的结果）。 */
-  readonly settings: GhProxySettings;
+  readonly settings: HttpProxySettings;
   /** 要注入 gh 子进程的代理环境变量；未配置代理时为空对象。 */
   readonly env: NodeJS.ProcessEnv;
   /** 走代理的 fetch；未配置代理时就是全局 fetch。 */
@@ -168,11 +171,11 @@ export interface GhProxy {
  * `globalThis.fetch` 本身：每次调用都取当前的全局 fetch，否则首个请求之后替换
  * `globalThis.fetch`（插桩、测试替身）就不再生效。
  */
-export function createGhProxy(
-  configPath: string = ghProxyConfigPath(),
+export function createHttpProxy(
+  configPath: string = proxyConfigPath(),
   env: NodeJS.ProcessEnv = process.env,
-): GhProxy {
-  const settings = readGhProxySettings(configPath, env);
+): HttpProxy {
+  const settings = readProxySettings(configPath, env);
   const { proxy, noProxy } = settings;
   let dispatcher: NonNullable<RequestInit["dispatcher"]> | undefined;
 

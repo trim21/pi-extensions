@@ -2,7 +2,7 @@
  * Regression test for the wiring between the gh CLI child processes and the
  * proxy config: runGh must hand the resolved proxy variables to `gh`. The proxy
  * layer is mocked so the assertions do not depend on the developer's
- * ~/.pi/agent/gh.json.
+ * ~/.pi/agent/proxy.json.
  */
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -15,8 +15,8 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-vi.mock("../src/lib/gh-proxy.js", () => ({
-  createGhProxy: () => ({
+vi.mock("../src/lib/proxy.js", () => ({
+  createHttpProxy: () => ({
     settings: { proxy: "http://config:7890" },
     env: { HTTPS_PROXY: "http://config:7890" },
     fetch: globalThis.fetch,
