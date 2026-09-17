@@ -30,7 +30,7 @@ interface ToolsetEntry {
     tools: Map<string, RegisteredTool>;
     emitSessionStart: (cwd: string) => Promise<void>;
   };
-  /** claude-code 跟踪 read-before-write 状态，rename 结果带 reads 快照。 */
+  /** 两套工具集都跟踪已读状态，rename 结果带 reads 快照。 */
   tracksReads: boolean;
 }
 
@@ -79,7 +79,7 @@ async function emitSessionStart(
 
 const ENTRIES: Record<string, ToolsetEntry> = {
   "claude-code": { load: () => loadFileTools(claudeCodeFileTools), tracksReads: true },
-  opencode: { load: () => loadFileTools(opencodeFileTools), tracksReads: false },
+  opencode: { load: () => loadFileTools(opencodeFileTools), tracksReads: true },
 };
 
 function context(cwd: string) {

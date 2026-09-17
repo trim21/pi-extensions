@@ -134,7 +134,9 @@ bwrap 已集成进 bash 工具实现（opencode 风格 `bash` 位于 `src/openco
 - 上下文感知匹配（ContextAwareReplacer）
 - 多次出现替换（MultiOccurrenceReplacer）
 
-所有匹配策略按顺序尝试，第一个匹配成功即返回。同时自动处理 BOM、CRLF/LF 行尾转换和文件写入队列。
+所有匹配策略按顺序尝试，第一个匹配成功即返回。同时自动处理 BOM、CRLF/LF 行尾转换和文件写入队列。`filePath` 接受绝对路径或相对工作目录的路径。
+
+edit 要求目标文件已被 `read` 读过且内容未变（内容指纹比对，与 Claude Code 风格 Edit 同一套语义）：没读过报 `File has not been read yet. Read it first before editing it.`，读后文件被外部改动报 `File has been modified since read...`，两种情况都要重新 `read`。`read`/`edit`/`write`/`lsp-rename` 都会刷新记账并随工具结果持久化，session 恢复 / fork / rewind 后依然有效；`write` 本身不要求先读，但写后会刷新记账，紧随其后的 `edit` 不必重新读。
 
 ### 使用
 

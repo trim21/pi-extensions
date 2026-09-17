@@ -1,40 +1,15 @@
 import { readdirSync } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
-import {
-  basename,
-  dirname,
-  extname,
-  isAbsolute,
-  join,
-  normalize,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import { type Static, Type } from "typebox";
-import { Value } from "typebox/value";
+import { resolvePathArg } from "../lib/path.js";
 
-const fileSnapshotSchema = Type.Object({
-  digest: Type.String(),
-  textEditable: Type.Boolean(),
-});
-
-export type FileSnapshot = Static<typeof fileSnapshotSchema>;
-
-export interface ClaudeCodeState {
-  readonly reads: Map<string, FileSnapshot>;
-}
-
-export function createClaudeCodeState(): ClaudeCodeState {
-  return { reads: new Map() };
-}
-
-export function requireAbsolutePath(filePath: string, parameter = "file_path"): string {
-  if (!isAbsolute(filePath)) {
-    throw new Error(`The ${parameter} parameter must be an absolute path, not a relative path.`);
-  }
-  return normalize(filePath);
+/**
+ * 解析 `file_path`：绝对路径规整化后原样使用，相对路径（含 `~` 前缀）按调用
+ * cwd 展开。工具内部一律用解析后的绝对路径，写保护与 reads 记账都依赖它。
+ */
+export function resolveToolFilePath(filePath: string, cwd: string): string {
+  return resolve(resolvePathArg(cwd, filePath));
 }
 
 /** Resolve a search root path against the working directory. */
@@ -47,10 +22,6 @@ export function searchRoot(path: string | undefined, cwd: string): string {
 export function toRelativePath(filePath: string, cwd: string): string {
   const relativePath = relative(cwd, filePath);
   return relativePath.startsWith("..") ? filePath : relativePath;
-}
-
-export function snapshotsEqual(left: FileSnapshot, right: FileSnapshot): boolean {
-  return left.digest === right.digest;
 }
 
 /**
@@ -113,18 +84,4 @@ export async function didYouMean(filePath: string, cwd: string): Promise<string 
   const cwdSuggestion = await suggestPathUnderCwd(filePath, cwd);
   if (cwdSuggestion) return cwdSuggestion;
   return findSimilarFile(filePath);
-}
-
-/**
- * 从工具结果 details 里恢复文件已读记账（跨进程 resume / reload / fork）。
- * 数据来自 session 文件，可能缺失或损坏：逐条 TypeBox 校验，非法条目丢弃。
- * 只接受 plain object，数组、null 等异常形态直接返回空 map。
- */
-export function deserializeReads(data: unknown): Map<string, FileSnapshot> {
-  const reads = new Map<string, FileSnapshot>();
-  if (typeof data !== "object" || data === null || Array.isArray(data)) return reads;
-  for (const [filePath, snapshot] of Object.entries(data)) {
-    if (Value.Check(fileSnapshotSchema, snapshot)) reads.set(filePath, snapshot);
-  }
-  return reads;
 }

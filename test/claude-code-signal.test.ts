@@ -9,8 +9,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createClaudeCodeState } from "../src/claude-code/common.js";
 import { registerFileTools } from "../src/claude-code/files.js";
+import { createReadsState } from "../src/lib/file-reads.js";
 import { EMPTY_DIAGNOSTIC_REPORT } from "../src/lib/lsp/diagnostic.js";
 import type { LspService } from "../src/lib/lsp/lsp.js";
 import { createRequestPolicy } from "../src/lib/request-policy.js";
@@ -35,7 +35,7 @@ function loadFileTools(service: LspService): Map<string, RegisteredTool> {
         tools.set(tool.name, tool);
       },
     } as never,
-    createClaudeCodeState(),
+    createReadsState(),
     () => service,
     createRequestPolicy(),
   );

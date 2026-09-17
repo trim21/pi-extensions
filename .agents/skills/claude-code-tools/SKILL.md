@@ -10,13 +10,14 @@ description: "Exact behavior of the Claude Code style tools (Read/Edit/Write/Gre
 > (only `src/talk/skills` is shipped to users). Do not re-add it to the plugin registration.
 > To load it during development, point your personal `settings.json` `skills` at this directory.
 
-This package registers two parallel tool suites: opencode style (lowercase `read`/`edit`/`write`/`bash`/`todowrite`/`question`) and Claude Code style (capitalized `Read`/`Edit`/`Write`/`Bash`/`Grep`/`Glob`/`TodoWrite`/`AskUserQuestion`). They share the bwrap sandbox and write-guard. **Only one suite should be enabled** — enabling both duplicates commands (e.g. `/bwrap` vs `/bwrap:1`) and injects the bwrap system-prompt section twice.
+This package registers two parallel tool suites: opencode style (lowercase `read`/`edit`/`write`/`bash`/`todowrite`/`question`) and Claude Code style (capitalized `Read`/`Edit`/`Write`/`Bash`/`Grep`/`Glob`/`TodoWrite`/`AskUserQuestion`). They share the bwrap sandbox and write-guard, and both enforce read-before-edit (the opencode style `edit` only; its `write` has no read requirement). **Only one suite should be enabled** — enabling both duplicates commands (e.g. `/bwrap` vs `/bwrap:1`) and injects the bwrap system-prompt section twice.
 
 The capitalized tools below follow Claude Code behavior with a few deliberate deviations. Where behavior differs from stock Claude Code it is called out.
 
 ## Read
 
-- Output is `<lineNumber>\t<content>` per line, 1-indexed, **no padding** (compact format).
+- Output is `<lineNumber>: <content>` per line, 1-indexed, **no padding** (compact format).
+- `file_path` accepts an absolute path or a path relative to the working directory (as do `Edit` and `Write`); `~` prefixes expand to home.
 - Input is normalized: UTF-8 BOM stripped, `\r\n` → `\n` (CRLF stripped), and a trailing empty line is always present — **`totalLines` is one more than the editor line count** for non-empty files.
 - By default reads the **entire file**, capped at 256 KB (bytes) and a rough 25K-token estimate (4 chars/token, no tokenizer). Whole reads over either cap error with `File content (X) exceeds maximum allowed size/tokens (...) — use offset and limit`; providing `limit` bypasses the byte cap and only the selected range counts toward the token cap.
 - `offset`/`limit` are 1-based positive integers. Out-of-range offset returns `Warning: the file exists but is shorter than the provided offset (N). The file has M lines.`; empty files return `Warning: the file exists but the contents are empty.`
@@ -31,7 +32,7 @@ The capitalized tools below follow Claude Code behavior with a few deliberate de
 
 ### Edit specifics
 
-- Matching first tries an exact match, then a **quote-normalized match** (curly quotes in the file match straight quotes from the model); the replacement inherits the file's curly-quote style.
+- Matching is **exact only** (no quote normalization, no fuzzy matching): `old_string` must match the file byte-for-byte apart from CRLF handling. **Deviation from Claude Code:** upstream also treats curly quotes in the file as equivalent to straight quotes from the model and rewrites `new_string` to the file's quote style; this suite deliberately keeps editing literal, since quote equivalence can't be judged from language syntax.
 - Matching happens on CRLF-normalized content — `old_string` never needs `\r` — and the file's dominant line ending is restored on write.
 - Empty `old_string` means create-or-fill: nonexistent file → create it; empty file → fill it; non-empty file → `Cannot create new file - file already exists.` Neither create nor fill requires a prior Read.
 - `old_string === new_string` → `No changes to make: old_string and new_string are exactly the same.`

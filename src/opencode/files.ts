@@ -10,7 +10,13 @@
  *   字符截断、1 起始 offset、目录排序；读取后等待并报告该文档的诊断。
  *   不接 PDF、不接 <system-reminder>；图片 magic 检测保留。
  * - edit：匹配引擎 + 把 old/new 转到文件换行后再替换；写后等待文档诊断。
- * - write：BOM 保留（source.bom || next.bom）；写后同 edit 的诊断输出。
+ *   edit 要求文件已被 read 读过且内容未变（read 记账见下）。
+ * - write：BOM 保留（source.bom || next.bom）；写后同 edit 的诊断输出。write 本身
+ *   不要求先 read，但会刷新记账，保证紧接着的 edit 不必重新 read。
+ *
+ * read 记账：read / edit / write / lsp-rename 各自把受影响文件的内容指纹写进
+ * details.reads（随 session 持久化），session_start / session_tree 时从当前分支
+ * 重放。这是 edit 的 read-before-edit 守卫的基础。
  *
  * 匹配引擎在 edit-engine.ts，也被 lib/write-guard 复用。
  */
@@ -29,6 +35,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import {
+  createReadsState,
+  fileDigest,
+  type FileSnapshot,
+  type ReadsState,
+  readStateKey,
+  requireCurrentRead,
+  restoreReads,
+  snapshotOf,
+} from "../lib/file-reads.js";
 import { appendLspDiagnosticText } from "../lib/lsp/diagnostic.js";
 import { registerLspInspectTools } from "../lib/lsp/inspect-tool.js";
 import { createLspManager, type LspService, type LspServiceOptions } from "../lib/lsp/lsp.js";
@@ -359,7 +375,12 @@ async function formatDirectoryEntries(dirPath: string): Promise<string[]> {
   return results;
 }
 
-function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void {
+// ── read-before-edit 记账 ────────────────────────────────────────────────────
+
+/** 会更新 reads 记账（src/lib/file-reads.ts）并随 details 持久化快照的工具名。 */
+const READS_TOOL_NAMES = new Set(["read", "edit", "write", "lsp-rename"]);
+
+function registerReadTool(pi: ExtensionAPI, getService: () => LspService, state: ReadsState): void {
   pi.registerTool({
     name: "read",
     label: "read",
@@ -369,7 +390,10 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void 
       "Use read to examine files instead of cat, sed, or tail. A negative offset reads from the end of the file (offset=-2 reads the last 2 lines).",
     ],
     parameters: Type.Object({
-      filePath: Type.String({ description: "The absolute path to the file or directory to read" }),
+      filePath: Type.String({
+        description:
+          "The path to the file or directory to read (absolute or relative to the working directory)",
+      }),
       offset: Type.Optional(
         Type.Integer({
           description:
@@ -454,9 +478,15 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void 
           { type: "text", text: "Image read successfully" },
           { type: "image", data: base64, mimeType },
         ];
+        const key = await readStateKey(absolutePath);
+        const snapshot = snapshotOf(buffer, false);
+        state.reads.set(key, snapshot);
         return {
           content,
-          details: { pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath) } },
+          details: {
+            reads: { [key]: snapshot },
+            pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath) },
+          },
         };
       }
 
@@ -466,6 +496,11 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void 
           details: undefined,
         };
       }
+
+      // 记账指纹先于分页读取：文件若在读取期间被改动，指纹对应的是改动前的
+      // 内容，后续 edit 会要求重新 read（失败方向安全）。
+      const key = await readStateKey(absolutePath);
+      const snapshot: FileSnapshot = { digest: await fileDigest(absolutePath), textEditable: true };
 
       const effectiveOffset = offset || 1;
       const page = await readLines(absolutePath, {
@@ -498,6 +533,8 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void 
         outputText = `${header}${numbered}\n\n(End of file - total ${page.count} lines)${footer}`;
       }
 
+      state.reads.set(key, snapshot);
+
       // opencode: 与 edit / write 同一条驻留路径：didOpen 后等待该文件的诊断并报告
       const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
         signal,
@@ -513,6 +550,7 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService): void 
         content,
         details: {
           ...details,
+          reads: { [key]: snapshot },
           pendant: {
             subtitle: formatSubtitlePath(
               ctx.cwd,
@@ -544,6 +582,7 @@ function registerEditTool(
   pi: ExtensionAPI,
   getService: () => LspService,
   policy: RequestPolicy,
+  state: ReadsState,
 ): void {
   pi.registerTool({
     name: "edit",
@@ -606,12 +645,16 @@ function registerEditTool(
             await mkdir(dirname(absolutePath), { recursive: true });
             signal?.throwIfAborted();
             await writeFile(absolutePath, newString, "utf8");
+            // 新建文件无需先 read（无处可读），写后记账；realpath 要等文件落盘
+            const key = await readStateKey(absolutePath);
+            const snapshot = snapshotOf(newString);
+            state.reads.set(key, snapshot);
             const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
               signal,
             });
             return [
               "Edit applied successfully.",
-              { diff: "", patch: "", firstChangedLine: 0 },
+              { diff: "", patch: "", firstChangedLine: 0, reads: { [key]: snapshot } },
               diagnostics,
             ] as const;
           }
@@ -635,10 +678,16 @@ function registerEditTool(
             throw new Error(`Could not edit file: ${filePath}. ${msg}.`, { cause: error });
           }
 
+          // 指纹校验必须发生在写入之前：未 read 或外部已改动都拒绝编辑
           const rawContent = await readFile(absolutePath, "utf8");
+          const key = await readStateKey(absolutePath);
+          requireCurrentRead(state, key, absolutePath, rawContent);
+
           const applied = applyEdit(rawContent, oldString, newString, replaceAll);
           signal?.throwIfAborted();
           await writeFile(absolutePath, applied.finalContent, "utf8");
+          const snapshot = snapshotOf(applied.finalContent);
+          state.reads.set(key, snapshot);
 
           const diffOld = normalizeToLF(applied.contentOld);
           const diffNew = normalizeToLF(applied.contentNew);
@@ -649,7 +698,12 @@ function registerEditTool(
           });
           return [
             "Edit applied successfully.",
-            { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
+            {
+              diff: diffResult.diff,
+              patch,
+              firstChangedLine: diffResult.firstChangedLine,
+              reads: { [key]: snapshot },
+            },
             diagnostics,
           ] as const;
         },
@@ -702,6 +756,7 @@ function registerWriteTool(
   pi: ExtensionAPI,
   getService: () => LspService,
   policy: RequestPolicy,
+  state: ReadsState,
 ): void {
   pi.registerTool({
     name: "write",
@@ -712,7 +767,8 @@ function registerWriteTool(
     promptGuidelines: ["Use write only for new files or complete rewrites."],
     parameters: Type.Object({
       filePath: Type.String({
-        description: "The absolute path to the file to write (must be absolute, not relative)",
+        description:
+          "The path to the file to write (absolute or relative to the working directory)",
       }),
       content: Type.String({ description: "The content to write to the file" }),
     }),
@@ -753,11 +809,15 @@ function registerWriteTool(
           await mkdir(dir, { recursive: true });
           signal?.throwIfAborted();
           await writeFile(absolutePath, desiredBom + nextText, "utf8");
+          // write 不要求先 read，但写后记账：紧接着的 edit 不该再要求重新 read
+          const key = await readStateKey(absolutePath);
+          const snapshot = snapshotOf(desiredBom + nextText);
+          state.reads.set(key, snapshot);
           const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
             signal,
           });
 
-          return ["Wrote file successfully.", {}, diagnostics] as const;
+          return ["Wrote file successfully.", { reads: { [key]: snapshot } }, diagnostics] as const;
         },
       );
 
@@ -786,10 +846,11 @@ export function registerFileTools(
   pi: ExtensionAPI,
   getService: () => LspService,
   policy: RequestPolicy,
+  state: ReadsState,
 ): void {
-  registerReadTool(pi, getService);
-  registerEditTool(pi, getService, policy);
-  registerWriteTool(pi, getService, policy);
+  registerReadTool(pi, getService, state);
+  registerEditTool(pi, getService, policy, state);
+  registerWriteTool(pi, getService, policy, state);
   // lsp-rename / inspect 工具由 manager 的 onEnabled 回调注册，不在这里注册。
 }
 
@@ -806,16 +867,42 @@ export default function opencodeFileTools(
   // 聚合入口（index.ts）注入与 bash runtime 共享的那一份；独立入口自建并靠
   // pi.events 跟随同一开关。
   const policy = options?.policy ?? createRequestPolicy(pi.events);
+  const state = createReadsState();
   const manager = createLspManager(
     pi,
     {
       onEnabled: (pi, service) => {
-        registerLspRenameTool(pi, service, { policy });
+        registerLspRenameTool(pi, service, {
+          policy,
+          recordReads: async (applied) => {
+            const reads: Record<string, FileSnapshot> = {};
+            for (const fileEdit of applied) {
+              const key = await readStateKey(fileEdit.path);
+              const snapshot = snapshotOf(fileEdit.newText);
+              state.reads.set(key, snapshot);
+              reads[key] = snapshot;
+            }
+            return reads;
+          },
+        });
         registerLspInspectTools(pi, service);
       },
     },
     options,
   );
+
+  // 扩展实例在进程启动 / /reload / /new / /resume / /fork 时重建，内存里的已读
+  // 记账随之丢失，这里从当前分支的历史工具结果恢复；digest 仍是当时的值，文件
+  // 若在此期间被外部修改，edit 时的指纹对比照样要求重新 read。
+  pi.on("session_start", (_event, ctx) => {
+    restoreReads(state, ctx.sessionManager, READS_TOOL_NAMES);
+  });
+  // rewind / 树内跳转走 branch()，只发 session_tree：重放当前分支，丢弃被抛弃
+  // 分支的记账，避免 state 与当前分支脱节。
+  pi.on("session_tree", (_event, ctx) => {
+    restoreReads(state, ctx.sessionManager, READS_TOOL_NAMES);
+  });
+
   // 文件工具无条件注册；service 惰性获取，disabled 时为 no-op。
-  registerFileTools(pi, () => manager.mustLazyGetService(), policy);
+  registerFileTools(pi, () => manager.mustLazyGetService(), policy, state);
 }

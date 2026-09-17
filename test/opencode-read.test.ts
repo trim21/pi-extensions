@@ -482,7 +482,11 @@ describe("opencode read reports LSP diagnostics", () => {
       { globalConfigPath: configPath },
     );
 
-    const lspCtx = { cwd: lspDir, ui: { notify: vi.fn(), setStatus: vi.fn() } };
+    const lspCtx = {
+      cwd: lspDir,
+      ui: { notify: vi.fn(), setStatus: vi.fn() },
+      sessionManager: { getBranch: () => [] },
+    };
     try {
       for (const handler of handlers.get("session_start") ?? []) {
         await handler({ type: "session_start", reason: "startup" }, lspCtx);

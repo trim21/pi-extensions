@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
 import { constants, readFileSync, type Stats } from "node:fs";
-import { access, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,6 +13,15 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import {
+  createReadsState,
+  type FileSnapshot,
+  type ReadsState,
+  readStateKey,
+  requireCurrentRead,
+  restoreReads,
+  snapshotOf,
+} from "../lib/file-reads.js";
 import { appendLspDiagnosticText, type DiagnosticReport } from "../lib/lsp/diagnostic.js";
 import { registerLspInspectTools } from "../lib/lsp/inspect-tool.js";
 import { createLspManager, type LspService, type LspServiceOptions } from "../lib/lsp/lsp.js";
@@ -22,16 +30,8 @@ import { formatSubtitlePath } from "../lib/path.js";
 import type { ToolPendant } from "../lib/pendant.ts";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
-import {
-  type ClaudeCodeState,
-  createClaudeCodeState,
-  deserializeReads,
-  didYouMean,
-  type FileSnapshot,
-  requireAbsolutePath,
-  snapshotsEqual,
-} from "./common.js";
-import { convertLeadingTabsToSpaces, findActualString, preserveQuoteStyle } from "./edit-utils.js";
+import { didYouMean, resolveToolFilePath } from "./common.js";
+import { convertLeadingTabsToSpaces } from "./edit-utils.js";
 
 const SAMPLE_BYTES = 4096;
 
@@ -74,10 +74,6 @@ export interface FileToolDetails {
    * session 文件，resume 后由 session_start 重建 reads state。
    */
   reads?: Record<string, FileSnapshot>;
-}
-
-function snapshotOf(content: Uint8Array | string, textEditable = true): FileSnapshot {
-  return { digest: createHash("sha256").update(content).digest("hex"), textEditable };
 }
 
 async function assertReadableFile(filePath: string): Promise<Stats> {
@@ -192,53 +188,9 @@ export function exactReplace(
   return content.slice(0, index) + newString + content.slice(index + oldString.length);
 }
 
-/**
- * reads 记账 key：解析 symlink 后的真实路径，与 withFileMutationQueue 的队列
- * key 对齐。文件尚不存在（Write 新建 / Edit 空 old_string 创建）时 realpath
- * 抛 ENOENT，回退到已规范化路径。
- */
-async function readStateKey(filePath: string): Promise<string> {
-  try {
-    return await realpath(filePath);
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error.code === "ENOENT" || error.code === "ENOTDIR")
-    ) {
-      return filePath;
-    }
-    throw error;
-  }
-}
-
-/**
- * 校验「已读且未变」。key 与 currentContent 由调用方提供：调用方每次工具调用
- * 只 realpath / readFile 一次，避免重复 IO。
- */
-function requireCurrentRead(
-  state: ClaudeCodeState,
-  key: string,
-  filePath: string,
-  currentContent: Uint8Array,
-): void {
-  const readSnapshot = state.reads.get(key);
-  if (!readSnapshot) {
-    throw new Error("File has not been read yet. Read it first before writing to it.");
-  }
-  if (!readSnapshot.textEditable) {
-    throw new Error(`Cannot edit or overwrite a binary file with a text tool: ${filePath}`);
-  }
-  if (!snapshotsEqual(readSnapshot, snapshotOf(currentContent))) {
-    throw new Error(
-      "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.",
-    );
-  }
-}
-
 export function registerFileTools(
   pi: ExtensionAPI,
-  state: ClaudeCodeState,
+  state: ReadsState,
   getService: () => LspService,
   policy: RequestPolicy,
 ): void {
@@ -248,7 +200,7 @@ export function registerFileTools(
     description: [
       "Reads a file from the local filesystem. You can access any file directly using this tool.",
       "Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.",
-      "The file_path parameter must be an absolute path. By default, it reads the entire file; files over 256 KB or 25K tokens require offset and limit.",
+      "The file_path parameter accepts an absolute path or a path relative to the working directory. By default, it reads the entire file; files over 256 KB or 25K tokens require offset and limit.",
       "Read parts of files with offset and limit instead of running head/tail via Bash: a positive offset is the starting line number, a negative offset counts from the end of the file (offset=-5 reads the last 5 lines, like tail -n 5).",
       "Results use cat -n style line numbers starting at 1. Images are returned visually.",
       "This tool reads files, not directories.",
@@ -257,7 +209,10 @@ export function registerFileTools(
     promptGuidelines: [READ_PROMPT],
     parameters: Type.Object(
       {
-        file_path: Type.String({ description: "The absolute path to the file to read" }),
+        file_path: Type.String({
+          description:
+            "The path to the file to read (absolute or relative to the working directory)",
+        }),
         offset: Type.Optional(
           Type.Integer({
             description:
@@ -273,7 +228,7 @@ export function registerFileTools(
     ),
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
-      const filePath = requireAbsolutePath(params.file_path);
+      const filePath = resolveToolFilePath(params.file_path, ctx.cwd);
       if (params.offset !== undefined && !Number.isSafeInteger(params.offset)) {
         throw new Error("offset must be an integer");
       }
@@ -389,7 +344,10 @@ export function registerFileTools(
     promptGuidelines: [EDIT_PROMPT],
     parameters: Type.Object(
       {
-        file_path: Type.String({ description: "The absolute path to the file to modify" }),
+        file_path: Type.String({
+          description:
+            "The path to the file to modify (absolute or relative to the working directory)",
+        }),
         old_string: Type.String({ description: "The text to replace" }),
         new_string: Type.String({
           description: "The text to replace it with (must be different from old_string)",
@@ -402,7 +360,7 @@ export function registerFileTools(
     ),
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
-      const filePath = requireAbsolutePath(params.file_path);
+      const filePath = resolveToolFilePath(params.file_path, ctx.cwd);
       await guardWriteAccess(ctx, {
         toolName: "Edit",
         absolutePath: filePath,
@@ -505,8 +463,7 @@ export function registerFileTools(
         const lfCount = (original.match(/(?<!\r)\n/g) ?? []).length;
         const lineEnding = crlfCount > lfCount ? "\r\n" : "\n";
         const normalized = original.replaceAll("\r\n", "\n");
-        const actualOldString = findActualString(normalized, oldString) ?? oldString;
-        const matches = normalized.split(actualOldString).length - 1;
+        const matches = normalized.split(oldString).length - 1;
         if (matches === 0) {
           throw new Error(`String to replace not found in file.\nString: ${oldString}`);
         }
@@ -515,22 +472,21 @@ export function registerFileTools(
             `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${oldString}`,
           );
         }
-        const actualNewString = preserveQuoteStyle(oldString, actualOldString, newString);
         // 删除场景（new_string 为空）：old_string 不以换行结尾且文件里是
         // "old_string\n" 时连换行一起删，避免留下空行（对齐 Claude Code
         // applyEditToFile 的 stripTrailingNewline 语义）
-        let searchString = actualOldString;
+        let searchString = oldString;
         if (
-          actualNewString === "" &&
-          !actualOldString.endsWith("\n") &&
-          normalized.includes(actualOldString + "\n")
+          newString === "" &&
+          !oldString.endsWith("\n") &&
+          normalized.includes(oldString + "\n")
         ) {
-          searchString = actualOldString + "\n";
+          searchString = oldString + "\n";
         }
         // split/join 与函数替换：replacement 含 $ 时不会触发 $& 等特殊语义
         const updated = replaceAll
-          ? normalized.split(searchString).join(actualNewString)
-          : normalized.replace(searchString, () => actualNewString);
+          ? normalized.split(searchString).join(newString)
+          : normalized.replace(searchString, () => newString);
         const restored = lineEnding === "\r\n" ? updated.replaceAll("\n", "\r\n") : updated;
         await writeFile(filePath, restored, "utf8");
         const snapshot = snapshotOf(restored);
@@ -596,7 +552,8 @@ export function registerFileTools(
     parameters: Type.Object(
       {
         file_path: Type.String({
-          description: "The absolute path to the file to write (must be absolute, not relative)",
+          description:
+            "The path to the file to write (absolute or relative to the working directory)",
         }),
         content: Type.String({ description: "The content to write to the file" }),
       },
@@ -604,7 +561,7 @@ export function registerFileTools(
     ),
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
-      const filePath = requireAbsolutePath(params.file_path);
+      const filePath = resolveToolFilePath(params.file_path, ctx.cwd);
       await guardWriteAccess(ctx, {
         toolName: "Write",
         absolutePath: filePath,
@@ -684,24 +641,11 @@ export function registerFileTools(
 /** 会更新 reads state 并随 details 持久化快照的工具名。 */
 const FILE_TOOL_NAMES = new Set(["Read", "Edit", "Write", "lsp-rename"]);
 
-/**
- * 从当前分支的历史工具结果重建已读记账。先清空再重放，保证 state 只反映
- * 当前分支：rewind / fork / resume 后，被抛弃分支上的 Read 不再残留。
- */
 function restoreFileReads(
-  state: ClaudeCodeState,
+  state: ReadsState,
   sessionManager: ExtensionContext["sessionManager"],
 ): void {
-  state.reads.clear();
-  for (const entry of sessionManager.getBranch()) {
-    if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
-    if (!FILE_TOOL_NAMES.has(entry.message.toolName)) continue;
-    const details = entry.message.details as { reads?: unknown } | undefined;
-    if (!details?.reads) continue;
-    for (const [filePath, snapshot] of deserializeReads(details.reads)) {
-      state.reads.set(filePath, snapshot);
-    }
-  }
+  restoreReads(state, sessionManager, FILE_TOOL_NAMES);
 }
 
 export interface ClaudeCodeFileToolOptions extends LspServiceOptions {
@@ -719,7 +663,7 @@ export default function claudeCodeFileTools(
   pi: ExtensionAPI,
   options?: ClaudeCodeFileToolOptions,
 ): void {
-  const state = createClaudeCodeState();
+  const state = createReadsState();
   // 聚合入口（index.ts）注入与 bash runtime 共享的那一份；独立入口（spawn-agent
   // 按工具名 `-e` 加载本文件）自建一份，靠 pi.events 跟随同一开关。
   const policy = options?.policy ?? createRequestPolicy(pi.events);

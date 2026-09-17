@@ -14,12 +14,7 @@ beforeAll(() => {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 import { type BwrapRuntime, createBwrapRuntime } from "../src/bwrap/runtime.js";
-import {
-  deserializeReads,
-  didYouMean,
-  findSimilarFile,
-  suggestPathUnderCwd,
-} from "../src/claude-code/common.js";
+import { didYouMean, findSimilarFile, suggestPathUnderCwd } from "../src/claude-code/common.js";
 import claudeCodeFileTools, { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
 import claudeCodeGlobTool, { globFiles } from "../src/claude-code/glob.js";
 import claudeCodeGrepTool, {
@@ -29,6 +24,7 @@ import claudeCodeGrepTool, {
 import claudeCodeTools from "../src/claude-code/index.js";
 import { buildGrepArguments, pageGrepOutput } from "../src/claude-code/search.js";
 import { registerShellTools } from "../src/claude-code/shell.js";
+import { deserializeReads } from "../src/lib/file-reads.js";
 
 interface RegisteredTool {
   name: string;
@@ -398,6 +394,26 @@ describe("Read, Edit, and Write", () => {
     expect(await readFile(filePath, "utf8")).toBe("hello there\n");
   });
 
+  it("accepts paths relative to the working directory", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-relpath-"));
+    await writeFile(join(directory, "note.txt"), "hello world\n", "utf8");
+    const tools = loadTools();
+    const ctx = context(directory);
+
+    const readResult = await call(tools.get("Read")!, { file_path: "note.txt" }, ctx);
+    expect(readResult.content[0].text).toContain("1: hello world");
+    await call(
+      tools.get("Edit")!,
+      { file_path: "note.txt", old_string: "world", new_string: "there" },
+      ctx,
+    );
+    expect(await readFile(join(directory, "note.txt"), "utf8")).toBe("hello there\n");
+
+    // 相对路径的 Write：新建文件 + 自动创建父目录
+    await call(tools.get("Write")!, { file_path: join("sub", "new.txt"), content: "x\n" }, ctx);
+    expect(await readFile(join(directory, "sub", "new.txt"), "utf8")).toBe("x\n");
+  });
+
   it("allows Edit after a partial Read while still checking the file fingerprint", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-partial-"));
     const filePath = join(directory, "large.txt");
@@ -614,7 +630,7 @@ describe("Read, Edit, and Write", () => {
     ).rejects.toThrow(/Cannot create new file - file already exists\./);
   });
 
-  it("matches curly quotes via normalization and preserves their style", async () => {
+  it("matches quotes exactly, without normalization or style rewriting", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cc-edit-quotes-"));
     const filePath = join(directory, "quote.txt");
     await writeFile(filePath, "He said \u201Chello\u201D world\n", "utf8");
@@ -622,12 +638,23 @@ describe("Read, Edit, and Write", () => {
     const ctx = context(directory);
     await call(tools.get("Read")!, { file_path: filePath }, ctx);
 
+    // 直引号 old_string 不再被当作文件里花引号的等价物
+    await expect(
+      call(
+        tools.get("Edit")!,
+        { file_path: filePath, old_string: '"hello"', new_string: '"goodbye"' },
+        ctx,
+      ),
+    ).rejects.toThrow(/String to replace not found in file\./);
+    expect(await readFile(filePath, "utf8")).toBe("He said \u201Chello\u201D world\n");
+
+    // 精确匹配花引号后正常替换，new_string 原样写入（不按文件风格改写引号）
     await call(
       tools.get("Edit")!,
-      { file_path: filePath, old_string: '"hello"', new_string: '"goodbye"' },
+      { file_path: filePath, old_string: "\u201Chello\u201D", new_string: '"goodbye"' },
       ctx,
     );
-    expect(await readFile(filePath, "utf8")).toBe("He said \u201Cgoodbye\u201D world\n");
+    expect(await readFile(filePath, "utf8")).toBe('He said "goodbye" world\n');
   });
 
   it("matches old_string without CR in CRLF files and preserves line endings", async () => {
