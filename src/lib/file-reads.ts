@@ -45,6 +45,25 @@ export async function fileDigest(filePath: string): Promise<string> {
   return hash.digest("hex");
 }
 
+/** ENOENT / ENOTDIR：路径不存在。 */
+function isMissingPath(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
+}
+
+/** 磁盘上当前内容的指纹；文件已不存在时返回 undefined（视为「与读取时不同」）。 */
+export async function digestIfExists(filePath: string): Promise<string | undefined> {
+  try {
+    return await fileDigest(filePath);
+  } catch (error) {
+    if (isMissingPath(error)) return undefined;
+    throw error;
+  }
+}
+
 /**
  * 记账 key：解析 symlink 后的真实路径。文件尚不存在（Write 新建 / Edit 空
  * old_string 创建）时 realpath 抛 ENOENT，回退到调用方给出的路径。
@@ -53,13 +72,7 @@ export async function readStateKey(filePath: string): Promise<string> {
   try {
     return await realpath(filePath);
   } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error.code === "ENOENT" || error.code === "ENOTDIR")
-    ) {
-      return filePath;
-    }
+    if (isMissingPath(error)) return filePath;
     throw error;
   }
 }
@@ -83,6 +96,27 @@ export function requireCurrentRead(
     throw new Error(`Cannot edit or overwrite a binary file with a text tool: ${filePath}`);
   }
   if (!snapshotsEqual(readSnapshot, snapshotOf(currentContent))) {
+    throw new Error(
+      "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.",
+    );
+  }
+}
+
+/**
+ * 过期校验：该文件已有读取记录时，要求磁盘上的当前指纹与记录一致，否则拒绝
+ * 写入；从未读过（没有记录）时直接放行。
+ *
+ * opencode 的 write 用这个：没读过的文件允许直接写，读过之后再被外部改动就必须
+ * 重新 read。`currentDigest` 为 undefined（文件已不存在）同样算过期。
+ */
+export function requireUnchangedRead(
+  state: ReadsState,
+  key: string,
+  currentDigest: string | undefined,
+): void {
+  const readSnapshot = state.reads.get(key);
+  if (!readSnapshot) return;
+  if (currentDigest === undefined || readSnapshot.digest !== currentDigest) {
     throw new Error(
       "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.",
     );

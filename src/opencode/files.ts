@@ -11,8 +11,9 @@
  *   不接 PDF、不接 <system-reminder>；图片 magic 检测保留。
  * - edit：匹配引擎 + 把 old/new 转到文件换行后再替换；写后等待文档诊断。
  *   edit 要求文件已被 read 读过且内容未变（read 记账见下）。
- * - write：BOM 保留（source.bom || next.bom）；写后同 edit 的诊断输出。write 本身
- *   不要求先 read，但会刷新记账，保证紧接着的 edit 不必重新 read。
+ * - write：BOM 保留（source.bom || next.bom）；写后同 edit 的诊断输出。write 不
+ *   要求先 read（未读过的文件可直接写），但若已有读取记录而磁盘内容已变，则要求
+ *   重新 read；写完刷新记账，保证紧接着的 edit 不必重新 read。
  *
  * read 记账：read / edit / write / lsp-rename 各自把受影响文件的内容指纹写进
  * details.reads（随 session 持久化），session_start / session_tree 时从当前分支
@@ -37,11 +38,13 @@ import { Type } from "typebox";
 
 import {
   createReadsState,
+  digestIfExists,
   fileDigest,
   type FileSnapshot,
   type ReadsState,
   readStateKey,
   requireCurrentRead,
+  requireUnchangedRead,
   restoreReads,
   snapshotOf,
 } from "../lib/file-reads.js";
@@ -790,6 +793,13 @@ function registerWriteTool(
         async () => {
           signal?.throwIfAborted();
 
+          const key = await readStateKey(absolutePath);
+          // write 不要求先读过；但若已有读取记录，磁盘内容必须仍是读取时的样子，
+          // 否则先重新 read（外部改动过的文件不让盲写覆盖）
+          if (state.reads.has(key)) {
+            requireUnchangedRead(state, key, await digestIfExists(absolutePath));
+          }
+
           // opencode: desiredBom = source.bom || next.bom —— 保留原文件 BOM，
           // 否则用新内容自带的 BOM
           let existing: Buffer | undefined;
@@ -810,8 +820,7 @@ function registerWriteTool(
           await mkdir(dir, { recursive: true });
           signal?.throwIfAborted();
           await writeFile(absolutePath, desiredBom + nextText, "utf8");
-          // write 不要求先 read，但写后记账：紧接着的 edit 不该再要求重新 read
-          const key = await readStateKey(absolutePath);
+          // 写后记账（key 在写入前已算过）：紧接着的 edit 不该再要求重新 read
           const snapshot = snapshotOf(desiredBom + nextText);
           state.reads.set(key, snapshot);
           const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {

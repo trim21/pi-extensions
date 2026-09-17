@@ -10,7 +10,7 @@ description: "Exact behavior of the Claude Code style tools (Read/Edit/Write/Gre
 > (only `src/talk/skills` is shipped to users). Do not re-add it to the plugin registration.
 > To load it during development, point your personal `settings.json` `skills` at this directory.
 
-This package registers two parallel tool suites: opencode style (lowercase `read`/`edit`/`write`/`bash`/`todowrite`/`question`) and Claude Code style (capitalized `Read`/`Edit`/`Write`/`Bash`/`Grep`/`Glob`/`TodoWrite`/`AskUserQuestion`). They share the bwrap sandbox and write-guard, and both enforce read-before-edit (the opencode style `edit` only; its `write` has no read requirement). **Only one suite should be enabled** — enabling both duplicates commands (e.g. `/bwrap` vs `/bwrap:1`) and injects the bwrap system-prompt section twice.
+This package registers two parallel tool suites: opencode style (lowercase `read`/`edit`/`write`/`bash`/`todowrite`/`question`) and Claude Code style (capitalized `Read`/`Edit`/`Write`/`Bash`/`Grep`/`Glob`/`TodoWrite`/`AskUserQuestion`). They share the bwrap sandbox and write-guard, and both enforce a read-before-write staleness guard. The claude-code style requires a prior Read for Edit and for overwriting an existing file with Write; the opencode style requires it for `edit` only — its `write` accepts a file that was never read, but refuses one that was read and has changed (or been deleted) since. **Only one suite should be enabled** — enabling both duplicates commands (e.g. `/bwrap` vs `/bwrap:1`) and injects the bwrap system-prompt section twice.
 
 The capitalized tools below follow Claude Code behavior with a few deliberate deviations. Where behavior differs from stock Claude Code it is called out.
 

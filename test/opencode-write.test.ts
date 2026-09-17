@@ -66,16 +66,28 @@ interface Tool {
   }>;
 }
 
-function loadTool(): Tool {
-  let tool: Tool | undefined;
+interface Harness {
+  write: Tool;
+  /** 先走一遍 read，用于读取记录的过期校验。 */
+  readFirst: (filePath: string) => Promise<void>;
+}
+
+function loadTool(): Harness {
+  const tools = new Map<string, Tool>();
   opencodeFileTools({
     registerTool: (def: Tool) => {
-      if (def.name === "write") tool = def;
+      tools.set(def.name, def);
     },
     on: vi.fn(),
     registerCommand: vi.fn(),
   } as never);
-  return tool!;
+  const read = tools.get("read")!;
+  return {
+    write: tools.get("write")!,
+    readFirst: async (filePath: string) => {
+      await read.execute("id", { filePath } as never, undefined, undefined, ctx);
+    },
+  };
 }
 
 let dir: string;
@@ -95,7 +107,7 @@ afterEach(async () => {
 
 describe("opencode write execute", () => {
   it("writes a new file and creates parent directories automatically", async () => {
-    const tool = loadTool();
+    const { write: tool } = loadTool();
     const deep = join(dir, "a", "b", "c.txt");
     const result = await tool.execute(
       "id",
@@ -111,20 +123,20 @@ describe("opencode write execute", () => {
 
   it("overwrites an existing file", async () => {
     await writeFile(target, "old\n", "utf8");
-    const tool = loadTool();
+    const { write: tool } = loadTool();
     await tool.execute("id", { filePath: target, content: "new\n" }, undefined, undefined, ctx);
     expect(await readFile(target, "utf8")).toBe("new\n");
   });
 
   it("preserves an existing BOM when new content has none", async () => {
     await writeFile(target, "\uFEFFold\n", "utf8");
-    const tool = loadTool();
+    const { write: tool } = loadTool();
     await tool.execute("id", { filePath: target, content: "new\n" }, undefined, undefined, ctx);
     expect(await readFile(target, "utf8")).toBe("\uFEFFnew\n");
   });
 
   it("keeps the new content BOM for a new file", async () => {
-    const tool = loadTool();
+    const { write: tool } = loadTool();
     await tool.execute(
       "id",
       { filePath: target, content: "\uFEFFfresh\n" },
@@ -137,7 +149,7 @@ describe("opencode write execute", () => {
 
   it("keeps the new content BOM when the existing file has no BOM", async () => {
     await writeFile(target, "plain\n", "utf8");
-    const tool = loadTool();
+    const { write: tool } = loadTool();
     await tool.execute(
       "id",
       { filePath: target, content: "\uFEFFbom\n" },
@@ -150,7 +162,7 @@ describe("opencode write execute", () => {
 
   it("treats a short existing file as BOM-less and falls back to the new BOM", async () => {
     await writeFile(target, "ab", "utf8");
-    const tool = loadTool();
+    const { write: tool } = loadTool();
     await tool.execute(
       "id",
       { filePath: target, content: "\uFEFFlong\n" },
@@ -164,10 +176,62 @@ describe("opencode write execute", () => {
   it("aborts before writing anything", async () => {
     const controller = new AbortController();
     controller.abort();
-    const tool = loadTool();
+    const { write: tool } = loadTool();
     await expect(
       tool.execute("id", { filePath: target, content: "never" }, controller.signal, undefined, ctx),
     ).rejects.toThrow(/aborted/i);
     await expect(readFile(target, "utf8")).rejects.toThrow(/ENOENT/);
+  });
+});
+
+describe("opencode write read-record staleness", () => {
+  it("overwrites a file that was never read", async () => {
+    await writeFile(target, "old\n", "utf8");
+    const { write } = loadTool();
+    await write.execute("id", { filePath: target, content: "new\n" }, undefined, undefined, ctx);
+    expect(await readFile(target, "utf8")).toBe("new\n");
+  });
+
+  it("overwrites a file that was read and is unchanged", async () => {
+    await writeFile(target, "old\n", "utf8");
+    const { write, readFirst } = loadTool();
+    await readFirst(target);
+    await write.execute("id", { filePath: target, content: "new\n" }, undefined, undefined, ctx);
+    expect(await readFile(target, "utf8")).toBe("new\n");
+  });
+
+  it("refuses to overwrite a file that changed after the read", async () => {
+    await writeFile(target, "old\n", "utf8");
+    const { write, readFirst } = loadTool();
+    await readFirst(target);
+    await writeFile(target, "changed by someone else\n", "utf8");
+
+    await expect(
+      write.execute("id", { filePath: target, content: "new\n" }, undefined, undefined, ctx),
+    ).rejects.toThrow(/File has been modified since read/);
+    expect(await readFile(target, "utf8")).toBe("changed by someone else\n");
+
+    // 重新 read 之后可以正常写
+    await readFirst(target);
+    await write.execute("id", { filePath: target, content: "new\n" }, undefined, undefined, ctx);
+    expect(await readFile(target, "utf8")).toBe("new\n");
+  });
+
+  it("refuses to write over a file that was read and then deleted", async () => {
+    await writeFile(target, "old\n", "utf8");
+    const { write, readFirst } = loadTool();
+    await readFirst(target);
+    await rm(target);
+
+    await expect(
+      write.execute("id", { filePath: target, content: "new\n" }, undefined, undefined, ctx),
+    ).rejects.toThrow(/File has been modified since read/);
+  });
+
+  it("does not require a read for a file created by a previous write", async () => {
+    const { write } = loadTool();
+    await write.execute("id", { filePath: target, content: "one\n" }, undefined, undefined, ctx);
+    await write.execute("id", { filePath: target, content: "two\n" }, undefined, undefined, ctx);
+    expect(await readFile(target, "utf8")).toBe("two\n");
   });
 });
