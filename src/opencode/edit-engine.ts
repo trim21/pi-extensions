@@ -1,7 +1,9 @@
 /**
  * Opencode v1 edit matching engine.
  *
- * Replacers and replace() follow packages/opencode/src/tool/edit.ts.
+ * Replacers and replace() follow packages/opencode/src/tool/edit.ts, except
+ * EscapeNormalizedReplacer is intentionally omitted: unescaping \n, \t and
+ * friends heuristically rewrites escape sequences that are legitimate content.
  * applyEdit() matches the official preprocessing: convert oldString/newString
  * to the file's line endings, then replace on the original file content.
  *
@@ -317,59 +319,6 @@ const IndentationFlexibleReplacer: Replacer = function* (content, find) {
   }
 };
 
-function unescapeString(str: string): string {
-  return str.replaceAll(/\\(n|t|r|'|"|`|\\|\n|\$)/g, (_match, capturedChar) => {
-    switch (capturedChar) {
-      case "n": {
-        return "\n";
-      }
-      case "t": {
-        return "\t";
-      }
-      case "r": {
-        return "\r";
-      }
-      case "'": {
-        return "'";
-      }
-      case '"': {
-        return '"';
-      }
-      case "`": {
-        return "`";
-      }
-      case "\\": {
-        return "\\";
-      }
-      case "\n": {
-        return "\n";
-      }
-      case "$": {
-        return "$";
-      }
-      default: {
-        return _match;
-      }
-    }
-  });
-}
-
-const EscapeNormalizedReplacer: Replacer = function* (content, find) {
-  const unescapedFind = unescapeString(find);
-  if (content.includes(unescapedFind)) {
-    yield unescapedFind;
-  }
-  const lines = content.split("\n");
-  const findLines = unescapedFind.split("\n");
-  for (let i = 0; i <= lines.length - findLines.length; i++) {
-    const block = lines.slice(i, i + findLines.length).join("\n");
-    const unescapedBlock = unescapeString(block);
-    if (unescapedBlock === unescapedFind) {
-      yield block;
-    }
-  }
-};
-
 const MultiOccurrenceReplacer: Replacer = function* (content, find) {
   let startIndex = 0;
   for (;;) {
@@ -477,7 +426,6 @@ export function replace(
     BlockAnchorReplacer,
     WhitespaceNormalizedReplacer,
     IndentationFlexibleReplacer,
-    EscapeNormalizedReplacer,
     TrimmedBoundaryReplacer,
     ContextAwareReplacer,
     MultiOccurrenceReplacer,

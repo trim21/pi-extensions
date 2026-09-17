@@ -121,7 +121,7 @@ bwrap 已集成进 bash 工具实现（opencode 风格 `bash` 位于 `src/openco
 
 ## opencode-edit
 
-替换内置 `edit` 工具，使用 [opencode](https://github.com/anomalyco/opencode) 的 schema 和模糊匹配引擎。核心 replacer 和 `replace()` 函数直接复制自 opencode，行为与原版完全一致。匹配引擎位于 `src/opencode/edit-engine.ts`，与写保护审批弹窗（`src/lib/write-guard.ts`）的 diff 预览共享。
+替换内置 `edit` 工具，使用 [opencode](https://github.com/anomalyco/opencode) 的 schema 和模糊匹配引擎。核心 replacer 和 `replace()` 函数复制自 opencode，匹配引擎位于 `src/opencode/edit-engine.ts`，与写保护审批弹窗（`src/lib/write-guard.ts`）的 diff 预览共享。唯一的有意差异是去掉了原版的转义规范化（EscapeNormalizedReplacer）：它会把源码里合法的 `\n`、`\t` 等转义序列当成模型多转义的产物做启发式反转义，可能改坏内容。
 
 支持的匹配策略：
 
@@ -130,7 +130,6 @@ bwrap 已集成进 bash 工具实现（opencode 风格 `bash` 位于 `src/openco
 - 块首尾锚定（BlockAnchorReplacer）
 - 空白规范化（WhitespaceNormalizedReplacer）
 - 缩进灵活匹配（IndentationFlexibleReplacer）
-- 转义规范化（EscapeNormalizedReplacer）
 - 首尾空白修剪（TrimmedBoundaryReplacer）
 - 上下文感知匹配（ContextAwareReplacer）
 - 多次出现替换（MultiOccurrenceReplacer）

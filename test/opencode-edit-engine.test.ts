@@ -95,10 +95,6 @@ describe("replace()", () => {
     expect(replace("const   x = 1", "const x", "Y")).toBe("Y = 1");
   });
 
-  it("matches escaped sequences against raw content (EscapeNormalizedReplacer)", () => {
-    expect(replace("foo\nbar", String.raw`foo\nbar`, "Z")).toBe("Z");
-  });
-
   it("matches a trimmed boundary inside content (TrimmedBoundaryReplacer)", () => {
     // oldString has surrounding spaces; only the inner "a\nb" exists in content
     expect(replace("x\naa\nb\ny", " a\nb ", "Z")).toBe("x\naZ\ny");
