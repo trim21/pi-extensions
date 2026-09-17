@@ -1080,15 +1080,19 @@ describe("describeSandbox", () => {
 
   it("reports the default write boundary: / read-only, /tmp/ and ./ writable, ./.git/ read-only", () => {
     expect(render({})).toMatchInlineSnapshot(`
-      "[Sandbox] This command ran in a sandbox: / is read-only, /tmp/ and ./ are writable, ./.git/ is read-only; network access is off.
-      [Sandbox] If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request."
+      "<system-reminder>
+      This command ran in a sandbox: / is read-only, /tmp/ and ./ are writable, ./.git/ is read-only; network access is off.
+      If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request.
+      </system-reminder>"
     `);
   });
 
   it("reports read-only mode as a read-only filesystem", () => {
     expect(render({ mode: "readonly" })).toMatchInlineSnapshot(`
-      "[Sandbox] This command ran in a sandbox: the filesystem is read-only; network access is off.
-      [Sandbox] If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request."
+      "<system-reminder>
+      This command ran in a sandbox: the filesystem is read-only; network access is off.
+      If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request.
+      </system-reminder>"
     `);
   });
 
@@ -1110,8 +1114,10 @@ describe("describeSandbox", () => {
         extraWritablePaths: ["/data", "sub", "~/cache"],
       }),
     ).toMatchInlineSnapshot(`
-      "[Sandbox] This command ran in a sandbox: / is read-only, /tmp/ and ./ are writable, ./.git/ is read-only; network access is off.
-      [Sandbox] If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request."
+      "<system-reminder>
+      This command ran in a sandbox: / is read-only, /tmp/ and ./ are writable, ./.git/ is read-only; network access is off.
+      If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request.
+      </system-reminder>"
     `);
   });
 

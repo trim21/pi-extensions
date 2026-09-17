@@ -292,11 +292,12 @@ const UNSANDBOXED_DENIED = "User denied unsandboxed execution.";
 
 /** 命令没经沙箱时沿用 prompt 里的说法，给出在沙盒外重跑的手段。 */
 const SANDBOX_ESCAPE_HATCH =
-  "[Sandbox] If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.";
+  "If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.";
 
 /**
  * 命令失败时作为独立信息块附上的沙箱状态：默认写边界 + 网络层级，以及在沙盒外重跑的手段。
  * 写边界只说沙箱布局（不展开用户配置的可写路径），网络只说层级（不列白名单域名）。
+ * 整块包在 `<system-reminder>` 里，与其它系统注入的提示同一形态，模型不会把它当成命令输出。
  * 命令没经沙箱（allow-all、审批通过的全权限、Windows）时返回 undefined：
  * 没有沙箱就没什么可提示的。
  */
@@ -304,8 +305,10 @@ export function describeSandbox(resolved: ResolvedBwrap, unsandboxed: boolean): 
   if (unsandboxed) return undefined;
   const writes = resolved.mode === "readonly" ? "the filesystem is read-only" : SANDBOX_WRITE_RULES;
   return [
-    `[Sandbox] This command ran in a sandbox: ${writes}; ${describeNetwork(resolved)}.`,
+    "<system-reminder>",
+    `This command ran in a sandbox: ${writes}; ${describeNetwork(resolved)}.`,
     SANDBOX_ESCAPE_HATCH,
+    "</system-reminder>",
   ].join("\n");
 }
 
