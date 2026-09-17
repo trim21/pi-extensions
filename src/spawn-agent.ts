@@ -101,12 +101,19 @@ const SETTINGS_PATH = join(getAgentDir(), "settings.json");
  * (read/edit/write) likewise share opencode/files.ts (they share the LSP
  * service instance); that file also registers the shared `lsp-rename` and
  * LSP inspect tools, which stay hidden unless a subagent declares them.
+ *
+ * The lowercase search tools map to the opencode implementations: `grep`
+ * overrides pi's built-in grep, and `glob` adds a tool pi has no built-in for
+ * (its `find` stays available). Each is a self-contained file registering one
+ * tool, so they load independently — `grep` without `glob`.
  */
 const TOOL_EXTENSION_OVERRIDES: Record<string, string> = {
   read: "opencode/files.ts",
   edit: "opencode/files.ts",
   write: "opencode/files.ts",
   bash: "opencode/bash.ts",
+  grep: "opencode/grep.ts",
+  glob: "opencode/glob.ts",
   Grep: "claude-code/grep.ts",
   Glob: "claude-code/glob.ts",
   Read: "claude-code/files.ts",

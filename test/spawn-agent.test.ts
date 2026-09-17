@@ -276,6 +276,19 @@ describe("overrideExtensionPaths", () => {
     expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(true);
   });
 
+  it("loads the opencode search tools individually (grep without glob)", () => {
+    const grepPaths = overrideExtensionPaths(["grep"]);
+    expect(grepPaths.some((p) => p.endsWith(join("opencode", "grep.ts")))).toBe(true);
+    expect(grepPaths.some((p) => p.endsWith(join("opencode", "glob.ts")))).toBe(false);
+
+    const globPaths = overrideExtensionPaths(["glob"]);
+    expect(globPaths.some((p) => p.endsWith(join("opencode", "glob.ts")))).toBe(true);
+    expect(globPaths.some((p) => p.endsWith(join("opencode", "grep.ts")))).toBe(false);
+
+    // grep 的默认只读工具集不该顺带加载 bash（bwrap 沙箱只在声明 bash 时需要）
+    expect(grepPaths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(false);
+  });
+
   it("loads claude-code search tools individually (Grep without Glob)", () => {
     const grepPaths = overrideExtensionPaths(["Grep"]);
     expect(grepPaths.some((p) => p.endsWith(join("claude-code", "grep.ts")))).toBe(true);
