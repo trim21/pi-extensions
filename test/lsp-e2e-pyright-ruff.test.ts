@@ -134,7 +134,7 @@ async function setupProject(disabled: string[] = [], maxOpenDocuments?: number) 
   return { directory, filePath };
 }
 
-describe("cc Edit + real pyright/ruff LSP", () => {
+describe.concurrent("cc Edit + real pyright/ruff LSP", () => {
   it.runIf(hasPyright && hasRuff)(
     "reports pyright and ruff errors introduced by Edit",
     async () => {

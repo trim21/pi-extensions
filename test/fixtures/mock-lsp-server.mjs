@@ -28,11 +28,16 @@
 //   rename:1      第 1 次 textDocument/rename 返回 ContentModified，之后正常
 // env MOCK_DIAGNOSTICS_NEVER=1 时不推送任何诊断，也不实现 pull，
 // 用于让 waitForDiagnostics 一直停在等待状态（驻留 LRU 淘汰的挂死回归）。
+// env MOCK_DIDOPEN_EMPTY=1 时 didOpen 推空诊断（模拟"文件本来就是干净的"）。
+// env MOCK_SILENT_DIDCHANGE=1 时 didChange 不推送，模拟 typescript-language-server
+// 在诊断集合空→空时不重复发布（配合上面两个环境变量验证等待预算）。
 // env MOCK_HANG_METHODS（逗号分隔的请求方法）时不回应这些请求，
 // 用于验证调用方中止时客户端是否立刻放弃等待并发送 $/cancelRequest。
 // env MOCK_ECHO_REQUESTS=1 时把请求（带 id 的消息）也回显到 stderr，
 // 便于断言"请求已发出 / 收到取消"。
 const diagnosticsNever = process.env.MOCK_DIAGNOSTICS_NEVER === "1";
+const didOpenEmpty = process.env.MOCK_DIDOPEN_EMPTY === "1";
+const silentDidChange = process.env.MOCK_SILENT_DIDCHANGE === "1";
 const hangMethods = (process.env.MOCK_HANG_METHODS ?? "").split(",").filter(Boolean);
 const echoRequests = process.env.MOCK_ECHO_REQUESTS === "1";
 const renameMode = process.env.MOCK_RENAME_MODE ?? "";
@@ -171,20 +176,22 @@ function handle(msg) {
         method: "textDocument/publishDiagnostics",
         params: {
           uri,
-          diagnostics: [
-            {
-              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
-              severity: 1,
-              message: "mock error message",
-            },
-          ],
+          diagnostics: didOpenEmpty
+            ? []
+            : [
+                {
+                  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+                  severity: 1,
+                  message: "mock error message",
+                },
+              ],
         },
       });
     }, pushDelayMs);
     return;
   }
   if (msg.method === "textDocument/didChange") {
-    if (diagnosticsNever) return;
+    if (diagnosticsNever || silentDidChange) return;
     // 模拟慢服务器：重算耗时 300ms 后才推送基于新内容的结果
     const uri = msg.params.textDocument.uri;
     setTimeout(() => {

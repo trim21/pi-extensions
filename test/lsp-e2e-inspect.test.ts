@@ -138,7 +138,7 @@ async function retryUntil(
   }
 }
 
-describe.each(Object.entries(ENTRIES))(
+describe.concurrent.each(Object.entries(ENTRIES))(
   "lsp-inspect tools + real typescript-language-server (%s)",
   (_name, loader) => {
     it.runIf(hasTls)(

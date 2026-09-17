@@ -307,6 +307,16 @@ interface ServerCapabilities {
 export const clientDefaults = {
   diagnosticsDebounceMs: 150,
   diagnosticsDocumentWaitTimeoutMs: 5_000,
+  /**
+   * document 模式等待上限的补充：该文档上一份诊断为空（服务器手里是干净文档）时，
+   * 内容变化后只用这段安静期等新 push，不再等满 diagnosticsDocumentWaitTimeoutMs。
+   *
+   * typescript-language-server 的 FileDiagnostics.update 在「该类诊断上一轮为空、
+   * 这一轮仍为空」时直接 return 不推送，且它不实现 pull 诊断；这类文档等满整个
+   * 窗口也只会在窗口末尾返回同样的「无诊断」，白等一次编辑。诊断集合变成非空时
+   * 服务器必定推送，所以短安静期不会漏掉这次变更引入的错误。
+   */
+  diagnosticsSilentWaitTimeoutMs: 1_500,
   diagnosticsFullWaitTimeoutMs: 10_000,
   diagnosticsRequestTimeoutMs: 3_000,
   initializeTimeoutMs: 45_000,
@@ -321,6 +331,8 @@ export interface CreateInput {
   /** 可覆盖的超时参数（缺省用 client 默认值，由全局/本地 lsp.json 配置注入）。 */
   diagnosticsDebounceMs?: number;
   diagnosticsDocumentWaitTimeoutMs?: number;
+  /** 上一份诊断为空的文档的等待上限；缺省见 clientDefaults。 */
+  diagnosticsSilentWaitTimeoutMs?: number;
   diagnosticsFullWaitTimeoutMs?: number;
   diagnosticsRequestTimeoutMs?: number;
   initializeTimeoutMs?: number;
@@ -522,6 +534,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
   const diagnosticsDebounceMs = input.diagnosticsDebounceMs ?? clientDefaults.diagnosticsDebounceMs;
   const diagnosticsDocumentWaitTimeoutMs =
     input.diagnosticsDocumentWaitTimeoutMs ?? clientDefaults.diagnosticsDocumentWaitTimeoutMs;
+  const diagnosticsSilentWaitTimeoutMs =
+    input.diagnosticsSilentWaitTimeoutMs ?? clientDefaults.diagnosticsSilentWaitTimeoutMs;
   const diagnosticsFullWaitTimeoutMs =
     input.diagnosticsFullWaitTimeoutMs ?? clientDefaults.diagnosticsFullWaitTimeoutMs;
   const diagnosticsRequestTimeoutMs =
@@ -599,6 +613,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
         at: Date.now(),
         version: typeof params.version === "number" ? params.version : undefined,
       });
+      const document = files[filePath];
+      if (document !== undefined) document.lastPushEmpty = params.diagnostics.length === 0;
       updatePushDiagnostics(filePath, params.diagnostics);
     },
   );
@@ -702,7 +718,15 @@ export async function create(input: CreateInput): Promise<LspClient> {
     await connection.sendNotification("workspace/didChangeConfiguration", { settings });
   }
 
-  const files: Record<string, { version: number; text: string } | undefined> = {};
+  /**
+   * syncedAt：最后一次把该文档内容同步给服务器的时刻（didOpen / didChange）。
+   * lastPushEmpty：服务器对该文档最近一次 push 是否为空（无诊断），随驻留记录
+   * 一起在 didClose 时清除——只在当前驻留周期内成立。
+   */
+  const files: Record<
+    string,
+    { version: number; text: string; syncedAt: number; lastPushEmpty?: boolean } | undefined
+  > = {};
 
   // ── 驻留 LRU ────────────────────────────────────────────────────────────────
 
@@ -1009,7 +1033,20 @@ export async function create(input: CreateInput): Promise<LspClient> {
     after?: number;
     signal?: AbortSignal;
   }): Promise<void> {
+    // 服务器对当前内容的最新结论已在手（最后一次 push 晚于最后一次内容同步，
+    // 即此后没有再通知过内容变化）：直接返回已有结果。部分服务器在诊断集合
+    // 不变时不再推送（typescript-language-server 空→空不发布），等新 push 只会
+    // 耗满整个窗口后得到同样的「无诊断」。
+    const known = published.get(request.path);
+    const document = files[request.path];
+    if (known !== undefined && document !== undefined && known.at >= document.syncedAt) return;
+
     const startedAt = request.after ?? Date.now();
+    // 「上一份 push 为空」的文档用短安静期（见 clientDefaults.diagnosticsSilentWaitTimeoutMs）。
+    const budget =
+      files[request.path]?.lastPushEmpty === true
+        ? Math.min(diagnosticsDocumentWaitTimeoutMs, diagnosticsSilentWaitTimeoutMs)
+        : diagnosticsDocumentWaitTimeoutMs;
     // pull 与 push 语义相同：都是等「当前文档版本」的诊断结果，统一一个循环。
     // 先 pull（拿到即返回）；pull 超时说明服务器未响应，不再重试 pull，只等
     // 版本匹配的 push 兜底；版本不匹配的 push 一律忽略（防迟到旧结果）。
@@ -1017,11 +1054,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
       path: request.path,
       version: request.version,
       after: startedAt,
-      timeout: diagnosticsDocumentWaitTimeoutMs,
+      timeout: budget,
     });
 
     while (!connectionClosed && !request.signal?.aborted) {
-      const remaining = diagnosticsDocumentWaitTimeoutMs - (Date.now() - startedAt);
+      const remaining = budget - (Date.now() - startedAt);
       if (remaining <= 0) return;
       const result = await requestDocumentDiagnostics(request.path);
       if (result.matched) return;
@@ -1088,13 +1125,21 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
     const document = files[resolvedPath];
     if (document !== undefined) {
+      // 内容与服务器已知文本一致：不重复通知（didChange 会把已有诊断判为过期，
+      // 而部分服务器对内容未产生新结论的文档不再推送，见 diagnosticsSilentWaitTimeoutMs）。
+      if (document.text === text) {
+        touch(resolvedPath);
+        return document.version;
+      }
+
       // didChange：内容已变，旧诊断立即失效。清空缓存避免等待窗口内服务器
       // 重算未完成时（大项目可远超窗口）聚合到过期诊断；新 push 到达即填充。
       pushDiagnostics.delete(resolvedPath);
       pullDiagnostics.delete(resolvedPath);
 
       const next = document.version + 1;
-      files[resolvedPath] = { version: next, text };
+      // 保留 lastPushEmpty：安静期判据看的是「变更前服务器最后一份结论是否为空」
+      files[resolvedPath] = { ...document, version: next, text, syncedAt: Date.now() };
       documentVersions.set(resolvedPath, next);
       await connection.sendNotification("textDocument/didChange", {
         textDocument: { uri, version: next },
@@ -1118,7 +1163,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
     await connection.sendNotification("textDocument/didOpen", {
       textDocument: { uri, languageId, version: 0, text },
     });
-    files[resolvedPath] = { version: 0, text };
+    files[resolvedPath] = { version: 0, text, syncedAt: Date.now() };
     documentVersions.set(resolvedPath, 0);
     touch(resolvedPath);
     await evictExcess();

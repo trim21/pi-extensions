@@ -86,6 +86,8 @@ const lspConfigSchema = Type.Object({
   diagnosticsDebounceMs: Type.Optional(timeoutValue),
   /** document 模式诊断等待上限（ms）。 */
   diagnosticsDocumentWaitTimeoutMs: Type.Optional(timeoutValue),
+  /** 上一份诊断为空的文档的等待上限（ms）；见 clientDefaults.diagnosticsSilentWaitTimeoutMs。 */
+  diagnosticsSilentWaitTimeoutMs: Type.Optional(timeoutValue),
   /** full 模式诊断等待上限（ms）。 */
   diagnosticsFullWaitTimeoutMs: Type.Optional(timeoutValue),
   /** 单次 pull 诊断请求超时（ms）。 */
@@ -140,6 +142,7 @@ export interface ResolvedLspConfig {
   /** 以下超时均为换算后的毫秒数（缺省见 configDefaults / clientDefaults）。 */
   diagnosticsDebounceMs: number;
   diagnosticsDocumentWaitTimeoutMs: number;
+  diagnosticsSilentWaitTimeoutMs: number;
   diagnosticsFullWaitTimeoutMs: number;
   diagnosticsRequestTimeoutMs: number;
   initializeTimeoutMs: number;
@@ -198,6 +201,8 @@ export function resolveConfig(raw: LspConfig): ResolvedLspConfig {
     diagnosticsDebounceMs: toMs(raw.diagnosticsDebounceMs) ?? clientDefaults.diagnosticsDebounceMs,
     diagnosticsDocumentWaitTimeoutMs:
       toMs(raw.diagnosticsDocumentWaitTimeoutMs) ?? clientDefaults.diagnosticsDocumentWaitTimeoutMs,
+    diagnosticsSilentWaitTimeoutMs:
+      toMs(raw.diagnosticsSilentWaitTimeoutMs) ?? clientDefaults.diagnosticsSilentWaitTimeoutMs,
     diagnosticsFullWaitTimeoutMs:
       toMs(raw.diagnosticsFullWaitTimeoutMs) ?? clientDefaults.diagnosticsFullWaitTimeoutMs,
     diagnosticsRequestTimeoutMs:
@@ -791,6 +796,7 @@ export function createLspService(
           diagnosticsDebounceMs: config.diagnosticsDebounceMs,
           diagnosticsDocumentWaitTimeoutMs:
             adapter.diagnosticsWaitMs ?? config.diagnosticsDocumentWaitTimeoutMs,
+          diagnosticsSilentWaitTimeoutMs: config.diagnosticsSilentWaitTimeoutMs,
           diagnosticsFullWaitTimeoutMs: config.diagnosticsFullWaitTimeoutMs,
           diagnosticsRequestTimeoutMs: config.diagnosticsRequestTimeoutMs,
           initializeTimeoutMs: adapter.startupTimeoutMs ?? config.initializeTimeoutMs,

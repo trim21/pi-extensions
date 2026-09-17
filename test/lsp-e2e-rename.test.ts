@@ -140,7 +140,7 @@ async function setupProject() {
   return { directory };
 }
 
-describe.each(Object.entries(ENTRIES))(
+describe.concurrent.each(Object.entries(ENTRIES))(
   "lsp-rename + real typescript-language-server (%s)",
   (_name, entry) => {
     it.runIf(hasTls)(

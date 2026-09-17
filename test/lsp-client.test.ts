@@ -53,7 +53,7 @@ function plan(order: string[], options: { resident?: string[]; waiting?: string[
   });
 }
 
-describe("lsp client", () => {
+describe.concurrent("lsp client", () => {
   it("握手后 didOpen 能等到 push 诊断", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-client-test-"));
     const file = join(dir, "a.py");
@@ -97,6 +97,148 @@ describe("lsp client", () => {
       await writeFile(file, "x = 2\n");
       const second = await client.notify.open({ path: file });
       expect(second).toBe(1);
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("内容未变时不再同步：不发 didChange，也不清空已有结论", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-test-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const { proc, notifications } = spawnMock();
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      const first = await client.notify.open({ path: file });
+      await client.waitForDiagnostics({
+        path: file,
+        version: first,
+        mode: "document",
+        after: Date.now(),
+      });
+
+      const second = await client.notify.open({ path: file });
+      expect(second).toBe(first);
+      expect(notifications.filter((item) => item.method === "textDocument/didOpen")).toHaveLength(
+        1,
+      );
+      expect(notifications.filter((item) => item.method === "textDocument/didChange")).toHaveLength(
+        0,
+      );
+      // 内容没变，服务器不会给出新结论：已有结论依然对应磁盘内容，不该被清掉
+      expect(client.diagnostics.get(normalize(file))?.[0]?.message).toBe("mock error message");
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("服务器已对当前内容给出结论后，内容未变的再次等待立刻返回", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-test-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    // didOpen 推空诊断（本来就干净的文档）、didChange 静默（对齐 tsls 空→空不发布）
+    const { proc } = spawnMock({ MOCK_DIDOPEN_EMPTY: "1", MOCK_SILENT_DIDCHANGE: "1" });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+      diagnosticsDocumentWaitTimeoutMs: 30_000,
+    });
+    try {
+      const version = await client.notify.open({ path: file });
+      await client.waitForDiagnostics({ path: file, version, mode: "document", after: Date.now() });
+      expect(client.diagnostics.get(normalize(file))).toEqual([]);
+
+      const startedAt = Date.now();
+      const again = await client.notify.open({ path: file });
+      await client.waitForDiagnostics({
+        path: file,
+        version: again,
+        mode: "document",
+        after: Date.now(),
+      });
+      // 修复前：didChange 被重新发出去、缓存被清空，服务器静默 → 等满 30s 窗口
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("上一份结论为空的文档内容变化后，用短安静期结束等待而不是等满窗口", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-test-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const { proc } = spawnMock({ MOCK_DIDOPEN_EMPTY: "1", MOCK_SILENT_DIDCHANGE: "1" });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+      diagnosticsDocumentWaitTimeoutMs: 30_000,
+      diagnosticsSilentWaitTimeoutMs: 250,
+    });
+    try {
+      const version = await client.notify.open({ path: file });
+      await client.waitForDiagnostics({ path: file, version, mode: "document", after: Date.now() });
+
+      await writeFile(file, "x = 2\n");
+      const startedAt = Date.now();
+      const next = await client.notify.open({ path: file });
+      expect(next).toBe(version + 1);
+      await client.waitForDiagnostics({
+        path: file,
+        version: next,
+        mode: "document",
+        after: startedAt,
+      });
+      const elapsed = Date.now() - startedAt;
+      // 安静期确实是等待而不是立刻放弃（否则会漏掉这次变更新引入的诊断）
+      expect(elapsed).toBeGreaterThanOrEqual(150);
+      expect(elapsed).toBeLessThan(3_000);
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("上一份结论非空时仍等满整个窗口：安静期只用于空结论", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-test-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    const { proc } = spawnMock({ MOCK_SILENT_DIDCHANGE: "1" });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+      diagnosticsDocumentWaitTimeoutMs: 800,
+      diagnosticsSilentWaitTimeoutMs: 250,
+    });
+    try {
+      const version = await client.notify.open({ path: file });
+      await client.waitForDiagnostics({ path: file, version, mode: "document", after: Date.now() });
+      expect(client.diagnostics.get(normalize(file))?.[0]?.message).toBe("mock error message");
+
+      await writeFile(file, "x = 2\n");
+      const startedAt = Date.now();
+      const next = await client.notify.open({ path: file });
+      await client.waitForDiagnostics({
+        path: file,
+        version: next,
+        mode: "document",
+        after: startedAt,
+      });
+      // 有错的文件一旦被改动就可能出错→好或好→坏，服务器会推送，等满窗口兜底
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(700);
     } finally {
       await client.shutdown();
       await rm(dir, { recursive: true, force: true });
@@ -169,7 +311,7 @@ describe("lsp client", () => {
   });
 });
 
-describe("lsp client watched files", () => {
+describe.concurrent("lsp client watched files", () => {
   it("notify.watchedFiles：批量合并单条、驻留路径（内容一致 echo）不出现", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-client-test-"));
     const a = join(dir, "a.py");
@@ -378,7 +520,7 @@ describe("lsp client watched files", () => {
   });
 });
 
-describe("驻留淘汰：容量上限与等待诊断的文档", () => {
+describe.concurrent("驻留淘汰：容量上限与等待诊断的文档", () => {
   it("容量内不动任何文档，超出时按使用顺序淘汰最久未用者", () => {
     expect(plan(["a", "b"], { max: 2 })).toEqual({ stale: [], evict: [] });
     expect(plan(["a", "b", "c"], { max: 2 })).toEqual({ stale: [], evict: ["a"] });
@@ -438,6 +580,8 @@ describe("驻留淘汰：容量上限与等待诊断的文档", () => {
   }, 30_000);
 });
 
+// 该组保持串行：两个用例临时改写共享的 renameVerificationTiming（轮询间隔 / 预算），
+// 并发执行时保存与恢复会互相覆盖，把改后的预算泄漏给组内其他用例。
 describe("lsp client renameSymbol", () => {
   it("prepare + rename 成功：返回 WorkspaceEdit 与 placeholder，并先同步磁盘内容", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));

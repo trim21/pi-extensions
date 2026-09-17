@@ -73,6 +73,7 @@ describe("mergeConfig + resolveConfig", () => {
         "diagnosticsDocumentWaitTimeoutMs": 5000,
         "diagnosticsFullWaitTimeoutMs": 10000,
         "diagnosticsRequestTimeoutMs": 3000,
+        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": Set {
           "pyright",
@@ -110,6 +111,7 @@ describe("mergeConfig + resolveConfig", () => {
         "diagnosticsDocumentWaitTimeoutMs": 3000,
         "diagnosticsFullWaitTimeoutMs": 10000,
         "diagnosticsRequestTimeoutMs": 3000,
+        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": Set {
           "ruff",
         },
@@ -155,6 +157,7 @@ describe("mergeConfig + resolveConfig", () => {
         "diagnosticsDocumentWaitTimeoutMs": 5000,
         "diagnosticsFullWaitTimeoutMs": 10000,
         "diagnosticsRequestTimeoutMs": 3000,
+        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": undefined,
         "initializeTimeoutMs": 45000,
@@ -189,6 +192,7 @@ describe("mergeConfig + resolveConfig", () => {
         "diagnosticsDocumentWaitTimeoutMs": 5000,
         "diagnosticsFullWaitTimeoutMs": 10000,
         "diagnosticsRequestTimeoutMs": 3000,
+        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": Set {
           "a",
@@ -225,6 +229,7 @@ describe("mergeConfig + resolveConfig", () => {
         "diagnosticsDocumentWaitTimeoutMs": 5000,
         "diagnosticsFullWaitTimeoutMs": 10000,
         "diagnosticsRequestTimeoutMs": 3000,
+        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": Set {
           "typescript",
@@ -267,6 +272,7 @@ describe("mergeConfig + resolveConfig", () => {
         "diagnosticsDocumentWaitTimeoutMs": 5000,
         "diagnosticsFullWaitTimeoutMs": 10000,
         "diagnosticsRequestTimeoutMs": 3000,
+        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": undefined,
         "initializeTimeoutMs": 45000,
@@ -299,6 +305,7 @@ describe("mergeConfig + resolveConfig", () => {
         "diagnosticsDocumentWaitTimeoutMs": 5000,
         "diagnosticsFullWaitTimeoutMs": 10000,
         "diagnosticsRequestTimeoutMs": 3000,
+        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": undefined,
         "initializeTimeoutMs": 45000,
@@ -339,6 +346,7 @@ describe("mergeConfig + resolveConfig", () => {
         "diagnosticsDocumentWaitTimeoutMs": 5000,
         "diagnosticsFullWaitTimeoutMs": 10000,
         "diagnosticsRequestTimeoutMs": 3000,
+        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": undefined,
         "initializeTimeoutMs": 45000,

@@ -27,12 +27,13 @@ description: Use when 编写、检查或排查 LSP 语言服务器配置 —— 
 
 ```
 version / servers / enabled / disabled / watch / maxOpenDocuments /
-diagnosticsDebounceMs / diagnosticsDocumentWaitTimeoutMs /
+diagnosticsDebounceMs / diagnosticsDocumentWaitTimeoutMs / diagnosticsSilentWaitTimeoutMs /
 diagnosticsFullWaitTimeoutMs / diagnosticsRequestTimeoutMs / initializeTimeoutMs
 ```
 
 - `enabled`：只启用列出的服务器 id（缺省 = 全部启用）；`disabled`：从启用集中排除
-- 时长字段：毫秒数字，或带单位的字符串（`"300ms"` / `"5s"` / `"1m"` / `"2h"`，空单位按 ms）；默认值见 `clientDefaults`（client.ts）：debounce 150ms、document 等待 5s、full 等待 10s、pull 请求 3s、initialize 45s、`maxOpenDocuments` 32
+- 时长字段：毫秒数字，或带单位的字符串（`"300ms"` / `"5s"` / `"1m"` / `"2h"`，空单位按 ms）；默认值见 `clientDefaults`（client.ts）：debounce 150ms、document 等待 5s、安静期 1.5s、full 等待 10s、pull 请求 3s、initialize 45s、`maxOpenDocuments` 32
+- `diagnosticsSilentWaitTimeoutMs`：只用于「该文档上一份诊断为空」的情形——内容变化后最多只等这段安静期，不再等满 `diagnosticsDocumentWaitTimeoutMs`。typescript-language-server 在诊断集合空→空时不重复推送且不实现 pull 诊断，这类文档等满整个窗口也只会得到同样的「无诊断」，白等一次编辑；集合变成非空时服务器必定推送，所以调小它不会漏掉变更引入的错误，调大则更保守（默认 1.5s，约等于实测热态推送延迟的三倍）。设为不小于 `diagnosticsDocumentWaitTimeoutMs` 即等价于不做这个缩短
 - `watch`：`enabled` / `debounceMs`（缺省 300）/ `maxBatch`（缺省 500）/ `ignore`（glob，相对**每个被监听的项目根**的 POSIX 路径）。注意 `flushMs` 只在默认值里、**不可配**
 - 监听范围不是整个 cwd，而是**当前活跃服务器 client 的项目根**：root 在 cwd 内就只监听 root（被其他 root 包含的 root 不重复监听，root 是 cwd 的祖先时退化为 cwd）；没有活跃 client 就不监听。因此容器 cwd（`~/projects` 下多个仓库）里只有活跃服务器所在的项目会被 watch；`ignore` 的匹配基准也随之是各自的项目根。资源耗尽（ENOSPC）时该 root 的监听器会停止并提示一次，调大 `fs.inotify.max_user_watches` 后跑 `/lsp-reload` 重试
 

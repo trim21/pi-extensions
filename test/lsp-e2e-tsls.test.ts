@@ -134,7 +134,7 @@ async function setupProject() {
   return { directory };
 }
 
-describe("cc Edit/Write + real typescript-language-server LSP", () => {
+describe.concurrent("cc Edit/Write + real typescript-language-server LSP", () => {
   it.runIf(hasTls)(
     "外部修正被依赖文件后，Edit 上层文件的诊断反映新磁盘状态",
     async () => {
