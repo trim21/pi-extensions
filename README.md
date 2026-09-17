@@ -11,6 +11,8 @@
 | [bwrap](#bwrap)                 | 基于 bubblewrap 的 OS 级沙箱，提供文件系统和网络隔离    |
 | [写保护（内置）](#写保护内置)   | 写工具内置：限制文件写入在 workspace 内，外部写入需审批 |
 | [opencode-edit](#opencode-edit) | 替换内置 edit 工具，使用 opencode 的 schema 和匹配引擎  |
+| [opencode-grep](#opencode-grep) | opencode 风格 grep，基于 ripgrep 的内容搜索             |
+| [opencode-glob](#opencode-glob) | opencode 风格 glob，基于 ripgrep 的文件名匹配           |
 | [vision-agent](#vision-agent)   | 视觉代理：主模型不支持视觉时，spawn 子 agent 识别图片   |
 | [session-name](#session-name)   | 首个 user prompt 自动生成会话名，失败仅告警不命名       |
 | [todowrite](#todowrite)         | opencode 风格的任务列表工具，完整列表替换语义           |
@@ -19,7 +21,7 @@
 | [openai-cost](#openai-cost)     | OpenAI Chat Completions，费用取自响应 `usage.cost`      |
 
 > **两套工具风格，按预期只启用其中一套**：本包同时提供 opencode 风格
-> （小写 `read`/`edit`/`write`/`bash`/`todowrite`/`question`）与 Claude Code
+> （小写 `read`/`edit`/`write`/`grep`/`glob`/`bash`/`todowrite`/`question`）与 Claude Code
 > 风格（大写 `Read`/`Edit`/`Write`/`Bash`/`Grep`/`Glob`/`TodoWrite`/
 > `AskUserQuestion`）两套工具集，二者共享 bwrap 沙箱与写保护实现。两套同时
 > 启用会带来预期外的冗余：同名命令重复注册（如 `/bwrap` 出现 `/bwrap:1`
@@ -143,6 +145,32 @@ edit 要求目标文件已被 `read` 读过且内容未变（内容指纹比对�
 ```bash
 pi -e ./src/opencode-edit.ts
 ```
+
+---
+
+## opencode-grep
+
+opencode 风格的 `grep` 工具，替换 pi 内置 `grep`。参数与输出格式对齐 opencode 的 [`grep`](https://github.com/anomalyco/opencode) 工具：`pattern` / `path` / `include`，输出以 `Found N matches` 开头，按文件分组（`<绝对路径>:` + `  Line N: <文本>`）。隐藏文件参与搜索、`.git` 排除、结果上限 100 条（触顶时提示 `(more matches available)` 并附截断说明）。
+
+执行层在 `src/opencode/ripgrep.ts`：`rg` 子进程流式读取 stdout，读满 100 条即终止进程，宽泛 pattern 不会把整个结果集读进内存；退出码语义与上游一致（1 = 无匹配，2 = 部分文件读失败仍返回已有结果，正则语法错误单独报错）。
+
+与上游的三处有意差异：行文本去掉 rg JSON 带出的行尾换行（否则每条匹配后面会多一个空行）；`path` 指向文件时只搜该文件（上游按目录搜索）；`path` 不存在时报错（含同目录相近名字提示），而不是静默返回 `No files found`。
+
+### 使用
+
+随 `src/opencode/index.ts` 一起加载。
+
+---
+
+## opencode-glob
+
+opencode 风格的 `glob` 工具（与 pi 内置 `find` 并存）。参数 `pattern` / `path`，内部是 `rg --files` 语义：尊重 `.gitignore`、不列隐藏文件、不按修改时间排序、排除 `.git`，输出绝对路径，上限 100 条（截断时附 `(Results are truncated: ...)`）。与 Claude Code 风格 `Glob` 的差异（`--no-ignore` / `--hidden` / `--sort=modified`）是各自跟随上游的结果。
+
+`path` 不存在或指向文件时报错（含同目录相近名字提示）。
+
+### 使用
+
+随 `src/opencode/index.ts` 一起加载。
 
 ---
 

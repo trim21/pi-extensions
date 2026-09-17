@@ -329,7 +329,8 @@ function truncationFromPage(page: LinePage): TruncationResult {
   };
 }
 
-async function didYouMean(filePath: string): Promise<string> {
+/** 同目录下名字相近的候选（供 read / edit / grep 的路径错误提示复用）。 */
+export async function didYouMean(filePath: string): Promise<string> {
   const dir = dirname(filePath);
   const base = basename(filePath);
 
