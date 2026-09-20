@@ -251,7 +251,7 @@ opencode 风格的任务列表工具，参数与语义和 opencode 的 [`todowri
   - `status`：`pending` | `in_progress` | `completed` | `cancelled`
   - `priority`：`high` | `medium` | `low`
 - **持久化**：列表存进工具结果 `details.todos`，跟随会话分支自动恢复
-- **渲染**：每次调用用完整 markdown 列表输出对应的任务（pendant 面板自动展开）
+- **渲染**：每次调用用完整 markdown 列表输出对应的任务
 
 与 pi 内置 `todo` 工具（`create`/`update`/`list`/… 单条动作）不同，本工具没有单条增删改动作，模型必须每次都传完整列表。
 

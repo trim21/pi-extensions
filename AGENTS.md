@@ -47,6 +47,6 @@ test/             # Vitest 测试，文件与 src 对应
 
 ## pi 扩展约定
 
-- 工具 `execute` 返回的 `details.pendant` 是本仓库 UI 约定（非 pi 官方 schema），可折叠 markdown 面板，类型定义在 `src/lib/pendant.ts`，统一从 `./lib/pendant.js` 导入，禁止内联字面量。`expanded: true` 用于需立即看到的结果，`false` 用于常驻信息。
+- 工具 `execute` 返回的 `details.pendant` 是本仓库 UI 约定（非 pi 官方 schema），可折叠 markdown 面板，类型定义在 `src/lib/pendant.ts`，统一从 `./lib/pendant.js` 导入，禁止内联字面量。
 - 修改扩展后需重启 pi agent 才能生效。
 - 开发 pi 扩展遇到 API / SDK 问题，参考 pi 主仓库 `/srv/ssd-1/projects/github/earendil-works/pi`（`AGENTS.md`、`packages/coding-agent/src/`、`extensions/`）。
