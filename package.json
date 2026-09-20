@@ -6,6 +6,7 @@
   "keywords": [
     "pi-package"
   ],
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/trim21/pi-extensions"
