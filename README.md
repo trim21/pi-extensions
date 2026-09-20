@@ -429,6 +429,7 @@ read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级�
 - `startupTimeoutMs` / `diagnosticsWaitMs`：per-server 超时，覆盖全局配置与默认值
 - `env`：追加到 LSP 子进程的环境变量（在 `process.env` 之上合并）。string 值支持 `{root}` / `{cwd}` 模板与 `${VAR}` 环境变量引用；`{ "sh": [...] }` 在服务器启动时执行命令（argv 直接执行、不经 shell，需要 shell 特性时自行包 `["bash", "-c", "..."]`），stdout trim 后作为值，命令失败（非零退出或输出为空）时该服务器启动失败并报错
 - `initializationOptions` 与 `settings` 按 LSP 语义分离：前者进 initialize 请求，后者进 didChangeConfiguration / workspace/configuration 请求；`initializationOptions` 的字符串值（含嵌套对象/数组）在启动时做 `${VAR}` 插值，`${VAR:-default}` 在变量未定义或为空时用 default，未定义且无 default 替换为空字符串；插值时可引用 `env` 里配置的变量
+- `initializationOptionsCommand`：启动时执行命令计算 `initializationOptions`（argv 直接执行、不经 shell，需要 shell 特性时自行包 `["bash", "-c", "..."]`；参数项支持 `{root}` / `{cwd}` 模板与 `${VAR}` 插值；cwd 为该服务器的项目根，环境含上面 `env` 解析出的变量）。stdout 必须是 JSON 对象，与静态 `initializationOptions` 深合并（命令输出优先，嵌套对象逐层递归）；非零退出、输出为空或不是 JSON 对象时该服务器启动失败并报错
 
 `env` 的 `{sh}` 命令与 `initializationOptions` 插值可以组合使用，例如用 `gh auth token` 给服务器的 initialize 请求提供 session token：
 
@@ -452,6 +453,22 @@ read/edit/write 工具内置 LSP 诊断（写文件后等待并报告 ERROR 级�
 ```
 
 命令失败（`gh` 未登录 / 不在 PATH）时该服务器启动失败并报错。
+
+启动时才能算出的值（例如项目把 `typescript` alias 成 `@typescript/typescript6` 时，要去 pnpm store 里找真实的 `tsserver.js`）用 `initializationOptionsCommand`，避免把绝对路径写死在配置里：
+
+```jsonc
+{
+  "servers": {
+    "typescript": {
+      "bin": "typescript-language-server",
+      "args": ["--stdio"],
+      "initializationOptions": { "tsserver": { "logVerbosity": "verbose" } },
+      // 脚本 stdout 的 JSON 对象与上面的静态值深合并（命令优先）
+      "initializationOptionsCommand": ["node", "{root}/.pi/lsp/ts-options.mjs"],
+    },
+  },
+}
+```
 
 没有内置默认服务器：`servers` 的 key 就是服务器 id，全部来自你的配置，未定义 `servers` 时不启动任何语言服务器。executable 的发现逻辑（如 tsserver 路径、venv 里的 python）不内置，需要时用 `bin` / `args` / `settings` 自行表达。
 

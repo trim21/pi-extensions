@@ -93,6 +93,15 @@ describe("serverConfigSchema", () => {
     expect(() => parse({ bin: "x", rootMarkers: [""] })).toThrow();
     expect(() => parse({ bin: "x", rootMarkers: "pyproject.toml" })).toThrow();
   });
+
+  it("initializationOptionsCommand 解析为字符串数组，非数组与空数组被拒绝", () => {
+    expect(
+      parse({ bin: "x", initializationOptionsCommand: ["node", "opts.mjs"] })
+        .initializationOptionsCommand,
+    ).toEqual(["node", "opts.mjs"]);
+    expect(() => parse({ bin: "x", initializationOptionsCommand: "node" })).toThrow();
+    expect(() => parse({ bin: "x", initializationOptionsCommand: [] })).toThrow();
+  });
 });
 
 describe("ConfigAdapter.kind", () => {
@@ -436,6 +445,134 @@ describe("ConfigAdapter.spawn", () => {
         }),
       );
       await expect(empty.spawn(dir, dir)).rejects.toThrow(/produced empty output/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("initializationOptionsCommand 的输出（JSON 对象）作为 initializationOptions", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    try {
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          initializationOptionsCommand: [
+            process.execPath,
+            "-e",
+            'console.log(JSON.stringify({tsserver:{path:"/real/tsserver.js"},disableAutomaticTypingAcquisition:true}))',
+          ],
+        }),
+      );
+      const handle = await adapter.spawn(dir, dir);
+      expect(handle?.initialization).toEqual({
+        tsserver: { path: "/real/tsserver.js" },
+        disableAutomaticTypingAcquisition: true,
+      });
+      handle?.process.kill();
+      await new Promise((resolve) => handle!.process.once("exit", resolve));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("initializationOptionsCommand 输出与静态 initializationOptions 深合并，命令优先", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    try {
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          initializationOptions: {
+            tsserver: { logVerbosity: "verbose", path: "/static/tsserver.js" },
+            nested: { keep: 1 },
+            flat: "static",
+          },
+          initializationOptionsCommand: [
+            process.execPath,
+            "-e",
+            'console.log(JSON.stringify({tsserver:{path:"/dynamic/tsserver.js"},nested:{added:2},flat:"dynamic",extra:true}))',
+          ],
+        }),
+      );
+      const handle = await adapter.spawn(dir, dir);
+      expect(handle?.initialization).toEqual({
+        tsserver: { logVerbosity: "verbose", path: "/dynamic/tsserver.js" },
+        nested: { keep: 1, added: 2 },
+        flat: "dynamic",
+        extra: true,
+      });
+      handle?.process.kill();
+      await new Promise((resolve) => handle!.process.once("exit", resolve));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("initializationOptionsCommand 在服务器 root 下运行，argv 支持 {root} / {cwd} 模板，环境含 env 解析结果", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const root = join(dir, "project");
+    await mkdir(root);
+    try {
+      await writeFile(
+        join(root, "opts.mjs"),
+        "console.log(JSON.stringify({cwd: process.cwd(), argCwd: process.argv[2], root: process.env.MOCK_OPTIONS_ROOT, token: process.env.MOCK_OPTIONS_TOKEN}))",
+      );
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          env: {
+            MOCK_OPTIONS_ROOT: "{root}",
+            MOCK_OPTIONS_TOKEN: { sh: [process.execPath, "-e", 'console.log("secret")'] },
+          },
+          initializationOptionsCommand: [process.execPath, "{root}/opts.mjs", "{cwd}"],
+        }),
+      );
+      const handle = await adapter.spawn(root, dir);
+      expect(handle?.initialization).toEqual({
+        cwd: root,
+        argCwd: dir,
+        root,
+        token: "secret",
+      });
+      handle?.process.kill();
+      await new Promise((resolve) => handle!.process.once("exit", resolve));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("initializationOptionsCommand 失败（非零退出 / 空输出 / 非 JSON / 非对象）时 spawn 抛错", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const spawnWith = (script: string) =>
+      new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          initializationOptionsCommand: [process.execPath, "-e", script],
+        }),
+      ).spawn(dir, dir);
+    try {
+      await expect(spawnWith("console.error('boom');process.exit(3)")).rejects.toThrow(
+        /initializationOptions command failed .*exit code 3: boom/,
+      );
+      await expect(spawnWith("process.exit(0)")).rejects.toThrow(
+        /initializationOptions command .*produced empty output/,
+      );
+      await expect(spawnWith("console.log('not json')")).rejects.toThrow(
+        /initializationOptions command .*produced invalid JSON/,
+      );
+      await expect(spawnWith("console.log('[1,2]')")).rejects.toThrow(
+        /must print a JSON object, got array/,
+      );
+      await expect(spawnWith("console.log('null')")).rejects.toThrow(
+        /must print a JSON object, got null/,
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

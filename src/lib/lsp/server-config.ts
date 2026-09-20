@@ -23,6 +23,7 @@ import { promisify } from "node:util";
 
 import { minimatch } from "minimatch";
 import { type Static, Type } from "typebox";
+import { Value } from "typebox/value";
 
 import { type LspServerAdapter, type LspServerHandle, type ServerKind } from "./adapter.js";
 import { exists, findBinaryInWorkspace, which } from "./bin.js";
@@ -67,6 +68,13 @@ export const serverConfigSchema = Type.Object({
   diagnosticsWaitMs: Type.Optional(Type.Number({ minimum: 1 })),
   /** initialize 请求的 initializationOptions；字符串值支持 ${VAR} / ${VAR:-default} 插值。 */
   initializationOptions: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  /**
+   * 启动时执行命令计算 initializationOptions（argv 直接执行、不经 shell，每项支持
+   * {root} / {cwd} 模板与 ${VAR} / ${VAR:-default} 插值）。stdout 必须是 JSON 对象，
+   * 与静态 initializationOptions 深合并（命令输出优先）；失败（spawn 错误 / 非零退出 /
+   * 空输出 / 非 JSON 对象）时服务器启动失败并报错。
+   */
+  initializationOptionsCommand: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
   /** didChangeConfiguration / workspace/configuration 请求的 settings。 */
   settings: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 });
@@ -132,7 +140,7 @@ async function resolveEnv(
       if (typeof value === "string") {
         return [key, interpolateEnvVars(resolveTemplate(value, root, cwd), process.env)];
       }
-      return [key, await runEnvCommand(value.sh, cwd)];
+      return [key, await runConfigCommand(value.sh, { cwd, label: "env command" })];
     }),
   );
   return Object.fromEntries(resolved);
@@ -140,29 +148,116 @@ async function resolveEnv(
 
 const execFile = promisify(nodeExecFile);
 
+interface ConfigCommandOptions {
+  cwd: string;
+  /** 子进程环境；缺省继承 process.env。 */
+  env?: NodeJS.ProcessEnv;
+  /** 报错文案里的命令用途，如 "env command"。 */
+  label: string;
+}
+
 /**
  * argv 直接执行（不经 shell，避免注入面；需要 shell 特性时配置里自行包
- * ["bash", "-c", "..."]），stdout trim 后作为 env 值。
+ * ["bash", "-c", "..."]），stdout trim 后返回。
  * 失败（spawn 错误 / 非零退出 / 空输出）时抛错，由 lsp.ts 捕获后 notify 给用户。
  */
-async function runEnvCommand(argv: string[], cwd: string): Promise<string> {
+async function runConfigCommand(argv: string[], options: ConfigCommandOptions): Promise<string> {
+  const { cwd, env, label } = options;
   let stdout: string;
   try {
-    ({ stdout } = await execFile(argv[0], argv.slice(1), { cwd }));
+    ({ stdout } = await execFile(argv[0], argv.slice(1), { cwd, env }));
   } catch (error) {
     const err = error as NodeJS.ErrnoException & { stderr?: string };
     const reason = typeof err.code === "number" ? `exit code ${err.code}` : err.message;
     const stderr = err.stderr?.trim();
     throw new Error(
-      `env command failed (${argv.join(" ")}): ${reason}${stderr ? `: ${stderr}` : ""}`,
+      `${label} failed (${argv.join(" ")}): ${reason}${stderr ? `: ${stderr}` : ""}`,
       { cause: error },
     );
   }
   const output = stdout.trim();
   if (!output) {
-    throw new Error(`env command (${argv.join(" ")}) produced empty output`);
+    throw new Error(`${label} (${argv.join(" ")}) produced empty output`);
   }
   return output;
+}
+
+/** 命令 stdout 即 initializationOptions：JSON 对象，经 typebox 校验后作为配置值。 */
+const initializationOptionsOutputSchema = Type.Record(Type.String(), Type.Unknown());
+
+/** 纯对象判定（数组与 null 不算），用于深合并与命令输出校验。 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 深合并 initializationOptions：两侧都是纯对象时逐层递归，其余类型整体覆盖（override 优先）。 */
+function mergeInitializationOptions(
+  base: Record<string, unknown> | undefined,
+  override: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    const current = merged[key];
+    merged[key] =
+      isRecord(current) && isRecord(value) ? mergeInitializationOptions(current, value) : value;
+  }
+  return merged;
+}
+
+/** 命令输出 → initializationOptions；JSON 语法错误与非对象输出都带上具体命令，便于定位是哪个脚本挂了。 */
+function parseInitializationOptionsOutput(
+  output: string,
+  argv: readonly string[],
+): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch (error) {
+    throw new Error(
+      `initializationOptions command (${argv.join(" ")}) produced invalid JSON: ${(error as Error).message}`,
+      { cause: error },
+    );
+  }
+  try {
+    return Value.Parse(initializationOptionsOutputSchema, parsed);
+  } catch (error) {
+    throw new Error(
+      `initializationOptions command (${argv.join(" ")}) must print a JSON object, got ${describeValue(parsed)}`,
+      { cause: error },
+    );
+  }
+}
+
+/** 非法输出的类型描述（typebox 的 ParseError 只有 "Parse"，自己给出可读文案）。 */
+function describeValue(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+/**
+ * 解析 initializationOptions：静态值按环境变量深插值；配置了 initializationOptionsCommand
+ * 时执行该命令（cwd 为服务器 root，环境含已解析的 per-server env），stdout 的 JSON 对象
+ * 与静态值深合并（命令优先）。
+ */
+async function resolveInitializationOptions(
+  config: ServerConfig,
+  root: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv | undefined,
+): Promise<Record<string, unknown> | undefined> {
+  const variables = { ...process.env, ...env };
+  const staticOptions = interpolateEnvDeep(config.initializationOptions, variables) as
+    Record<string, unknown> | undefined;
+  const command = config.initializationOptionsCommand;
+  if (!command) return staticOptions;
+  const argv = command.map((arg) => interpolateEnvVars(resolveTemplate(arg, root, cwd), variables));
+  const output = await runConfigCommand(argv, {
+    cwd: root,
+    env: variables,
+    label: "initializationOptions command",
+  });
+  return mergeInitializationOptions(staticOptions, parseInitializationOptionsOutput(output, argv));
 }
 
 /** 解析可执行文件：绝对/相对路径直接用；名字走项目工作区（node_modules/.bin 等）→ PATH。 */
@@ -232,15 +327,13 @@ export class ConfigAdapter implements LspServerAdapter {
     const resolved = await resolveBinary(bin, root, cwd);
     if (!resolved) return undefined;
     const env = await resolveEnv(this.config.env, root, cwd);
+    const initialization = await resolveInitializationOptions(this.config, root, cwd, env);
     return {
       process: spawnProcess(resolved, this.config.args ?? [], {
         cwd: root,
         env,
       }),
-      initialization: interpolateEnvDeep(this.config.initializationOptions, {
-        ...process.env,
-        ...env,
-      }) as Record<string, unknown> | undefined,
+      initialization,
       settings: this.config.settings,
       languageIds: this.config.languageIdByExtension,
     };

@@ -46,7 +46,7 @@ LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，
 
 ### Requirement: 服务器启动
 
-服务器 SHALL 按配置启动，包含匹配规则、项目根定位与可执行文件发现。
+服务器 SHALL 按配置启动，包含匹配规则、项目根定位、可执行文件发现与初始化参数生成。
 
 #### Scenario: 按 include glob 启用
 
@@ -76,6 +76,15 @@ LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，
 
 - **WHEN** 配置了 `bin`
 - **THEN** 按绝对路径 / 相对调用 cwd / 名字（先在项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin` 找，再走 PATH）解析
+
+#### Scenario: 初始化参数由命令生成
+
+- **WHEN** 配置了 `initializationOptionsCommand`
+- **THEN** 启动前执行该命令：argv 直接执行（不经 shell），参数项支持 `{root}` / `{cwd}` 模板与 `${VAR}` 插值，cwd 为该服务器的项目根，环境为 process env 叠加已解析的 `env`
+- **WHEN** 命令成功退出且 stdout 是 JSON 对象
+- **THEN** 该对象与静态 `initializationOptions` 深合并（命令输出优先，嵌套对象逐层递归）作为 initialize 请求的 `initializationOptions`
+- **WHEN** 命令非零退出、输出为空、或 stdout 不是 JSON 对象
+- **THEN** 该服务器启动失败并报错（错误信息含具体命令、退出码与 stderr），SHALL NOT 启动进程
 
 ### Requirement: 工作区文件事件同步
 
@@ -262,7 +271,7 @@ LSP 配置 SHALL 在 `session_start` 时加载并校验（pi await 该事件）�
 实现位于 `src/lib/lsp/`：read / edit / write 工具读取或写入文件后经 LSP 客户端请求诊断并报告 ERROR / WARN 诊断。
 
 - **配置解析**（`server-config.ts`）：`~/.pi/agent/lsp.json`（全局）与 `.pi/lsp.json`（项目）合并——顶层字段本地覆盖全局，`servers` 按 id 合并（同名整体覆盖、新 id 新增、全局其余保留）；无内置默认服务器，服务器全部来自配置，禁用某服务器用顶层 `disabled: [id]`。
-- **服务器启动**（`adapter.ts` / `server-config.ts`）：按 `include` glob 匹配启用（`!` 否定排除）；root 由 `serverRoot` 解析——配置 `rootMarkers` 时从调用 cwd 沿文件路径向下找第一个含标记的目录（cwd 自身命中即 cwd，未命中回退 cwd），否则即 `workingDir`（相对调用 cwd 解析）或调用 cwd；两者互斥，同时配置在 `resolveConfig` 报错。同一服务器可为不同 root 各启动一个实例。`bin` 按绝对路径 / 相对调用 cwd / 名字（先项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin`，再 PATH）解析，`env` 的 `{root}` / `{cwd}` 模板按该文件的 root 生效。
+- **服务器启动**（`adapter.ts` / `server-config.ts`）：按 `include` glob 匹配启用（`!` 否定排除）；root 由 `serverRoot` 解析——配置 `rootMarkers` 时从调用 cwd 沿文件路径向下找第一个含标记的目录（cwd 自身命中即 cwd，未命中回退 cwd），否则即 `workingDir`（相对调用 cwd 解析）或调用 cwd；两者互斥，同时配置在 `resolveConfig` 报错。同一服务器可为不同 root 各启动一个实例。`bin` 按绝对路径 / 相对调用 cwd / 名字（先项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin`，再 PATH）解析，`env` 的 `{root}` / `{cwd}` 模板按该文件的 root 生效。`env` 的 `{sh}`（cwd 为调用 cwd）与 `initializationOptionsCommand`（cwd 为该项目根、环境含已解析的 `env`）都在 spawn 前执行，后者 stdout 的 JSON 对象与静态 `initializationOptions` 深合并（命令输出优先）。
 - **协议**：`initializationOptions` 进 initialize 请求，`settings` 进 didChangeConfiguration / workspace/configuration；languageId 按扩展名映射（缺省内置映射表）。
 - **超时**：per-server `startupTimeoutMs` / `diagnosticsWaitMs` 覆盖全局与默认值。
 - **文件监听**（`watcher.ts` / `lsp.ts`）：`@parcel/watcher` 递归监听**活跃 client 的项目根**（root 去重、不越 cwd，无活跃 client 不监听；内核层 ignore 使被忽略目录不建 watch），尾部去抖 + 最长 flush 批量回调；事件按各 client 的 root 前缀 / 注册 pattern / 扩展名过滤后以 `workspace/didChangeWatchedFiles` 投递（created=1 / changed=2 / deleted=3）；监听器失败降级提示（ENOSPC 等资源耗尽时停用该 root 直到 `/lsp-reload`），不影响诊断链路。

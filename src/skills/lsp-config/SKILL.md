@@ -1,6 +1,6 @@
 ---
 name: lsp-config
-description: Use when 编写、检查或排查 LSP 语言服务器配置 —— 项目本地 .pi/lsp.json 或全局 ~/.pi/agent/lsp.json：配置 typescript-language-server / pyright / ruff / gopls / clangd 等服务器的 bin、include、rootMarkers、workingDir、initializationOptions、tsserver.path、watch 与诊断超时；或排查服务器起不来（binary not found / provides no tsserver.js）、typescript alias 依赖下 tsserver 找不到、诊断一直为空、monorepo 子项目 root 不对等问题。
+description: Use when 编写、检查或排查 LSP 语言服务器配置 —— 项目本地 .pi/lsp.json 或全局 ~/.pi/agent/lsp.json：配置 typescript-language-server / pyright / ruff / gopls / clangd 等服务器的 bin、include、rootMarkers、workingDir、initializationOptions、initializationOptionsCommand、tsserver.path、watch 与诊断超时；或排查服务器起不来（binary not found / provides no tsserver.js）、typescript alias 依赖下 tsserver 找不到、诊断一直为空、monorepo 子项目 root 不对等问题。
 ---
 
 # 配置 LSP 服务器（.pi/lsp.json）
@@ -39,19 +39,20 @@ diagnosticsFullWaitTimeoutMs / diagnosticsRequestTimeoutMs / initializeTimeoutMs
 
 ## servers.<id> 字段
 
-| 字段                                     | 说明                                                                                                                                                                                                                                  |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `include`                                | 文件 glob（相对项目根或调用 cwd，任一命中即可）；缺省匹配所有文件                                                                                                                                                                     |
-| `kind`                                   | `language`（缺省）或 `linter`。rename / inspect 等符号级功能**只面向 `language`**；linter 只参与诊断                                                                                                                                  |
-| `rootMarkers`                            | 项目根标记文件名数组（精确匹配，目录名亦可，如 `pyproject.toml` / `go.mod` / `.git`）：从调用 cwd 沿文件路径向下查找，第一个含标记的目录即 LSP root（cwd 自身命中即 cwd），未命中回退 cwd。**与 `workingDir` 互斥**（同现报配置错误） |
-| `workingDir`                             | 服务器工作目录（即 LSP root）：绝对路径或相对调用 cwd 的路径；缺省即调用 cwd。文件必须位于该目录内才会由本服务器处理；spawn 工作目录与 rootUri 均用它。**与 `rootMarkers` 互斥**                                                      |
-| `bin`                                    | 可执行文件：绝对路径、相对调用 cwd 的路径、或仅名字（项目工作区优先，PATH 兜底）                                                                                                                                                      |
-| `args`                                   | 启动参数数组                                                                                                                                                                                                                          |
-| `env`                                    | 追加的环境变量：string 值支持 `{root}`/`{cwd}` 与 `${VAR}` 插值；`{ "sh": ["cmd","arg"] }` 启动时执行命令取 stdout（非零退出/空输出 → 启动失败并报错）                                                                                |
-| `languageIdByExtension`                  | 扩展名（含点）→ languageId；缺省回退内置映射（见 `src/lib/lsp/language.ts`，覆盖主流语言）                                                                                                                                            |
-| `startupTimeoutMs` / `diagnosticsWaitMs` | 覆盖该服务器的初始化握手 / 写文件后诊断等待（缺省用全局配置与 client 默认）                                                                                                                                                           |
-| `initializationOptions`                  | 透传给 initialize 请求；字符串值支持 `${VAR}` / `${VAR:-default}`（读 process env，**不支持 `{root}`/`{cwd}` 模板**）                                                                                                                 |
-| `settings`                               | `workspace/didChangeConfiguration` 与 `workspace/configuration` 请求的负载；缺省回退 `initializationOptions`                                                                                                                          |
+| 字段                                     | 说明                                                                                                                                                                                                                                                                                                                                     |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `include`                                | 文件 glob（相对项目根或调用 cwd，任一命中即可）；缺省匹配所有文件                                                                                                                                                                                                                                                                        |
+| `kind`                                   | `language`（缺省）或 `linter`。rename / inspect 等符号级功能**只面向 `language`**；linter 只参与诊断                                                                                                                                                                                                                                     |
+| `rootMarkers`                            | 项目根标记文件名数组（精确匹配，目录名亦可，如 `pyproject.toml` / `go.mod` / `.git`）：从调用 cwd 沿文件路径向下查找，第一个含标记的目录即 LSP root（cwd 自身命中即 cwd），未命中回退 cwd。**与 `workingDir` 互斥**（同现报配置错误）                                                                                                    |
+| `workingDir`                             | 服务器工作目录（即 LSP root）：绝对路径或相对调用 cwd 的路径；缺省即调用 cwd。文件必须位于该目录内才会由本服务器处理；spawn 工作目录与 rootUri 均用它。**与 `rootMarkers` 互斥**                                                                                                                                                         |
+| `bin`                                    | 可执行文件：绝对路径、相对调用 cwd 的路径、或仅名字（项目工作区优先，PATH 兜底）                                                                                                                                                                                                                                                         |
+| `args`                                   | 启动参数数组                                                                                                                                                                                                                                                                                                                             |
+| `env`                                    | 追加的环境变量：string 值支持 `{root}`/`{cwd}` 与 `${VAR}` 插值；`{ "sh": ["cmd","arg"] }` 启动时执行命令取 stdout（非零退出/空输出 → 启动失败并报错）                                                                                                                                                                                   |
+| `languageIdByExtension`                  | 扩展名（含点）→ languageId；缺省回退内置映射（见 `src/lib/lsp/language.ts`，覆盖主流语言）                                                                                                                                                                                                                                               |
+| `startupTimeoutMs` / `diagnosticsWaitMs` | 覆盖该服务器的初始化握手 / 写文件后诊断等待（缺省用全局配置与 client 默认）                                                                                                                                                                                                                                                              |
+| `initializationOptions`                  | 透传给 initialize 请求；字符串值支持 `${VAR}` / `${VAR:-default}`（读 process env，**不支持 `{root}`/`{cwd}` 模板**）                                                                                                                                                                                                                    |
+| `initializationOptionsCommand`           | 启动时执行命令计算 `initializationOptions`（argv 直接执行、不经 shell，每项支持 `{root}`/`{cwd}` 模板与 `${VAR}` 插值）：命令以服务器 root 为 cwd、环境含解析后的 `env`（可读 `env` 的 `{sh}` 结果）；stdout 必须是 JSON 对象，与静态 `initializationOptions` **深合并（命令优先）**，失败（非零退出 / 空输出 / 非 JSON 对象）即启动失败 |
+| `settings`                               | `workspace/didChangeConfiguration` 与 `workspace/configuration` 请求的负载；缺省回退 `initializationOptions`                                                                                                                                                                                                                             |
 
 ## 子目录项目：rootMarkers
 
@@ -164,7 +165,7 @@ typescript-language-server **不内置 TypeScript**（零依赖）。启动时�
 
 **alias 依赖坑**：当项目把 typescript 写成 `npm:@typescript/typescript6`（alias stub）时，`node_modules/typescript/lib/` 下只有转发 stub（`typescript.js`/`tsserverlibrary.js`/`tsc.js`），**没有 `tsserver.js`** → workspace 探测失效；实体 tsserver 在 pnpm 虚拟 store：`node_modules/.pnpm/typescript@<真实版本>/node_modules/typescript/lib/tsserver.js`（目录名无 peer 后缀、相对稳定；**升级 typescript 版本后要同步更新路径**）。依赖为标准 `typescript` 包时 `node_modules/typescript` 直接是完整包，workspace 探测即命中、无需配 path。
 
-配 `initializationOptions.tsserver.path` 时，因为 servers 按 id 整条覆盖，本地 `.pi/lsp.json` 要写完整条目，示例：
+这种项目里把路径写死会随 typescript 升级失效，用 `initializationOptionsCommand` 让脚本现算更稳。因为 servers 按 id 整条覆盖，本地 `.pi/lsp.json` 要写完整条目：
 
 ```json
 {
@@ -179,13 +180,59 @@ typescript-language-server **不内置 TypeScript**（零依赖）。启动时�
         ".js": "javascript",
         ".jsx": "javascriptreact"
       },
-      "initializationOptions": {
-        "tsserver": {
-          "path": "/path/to/node_modules/.pnpm/typescript@6.0.3/node_modules/typescript/lib/tsserver.js"
-        }
-      }
+      "initializationOptionsCommand": ["node", "{root}/.pi/lsp/ts-options.mjs"]
     }
   }
+}
+```
+
+```js
+// .pi/lsp/ts-options.mjs：项目能解析到 typescript/lib/tsserver.js（标准依赖 / hoisted）时输出 {}，
+// 让服务器按 workspace 解析、版本随项目走；只有 alias shim（解析不到）才去 pnpm store 里找真实 tsserver。
+import { existsSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join } from "node:path";
+
+const requireFromProject = createRequire(join(process.cwd(), "package.json"));
+
+// workspace 里可用的 tsserver：解析得到就不干预（hoisted 的依赖也能解析到）
+function workspaceHasTsserver() {
+  try {
+    requireFromProject.resolve("typescript/lib/tsserver.js");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// store 里带 tsserver.js 的最高版本：typescript@7 是 native 包、没有 tsserver.js，会被筛掉
+function storeTsserver() {
+  const store = join(process.cwd(), "node_modules/.pnpm");
+  let entries;
+  try {
+    entries = readdirSync(store);
+  } catch {
+    return undefined;
+  }
+  return entries
+    .map((name) => /^typescript@(\d[^/]*)$/.exec(name)?.[1])
+    .filter(Boolean)
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+    .map((version) =>
+      join(store, `typescript@${version}`, "node_modules/typescript/lib/tsserver.js"),
+    )
+    .find((path) => existsSync(path));
+}
+
+const path = workspaceHasTsserver() ? undefined : storeTsserver();
+console.log(JSON.stringify(path ? { tsserver: { path } } : {}));
+```
+
+只在某台机器上临时用、路径不常变时，也可以直接写静态值（同样要整条覆盖）：
+
+```json
+"initializationOptions": {
+  "tsserver": { "path": "/abs/path/node_modules/.pnpm/typescript@6.0.3/node_modules/typescript/lib/tsserver.js" }
 }
 ```
 
@@ -202,9 +249,10 @@ typescript-language-server **不内置 TypeScript**（零依赖）。启动时�
 
 ## 常见排查
 
-| 现象                                                                          | 原因与修法                                                                                                                               |
-| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| notify `failed to start …: binary not found`                                  | `bin` 不在 PATH（测试场景二进制缺失时整组跳过）                                                                                          |
-| `… provides no tsserver.js. No other valid TypeScript installation was found` | workspace 的 `node_modules/typescript` 是 alias stub：配 `initializationOptions.tsserver.path` 指 `.pnpm` 实体，或换标准 typescript 依赖 |
-| 诊断一直为空且无任何报错                                                      | 服务器没匹配到文件（`include`/扩展名）、在 broken 冷却中、或文件在调用 cwd 之外（LSP 只在工作目录内启用）                                |
-| 读取配置直接抛错                                                              | typebox 严格校验拒绝：字段类型不符 / 非法时长格式（未知字段只是 warning，不拒绝）                                                        |
+| 现象                                                                          | 原因与修法                                                                                                                                                                              |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| notify `failed to start …: binary not found`                                  | `bin` 不在 PATH（测试场景二进制缺失时整组跳过）                                                                                                                                         |
+| `… provides no tsserver.js. No other valid TypeScript installation was found` | workspace 的 `node_modules/typescript` 是 alias stub：用 `initializationOptionsCommand` 算 `.pnpm` 里的实体路径、写静态 `initializationOptions.tsserver.path`，或换标准 typescript 依赖 |
+| notify `failed to start …: initializationOptions command …`                   | 脚本非零退出 / 空输出 / stdout 不是 JSON 对象（报错里带具体命令、退出码与 stderr）                                                                                                      |
+| 诊断一直为空且无任何报错                                                      | 服务器没匹配到文件（`include`/扩展名）、在 broken 冷却中、或文件在调用 cwd 之外（LSP 只在工作目录内启用）                                                                               |
+| 读取配置直接抛错                                                              | typebox 严格校验拒绝：字段类型不符 / 非法时长格式（未知字段只是 warning，不拒绝）                                                                                                       |
