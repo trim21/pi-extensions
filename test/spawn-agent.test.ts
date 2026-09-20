@@ -108,6 +108,30 @@ Just read files.
     expect(discoverAgents(join(tmpdir(), "definitely-not-here"))).toEqual([]);
   });
 
+  it("skips a file with invalid YAML without failing discovery", () => {
+    // Real-world case: an unquoted `: ` inside a description value makes the
+    // YAML parser throw. That used to propagate out of discoverAgents and
+    // take down the whole spawn-agent extension at load time.
+    const broken = `---
+name: broken
+description: Critic dispatched in \`Mode: amendment-review\` by brainstorming
+tools:
+  - read
+---
+body`;
+    withTempDir(
+      {
+        "broken.md": broken,
+        "valid.md": "---\nname: v\ndescription: ok\n---\nbody",
+      },
+      (dir) => {
+        const agents = discoverAgents(dir);
+        expect(agents).toHaveLength(1);
+        expect(agents[0].name).toBe("v");
+      },
+    );
+  });
+
   it("parses provider from frontmatter", () => {
     withTempDir({ "p.md": "---\nname: p\ndescription: d\nprovider: openai\n---\nbody" }, (dir) => {
       const [agent] = discoverAgents(dir);

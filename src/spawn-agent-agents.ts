@@ -20,7 +20,10 @@
  *   System prompt for the agent goes here.
  *
  * Frontmatter is validated with a typebox schema; files that fail validation
- * (missing name/description, wrong field types) are skipped. If `tools` is
+ * (missing name/description, wrong field types) are skipped, as are files
+ * whose frontmatter is not even parseable YAML — one broken file must never
+ * fail the whole discovery pass and take down the extension at load time.
+ * If `tools` is
  * omitted, the subagent runs with the read-only default toolset from the
  * spawn-agent config (read/grep/find/ls) unless overridden there.
  *
@@ -107,8 +110,13 @@ export function discoverAgents(dir = join(getAgentDir(), "agents")): AgentConfig
       continue;
     }
 
-    const { frontmatter, body } = parseFrontmatter(content);
-    const fm = parseAgentFrontmatter(frontmatter);
+    let parsed: { frontmatter: unknown; body: string };
+    try {
+      parsed = parseFrontmatter(content);
+    } catch {
+      continue; // invalid YAML → not an agent (same as failed validation below)
+    }
+    const fm = parseAgentFrontmatter(parsed.frontmatter);
     if (!fm) continue; // missing name/description or wrong field types → not an agent
 
     agents.push({
@@ -118,7 +126,7 @@ export function discoverAgents(dir = join(getAgentDir(), "agents")): AgentConfig
       provider: fm.provider,
       model: fm.model,
       thinkingLevel: fm.thinkingLevel,
-      systemPrompt: body,
+      systemPrompt: parsed.body,
       filePath,
     });
   }
