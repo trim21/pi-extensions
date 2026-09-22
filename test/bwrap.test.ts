@@ -1,9 +1,5 @@
 /**
- * Tests for bwrap headless policies:
- * - resolveHeadlessBwrap: sessions without UI force read-only bash regardless
- *   of config (no writable paths, no network, no extra args).
- * - resolveEscalation: request_full_access is denied without UI and requires
- *   the approval dialog when UI is available.
+ * Tests for bwrap core helpers:
  * - buildBwrapArgs: writable "." resolves against the workspace argument, so
  *   a per-command workdir can never move the sandbox write boundary.
  */
@@ -21,9 +17,7 @@ import {
   findMihomo,
   resolveBwrap,
   type ResolvedBwrap,
-  resolveHeadlessBwrap,
 } from "../src/bwrap/core.ts";
-import { resolveEscalation } from "../src/bwrap/runtime.ts";
 
 /** 沙箱显式以调用进程的 uid/gid 运行（net-allowlist 下避免在沙箱内自称 root）。 */
 function identityArgs(): string[] {
@@ -97,55 +91,6 @@ describe("resolveBwrap", () => {
 
     expect(resolved.bwrapEnabled).toBe(true);
     expect(resolved.network).toBe(false);
-  });
-});
-
-describe("resolveHeadlessBwrap", () => {
-  it("forces read-only regardless of the configured mode", () => {
-    const resolved = resolveHeadlessBwrap({
-      mode: "allow-all",
-      writablePaths: [".", "/tmp"],
-      extraWritablePaths: [],
-      denyPaths: [],
-      extraArgs: [],
-      networkAllowlist: [],
-    });
-
-    expect(resolved.mode).toBe("readonly");
-    expect(resolved.bwrapEnabled).toBe(true);
-    expect(resolved.network).toBe(false);
-    expect(resolved.writablePaths).toEqual([]);
-  });
-
-  it("drops configured writable paths, tmpfs mounts and extra args", () => {
-    const resolved = resolveHeadlessBwrap({
-      mode: "workspace-write",
-      writablePaths: [".", "/tmp"],
-      extraWritablePaths: ["~/.cache", "~/go/pkg"],
-      denyPaths: ["/tmp/scratch"],
-      extraArgs: ["--bind", "/x", "/x"],
-      networkAllowlist: [],
-    });
-
-    expect(resolved.mode).toBe("readonly");
-    expect(resolved.writablePaths).toEqual([]);
-    expect(resolved.extraWritablePaths).toEqual([]);
-    expect(resolved.denyPaths).toEqual([]);
-    expect(resolved.extraArgs).toEqual([]);
-  });
-});
-
-describe("resolveEscalation", () => {
-  it("denies escalation in headless sessions without UI", () => {
-    const decision = resolveEscalation({ hasUI: false });
-
-    expect(decision.kind).toBe("deny");
-  });
-
-  it("requires the approval dialog in interactive sessions", () => {
-    const decision = resolveEscalation({ hasUI: true });
-
-    expect(decision.kind).toBe("dialog");
   });
 });
 

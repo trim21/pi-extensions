@@ -1,6 +1,6 @@
 /**
  * 沙箱执行层（src/bwrap/sandbox.ts）测试：
- * - loadSandboxConfig：单文件配置、mode 覆盖、headless 策略、"." 归一化、缺失文件报错
+ * - loadSandboxConfig：单文件配置、mode 覆盖、"." 归一化、缺失文件报错
  * - previewSandboxCommand：打印的 argv/环境 与实际执行语义一致（bind、--unshare-net、nsenter 包裹）
  * - runInSandbox / runSandboxCommand：本地（不经沙箱）与真实 bwrap 两条执行路径
  *
@@ -90,21 +90,6 @@ describe("loadSandboxConfig", () => {
     expect(
       loadSandboxConfig({ workspace: directory, configPath: file, mode: "allow-net" }).mode,
     ).toBe("allow-net");
-  });
-
-  it("headless 策略强制 readonly 且无可写路径", () => {
-    const directory = workspace();
-    const file = config(directory, {
-      mode: "net-allowlist",
-      writablePaths: [".", "/tmp"],
-      networkAllowlist: ["pypi.org"],
-    });
-
-    const strategy = loadSandboxConfig({ workspace: directory, configPath: file, headless: true });
-
-    expect(strategy.mode).toBe("readonly");
-    expect(strategy.writablePaths).toEqual([]);
-    expect(strategy.network).toBe(false);
   });
 
   it("显式配置文件不存在时直接报错，不静默回落到默认值", () => {

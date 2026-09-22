@@ -83,10 +83,6 @@ const command = defineCommand({
       type: "boolean",
       description: "透传 netns holder（unshare/mihomo）与 slirp4netns 日志",
     },
-    headless: {
-      type: "boolean",
-      description: "按无 UI 会话策略执行（强制 readonly）",
-    },
   },
   async run({ args }) {
     const rest: string[] = args._;
@@ -126,7 +122,6 @@ const command = defineCommand({
       workspace,
       ...(configPath && { configPath }),
       ...(mode && { mode }),
-      headless: args.headless === true,
     });
     const preview = strategy.bwrapEnabled
       ? await previewSandboxCommand(strategy, {

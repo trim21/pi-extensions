@@ -28,7 +28,6 @@ import {
   resolveBwrap,
   resolveBwrapPath,
   type ResolvedBwrap,
-  resolveHeadlessBwrap,
 } from "./core.js";
 import type { NetworkStack } from "./network-stack.js";
 
@@ -39,8 +38,6 @@ export interface SandboxConfigInput {
   configPath?: string;
   /** 覆盖配置中的 mode（等价于会话内切 /bwrap 模式）。 */
   mode?: BwrapMode;
-  /** 无 UI 会话策略：无论配置如何都强制 readonly。 */
-  headless?: boolean;
 }
 
 export interface SandboxRunOptions {
@@ -97,9 +94,7 @@ export function loadSandboxConfig(input: SandboxConfigInput): ResolvedBwrap {
   const config: BwrapConfig = loadBwrapConfig(workspace, paths);
   const configured: BwrapConfig =
     input.mode === undefined ? config : { ...config, mode: input.mode };
-  const resolved =
-    input.headless === true ? resolveHeadlessBwrap(configured) : resolveBwrap(configured);
-  return resolveSandboxPaths(resolved, workspace);
+  return resolveSandboxPaths(resolveBwrap(configured), workspace);
 }
 
 /**

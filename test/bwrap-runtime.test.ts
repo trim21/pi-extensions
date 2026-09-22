@@ -137,9 +137,8 @@ describe("BwrapRuntime", () => {
     dcgSuggestionMock.mockResolvedValue({ kind: "not-installed" });
   });
 
-  it("registers flags, lifecycle handlers, and bwrap commands in setup", () => {
+  it("registers lifecycle handlers and bwrap commands in setup", () => {
     const { pi } = setupRuntime();
-    expect(pi.registerFlag).toHaveBeenCalledWith("no-bwrap", expect.any(Object));
     expect(pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
     expect(pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
     expect(pi.registerCommand).toHaveBeenCalledWith("bwrap-readonly", expect.any(Object));
@@ -299,7 +298,31 @@ describe("BwrapRuntime", () => {
         requestFullAccess: true,
         ctx: { cwd: process.cwd(), hasUI: false } as never,
       }),
-    ).rejects.toThrow(/no UI is available/);
+    ).rejects.toThrow(/User denied unsandboxed execution/);
+  });
+
+  it("runs headless sessions under the configured mode instead of forcing readonly", async () => {
+    writeFileSync(
+      join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+      JSON.stringify({ mode: "allow-all" }),
+    );
+    const { runtime } = setupRuntime();
+    try {
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf runtime",
+        ctx: {
+          cwd: process.cwd(),
+          hasUI: false,
+          sessionManager: { getSessionId: () => "test-session" },
+        } as never,
+      });
+      expect(result).toMatchObject({ exitCode: 0, output: "runtime" });
+      // allow-all 不进沙箱：只有沙箱执行才会附沙箱状态块
+      expect(result.sandboxHint).toBeUndefined();
+    } finally {
+      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
+    }
   });
 
   describe("approval rules", () => {
@@ -1061,7 +1084,7 @@ describe("Windows (no bwrap): every command requires approval", () => {
         command: "printf should-not-run",
         ctx: { cwd: process.cwd(), hasUI: false } as never,
       }),
-    ).rejects.toThrow(/no UI is available/);
+    ).rejects.toThrow(/User denied unsandboxed execution/);
   });
 });
 

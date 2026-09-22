@@ -134,17 +134,6 @@ export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
   }
 }
 
-export function resolveHeadlessBwrap(config: BwrapConfig): ResolvedBwrap {
-  return resolveBwrap({
-    ...config,
-    mode: "readonly",
-    writablePaths: [],
-    extraWritablePaths: [],
-    denyPaths: [],
-    extraArgs: [],
-  });
-}
-
 function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapConfig {
   return {
     mode: overrides.mode ?? base.mode,

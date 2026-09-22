@@ -31,23 +31,9 @@ import {
   resolveBwrap,
   resolveBwrapPath,
   type ResolvedBwrap,
-  resolveHeadlessBwrap,
 } from "./core.js";
 import { dcgSuggestion } from "./dcg-scan.js";
 import { loadSandboxConfig, runInSandbox } from "./sandbox.js";
-
-export type EscalationDecision = { kind: "dialog" } | { kind: "deny"; reason: string };
-
-export function resolveEscalation(opts: { hasUI: boolean }): EscalationDecision {
-  if (!opts.hasUI) {
-    return {
-      kind: "deny",
-      reason:
-        "request_full_access requires an interactive session with user approval; no UI is available in this session.",
-    };
-  }
-  return { kind: "dialog" };
-}
 
 /** 全权限审批对话框的选项 label（也作为 switch 匹配键与测试引用）。 */
 export const ALLOW_ONCE = "Allow once";
@@ -285,8 +271,9 @@ function describeNetwork(resolved: ResolvedBwrap): string {
 }
 
 /**
- * 用户无理由拒绝非沙盒请求的文案。`/bwrap-deny-request` 生效时的拒绝必须与
- * 用户在审批框点 Deny 完全一致——模型看到的是一次普通拒绝，而不是另一套错误语义。
+ * 用户无理由拒绝非沙盒请求的文案。`/bwrap-deny-request` 生效时与无 UI 会话里
+ * 需要审批的请求，都必须与用户在审批框点 Deny 完全一致——模型看到的是一次
+ * 普通拒绝，而不是另一套错误语义。
  */
 const UNSANDBOXED_DENIED = "User denied unsandboxed execution.";
 
@@ -319,7 +306,6 @@ export function sandboxHintBlock(hint: string | undefined): { type: "text"; text
 
 export class BwrapRuntime {
   private resolved: ResolvedBwrap | undefined;
-  private sandboxDisabled = false;
   private bwrapUnavailable = false;
   /** net-allowlist 首次执行时解析一次 mihomo 路径，之后随 runtime 复用，不逐命令扫描 PATH。 */
   private mihomoPath: string | undefined;
@@ -334,14 +320,7 @@ export class BwrapRuntime {
   }
 
   setup(pi: ExtensionAPI): void {
-    pi.registerFlag("no-bwrap", {
-      description: "Disable bwrap sandboxing for bash commands",
-      type: "boolean",
-      default: false,
-    });
-
     pi.on("session_start", (_event, ctx) => {
-      this.sandboxDisabled = pi.getFlag("no-bwrap") === true && ctx.hasUI;
       this.resolved = undefined;
       this.bwrapUnavailable = false;
       this.policy.setDenyRequests(false);
@@ -358,7 +337,7 @@ export class BwrapRuntime {
         } catch (error) {
           // Fail closed: a missing bwrap binary must not silently degrade to an
           // unsandboxed allow-all session. Commands are refused until the user
-          // explicitly opts out via --no-bwrap or the bwrap-allow-all command.
+          // explicitly opts out via the bwrap-allow-all command.
           this.bwrapUnavailable = true;
           this.resolved = undefined;
           ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("error", "bwrap: unavailable"));
@@ -386,9 +365,7 @@ export class BwrapRuntime {
         ? isWindows
           ? "Every bash command requires user approval before it runs."
           : `Current bwrap mode: **${runtime.mode}**. The bwrap runtime selects sandboxing and, when requested, user approval for unsandboxed execution.`
-        : isWindows
-          ? "This headless session cannot approve commands: bash commands are refused."
-          : "This headless session is forced into bwrap readonly mode. Unsandboxed execution cannot be approved.";
+        : `Current bwrap mode: **${runtime.mode}**. This headless session cannot ask for approval: commands that require user approval are denied.`;
       const unavailableText =
         !isWindows && this.bwrapUnavailable
           ? " bwrap is unavailable (binary not found): bash commands are refused unless the user explicitly approves unsandboxed execution."
@@ -409,13 +386,11 @@ export class BwrapRuntime {
 
   setMode(cwd: string, mode: BwrapMode): ResolvedBwrap {
     this.resolved = loadSandboxConfig({ workspace: cwd, mode });
-    this.sandboxDisabled = false;
     return this.resolved;
   }
 
   reset(): void {
     this.resolved = undefined;
-    this.sandboxDisabled = false;
     this.bwrapUnavailable = false;
   }
 
@@ -432,7 +407,7 @@ export class BwrapRuntime {
     ) {
       throw new Error(
         "bwrap (bubblewrap) not found; refusing to execute commands without sandboxing. " +
-          "Install bubblewrap and restart the session, or pass --no-bwrap to disable the sandbox explicitly.",
+          "Install bubblewrap and restart the session, or disable the sandbox explicitly with /bwrap-allow-all.",
       );
     }
     // workspace 恒为 session 工作区；cwd 只是本次命令的进程执行目录，
@@ -568,10 +543,8 @@ export class BwrapRuntime {
     };
   }
 
-  private resolve(ctx: Pick<ExtensionContext, "cwd" | "hasUI">): ResolvedBwrap {
+  private resolve(ctx: Pick<ExtensionContext, "cwd">): ResolvedBwrap {
     const config = loadBwrapConfig(ctx.cwd);
-    if (!ctx.hasUI) return resolveHeadlessBwrap(config);
-    if (this.sandboxDisabled) return resolveBwrap({ ...config, mode: "allow-all" });
     if (!this.resolved) this.resolved = resolveBwrap(config);
     return this.resolved;
   }
@@ -582,8 +555,8 @@ export class BwrapRuntime {
     reason: string | undefined,
     execCwd: string,
   ): Promise<void> {
-    const policy = resolveEscalation({ hasUI: ctx.hasUI });
-    if (policy.kind === "deny") throw new Error(policy.reason);
+    // hasUI 判定推迟到审批时刻：无 UI 会话弹不了审批框，按用户点 Deny 的标准文案拒绝
+    if (!ctx.hasUI) throw new Error(UNSANDBOXED_DENIED);
     const decision = await this.approveFullAccessUI(ctx, command, reason, execCwd);
     // 关闭对话框 = 中断并拒绝，不循环重问
     if (decision === undefined) {
