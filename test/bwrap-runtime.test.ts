@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { createEventBus, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/bwrap/core.js", async (importOriginal) => {
@@ -12,12 +12,19 @@ vi.mock("../src/bwrap/core.js", async (importOriginal) => {
     findBwrap: () => {
       throw new Error("bwrap (bubblewrap) not found in PATH");
     },
+    // 本文件只验证审批流与结果拼装：沙箱执行路径降级为本地执行（真实 bwrap 行为由
+    // bwrap-sandbox.test.ts 覆盖），bwrapOpsCreateMock 记录调用供「走了沙箱路径」断言
+    createBwrapBashOperations: (...args: unknown[]) => {
+      bwrapOpsCreateMock(...args);
+      return createLocalBashOperations();
+    },
   };
 });
 
-const { dcgSuggestionMock, localCreateMock } = vi.hoisted(() => ({
+const { dcgSuggestionMock, localCreateMock, bwrapOpsCreateMock } = vi.hoisted(() => ({
   dcgSuggestionMock: vi.fn(),
   localCreateMock: vi.fn(),
+  bwrapOpsCreateMock: vi.fn(),
 }));
 
 vi.mock("../src/bwrap/dcg-scan.js", () => ({
@@ -55,6 +62,7 @@ import {
   DENY_WITH_REASON,
   describeSandbox,
   EDIT_RULES,
+  RUN_IN_SANDBOX,
 } from "../src/bwrap/runtime.js";
 import { createRequestPolicy, type RequestPolicy } from "../src/lib/request-policy.js";
 
@@ -132,6 +140,7 @@ describe("BwrapRuntime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     localCreateMock.mockReset();
+    bwrapOpsCreateMock.mockReset();
     dcgSuggestionMock.mockReset();
     // 默认视为 dcg 未安装：静默跳过，不影响任何审批断言
     dcgSuggestionMock.mockResolvedValue({ kind: "not-installed" });
@@ -460,12 +469,56 @@ describe("BwrapRuntime", () => {
       expect(abort).not.toHaveBeenCalled();
     });
 
+    it("runs the command in the sandbox and reports it when the user picks Run this in sandbox", async () => {
+      const { runtime } = setupRuntime();
+      runtime.setMode(process.cwd(), "workspace-write");
+      const select = vi.fn(async () => RUN_IN_SANDBOX);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf sandboxed",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }),
+      });
+      // 提权被拒：命令走沙箱执行路径，而不是审批放行的本地路径
+      expect(bwrapOpsCreateMock).toHaveBeenCalled();
+      expect(result).toMatchObject({ exitCode: 0, output: "sandboxed" });
+      // 沙箱作用域由提醒块说明：不再附失败时的状态块（会再提示 dangerouslyDisableSandbox）
+      expect(result.sandboxHint).toBeUndefined();
+      expect(result.sandboxReminder).toMatchInlineSnapshot(`
+        "<system-reminder>
+        The user ran this command in the sandbox instead of approving unsandboxed execution: / is read-only, /tmp/ and ./ are writable, ./.git/ is read-only; network access is off.
+        </system-reminder>"
+      `);
+    });
+
+    it("does not persist allow rules when the user picks Run this in sandbox", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-sandbox-choice-"));
+      const { runtime } = setupRuntime();
+      runtime.setMode(directory, "workspace-write");
+      // 子菜单勾选了 pattern，但主决策是「在沙盒内执行」：allow 规则会自动放行非沙盒
+      // 执行，与该选择矛盾，不持久化
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
+        .mockResolvedValueOnce("☐ printf *")
+        .mockResolvedValueOnce(BACK)
+        .mockResolvedValueOnce(RUN_IN_SANDBOX);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf choice",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
+      });
+      expect(result).toMatchObject({ exitCode: 0, output: "choice" });
+      expect(existsSync(join(directory, ".pi", "bwrap.json"))).toBe(false);
+    });
+
     it("folds the persistable patterns behind the edit option instead of listing them", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), "workspace-write");
       const select = vi.fn(async (_title: string, options: string[]) => {
         // 主决策层只列动作：pattern 不再直接铺开，收进 Edit approval rules
-        expect(options).toEqual([ALLOW_ONCE, DENY, DENY_WITH_REASON, EDIT_RULES]);
+        expect(options).toEqual([ALLOW_ONCE, RUN_IN_SANDBOX, DENY, DENY_WITH_REASON, EDIT_RULES]);
         return ALLOW_ONCE;
       });
       await runtime.execute({

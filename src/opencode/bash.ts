@@ -124,6 +124,7 @@ export default function opencodeBash(
             content: [
               { type: "text" as const, text: full },
               ...sandboxHintBlock(error.kind === "timeout" ? error.sandboxHint : undefined),
+              ...sandboxHintBlock(error.sandboxReminder),
             ],
             details: error.kind === "timeout" ? { timeout: true } : {},
           };
@@ -141,6 +142,7 @@ export default function opencodeBash(
           { type: "text" as const, text: `Command exited with code ${result.exitCode}.` },
           // 失败可能是被沙箱的写边界或网络限制挡住的，附一块沙箱状态
           ...sandboxHintBlock(failed ? result.sandboxHint : undefined),
+          ...sandboxHintBlock(result.sandboxReminder),
         ],
         details: {
           exitCode: result.exitCode,

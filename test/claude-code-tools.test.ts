@@ -13,7 +13,11 @@ beforeAll(() => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-import { type BwrapRuntime, createBwrapRuntime } from "../src/bwrap/runtime.js";
+import {
+  BashInterruptedError,
+  type BwrapRuntime,
+  createBwrapRuntime,
+} from "../src/bwrap/runtime.js";
 import { didYouMean, findSimilarFile, suggestPathUnderCwd } from "../src/claude-code/common.js";
 import claudeCodeFileTools, { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
 import claudeCodeGlobTool, { globFiles } from "../src/claude-code/glob.js";
@@ -1342,6 +1346,70 @@ describe("Bash", () => {
       context(process.cwd()),
     );
     expect(result.content[0].text).toBe("Exit code 4\nboom\n");
+  });
+
+  it("appends the user sandbox reminder as an extra content block", async () => {
+    const runtime = createBwrapRuntime();
+    vi.spyOn(runtime, "execute").mockResolvedValue({
+      exitCode: 0,
+      sandboxHint: undefined,
+      sandboxReminder: "user sandbox reminder",
+      output: "done",
+      truncation: { truncated: false } as never,
+    });
+    const result = await call(
+      loadBashTool(runtime),
+      { command: "printf done", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "done",
+      "user sandbox reminder",
+    ]);
+  });
+
+  it("appends the user sandbox reminder to failed commands", async () => {
+    const runtime = createBwrapRuntime();
+    vi.spyOn(runtime, "execute").mockResolvedValue({
+      exitCode: 1,
+      sandboxHint: undefined,
+      sandboxReminder: "user sandbox reminder",
+      output: "denied\n",
+      truncation: { truncated: false } as never,
+    });
+    const result = await call(
+      loadBashTool(runtime),
+      { command: "touch /etc/x", timeout: 5_000 },
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "Exit code 1\ndenied\n",
+      "user sandbox reminder",
+    ]);
+  });
+
+  it("appends the user sandbox reminder after a timeout", async () => {
+    const runtime = createBwrapRuntime();
+    vi.spyOn(runtime, "execute").mockRejectedValue(
+      new BashInterruptedError(
+        "timeout",
+        "still here",
+        { output: "partial", truncation: { truncated: false } as never },
+        undefined,
+        20,
+        new Error("timed out"),
+        "user sandbox reminder",
+      ),
+    );
+    const result = await call(
+      loadBashTool(runtime),
+      { command: "printf partial; sleep 1", timeout: 20 },
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "partial\n\nCommand timed out after 20 milliseconds",
+      "user sandbox reminder",
+    ]);
   });
 
   it("appends the sandbox status as an extra content block for failures inside the sandbox", async () => {

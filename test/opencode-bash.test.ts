@@ -141,6 +141,29 @@ describe("opencode bash", () => {
     `);
   });
 
+  it("appends the user sandbox reminder as an extra content block", async () => {
+    const { tool, runtime } = loadBashTool();
+    vi.spyOn(runtime, "execute").mockResolvedValue({
+      exitCode: 0,
+      sandboxHint: undefined,
+      sandboxReminder: "user sandbox reminder",
+      output: "done",
+      truncation: { truncated: false } as never,
+    });
+    const result = await tool.execute(
+      "id",
+      { command: "x", timeout: 5_000 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "done",
+      "Command exited with code 0.",
+      "user sandbox reminder",
+    ]);
+  });
+
   it("appends the sandbox status when the command timed out inside the sandbox", async () => {
     const { tool, runtime } = loadBashTool();
     vi.spyOn(runtime, "execute").mockRejectedValue(
@@ -168,6 +191,32 @@ describe("opencode bash", () => {
         "sandbox status",
       ]
     `);
+  });
+
+  it("appends the user sandbox reminder after a timeout", async () => {
+    const { tool, runtime } = loadBashTool();
+    vi.spyOn(runtime, "execute").mockRejectedValue(
+      new BashInterruptedError(
+        "timeout",
+        "still here",
+        { output: "partial", truncation: { truncated: false } as never },
+        undefined,
+        20,
+        new Error("timed out"),
+        "user sandbox reminder",
+      ),
+    );
+    const result = await tool.execute(
+      "id",
+      { command: "x", timeout: 20 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "partial\n\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
+      "user sandbox reminder",
+    ]);
   });
 
   it("returns a timeout message instead of throwing", async () => {

@@ -75,7 +75,7 @@ export function formatBashSuccess(result: Awaited<ReturnType<BwrapRuntime["execu
   const { output, truncation, fullOutputPath } = result;
   const text = appendTruncationNotice(output || "(no output)", truncation, fullOutputPath);
   return {
-    content: [{ type: "text", text }],
+    content: [{ type: "text", text }, ...sandboxHintBlock(result.sandboxReminder)],
     details: fullOutputPath && truncation.truncated ? { truncation, fullOutputPath } : undefined,
   };
 }
@@ -158,7 +158,10 @@ export function registerShellTools(
             // 不含审批弹窗等 UI 交互
             const status = `Command aborted by user after ${formatElapsedSeconds(error.elapsedMs)}`;
             return {
-              content: [{ type: "text", text: text ? `${text}\n\n${status}` : status }],
+              content: [
+                { type: "text", text: text ? `${text}\n\n${status}` : status },
+                ...sandboxHintBlock(error.sandboxReminder),
+              ],
               details: undefined,
             };
           }
@@ -166,7 +169,11 @@ export function registerShellTools(
             ? `${text}\n\nCommand timed out after ${timeout} milliseconds`
             : `Command timed out after ${timeout} milliseconds`;
           return {
-            content: [{ type: "text", text: full }, ...sandboxHintBlock(error.sandboxHint)],
+            content: [
+              { type: "text", text: full },
+              ...sandboxHintBlock(error.sandboxHint),
+              ...sandboxHintBlock(error.sandboxReminder),
+            ],
             details: undefined,
           };
         }
@@ -184,6 +191,7 @@ export function registerShellTools(
           content: [
             { type: "text", text: formatBashError(result.exitCode, full) },
             ...sandboxHintBlock(result.sandboxHint),
+            ...sandboxHintBlock(result.sandboxReminder),
           ],
           details: undefined,
         };

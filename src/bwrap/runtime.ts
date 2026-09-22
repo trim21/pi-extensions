@@ -37,6 +37,8 @@ import { loadSandboxConfig, runInSandbox } from "./sandbox.js";
 
 /** 全权限审批对话框的选项 label（也作为 switch 匹配键与测试引用）。 */
 export const ALLOW_ONCE = "Allow once";
+/** 拒绝提权、命令降级为在沙盒内执行。 */
+export const RUN_IN_SANDBOX = "Run this in sandbox";
 export const DENY = "Deny";
 export const DENY_WITH_REASON = "Deny with reason";
 /** 第一层的折叠入口：进入按 pattern 勾选持久化规则的子菜单。 */
@@ -49,13 +51,19 @@ export const BACK = "Back";
  * 决定放行、拒绝并持久化勾选的规则，UI 层不直接产生副作用。
  */
 export interface FullAccessUIDecision {
-  /** 用户选择的动作 label（ALLOW_ONCE / DENY / DENY_WITH_REASON）。 */
+  /** 用户选择的动作 label（ALLOW_ONCE / RUN_IN_SANDBOX / DENY / DENY_WITH_REASON）。 */
   result: string;
   /** 用户勾选、需持久化为 allow 规则的 pattern；未勾选时为空数组。 */
   foreverApprovedPattern: string[];
   /** DENY_WITH_REASON 时用户输入的理由。 */
   reason?: string;
 }
+
+/**
+ * 全权限审批的放行结果：允许一次性全权限执行，或用户拒绝提权、
+ * 命令降级为在沙盒内执行（输出后附系统提醒）。
+ */
+type FullAccessGrant = "full-access" | "sandbox";
 
 export interface BwrapExecutionRequest {
   toolCallId: string;
@@ -78,6 +86,8 @@ export interface BwrapExecutionRequest {
  */
 export interface BwrapExecutionResult {
   exitCode: number | null;
+  /** 用户选「Run this in sandbox」拒绝提权时的系统提醒，成功与失败都由上层附上；其余情况缺省。 */
+  sandboxReminder?: string;
   /** 沙箱状态说明（写边界 + 网络层级），失败时由上层工具作为独立信息块附上；未沙箱执行时为 undefined。 */
   sandboxHint: string | undefined;
   /** 截断后的输出（尾部），未截断时为完整输出；空输出为空字符串。 */
@@ -102,6 +112,8 @@ export class BashInterruptedError extends Error {
   readonly kind: "timeout" | "aborted";
   readonly partial: BashExecutionPartial;
   readonly sandboxHint: string | undefined;
+  /** 用户选「Run this in sandbox」拒绝提权时的系统提醒；其余情况为 undefined。 */
+  readonly sandboxReminder: string | undefined;
   /**
    * 命令实际运行时长（毫秒）：从审批结束、命令真正开始执行算到终止，
    * 不含审批弹窗等用户 UI 交互耗时。
@@ -115,11 +127,13 @@ export class BashInterruptedError extends Error {
     sandboxHint: string | undefined,
     elapsedMs: number,
     cause: unknown,
+    sandboxReminder?: string,
   ) {
     super(message, { cause });
     this.kind = kind;
     this.partial = partial;
     this.sandboxHint = sandboxHint;
+    this.sandboxReminder = sandboxReminder;
     this.elapsedMs = elapsedMs;
     // 对齐标准错误分类：中断=AbortError（用户取消），超时=TimeoutError
     this.name = kind === "aborted" ? "AbortError" : "TimeoutError";
@@ -270,6 +284,12 @@ function describeNetwork(resolved: ResolvedBwrap): string {
   return "network access is unrestricted";
 }
 
+/** 沙箱作用域一句话：写边界 + 网络层级（沙箱状态块与沙盒内执行提醒共用）。 */
+function describeLimits(resolved: ResolvedBwrap): string {
+  const writes = resolved.mode === "readonly" ? "the filesystem is read-only" : SANDBOX_WRITE_RULES;
+  return `${writes}; ${describeNetwork(resolved)}`;
+}
+
 /**
  * 用户无理由拒绝非沙盒请求的文案。`/bwrap-deny-request` 生效时与无 UI 会话里
  * 需要审批的请求，都必须与用户在审批框点 Deny 完全一致——模型看到的是一次
@@ -290,11 +310,24 @@ const SANDBOX_ESCAPE_HATCH =
  */
 export function describeSandbox(resolved: ResolvedBwrap, unsandboxed: boolean): string | undefined {
   if (unsandboxed) return undefined;
-  const writes = resolved.mode === "readonly" ? "the filesystem is read-only" : SANDBOX_WRITE_RULES;
   return [
     "<system-reminder>",
-    `This command ran in a sandbox: ${writes}; ${describeNetwork(resolved)}.`,
+    `This command ran in a sandbox: ${describeLimits(resolved)}.`,
     SANDBOX_ESCAPE_HATCH,
+    "</system-reminder>",
+  ].join("\n");
+}
+
+/**
+ * 用户在审批框选「Run this in sandbox」拒绝提权后，命令输出后附带的系统提醒：
+ * 说明命令在沙盒内执行及其作用域，成功与失败都附上。此时 describeSandbox 的
+ * 状态块不再附——提权请求刚被用户拒绝，再提示 dangerouslyDisableSandbox 只会
+ * 诱导重复请求，作用域描述由本提醒承担。
+ */
+export function describeSandboxChoice(resolved: ResolvedBwrap): string {
+  return [
+    "<system-reminder>",
+    `The user ran this command in the sandbox instead of approving unsandboxed execution: ${describeLimits(resolved)}.`,
     "</system-reminder>",
   ].join("\n");
 }
@@ -417,6 +450,8 @@ export class BwrapRuntime {
     // 需要人工审批：非 Windows 仅 requestFullAccess；Windows 上默认所有命令
     // （allow-all 模式是显式 opt-out，仍直接执行）。
     const needsApproval = request.requestFullAccess === true || (isWindows && runtime.bwrapEnabled);
+    // 用户在审批框选「Run this in sandbox」拒绝提权：命令降级为沙盒内执行
+    let userChoseSandbox = false;
     if (needsApproval && runtime.bwrapEnabled) {
       // /bwrap-deny-request：非沙盒请求直接拒绝——审批规则与审批框都不再参与，
       // 拒绝文案与用户点 Deny 相同，直到用户用 /bwrap-allow-request 恢复审批。
@@ -429,19 +464,29 @@ export class BwrapRuntime {
         throw new Error(`Command denied by bwrap approval rule: ${request.command}`);
       }
       if (decision === undefined) {
-        await this.approveFullAccess(request.ctx, request.command, request.description, execCwd);
+        userChoseSandbox =
+          (await this.approveFullAccess(
+            request.ctx,
+            request.command,
+            request.description,
+            execCwd,
+          )) === "sandbox";
       }
     }
-    // 不经沙箱的三种情形：Windows（无 bubblewrap）、审批通过的全权限、allow-all 模式
-    const local = isWindows || needsApproval || !runtime.bwrapEnabled;
+    // 不经沙箱的三种情形：Windows（无 bubblewrap）、审批通过的全权限、allow-all 模式；
+    // 例外是用户选「Run this in sandbox」：提权被拒，命令照常进沙箱
+    const local = !userChoseSandbox && (isWindows || needsApproval || !runtime.bwrapEnabled);
     // mihomoPath 是 ResolvedBwrap 的 override 语义：首次 net-allowlist 执行时解析
     // 一次存入私有字段，之后写回 resolved 直达 createNetworkStack，不逐命令扫描 PATH
     if (runtime.network && runtime.networkAllowlist.length > 0) {
       runtime.mihomoPath ??= this.mihomoPath ?? findMihomo();
       this.mihomoPath = runtime.mihomoPath;
     }
-    // 命令失败时附带的沙箱状态（写边界 + 网络层级），由上层拼进错误文本
-    const sandboxHint = describeSandbox(runtime, local);
+    // 命令失败时附带的沙箱状态（写边界 + 网络层级），由上层拼进错误文本。
+    // 用户选「Run this in sandbox」时不附：沙箱作用域改由 sandboxReminder 说明
+    const sandboxHint = userChoseSandbox ? undefined : describeSandbox(runtime, local);
+    // 提权被拒、命令在沙盒内执行的系统提醒：成功与失败都由上层附上
+    const sandboxReminder = userChoseSandbox ? describeSandboxChoice(runtime) : undefined;
     // 计时起点放在审批之后：审批弹窗的等待时长属于用户 UI 操作，不是命令运行时间
     const startedAt = Date.now();
     await using output = new BashOutput(request.ctx.sessionManager.getSessionId());
@@ -477,6 +522,7 @@ export class BwrapRuntime {
       return {
         exitCode,
         sandboxHint,
+        ...(sandboxReminder && { sandboxReminder }),
         output: partial.output,
         ...(partial.fullOutputPath && { fullOutputPath: partial.fullOutputPath }),
         truncation: partial.truncation,
@@ -499,6 +545,7 @@ export class BwrapRuntime {
           sandboxHint,
           elapsedMs,
           error,
+          sandboxReminder,
         );
       }
       // 中断识别：优先 name=AbortError（throwIfAborted/signal.reason），
@@ -512,6 +559,7 @@ export class BwrapRuntime {
           sandboxHint,
           elapsedMs,
           error,
+          sandboxReminder,
         );
       }
       throw error;
@@ -554,7 +602,7 @@ export class BwrapRuntime {
     command: string,
     reason: string | undefined,
     execCwd: string,
-  ): Promise<void> {
+  ): Promise<FullAccessGrant> {
     // hasUI 判定推迟到审批时刻：无 UI 会话弹不了审批框，按用户点 Deny 的标准文案拒绝
     if (!ctx.hasUI) throw new Error(UNSANDBOXED_DENIED);
     const decision = await this.approveFullAccessUI(ctx, command, reason, execCwd);
@@ -565,11 +613,10 @@ export class BwrapRuntime {
     }
     const { result, foreverApprovedPattern } = decision;
     switch (result) {
-      case ALLOW_ONCE: {
-        if (foreverApprovedPattern.length > 0) {
-          await this.persistAllowRule(ctx, command, foreverApprovedPattern);
-        }
-        return;
+      case RUN_IN_SANDBOX: {
+        // 用户拒绝提权、改为沙盒内执行：allow 规则意味着自动放行非沙盒执行，
+        // 与该选择矛盾，即使在子菜单勾选了 pattern 也不持久化
+        return "sandbox";
       }
       case DENY: {
         if (foreverApprovedPattern.length > 0) {
@@ -587,6 +634,16 @@ export class BwrapRuntime {
             ? `User denied command execution with reason: ${feedback}`
             : "User denied command execution.",
         );
+      }
+      case ALLOW_ONCE: {
+        if (foreverApprovedPattern.length > 0) {
+          await this.persistAllowRule(ctx, command, foreverApprovedPattern);
+        }
+        return "full-access";
+      }
+      default: {
+        // UI 层只会产出上面几种 label；未识别的按历史行为放行，不持久化规则
+        return "full-access";
       }
     }
   }
@@ -647,6 +704,7 @@ export class BwrapRuntime {
     // 追加折叠入口，进入子菜单逐项勾选。
     const actions: SelectAction[] = [
       { label: ALLOW_ONCE },
+      { label: RUN_IN_SANDBOX },
       { label: DENY },
       { label: DENY_WITH_REASON, inputPrompt: "Why was this denied?" },
     ];
@@ -661,9 +719,10 @@ export class BwrapRuntime {
       description,
     ].join("\n");
 
-    // 两层循环：子菜单勾选后回到主决策，直到用户在 Allow once / Deny 系列中做出
-    // 选择。勾选的规则在放行时持久化；Deny 系列同样持久化（用户确认该模式可信，
-    // 只是本次命令不执行）。子菜单关闭 = 返回主决策；主决策关闭 = 取消（上层按拒绝处理）。
+    // 两层循环：子菜单勾选后回到主决策，直到用户在 Allow once / Run this in sandbox /
+    // Deny 系列中做出选择。勾选的规则在放行时持久化；Deny 系列同样持久化（用户确认
+    // 该模式可信，只是本次命令不执行）；Run this in sandbox 不持久化。
+    // 子菜单关闭 = 返回主决策；主决策关闭 = 取消（上层按拒绝处理）。
     let selected: string[] = [];
     for (;;) {
       const pending =
