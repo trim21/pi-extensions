@@ -139,7 +139,8 @@ interface UsageStats {
   turns: number;
 }
 
-interface SubagentDetails {
+/** 子 agent 的一次运行结果：runAgent 的返回值，也是 details.result 的内容。 */
+interface SubagentResult {
   agent: string;
   task: string;
   exitCode: number;
@@ -149,6 +150,11 @@ interface SubagentDetails {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
+}
+
+interface SubagentDetails {
+  /** 子 agent 运行结果（除 pendant 外的字段都收在这里）。 */
+  result: SubagentResult;
   /** 折叠 markdown 面板：父 agent 的 prompt 与父 agent 看到的子 agent 结果。 */
   pendant?: ToolPendant;
 }
@@ -172,7 +178,7 @@ function getFinalOutput(messages: AgentMessage[]): string {
  * stderr 截断到尾部（错误信息通常在最后）。全空时保底 "(no output)"，
  * 避免只回一个 exit code。
  */
-export function formatSubagentError(result: SubagentDetails): { reason: string; message: string } {
+export function formatSubagentError(result: SubagentResult): { reason: string; message: string } {
   const reason =
     result.stopReason ?? (result.exitCode === 0 ? "failed" : `exit ${result.exitCode}`);
   const parts: string[] = [];
@@ -356,8 +362,8 @@ export async function runAgent(
   onUpdate: OnUpdateCallback | undefined,
   parentUI?: ExtensionUIContext,
   createSession: SessionFactory = createSubagentSession,
-): Promise<SubagentDetails> {
-  const result: SubagentDetails = {
+): Promise<SubagentResult> {
+  const result: SubagentResult = {
     agent: agent.name,
     task,
     exitCode: 0,
@@ -431,7 +437,7 @@ export async function runAgent(
     const footer = usageLine ? `\`${name}\` ${usageLine}` : `\`${name}\``;
     onUpdate?.({
       content: [{ type: "text", text: [...logLines, footer].join("\n") }],
-      details: { ...result },
+      details: { result: { ...result } },
     });
   };
 
@@ -558,15 +564,17 @@ export default function spawnAgent(pi: ExtensionAPI) {
             },
           ],
           details: {
-            agent: params.agent,
-            task: params.task,
-            exitCode: 1,
-            messages: [],
-            stderr: "",
-            usage: {
-              cost: 0,
-              contextTokens: 0,
-              turns: 0,
+            result: {
+              agent: params.agent,
+              task: params.task,
+              exitCode: 1,
+              messages: [],
+              stderr: "",
+              usage: {
+                cost: 0,
+                contextTokens: 0,
+                turns: 0,
+              },
             },
           },
           isError: true,
@@ -591,7 +599,7 @@ export default function spawnAgent(pi: ExtensionAPI) {
             { type: "text", text: `Subagent "${result.agent}" failed (${reason}):\n${message}` },
           ],
           details: {
-            ...result,
+            result,
             pendant: {
               subtitle: result.agent,
               markdown: formatPendantMarkdown(params.task, message),
@@ -609,7 +617,7 @@ export default function spawnAgent(pi: ExtensionAPI) {
       return {
         content: [{ type: "text", text }],
         details: {
-          ...result,
+          result,
           pendant: {
             subtitle: result.agent,
             markdown: formatPendantMarkdown(params.task, text),
@@ -631,7 +639,7 @@ export default function spawnAgent(pi: ExtensionAPI) {
     },
 
     renderResult(result, { expanded }, theme) {
-      const details = result.details;
+      const details = result.details.result;
       const isError =
         details.exitCode !== 0 ||
         details.stopReason === "error" ||
