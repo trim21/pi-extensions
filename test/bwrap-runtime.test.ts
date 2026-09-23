@@ -313,7 +313,7 @@ describe("BwrapRuntime", () => {
 
   it("runs headless sessions under the configured mode instead of forcing readonly", async () => {
     writeFileSync(
-      join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+      join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"),
       JSON.stringify({ fs: { mode: "allow-all" }, network: { mode: "allow-all" } }),
     );
     const { runtime } = setupRuntime();
@@ -331,7 +331,7 @@ describe("BwrapRuntime", () => {
       // allow-all 不进沙箱：只有沙箱执行才会附沙箱状态块
       expect(result.sandboxHint).toBeUndefined();
     } finally {
-      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
+      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"), { force: true });
     }
   });
 
@@ -339,7 +339,7 @@ describe("BwrapRuntime", () => {
     beforeEach(() => {
       // 在测试 agent 目录写入带 approvalRules 的全局配置
       writeFileSync(
-        join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+        join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"),
         JSON.stringify({
           approvalRules: [
             { action: "allow", pattern: "git status *" },
@@ -396,7 +396,7 @@ describe("BwrapRuntime", () => {
 
     it("does not auto-allow a file redirect under an echo * rule", async () => {
       writeFileSync(
-        join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+        join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"),
         JSON.stringify({
           approvalRules: [{ action: "allow", pattern: "echo *" }],
         }),
@@ -413,13 +413,13 @@ describe("BwrapRuntime", () => {
         }),
       ).rejects.toThrow(/User denied unsandboxed execution/);
       expect(select).toHaveBeenCalled();
-      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
+      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"), { force: true });
     });
 
     it("shows only unallowed patterns in the edit submenu when part of a chain is pre-approved", async () => {
       // 覆盖全局规则：`echo *` 已 allow，`head *` 未允许
       writeFileSync(
-        join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+        join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"),
         JSON.stringify({
           approvalRules: [{ action: "allow", pattern: "echo *" }],
         }),
@@ -445,12 +445,12 @@ describe("BwrapRuntime", () => {
       });
       expect(result).toMatchObject({ exitCode: 0 });
       // 勾选持久化只写入未允许的 pattern，已 allow 的不重复写入
-      const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
+      const config = JSON.parse(readFileSync(join(directory, ".pi", "sandbox.json"), "utf8")) as {
         approvalRules: { action: string; pattern: string }[];
       };
       expect(config.approvalRules).toEqual([{ action: "allow", pattern: "head *" }]);
       // 重置全局规则，避免残留影响后续 describe 的审批断言
-      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
+      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"), { force: true });
     });
   });
 
@@ -511,7 +511,7 @@ describe("BwrapRuntime", () => {
         ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
       });
       expect(result).toMatchObject({ exitCode: 0, output: "choice" });
-      expect(existsSync(join(directory, ".pi", "bwrap.json"))).toBe(false);
+      expect(existsSync(join(directory, ".pi", "sandbox.json"))).toBe(false);
     });
 
     it("folds the persistable patterns behind the edit option instead of listing them", async () => {
@@ -548,7 +548,7 @@ describe("BwrapRuntime", () => {
         ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
       });
       expect(result).toMatchObject({ exitCode: 0, output: "back" });
-      expect(existsSync(join(directory, ".pi", "bwrap.json"))).toBe(false);
+      expect(existsSync(join(directory, ".pi", "sandbox.json"))).toBe(false);
     });
 
     it("shows the resolved exec cwd inside the approval dialog when workdir is provided", async () => {
@@ -752,7 +752,7 @@ describe("BwrapRuntime", () => {
       });
       expect(result).toMatchObject({ exitCode: 0, output: "forever" });
       // 项目配置只写入勾选的规则
-      const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
+      const config = JSON.parse(readFileSync(join(directory, ".pi", "sandbox.json"), "utf8")) as {
         approvalRules: { action: string; pattern: string }[];
       };
       expect(config.approvalRules).toEqual([{ action: "allow", pattern: "printf *" }]);
@@ -790,7 +790,7 @@ describe("BwrapRuntime", () => {
         ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
       });
       expect(result).toMatchObject({ exitCode: 0, output: "1\n" });
-      const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
+      const config = JSON.parse(readFileSync(join(directory, ".pi", "sandbox.json"), "utf8")) as {
         approvalRules: { action: string; pattern: string }[];
       };
       expect(config.approvalRules).toEqual([{ action: "allow", pattern: "echo *" }]);
@@ -817,8 +817,8 @@ describe("BwrapRuntime", () => {
         ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
       });
       expect(result).toMatchObject({ exitCode: 0, output: "once" });
-      // 未勾选任何规则：不写入 bwrap.json
-      expect(existsSync(join(directory, ".pi", "bwrap.json"))).toBe(false);
+      // 未勾选任何规则：不写入 sandbox.json
+      expect(existsSync(join(directory, ".pi", "sandbox.json"))).toBe(false);
       // 同命令再次执行：无规则命中，仍需审批
       const select2 = vi.fn(async () => ALLOW_ONCE);
       await runtime.execute({
@@ -849,7 +849,7 @@ describe("BwrapRuntime", () => {
           ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
         }),
       ).rejects.toThrow(/User denied unsandboxed execution/);
-      const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
+      const config = JSON.parse(readFileSync(join(directory, ".pi", "sandbox.json"), "utf8")) as {
         approvalRules: { action: string; pattern: string }[];
       };
       expect(config.approvalRules).toEqual([{ action: "allow", pattern: "printf *" }]);
@@ -884,7 +884,7 @@ describe("BwrapRuntime", () => {
           ctx: fullAccessContext({ select, input }, undefined, directory),
         }),
       ).rejects.toThrow(/User denied command execution with reason: risky args/);
-      const config = JSON.parse(readFileSync(join(directory, ".pi", "bwrap.json"), "utf8")) as {
+      const config = JSON.parse(readFileSync(join(directory, ".pi", "sandbox.json"), "utf8")) as {
         approvalRules: { action: string; pattern: string }[];
       };
       expect(config.approvalRules).toEqual([{ action: "allow", pattern: "printf *" }]);
@@ -921,7 +921,7 @@ describe("BwrapRuntime", () => {
 
     it("denies full-access requests even when an allow rule matches", async () => {
       writeFileSync(
-        join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+        join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"),
         JSON.stringify({ approvalRules: [{ action: "allow", pattern: "printf *" }] }),
       );
       const { runtime, pi } = setupRuntime();
@@ -938,7 +938,7 @@ describe("BwrapRuntime", () => {
         }),
       ).rejects.toThrow("User denied unsandboxed execution.");
       expect(select).not.toHaveBeenCalled();
-      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
+      rmSync(join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"), { force: true });
     });
 
     it("leaves sandboxed commands untouched while requests are denied", async () => {
@@ -1076,7 +1076,7 @@ describe("Windows (no bwrap): every command requires approval", () => {
   beforeEach(() => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     // 重置全局 approvalRules，避免前序测试的规则残留影响审批判定
-    rmSync(join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"), { force: true });
+    rmSync(join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"), { force: true });
     // 审批通过后走本地执行路径：mock 掉 createLocalBashOperations，避免 mock
     // win32 下 pi 去找 Git Bash；fake exec 把命令文本回显为输出，便于断言。
     localCreateMock.mockReturnValue({
@@ -1136,7 +1136,7 @@ describe("Windows (no bwrap): every command requires approval", () => {
 
   it("auto-denies commands matching a deny rule without a dialog", async () => {
     writeFileSync(
-      join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+      join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"),
       JSON.stringify({ approvalRules: [{ action: "deny", pattern: "printf *" }] }),
     );
     const { runtime } = setupRuntime();
@@ -1153,7 +1153,7 @@ describe("Windows (no bwrap): every command requires approval", () => {
 
   it("auto-allows commands matching an allow rule without a dialog", async () => {
     writeFileSync(
-      join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
+      join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"),
       JSON.stringify({ approvalRules: [{ action: "allow", pattern: "printf *" }] }),
     );
     const { runtime } = setupRuntime();

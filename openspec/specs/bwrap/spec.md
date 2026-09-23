@@ -69,7 +69,7 @@ bash 命令在沙箱内执行，可写文件系统边界由模式决定，可在
 
 #### Scenario: 项目配置覆盖全局
 
-- **WHEN** 项目 `.pi/bwrap.json` 与全局 `~/.pi/agent/bwrap.json` 都存在
+- **WHEN** 项目 `.pi/sandbox.json` 与全局 `~/.pi/agent/sandbox.json` 都存在
 - **THEN** 项目配置优先生效（可写路径覆盖、额外可写路径合并）
 
 #### Scenario: 不存在的路径自动忽略
@@ -89,6 +89,6 @@ bash 命令在沙箱内执行，可写文件系统边界由模式决定，可在
 - **bwrap argv 组装**：`--ro-bind / /` 只读挂载整个根，然后按配置叠加 `--bind-try`（可写路径，不存在自动忽略）、`--ro-bind-try`（保护目录）、`--tmpfs` / `/dev/null` 覆盖（denyPaths）；`--unshare-user --unshare-pid` 提供 user/pid namespace 隔离。
 - **模式解析**：`allow-all` 不经 bwrap 直接本地执行；`workspace-write` / `readonly` 决定可写路径集合；`headless` 会话强制 readonly。
 - **审批**：`dangerouslyDisableSandbox` 命令按 `approvalRules` 判定——用 tree-sitter 解析命令并按 BashArity 生成模式（`git checkout main` → `git checkout *`），含嵌套 `$(...)` 内的命令，规则后写优先；含输出重定向（`>` / `>>` / `&>`）的命令即使规则全匹配也不自动放行；未命中弹确认框。
-- **配置加载**：`~/.pi/agent/bwrap.json`（全局）与 `.pi/bwrap.json`（项目）合并，项目优先；模式可用 `/bwrap-*` 命令运行时切换。
+- **配置加载**：`~/.pi/agent/sandbox.json`（全局）与 `.pi/sandbox.json`（项目）合并，项目优先；模式可用 `/bwrap-*` 命令运行时切换。
 
 涉及文件：`src/bwrap/core.ts`、`src/bwrap/sandbox.ts`、`src/bwrap/runtime.ts`。

@@ -28,7 +28,7 @@ function workspace(): string {
 
 /** 写一份配置文件并返回路径（字段缺省由 core 的默认值补齐）。 */
 function config(directory: string, overrides: BwrapConfigFile): string {
-  const path = join(directory, "bwrap.json");
+  const path = join(directory, "sandbox.json");
   writeFileSync(path, `${JSON.stringify(overrides, null, 2)}\n`);
   return path;
 }

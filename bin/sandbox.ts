@@ -51,7 +51,7 @@ const command = defineCommand({
   args: {
     config: {
       type: "string",
-      description: "只用该配置文件；默认读 ~/.pi/agent/bwrap.json 与 <cwd>/.pi/bwrap.json",
+      description: "只用该配置文件；默认读 ~/.pi/agent/sandbox.json 与 <cwd>/.pi/sandbox.json",
       valueHint: "<path>",
     },
     cwd: {
@@ -145,7 +145,7 @@ const command = defineCommand({
       : undefined;
 
     const plan = [
-      ["config", configPath ?? "全局 + 项目 bwrap.json"],
+      ["config", configPath ?? "全局 + 项目 sandbox.json"],
       ["workspace", workspace],
       ["exec cwd", commandCwd],
       [

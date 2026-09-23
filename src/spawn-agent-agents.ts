@@ -29,10 +29,10 @@
  * omitted, the subagent runs with the read-only default toolset from the
  * spawn-agent config (read/grep/find/ls) unless overridden there.
  *
- * `sandbox` is a complete bwrap config (same shape as bwrap.json) that becomes
+ * `sandbox` is a complete bwrap config (same shape as sandbox.json) that becomes
  * the bash tool's fixed sandbox: it is parsed here and passed to the subagent's
  * bwrap runtime directly (config loading is decoupled from sandbox creation),
- * so the user's bwrap.json is not consulted for that agent. Unsandboxed
+ * so the user's sandbox.json is not consulted for that agent. Unsandboxed
  * execution requests are refused and /bwrap-* mode commands are not registered.
  * Fields are optional and fall back to the standard bwrap defaults (e.g.
  * `sandbox: { fs: { mode: readonly } }` alone is enough for a read-only shell);

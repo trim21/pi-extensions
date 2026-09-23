@@ -381,7 +381,7 @@ export class BwrapRuntime {
   /**
    * 创建时传入的完整配置：加载配置与创建解耦——有它就不再读盘，且沙箱视为固定
    * （不注册 /bwrap-* 命令、非沙盒请求一律拒绝）。undefined 表示从全局/项目
-   * bwrap.json 加载（主会话入口的现状行为）。
+   * sandbox.json 加载（主会话入口的现状行为）。
    */
   private readonly config: BwrapConfig | undefined;
 
@@ -816,7 +816,7 @@ export class BwrapRuntime {
     }
   }
 
-  /** 把命令的权限模式写入项目 bwrap.json 的 approvalRules（allow forever）。 */
+  /** 把命令的权限模式写入项目 sandbox.json 的 approvalRules（allow forever）。 */
   private async persistAllowRule(
     ctx: ExtensionContext,
     command: string,
@@ -1052,7 +1052,7 @@ export class BwrapRuntime {
  * 缺省自建一份不跨入口同步的策略；入口通常显式传入 `createRequestPolicy(pi.events)`。
  * config 为完整配置（completeBwrapConfig 的产物）：加载配置与创建解耦，传入后不再
  * 读盘，且沙箱固定（不注册 /bwrap-* 命令、非沙盒请求直接拒绝）。缺省从全局/项目
- * bwrap.json 加载。
+ * sandbox.json 加载。
  */
 export function createBwrapRuntime(
   policy: RequestPolicy = createRequestPolicy(),
