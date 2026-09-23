@@ -71,8 +71,8 @@ beforeAll(() => {
   process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "cc-bwrap-agent-dir-"));
 });
 
-function setupRuntime(policy: RequestPolicy = createRequestPolicy()) {
-  const runtime = createBwrapRuntime(policy);
+function setupRuntime(policy: RequestPolicy = createRequestPolicy(), config?: BwrapConfig) {
+  const runtime = createBwrapRuntime(policy, config);
   const pi = {
     getFlag: vi.fn(() => false),
     registerFlag: vi.fn(),
@@ -1014,6 +1014,57 @@ describe("BwrapRuntime", () => {
       expect(beforeAgentStart(pi)).not.toContain("currently denied");
     });
   });
+
+  describe("fixed sandbox (explicit config)", () => {
+    // 加载配置与创建解耦：创建时传入完整配置（如子代理元数据声明的 sandbox），
+    // 沙箱随之固定——不注册 /bwrap-* 命令、非沙盒请求一律拒绝。
+    const readonlyConfig: BwrapConfig = {
+      mode: "readonly",
+      writablePaths: [],
+      extraWritablePaths: [],
+      denyPaths: [],
+      extraArgs: [],
+      networkAllowlist: [],
+    };
+
+    it("registers no bwrap commands so the sandbox cannot be loosened", () => {
+      const { pi } = setupRuntime(createRequestPolicy(), readonlyConfig);
+      expect(pi.registerCommand).not.toHaveBeenCalled();
+    });
+
+    it("denies unsandboxed execution requests without a dialog", async () => {
+      const { runtime } = setupRuntime(createRequestPolicy(), readonlyConfig);
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "echo escalate",
+          requestFullAccess: true,
+          ctx: fullAccessContext({}),
+        }),
+      ).rejects.toThrow(/User denied unsandboxed execution/);
+    });
+
+    it("runs under the declared config and omits the escape hatch hint", async () => {
+      const { runtime } = setupRuntime(createRequestPolicy(), readonlyConfig);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf fixed",
+        ctx: {
+          cwd: process.cwd(),
+          hasUI: true,
+          sessionManager: { getSessionId: () => "test-session" },
+        } as never,
+      });
+      expect(result).toMatchObject({ exitCode: 0, output: "fixed" });
+      expect(result.sandboxHint).toContain("the filesystem is read-only");
+      expect(result.sandboxHint).not.toContain("dangerouslyDisableSandbox");
+    });
+
+    it("states the fixed mode and refused requests in the system prompt", () => {
+      const { pi } = setupRuntime(createRequestPolicy(), readonlyConfig);
+      expect(beforeAgentStart(pi)).toContain("fixed by the agent's declared sandbox config");
+    });
+  });
 });
 
 describe("Windows (no bwrap): every command requires approval", () => {
@@ -1170,6 +1221,12 @@ describe("describeSandbox", () => {
       If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request.
       </system-reminder>"
     `);
+  });
+
+  it("omits the unsandboxed escape hatch for a fixed sandbox", () => {
+    const hint = describeSandbox(resolveBwrap({ ...baseConfig, mode: "readonly" }), false, true);
+    expect(hint).toContain("the filesystem is read-only");
+    expect(hint).not.toContain("dangerouslyDisableSandbox");
   });
 
   it("separates unrestricted network from an allowlist", () => {

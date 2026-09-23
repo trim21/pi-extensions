@@ -26,6 +26,10 @@
  *
  * Security default: without an explicit `tools:` in the frontmatter, the
  * subagent only gets read-only tools (read/grep/find/ls) — no bash/write/edit.
+ * A frontmatter `sandbox:` gives the bash tool a fixed bwrap sandbox config
+ * (bwrap.json shape, e.g. mode readonly): it is passed to the subagent's bwrap
+ * runtime as the complete config, unsandboxed execution requests are refused,
+ * and /bwrap-* mode commands are not registered (see spawn-agent-agents.ts).
  */
 
 import { existsSync } from "node:fs";
@@ -42,6 +46,7 @@ import {
   type ExtensionAPI,
   type ExtensionUIContext,
   getAgentDir,
+  type InlineExtension,
   ModelRuntime,
   type PromptOptions,
   SessionManager,
@@ -51,7 +56,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { type BwrapRuntime, createBwrapRuntime } from "./bwrap/runtime.js";
+import { registerShellTools } from "./claude-code/shell.js";
 import { type ToolPendant } from "./lib/pendant.js";
+import { createRequestPolicy } from "./lib/request-policy.js";
+import opencodeBash from "./opencode/bash.js";
 import {
   type AgentConfig,
   applyAgentDefaults,
@@ -87,10 +96,11 @@ const SETTINGS_PATH = join(getAgentDir(), "settings.json");
  * `additionalExtensionPaths` so the subagent uses the enhanced implementation
  * instead of the built-in one.
  *
- * The bash override also carries the bwrap sandbox: opencode/bash.ts creates
- * its own bwrap runtime instance and runs commands through runtime.execute(),
- * so agents that declare the bash tool get sandboxing automatically. Agents
- * without bash need no bwrap setup (there are no commands to sandbox).
+ * `bash` (opencode) and `Bash` (claude-code) are deliberately not in this map:
+ * they are injected via an inline extension factory (subagentShellExtension)
+ * instead, because their bwrap runtime carries the agent's declared sandbox
+ * config — a path-based override has no channel to pass per-agent config
+ * (see createSubagentSession).
  * (Workspace write protection is embedded in the opencode write/edit tools.)
  *
  * Claude Code style tools (capitalized names) map to their claude-code
@@ -111,7 +121,6 @@ const TOOL_EXTENSION_OVERRIDES: Record<string, string> = {
   read: "opencode/files.ts",
   edit: "opencode/files.ts",
   write: "opencode/files.ts",
-  bash: "opencode/bash.ts",
   grep: "opencode/grep.ts",
   glob: "opencode/glob.ts",
   Grep: "claude-code/grep.ts",
@@ -272,6 +281,20 @@ export function overrideExtensionPaths(tools: string[]): string[] {
 }
 
 /**
+ * bash 类工具（opencode `bash` / cc `Bash`）的内联扩展工厂：bwrap runtime 随闭包
+ * 携带该 agent 的完整沙箱配置（frontmatter `sandbox`，已在 discoverAgents 补全成
+ * BwrapConfig）。路径式 override（additionalExtensionPaths）没有 per-agent 配置
+ * 通道，extensionFactories 的工厂闭包是 SDK 提供的唯一注入点。agent.sandbox 为
+ * undefined 时与各注册函数的默认构造完全一致（跟随用户 bwrap 配置）。
+ */
+export function subagentShellExtension(
+  agent: AgentConfig,
+  register: (pi: ExtensionAPI, runtime: BwrapRuntime) => void,
+): InlineExtension {
+  return (pi) => register(pi, createBwrapRuntime(createRequestPolicy(pi.events), agent.sandbox));
+}
+
+/**
  * Resolve the frontmatter model to a runtime Model. A "provider/model" string
  * carries its own provider; a bare model id uses the declared provider, then
  * the settings default provider (the CLI's implicit resolution when no
@@ -328,13 +351,18 @@ export async function createSubagentSession(
   cwd: string,
   parentUI: ExtensionUIContext | undefined,
 ): Promise<AgentSession> {
+  const tools = agent.tools ?? DEFAULT_TOOLS;
   const settingsManager = SettingsManager.create(cwd, getAgentDir());
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir: getAgentDir(),
     settingsManager,
     noExtensions: true,
-    additionalExtensionPaths: overrideExtensionPaths(agent.tools ?? DEFAULT_TOOLS),
+    additionalExtensionPaths: overrideExtensionPaths(tools),
+    extensionFactories: [
+      ...(tools.includes("bash") ? [subagentShellExtension(agent, opencodeBash)] : []),
+      ...(tools.includes("Bash") ? [subagentShellExtension(agent, registerShellTools)] : []),
+    ],
     appendSystemPrompt: agent.systemPrompt ? [agent.systemPrompt] : undefined,
   });
   await loader.reload();
@@ -344,7 +372,7 @@ export async function createSubagentSession(
     cwd,
     model: resolveModel(modelRuntime, agent, settingsManager),
     thinkingLevel: agent.thinkingLevel,
-    tools: agent.tools ?? DEFAULT_TOOLS,
+    tools,
     sessionManager: SessionManager.inMemory(cwd),
     settingsManager,
     resourceLoader: loader,

@@ -13,6 +13,8 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
+import { completeBwrapConfig } from "../src/bwrap/core.js";
+import type { BwrapRuntime } from "../src/bwrap/runtime.js";
 import {
   formatAgentListSection,
   formatSubagentError,
@@ -20,6 +22,7 @@ import {
   resolveModel,
   runAgent,
   type SubagentSession,
+  subagentShellExtension,
 } from "../src/spawn-agent.js";
 import {
   applyAgentDefaults,
@@ -126,6 +129,44 @@ Just read files.
         expect(agents.map((a) => a.name)).toEqual(["off"]);
       },
     );
+  });
+  it("parses a complete sandbox config from frontmatter", () => {
+    const md = `---
+name: explorer
+description: Read-only recon with shell access
+tools:
+  - bash
+sandbox:
+  mode: readonly
+  extraWritablePaths:
+    - /tmp
+---
+Explorer prompt.
+`;
+    withTempDir({ "explorer.md": md }, (dir) => {
+      const [agent] = discoverAgents(dir);
+      expect(agent.sandbox).toMatchObject({
+        mode: "readonly",
+        writablePaths: [".", "/tmp"],
+        extraWritablePaths: ["/tmp"],
+      });
+    });
+  });
+
+  it("skips agents whose sandbox config fails validation", () => {
+    const md = `---
+name: broken
+description: Bad sandbox mode
+tools:
+  - bash
+sandbox:
+  mode: yolo
+---
+Prompt.
+`;
+    withTempDir({ "broken.md": md }, (dir) => {
+      expect(discoverAgents(dir)).toEqual([]);
+    });
   });
 });
 
@@ -247,10 +288,13 @@ describe("applyAgentDefaults", () => {
 });
 
 describe("overrideExtensionPaths", () => {
-  it("loads the bwrap-backed opencode bash for agents that declare the bash tool", () => {
-    for (const tools of [["bash"], ["bash", "edit"]]) {
+  it("routes bash through the inline factory, not path overrides", () => {
+    // bash / cc Bash 的 bwrap runtime 要携带 frontmatter 的完整沙箱配置，路径式
+    // override 没有 per-agent 配置通道，改由 subagentShellExtension 内联工厂注入。
+    for (const tools of [["bash"], ["bash", "edit"], ["Bash"]]) {
       const paths = overrideExtensionPaths(tools);
-      expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(true);
+      expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(false);
+      expect(paths.some((p) => p.endsWith(join("claude-code", "shell.ts")))).toBe(false);
     }
     // Agents without bash need no bwrap sandbox: there are no commands to run.
     const paths = overrideExtensionPaths(["read", "grep", "find", "ls"]);
@@ -267,13 +311,12 @@ describe("overrideExtensionPaths", () => {
     const paths = overrideExtensionPaths(["read", "edit", "write", "bash"]);
     // read/edit/write 共享 opencode/files.ts（共享 LSP service 实例），只加载一次
     expect(paths.filter((p) => p.endsWith(join("opencode", "files.ts")))).toHaveLength(1);
-    expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(true);
+    expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(false);
   });
 
   it("does not load overrides for tools the agent did not declare", () => {
-    const paths = overrideExtensionPaths(["bash"]);
-    expect(paths.some((p) => p.endsWith(join("opencode", "files.ts")))).toBe(false);
-    expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(true);
+    // bash 不在路径 override 表里（内联工厂注入），这里不产生任何路径
+    expect(overrideExtensionPaths(["bash"])).toEqual([]);
   });
 
   it("loads the opencode search tools individually (grep without glob)", () => {
@@ -319,6 +362,32 @@ describe("overrideExtensionPaths", () => {
     // overrideExtensionPaths resolves against the installed package; a
     // missing file means the extension bundle is broken and must be fatal.
     expect(() => overrideExtensionPaths(["read"])).not.toThrow();
+  });
+});
+
+describe("subagentShellExtension", () => {
+  it("injects a runtime carrying the agent's declared sandbox config", async () => {
+    const register = vi.fn();
+    const extension = subagentShellExtension(
+      { ...BASE_AGENT, sandbox: completeBwrapConfig({ mode: "readonly" }) },
+      register,
+    );
+    await (extension as (pi: unknown) => void | Promise<void>)({ events: undefined });
+    expect(register).toHaveBeenCalledOnce();
+    const runtime = (register.mock.calls[0] as [unknown, BwrapRuntime])[1];
+    // 固定沙箱语义随配置生效：非沙盒请求被直接拒绝
+    await expect(
+      runtime.execute({
+        toolCallId: "test",
+        command: "echo escalate",
+        requestFullAccess: true,
+        ctx: {
+          cwd: process.cwd(),
+          hasUI: true,
+          sessionManager: { getSessionId: () => "test-session" },
+        } as never,
+      }),
+    ).rejects.toThrow(/User denied unsandboxed execution/);
   });
 });
 

@@ -134,6 +134,15 @@ export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
   }
 }
 
+/**
+ * 把配置文件形状（可缺省、容忍未知字段）补全成完整 BwrapConfig：合并默认值后走
+ * 同一套 schema 校验。与 loadBwrapConfig 的文件路径共用同一条补全语义，供
+ * frontmatter 等非文件来源的配置使用（配置的加载/构造与沙箱创建解耦）。
+ */
+export function completeBwrapConfig(file: BwrapConfigFile): BwrapConfig {
+  return Value.Parse(bwrapConfigSchema, deepMerge(DEFAULT_CONFIG, file));
+}
+
 function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapConfig {
   return {
     mode: overrides.mode ?? base.mode,

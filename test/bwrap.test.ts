@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildBwrapArgs,
+  completeBwrapConfig,
   findBwrap,
   findGitDirs,
   findMihomo,
@@ -91,6 +92,25 @@ describe("resolveBwrap", () => {
 
     expect(resolved.bwrapEnabled).toBe(true);
     expect(resolved.network).toBe(false);
+  });
+});
+
+describe("completeBwrapConfig", () => {
+  it("fills the defaults so callers can pass a minimal config file shape", () => {
+    const config = completeBwrapConfig({ mode: "readonly" });
+    expect(config).toMatchObject({
+      mode: "readonly",
+      writablePaths: [".", "/tmp"],
+      extraWritablePaths: [],
+      denyPaths: [],
+      extraArgs: [],
+      networkAllowlist: [],
+    });
+  });
+
+  it("keeps declared extraWritablePaths over the defaults", () => {
+    const config = completeBwrapConfig({ mode: "readonly", extraWritablePaths: ["/tmp"] });
+    expect(config.extraWritablePaths).toEqual(["/tmp"]);
   });
 });
 

@@ -23,6 +23,7 @@ import { type SelectAction, selectMultiple, selectWithOptionalInput } from "../l
 import { type ApprovalRule, evaluateBashApproval, matchRule } from "./approval-rules.js";
 import { commandPatternsFor } from "./approval-suggest.js";
 import {
+  type BwrapConfig,
   type BwrapMode,
   findBwrap,
   findMihomo,
@@ -308,12 +309,17 @@ const SANDBOX_ESCAPE_HATCH =
  * 命令没经沙箱（allow-all、审批通过的全权限、Windows）时返回 undefined：
  * 没有沙箱就没什么可提示的。
  */
-export function describeSandbox(resolved: ResolvedBwrap, unsandboxed: boolean): string | undefined {
+export function describeSandbox(
+  resolved: ResolvedBwrap,
+  unsandboxed: boolean,
+  fixed = false,
+): string | undefined {
   if (unsandboxed) return undefined;
   return [
     "<system-reminder>",
     `This command ran in a sandbox: ${describeLimits(resolved)}.`,
-    SANDBOX_ESCAPE_HATCH,
+    // 固定沙箱的提权请求会被直接拒绝，再提示 escape hatch 只会诱导无效请求
+    ...(fixed ? [] : [SANDBOX_ESCAPE_HATCH]),
     "</system-reminder>",
   ].join("\n");
 }
@@ -347,9 +353,16 @@ export class BwrapRuntime {
    * 独立入口各持一份、经 pi.events 同步。
    */
   private readonly policy: RequestPolicy;
+  /**
+   * 创建时传入的完整配置：加载配置与创建解耦——有它就不再读盘，且沙箱视为固定
+   * （不注册 /bwrap-* 命令、非沙盒请求一律拒绝）。undefined 表示从全局/项目
+   * bwrap.json 加载（主会话入口的现状行为）。
+   */
+  private readonly config: BwrapConfig | undefined;
 
-  constructor(policy: RequestPolicy) {
+  constructor(policy: RequestPolicy, config?: BwrapConfig) {
     this.policy = policy;
+    this.config = config;
   }
 
   setup(pi: ExtensionAPI): void {
@@ -394,11 +407,18 @@ export class BwrapRuntime {
     pi.on("before_agent_start", (event, ctx) => {
       const runtime = this.resolve(ctx);
       const isWindows = process.platform === "win32";
-      const modeText = ctx.hasUI
-        ? isWindows
-          ? "Every bash command requires user approval before it runs."
-          : `Current bwrap mode: **${runtime.mode}**. The bwrap runtime selects sandboxing and, when requested, user approval for unsandboxed execution.`
-        : `Current bwrap mode: **${runtime.mode}**. This headless session cannot ask for approval: commands that require user approval are denied.`;
+      let modeText: string;
+      if (ctx.hasUI) {
+        if (isWindows) {
+          modeText = "Every bash command requires user approval before it runs.";
+        } else if (this.config === undefined) {
+          modeText = `Current bwrap mode: **${runtime.mode}**. The bwrap runtime selects sandboxing and, when requested, user approval for unsandboxed execution.`;
+        } else {
+          modeText = `Current bwrap mode: **${runtime.mode}**, fixed by the agent's declared sandbox config. Unsandboxed execution requests are refused without approval.`;
+        }
+      } else {
+        modeText = `Current bwrap mode: **${runtime.mode}**. This headless session cannot ask for approval: commands that require user approval are denied.`;
+      }
       const unavailableText =
         !isWindows && this.bwrapUnavailable
           ? " bwrap is unavailable (binary not found): bash commands are refused unless the user explicitly approves unsandboxed execution."
@@ -414,11 +434,16 @@ export class BwrapRuntime {
       };
     });
 
-    this.registerCommands(pi);
+    // 固定沙箱（创建时显式传入配置）不注册 /bwrap-* 命令：切模式与恢复提权审批
+    // 都可能放宽声明的沙箱
+    if (this.config === undefined) this.registerCommands(pi);
   }
 
   setMode(cwd: string, mode: BwrapMode): ResolvedBwrap {
-    this.resolved = loadSandboxConfig({ workspace: cwd, mode });
+    this.resolved =
+      this.config === undefined
+        ? loadSandboxConfig({ workspace: cwd, mode })
+        : resolveBwrap({ ...this.config, mode });
     return this.resolved;
   }
 
@@ -453,9 +478,13 @@ export class BwrapRuntime {
     // 用户在审批框选「Run this in sandbox」拒绝提权：命令降级为沙盒内执行
     let userChoseSandbox = false;
     if (needsApproval && runtime.bwrapEnabled) {
-      // /bwrap-deny-request：非沙盒请求直接拒绝——审批规则与审批框都不再参与，
-      // 拒绝文案与用户点 Deny 相同，直到用户用 /bwrap-allow-request 恢复审批。
-      if (request.requestFullAccess === true && this.policy.deniesRequests()) {
+      // /bwrap-deny-request 与固定沙箱（创建时显式传入配置）：非沙盒请求直接
+      // 拒绝——审批规则与审批框都不再参与，拒绝文案与用户点 Deny 相同
+      // （deny-request 可用 /bwrap-allow-request 恢复审批，固定沙箱不可恢复）。
+      if (
+        request.requestFullAccess === true &&
+        (this.config !== undefined || this.policy.deniesRequests())
+      ) {
         throw new Error(UNSANDBOXED_DENIED);
       }
       // 先按 approvalRules 自动判定：allow 直接放行，deny 直接拒绝，未命中才弹框
@@ -484,7 +513,9 @@ export class BwrapRuntime {
     }
     // 命令失败时附带的沙箱状态（写边界 + 网络层级），由上层拼进错误文本。
     // 用户选「Run this in sandbox」时不附：沙箱作用域改由 sandboxReminder 说明
-    const sandboxHint = userChoseSandbox ? undefined : describeSandbox(runtime, local);
+    const sandboxHint = userChoseSandbox
+      ? undefined
+      : describeSandbox(runtime, local, this.config !== undefined);
     // 提权被拒、命令在沙盒内执行的系统提醒：成功与失败都由上层附上
     const sandboxReminder = userChoseSandbox ? describeSandboxChoice(runtime) : undefined;
     // 计时起点放在审批之后：审批弹窗的等待时长属于用户 UI 操作，不是命令运行时间
@@ -592,8 +623,7 @@ export class BwrapRuntime {
   }
 
   private resolve(ctx: Pick<ExtensionContext, "cwd">): ResolvedBwrap {
-    const config = loadBwrapConfig(ctx.cwd);
-    if (!this.resolved) this.resolved = resolveBwrap(config);
+    if (!this.resolved) this.resolved = resolveBwrap(this.config ?? loadBwrapConfig(ctx.cwd));
     return this.resolved;
   }
 
@@ -960,7 +990,15 @@ export class BwrapRuntime {
   }
 }
 
-/** 缺省自建一份不跨入口同步的策略；入口通常显式传入 `createRequestPolicy(pi.events)`。 */
-export function createBwrapRuntime(policy: RequestPolicy = createRequestPolicy()): BwrapRuntime {
-  return new BwrapRuntime(policy);
+/**
+ * 缺省自建一份不跨入口同步的策略；入口通常显式传入 `createRequestPolicy(pi.events)`。
+ * config 为完整配置（completeBwrapConfig 的产物）：加载配置与创建解耦，传入后不再
+ * 读盘，且沙箱固定（不注册 /bwrap-* 命令、非沙盒请求直接拒绝）。缺省从全局/项目
+ * bwrap.json 加载。
+ */
+export function createBwrapRuntime(
+  policy: RequestPolicy = createRequestPolicy(),
+  config?: BwrapConfig,
+): BwrapRuntime {
+  return new BwrapRuntime(policy, config);
 }

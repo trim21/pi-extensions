@@ -16,6 +16,10 @@
  *   provider: openai           # optional; overrides the global default
  *   model: claude-haiku-4-5     # optional; overrides the global default
  *   thinkingLevel: high         # optional; overrides the global default
+ *   sandbox:                    # optional; fixed bwrap sandbox for the bash tool
+ *     mode: readonly
+ *     extraWritablePaths:
+ *       - /tmp
  *   ---
  *   System prompt for the agent goes here.
  *
@@ -23,6 +27,16 @@
  * (missing name/description, wrong field types) are skipped. If `tools` is
  * omitted, the subagent runs with the read-only default toolset from the
  * spawn-agent config (read/grep/find/ls) unless overridden there.
+ *
+ * `sandbox` is a complete bwrap config (same shape as bwrap.json) that becomes
+ * the bash tool's fixed sandbox: it is parsed here and passed to the subagent's
+ * bwrap runtime directly (config loading is decoupled from sandbox creation),
+ * so the user's bwrap.json is not consulted for that agent. Unsandboxed
+ * execution requests are refused and /bwrap-* mode commands are not registered.
+ * Fields are optional and fall back to the standard bwrap defaults (e.g.
+ * `sandbox: {mode: readonly}` alone is enough for a read-only shell);
+ * `extraWritablePaths` is the writable escape hatch under a read-only mode.
+ * Without `sandbox`, the subagent's bash follows the user bwrap config.
  *
  * Global defaults for provider/model/thinkingLevel come from
  * `~/.pi/agent/spawn-agent.json` (see loadSpawnAgentConfig); frontmatter
@@ -38,6 +52,8 @@ import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { type BwrapConfig, bwrapConfigFileSchema, completeBwrapConfig } from "./bwrap/core.js";
+
 /**
  * Valid thinking levels, mirroring pi's CLI --thinking validation
  * (VALID_THINKING_LEVELS). "off" disables thinking; "max" is deliberately
@@ -52,6 +68,7 @@ const agentFrontmatterSchema = Type.Object({
   provider: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
   thinkingLevel: Type.Optional(Type.Union(THINKING_LEVELS.map((level) => Type.Literal(level)))),
+  sandbox: Type.Optional(bwrapConfigFileSchema),
 });
 
 function parseAgentFrontmatter(frontmatter: unknown) {
@@ -71,6 +88,8 @@ export interface AgentConfig {
   model?: string;
   /** Thinking level, applied via --thinking. */
   thinkingLevel?: (typeof THINKING_LEVELS)[number];
+  /** bash 的完整沙箱配置（bwrap.json 同构）；undefined 表示跟随用户 bwrap 配置。 */
+  sandbox?: BwrapConfig;
   systemPrompt: string;
   filePath: string;
 }
@@ -118,6 +137,7 @@ export function discoverAgents(dir = join(getAgentDir(), "agents")): AgentConfig
       provider: fm.provider,
       model: fm.model,
       thinkingLevel: fm.thinkingLevel,
+      sandbox: fm.sandbox ? completeBwrapConfig(fm.sandbox) : undefined,
       systemPrompt: body,
       filePath,
     });
