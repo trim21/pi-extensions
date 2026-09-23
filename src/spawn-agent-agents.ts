@@ -37,7 +37,9 @@
  * Fields are optional and fall back to the standard bwrap defaults (e.g.
  * `sandbox: { fs: { mode: readonly } }` alone is enough for a read-only shell);
  * `fs.extraWritablePaths` is the writable escape hatch under a read-only fs mode.
- * Without `sandbox`, the subagent's bash follows the user bwrap config.
+ * Without `sandbox`, the bash tool falls back to SUBAGENT_DEFAULT_SANDBOX
+ * (readonly fs, blocked network; see spawn-agent.ts) instead of the user's
+ * bwrap config.
  *
  * Global defaults for provider/model/thinkingLevel come from
  * `~/.pi/agent/spawn-agent.json` (see loadSpawnAgentConfig); frontmatter
@@ -89,7 +91,7 @@ export interface AgentConfig {
   model?: string;
   /** Thinking level, applied via --thinking. */
   thinkingLevel?: (typeof THINKING_LEVELS)[number];
-  /** bash 的完整沙箱配置（bwrap.json 同构）；undefined 表示跟随用户 bwrap 配置。 */
+  /** bash 的完整沙箱配置（bwrap.json 同构）；undefined 表示用子代理默认沙箱（只读 + 断网）。 */
   sandbox?: BwrapConfig;
   systemPrompt: string;
   filePath: string;

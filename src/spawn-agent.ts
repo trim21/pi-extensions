@@ -33,6 +33,9 @@
  * (sandbox.json shape, e.g. fs.mode readonly): it is passed to the subagent's
  * bwrap runtime as the complete config, unsandboxed execution requests are
  * refused, and /bwrap-* commands are not registered (see spawn-agent-agents.ts).
+ * Without `sandbox:` the bash tool gets SUBAGENT_DEFAULT_SANDBOX (readonly fs,
+ * blocked network) with the same fixed-sandbox semantics: subagents never
+ * inherit the user's sandbox.json, whose modes may be relaxed for interactive use.
  */
 
 import { existsSync } from "node:fs";
@@ -58,6 +61,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { type BwrapConfig, completeBwrapConfig } from "./bwrap/core.js";
 import { type BwrapRuntime, createBwrapRuntime } from "./bwrap/runtime.js";
 import { registerShellTools } from "./claude-code/shell.js";
 import { type ToolPendant } from "./lib/pendant.js";
@@ -77,6 +81,16 @@ import {
 const MAX_OUTPUT_BYTES = 50 * 1024;
 /** Read-only toolset used when an agent does not declare `tools`. */
 const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
+/**
+ * 子代理未在 frontmatter 声明 `sandbox` 时 bash 使用的固定沙箱：文件系统只读 + 断网。
+ * 与主会话（跟随用户 sandbox.json）相反，子代理不继承用户配置——为交互会话放宽的
+ * 模式不应被自动委派的任务顺带复用；要写工作区或联网的 agent 必须在 frontmatter 里
+ * 显式声明自己的 sandbox。
+ */
+export const SUBAGENT_DEFAULT_SANDBOX: BwrapConfig = completeBwrapConfig({
+  fs: { mode: "readonly" },
+  network: { mode: "block" },
+});
 /** Progress log keeps only the most recent lines (rolling window). */
 const MAX_PROGRESS_LINES = 5;
 /** Progress line content (without the `tool:` / `text:` prefix) is capped at 21 chars; longer text is folded to the first/last 9 chars joined by ` … `. */
@@ -283,15 +297,19 @@ export function overrideExtensionPaths(tools: string[]): string[] {
 /**
  * bash 类工具（opencode `bash` / cc `Bash`）的内联扩展工厂：bwrap runtime 随闭包
  * 携带该 agent 的完整沙箱配置（frontmatter `sandbox`，已在 discoverAgents 补全成
- * BwrapConfig）。路径式 override（additionalExtensionPaths）没有 per-agent 配置
- * 通道，extensionFactories 的工厂闭包是 SDK 提供的唯一注入点。agent.sandbox 为
- * undefined 时与各注册函数的默认构造完全一致（跟随用户 bwrap 配置）。
+ * BwrapConfig），未声明时用 SUBAGENT_DEFAULT_SANDBOX。路径式 override
+ * （additionalExtensionPaths）没有 per-agent 配置通道，extensionFactories 的工厂
+ * 闭包是 SDK 提供的唯一注入点。
  */
 export function subagentShellExtension(
   agent: AgentConfig,
   register: (pi: ExtensionAPI, runtime: BwrapRuntime) => void,
 ): InlineExtension {
-  return (pi) => register(pi, createBwrapRuntime(createRequestPolicy(pi.events), agent.sandbox));
+  return (pi) =>
+    register(
+      pi,
+      createBwrapRuntime(createRequestPolicy(pi.events), agent.sandbox ?? SUBAGENT_DEFAULT_SANDBOX),
+    );
 }
 
 /**

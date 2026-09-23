@@ -21,6 +21,7 @@ import {
   overrideExtensionPaths,
   resolveModel,
   runAgent,
+  SUBAGENT_DEFAULT_SANDBOX,
   type SubagentSession,
   subagentShellExtension,
 } from "../src/spawn-agent.js";
@@ -383,6 +384,29 @@ describe("subagentShellExtension", () => {
     await expect(
       runtime.execute({
         toolCallId: "test",
+        command: "echo escalate",
+        requestFullAccess: true,
+        ctx: {
+          cwd: process.cwd(),
+          hasUI: true,
+          sessionManager: { getSessionId: () => "test-session" },
+        } as never,
+      }),
+    ).rejects.toThrow(/User denied unsandboxed execution/);
+  });
+
+  it("falls back to the read-only default sandbox when the agent declares none", async () => {
+    expect(SUBAGENT_DEFAULT_SANDBOX.fs.mode).toBe("readonly");
+    expect(SUBAGENT_DEFAULT_SANDBOX.network.mode).toBe("block");
+
+    const register = vi.fn();
+    const extension = subagentShellExtension(BASE_AGENT, register);
+    await (extension as (pi: unknown) => void | Promise<void>)({ events: undefined });
+    const runtime = (register.mock.calls[0] as [unknown, BwrapRuntime])[1];
+    // 默认沙箱同样是固定的：提权请求直接拒绝，不会落到用户 bwrap 配置的审批路径
+    await expect(
+      runtime.execute({
+        toolCallId: "tool-1",
         command: "echo escalate",
         requestFullAccess: true,
         ctx: {

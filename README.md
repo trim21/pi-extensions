@@ -399,7 +399,7 @@ System prompt for the agent goes here.
 ```
 
 - **默认只读**：frontmatter 不声明 `tools` 时只有 `read`/`grep`/`find`/`ls`，没有 bash/write/edit
-- **`sandbox`**：完整沙箱配置直接作为该子代理 bash 的沙箱（不读用户 sandbox.json），非沙盒请求直接拒绝，`/bwrap-*` 命令不注册；不声明则跟随用户沙箱配置
+- **`sandbox`**：完整沙箱配置直接作为该子代理 bash 的沙箱（不读用户 sandbox.json），非沙盒请求直接拒绝，`/bwrap-*` 命令不注册；不声明则用子代理默认沙箱 `fs: readonly` + `network: block`（同样不继承用户 sandbox.json，需要写工作区或联网须显式声明）
 - **校验跳过**：frontmatter 校验失败（缺 name/description、字段类型错）的文件直接跳过
 - **全局默认**：`~/.pi/agent/spawn-agent.json`（provider / model / thinkingLevel），frontmatter 优先于它，二者都优先于 settings.json 的默认值
 - **可见子代理列表**通过工具的 promptGuidelines 注入 system prompt；改 `agents/*.md` 或 `spawn-agent.json` 后 `/reload` 生效
