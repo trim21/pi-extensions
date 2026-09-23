@@ -37,21 +37,22 @@
 
 基于 [bubblewrap](https://github.com/containers/bubblewrap) 的 OS 级沙箱，为所有 bash 命令提供文件系统和网络隔离。
 
-**前置条件：** 安装 bubblewrap（`apt install bubblewrap` / `pacman -S bubblewrap` / `dnf install bubblewrap`）。`net-allowlist` 模式额外需要 [mihomo](https://github.com/MetaCubeX/mihomo) 与 [slirp4netns](https://github.com/rootless-containers/slirp4netns)。Windows 没有 bubblewrap：`allow-all` 模式直接执行，其余模式下每条命令都走审批。
+**前置条件：** 安装 bubblewrap（`apt install bubblewrap` / `pacman -S bubblewrap` / `dnf install bubblewrap`）。`network: limited` 模式额外需要 [mihomo](https://github.com/MetaCubeX/mihomo) 与 [slirp4netns](https://github.com/rootless-containers/slirp4netns)。Windows 没有 bubblewrap：`fs` 与 `network` 均 `allow-all` 时直接执行，其余组合下每条命令都走审批。
 
-### 模式
+### 模式（两轴正交）
 
-可在运行时切换：
+fs（文件系统）与 network（网络）各自独立取值，可任意组合：
 
-| 模式              | 沙箱 | 网络       | 可写文件系统       | 提权方式 |
-| ----------------- | :--: | ---------- | ------------------ | -------- |
-| `allow-all`       |  关  | 开         | 完整               | 无需     |
-| `workspace-write` |  开  | 关         | workspace + `/tmp` | 用户审批 |
-| `allow-net`       |  开  | 开         | workspace + `/tmp` | 用户审批 |
-| `net-allowlist`   |  开  | 白名单过滤 | workspace + `/tmp` | 用户审批 |
-| `readonly`        |  开  | 关         | 无                 | 用户审批 |
+| 轴        | 取值              | 含义                                                                    |
+| --------- | ----------------- | ----------------------------------------------------------------------- |
+| `fs`      | `readonly`        | 文件系统只读（`fs.extraWritablePaths` 仍是显式开口）                    |
+| `fs`      | `workspace-write` | workspace + `/tmp` 可写，其余只读（`.pi` / `.agent` / `.git` 始终只读） |
+| `fs`      | `allow-all`       | 完全可写（沙箱内整根可写，不做 `.pi` / `.agent` / `.git` 保护绑定）     |
+| `network` | `block`           | 断网                                                                    |
+| `network` | `limited`         | 仅白名单可达：deny-by-default 过滤，`network.allowlist` 之外全部拒绝    |
+| `network` | `allow-all`       | 网络不受限                                                              |
 
-`net-allowlist` 在沙箱之上叠一层 deny-by-default 网络过滤：mihomo TUN（fakeip DNS）+ slirp4netns egress NAT，只有 `networkAllowlist` 里的域名 / IP / CIDR 可达，未命中流量在连接层被拒。进程模型、生命周期与设计约束见 `src/bwrap/README.md`。
+默认 `fs: workspace-write` + `network: block`。两者都 `allow-all` 时完全不经 bwrap、直接执行；其余组合都在 bwrap 里执行：`block` 用 `--unshare-net` 断网，`limited` 叠一层 mihomo TUN（fakeip DNS）+ slirp4netns egress NAT，只有 allowlist 里的域名 / IP / CIDR 可达，未命中流量在连接层被拒（allowlist 为空 = 全部拒绝）。进程模型、生命周期与设计约束见 `src/bwrap/README.md`。
 
 ### 提权机制
 
@@ -67,18 +68,15 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
 
 ### 保护目录
 
-`.pi`、`.agent` 即使在 `workspace-write` 模式下也始终只读；`.git` 同样只读：工作区根是 git 仓库时保护根 `.git`，根不是 git 仓库时才递归扫描嵌套仓库（monorepo 子仓库，跳过 `node_modules`、`.venv` 等包目录）。
+`.pi`、`.agent` 即使在 `fs: workspace-write` 下也始终只读；`.git` 同样只读：工作区根是 git 仓库时保护根 `.git`，根不是 git 仓库时才递归扫描嵌套仓库（monorepo 子仓库，跳过 `node_modules`、`.venv` 等包目录）。`fs: allow-all` 不做这些保护绑定。
 
 可写与保护路径均使用 bwrap 的 `--*-bind-try` 变体：路径不存在时自动忽略该项，而不是让整条命令失败。
 
 ### 运行时命令
 
-- `/bwrap` — 显示当前模式和路径配置
-- `/bwrap-allow-all` — 切换到 allow-all 模式
-- `/bwrap-workspace-write` — 切换到 workspace-write 模式
-- `/bwrap-allow-net` — 切换到 allow-net 模式
-- `/bwrap-net-allowlist` — 切换到 net-allowlist 模式
-- `/bwrap-readonly` — 切换到 readonly 模式
+- `/bwrap` — 显示当前两轴模式和路径配置
+- `/bwrap-fs-readonly` / `/bwrap-fs-workspace-write` / `/bwrap-fs-allow-all` — 切换 fs 模式
+- `/bwrap-network-block` / `/bwrap-network-limited` / `/bwrap-network-allow-all` — 切换 network 模式
 - `/bwrap-reload` — 重载 bwrap 配置并重启网络栈
 - `/bwrap-deny-request` — 拒绝模型的非沙盒请求，不再弹审批框
 - `/bwrap-allow-request` — 恢复非沙盒请求的审批
@@ -92,23 +90,29 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
 
 ```jsonc
 {
-  // "allow-all" | "workspace-write" | "allow-net" | "net-allowlist" | "readonly"
-  "mode": "workspace-write",
+  // 文件系统策略："readonly" | "workspace-write" | "allow-all"
+  "fs": {
+    "mode": "workspace-write",
+    // 可写路径列表，~ 展开为 $HOME，覆盖默认值
+    "writablePaths": [".", "/tmp", "~/my-projects"],
+    // 额外可写路径，与默认值合并（ro-bind）
+    "extraWritablePaths": ["~/.config"],
+    // 沙箱内隐藏的路径：以 / 结尾的视为目录（挂空 tmpfs），否则按文件处理（--ro-bind-try /dev/null）
+    "denyPaths": [],
+  },
+  // 网络策略："block" | "limited" | "allow-all"
+  "network": {
+    "mode": "block",
+    // limited 模式允许直连的域名 / IP / CIDR，可带 :port；空 = 全部拒绝
+    "allowlist": ["github.com", "*.githubassets.com"],
+    // mihomo / slirp4netns 可执行文件路径（可选，缺省走 PATH）
+    "mihomoPath": "/usr/local/bin/mihomo",
+    "slirp4netnsPath": "/usr/bin/slirp4netns",
+  },
   // 自定义 bwrap 路径（可选）
   "bwrapPath": "/usr/local/bin/bwrap",
-  // 可写路径列表，~ 展开为 $HOME，覆盖默认值
-  "writablePaths": [".", "/tmp", "~/my-projects"],
-  // 额外可写路径，与默认值合并（ro-bind）
-  "extraWritablePaths": ["~/.config"],
-  // 沙箱内隐藏的路径：以 / 结尾的视为目录（挂空 tmpfs），否则按文件处理（--ro-bind-try /dev/null）
-  "denyPaths": [],
   // 额外 bwrap 参数
   "extraArgs": ["--die-with-parent"],
-  // net-allowlist 模式允许直连的域名 / IP / CIDR，可带 :port；非空即启用网络过滤
-  "networkAllowlist": ["github.com", "*.githubassets.com"],
-  // mihomo / slirp4netns 可执行文件路径（可选，缺省走 PATH）
-  "mihomoPath": "/usr/local/bin/mihomo",
-  "slirp4netnsPath": "/usr/bin/slirp4netns",
   // 全权限执行的自动审批规则：命中规则的命令不弹确认框
   // allow 直接放行，deny 直接拒绝；命令用 tree-sitter 解析，
   // 按 BashArity 生成模式（git checkout main → "git checkout *"）
@@ -386,9 +390,10 @@ provider: openai # 可选，覆盖全局默认
 model: claude-haiku-4-5 # 可选，覆盖全局默认
 thinkingLevel: high # 可选，off/minimal/low/medium/high/xhigh
 sandbox: # 可选，bash 工具的固定 bwrap 配置（bwrap.json 同构）
-  mode: readonly
-  extraWritablePaths:
-    - /tmp
+  fs:
+    mode: readonly
+    extraWritablePaths:
+      - /tmp
 ---
 System prompt for the agent goes here.
 ```

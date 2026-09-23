@@ -24,11 +24,12 @@ import { type ApprovalRule, evaluateBashApproval, matchRule } from "./approval-r
 import { commandPatternsFor } from "./approval-suggest.js";
 import {
   type BwrapConfig,
-  type BwrapMode,
   findBwrap,
   findMihomo,
+  type FsMode,
   getBwrapConfigPaths,
   loadBwrapConfig,
+  type NetworkMode,
   resolveBwrap,
   resolveBwrapPath,
   type ResolvedBwrap,
@@ -260,18 +261,30 @@ class BashOutput {
   }
 }
 
-function notifyMode(
+/** 模式切换的两轴变更：fs / network 各自独立，至少给一个。 */
+export interface SandboxChange {
+  fs?: FsMode;
+  network?: NetworkMode;
+}
+
+const FS_LABELS: Record<FsMode, string> = {
+  readonly: "fs readonly: read-only filesystem",
+  "workspace-write": "fs workspace-write: / is read-only, /tmp/ and the workspace are writable",
+  "allow-all": "fs allow-all: filesystem fully writable",
+};
+
+const NETWORK_LABELS: Record<NetworkMode, string> = {
+  block: "network block: network off",
+  limited: "network limited: network filtered by allowlist",
+  "allow-all": "network allow-all: network unrestricted",
+};
+
+function notifyChange(
   ctx: { ui: { notify: (message: string, type?: "info" | "warning" | "error") => void } },
-  mode: BwrapMode,
+  change: SandboxChange,
 ): void {
-  const labels: Record<BwrapMode, string> = {
-    "allow-all": "allow-all: sandbox off, network on",
-    "workspace-write": "workspace-write: sandbox on, network off",
-    "allow-net": "allow-net: sandbox on, network on, workspace writable",
-    "net-allowlist": "net-allowlist: sandbox on, network filtered by allowlist",
-    readonly: "readonly: sandbox on, network off, read-only fs",
-  };
-  ctx.ui.notify(labels[mode], "info");
+  if (change.fs !== undefined) ctx.ui.notify(FS_LABELS[change.fs], "info");
+  if (change.network !== undefined) ctx.ui.notify(NETWORK_LABELS[change.network], "info");
 }
 
 /** 沙箱默认写边界：根只读、工作区与 /tmp 可写、.git 只读。不展开用户配置的额外可写路径。 */
@@ -279,15 +292,27 @@ const SANDBOX_WRITE_RULES = "/ is read-only, /tmp/ and ./ are writable, ./.git/ 
 
 /** 网络层级：关 / 只放行白名单 / 完全放开（白名单域名本身不列出，对判断失败无用）。 */
 function describeNetwork(resolved: ResolvedBwrap): string {
-  if (!resolved.network) return "network access is off";
-  if (resolved.networkAllowlist.length > 0)
-    return "network access is limited to allowlisted addresses";
-  return "network access is unrestricted";
+  switch (resolved.network) {
+    case "block": {
+      return "network access is off";
+    }
+    case "limited": {
+      return "network access is limited to a white list";
+    }
+    case "allow-all": {
+      return "network access is unrestricted";
+    }
+  }
 }
 
 /** 沙箱作用域一句话：写边界 + 网络层级（沙箱状态块与沙盒内执行提醒共用）。 */
 function describeLimits(resolved: ResolvedBwrap): string {
-  const writes = resolved.mode === "readonly" ? "the filesystem is read-only" : SANDBOX_WRITE_RULES;
+  const writes =
+    resolved.fs === "readonly"
+      ? "the filesystem is read-only"
+      : resolved.fs === "allow-all"
+        ? "the filesystem is fully writable"
+        : SANDBOX_WRITE_RULES;
   return `${writes}; ${describeNetwork(resolved)}`;
 }
 
@@ -306,7 +331,7 @@ const SANDBOX_ESCAPE_HATCH =
  * 命令失败时作为独立信息块附上的沙箱状态：默认写边界 + 网络层级，以及在沙盒外重跑的手段。
  * 写边界只说沙箱布局（不展开用户配置的可写路径），网络只说层级（不列白名单域名）。
  * 整块包在 `<system-reminder>` 里，与其它系统注入的提示同一形态，模型不会把它当成命令输出。
- * 命令没经沙箱（allow-all、审批通过的全权限、Windows）时返回 undefined：
+ * 命令没经沙箱（fs 与 network 均 allow-all、审批通过的全权限、Windows）时返回 undefined：
  * 没有沙箱就没什么可提示的。
  */
 export function describeSandbox(
@@ -346,7 +371,7 @@ export function sandboxHintBlock(hint: string | undefined): { type: "text"; text
 export class BwrapRuntime {
   private resolved: ResolvedBwrap | undefined;
   private bwrapUnavailable = false;
-  /** net-allowlist 首次执行时解析一次 mihomo 路径，之后随 runtime 复用，不逐命令扫描 PATH。 */
+  /** network limited 首次执行时解析一次 mihomo 路径，之后随 runtime 复用，不逐命令扫描 PATH。 */
   private mihomoPath: string | undefined;
   /**
    * 非沙盒请求策略由创建方注入：聚合入口把它与文件工具的 write-guard 共享同一实例，
@@ -382,8 +407,8 @@ export class BwrapRuntime {
           findBwrap(runtime.bwrapPath);
         } catch (error) {
           // Fail closed: a missing bwrap binary must not silently degrade to an
-          // unsandboxed allow-all session. Commands are refused until the user
-          // explicitly opts out via the bwrap-allow-all command.
+          // unsandboxed session. Commands are refused until the user explicitly
+          // opts out via /bwrap-fs-allow-all and /bwrap-network-allow-all.
           this.bwrapUnavailable = true;
           this.resolved = undefined;
           ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("error", "bwrap: unavailable"));
@@ -391,11 +416,11 @@ export class BwrapRuntime {
           return;
         }
       }
-      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(runtime.mode)));
+      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(runtime)));
       ctx.ui.notify(
         runtime.bwrapEnabled
-          ? `bwrap initialized (${runtime.mode})`
-          : `bwrap mode: ${runtime.mode}`,
+          ? `bwrap initialized (${this.modeText(runtime)})`
+          : `bwrap sandbox off (${this.modeText(runtime)})`,
         "info",
       );
     });
@@ -412,12 +437,12 @@ export class BwrapRuntime {
         if (isWindows) {
           modeText = "Every bash command requires user approval before it runs.";
         } else if (this.config === undefined) {
-          modeText = `Current bwrap mode: **${runtime.mode}**. The bwrap runtime selects sandboxing and, when requested, user approval for unsandboxed execution.`;
+          modeText = `Current bwrap sandbox: filesystem **${runtime.fs}**, network **${runtime.network}**. The bwrap runtime selects sandboxing and, when requested, user approval for unsandboxed execution.`;
         } else {
-          modeText = `Current bwrap mode: **${runtime.mode}**, fixed by the agent's declared sandbox config. Unsandboxed execution requests are refused without approval.`;
+          modeText = `Current bwrap sandbox: filesystem **${runtime.fs}**, network **${runtime.network}**, fixed by the agent's declared sandbox config. Unsandboxed execution requests are refused without approval.`;
         }
       } else {
-        modeText = `Current bwrap mode: **${runtime.mode}**. This headless session cannot ask for approval: commands that require user approval are denied.`;
+        modeText = `Current bwrap sandbox: filesystem **${runtime.fs}**, network **${runtime.network}**. This headless session cannot ask for approval: commands that require user approval are denied.`;
       }
       const unavailableText =
         !isWindows && this.bwrapUnavailable
@@ -439,11 +464,23 @@ export class BwrapRuntime {
     if (this.config === undefined) this.registerCommands(pi);
   }
 
-  setMode(cwd: string, mode: BwrapMode): ResolvedBwrap {
-    this.resolved =
-      this.config === undefined
-        ? loadSandboxConfig({ workspace: cwd, mode })
-        : resolveBwrap({ ...this.config, mode });
+  setMode(cwd: string, change: SandboxChange): ResolvedBwrap {
+    if (this.config === undefined) {
+      this.resolved = loadSandboxConfig({
+        workspace: cwd,
+        ...(change.fs !== undefined && { fsMode: change.fs }),
+        ...(change.network !== undefined && { networkMode: change.network }),
+      });
+    } else {
+      this.resolved = resolveBwrap({
+        ...this.config,
+        fs: { ...this.config.fs, ...(change.fs !== undefined && { mode: change.fs }) },
+        network: {
+          ...this.config.network,
+          ...(change.network !== undefined && { mode: change.network }),
+        },
+      });
+    }
     return this.resolved;
   }
 
@@ -465,7 +502,7 @@ export class BwrapRuntime {
     ) {
       throw new Error(
         "bwrap (bubblewrap) not found; refusing to execute commands without sandboxing. " +
-          "Install bubblewrap and restart the session, or disable the sandbox explicitly with /bwrap-allow-all.",
+          "Install bubblewrap and restart the session, or disable sandboxing explicitly with /bwrap-fs-allow-all and /bwrap-network-allow-all.",
       );
     }
     // workspace 恒为 session 工作区；cwd 只是本次命令的进程执行目录，
@@ -473,7 +510,7 @@ export class BwrapRuntime {
     const workspace = request.ctx.cwd;
     const execCwd = request.cwd ?? workspace;
     // 需要人工审批：非 Windows 仅 requestFullAccess；Windows 上默认所有命令
-    // （allow-all 模式是显式 opt-out，仍直接执行）。
+    // （fs 与 network 均 allow-all 是显式 opt-out，仍直接执行）。
     const needsApproval = request.requestFullAccess === true || (isWindows && runtime.bwrapEnabled);
     // 用户在审批框选「Run this in sandbox」拒绝提权：命令降级为沙盒内执行
     let userChoseSandbox = false;
@@ -502,12 +539,12 @@ export class BwrapRuntime {
           )) === "sandbox";
       }
     }
-    // 不经沙箱的三种情形：Windows（无 bubblewrap）、审批通过的全权限、allow-all 模式；
-    // 例外是用户选「Run this in sandbox」：提权被拒，命令照常进沙箱
+    // 不经沙箱的三种情形：Windows（无 bubblewrap）、审批通过的全权限、fs 与 network 均
+    // allow-all；例外是用户选「Run this in sandbox」：提权被拒，命令照常进沙箱
     const local = !userChoseSandbox && (isWindows || needsApproval || !runtime.bwrapEnabled);
-    // mihomoPath 是 ResolvedBwrap 的 override 语义：首次 net-allowlist 执行时解析
+    // mihomoPath 是 ResolvedBwrap 的 override 语义：首次 limited 执行时解析
     // 一次存入私有字段，之后写回 resolved 直达 createNetworkStack，不逐命令扫描 PATH
-    if (runtime.network && runtime.networkAllowlist.length > 0) {
+    if (runtime.network === "limited") {
       runtime.mihomoPath ??= this.mihomoPath ?? findMihomo();
       this.mihomoPath = runtime.mihomoPath;
     }
@@ -813,34 +850,40 @@ export class BwrapRuntime {
         description: "Show bwrap sandbox configuration",
         flags: Type.Object({}),
       },
-      "bwrap-allow-all": {
-        name: "bwrap-allow-all",
+      "bwrap-fs-readonly": {
+        name: "bwrap-fs-readonly",
         usage: "",
-        description: "Disable bwrap sandbox, full access",
+        description: "Filesystem: read-only (no writes)",
         flags: Type.Object({}),
       },
-      "bwrap-workspace-write": {
-        name: "bwrap-workspace-write",
+      "bwrap-fs-workspace-write": {
+        name: "bwrap-fs-workspace-write",
         usage: "",
-        description: "Sandbox on, network off, workspace writable",
+        description: "Filesystem: / read-only, /tmp and workspace writable",
         flags: Type.Object({}),
       },
-      "bwrap-allow-net": {
-        name: "bwrap-allow-net",
+      "bwrap-fs-allow-all": {
+        name: "bwrap-fs-allow-all",
         usage: "",
-        description: "Sandbox on, network on, workspace writable",
+        description: "Filesystem: fully writable",
         flags: Type.Object({}),
       },
-      "bwrap-net-allowlist": {
-        name: "bwrap-net-allowlist",
+      "bwrap-network-block": {
+        name: "bwrap-network-block",
         usage: "",
-        description: "Sandbox on, network filtered by allowlist, workspace writable",
+        description: "Network: off",
         flags: Type.Object({}),
       },
-      "bwrap-readonly": {
-        name: "bwrap-readonly",
+      "bwrap-network-limited": {
+        name: "bwrap-network-limited",
         usage: "",
-        description: "Sandbox on, network off, no writes",
+        description: "Network: only allowlisted addresses",
+        flags: Type.Object({}),
+      },
+      "bwrap-network-allow-all": {
+        name: "bwrap-network-allow-all",
+        usage: "",
+        description: "Network: unrestricted",
         flags: Type.Object({}),
       },
       "bwrap-reload": {
@@ -876,7 +919,7 @@ export class BwrapRuntime {
             return;
           }
           if (!runtime.bwrapEnabled) {
-            commandCtx.ui.notify(`bwrap disabled (mode: ${runtime.mode})`, "info");
+            commandCtx.ui.notify(`bwrap sandbox off (${this.modeText(runtime)})`, "info");
             return;
           }
           const writable = runtime.writablePaths.map((path) =>
@@ -884,24 +927,25 @@ export class BwrapRuntime {
           );
           const deny = runtime.denyPaths.map((path) => resolveBwrapPath(path, commandCtx.cwd));
           commandCtx.ui.notify(
-            `bwrap ${runtime.mode} ${runtime.network ? "net" : "no-net"} write:[${writable.join(", ")}] deny:[${deny.join(", ") || "-"}]`,
+            `bwrap fs:${runtime.fs} net:${runtime.network} write:[${writable.join(", ")}] deny:[${deny.join(", ") || "-"}]`,
             "info",
           );
         }),
     });
 
-    for (const [name, mode] of [
-      ["bwrap-allow-all", "allow-all"],
-      ["bwrap-workspace-write", "workspace-write"],
-      ["bwrap-allow-net", "allow-net"],
-      ["bwrap-net-allowlist", "net-allowlist"],
-      ["bwrap-readonly", "readonly"],
+    for (const [name, change] of [
+      ["bwrap-fs-readonly", { fs: "readonly" }],
+      ["bwrap-fs-workspace-write", { fs: "workspace-write" }],
+      ["bwrap-fs-allow-all", { fs: "allow-all" }],
+      ["bwrap-network-block", { network: "block" }],
+      ["bwrap-network-limited", { network: "limited" }],
+      ["bwrap-network-allow-all", { network: "allow-all" }],
     ] as const) {
       pi.registerCommand(name, {
         description: specs[name].description,
         handler: (args, ctx) =>
           this.runCommand(pi, specs[name], args, ctx, (commandCtx) =>
-            this.switchMode(pi, mode, commandCtx),
+            this.switchMode(pi, change, commandCtx),
           ),
       });
     }
@@ -932,28 +976,42 @@ export class BwrapRuntime {
     this.resolved = undefined;
     this.bwrapUnavailable = false;
     const runtime = this.resolve(ctx);
-    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(runtime.mode)));
-    ctx.ui.notify(`bwrap config reloaded (mode: ${runtime.mode})`, "info");
+    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(runtime)));
+    ctx.ui.notify(`bwrap config reloaded (${this.modeText(runtime)})`, "info");
   }
 
-  private switchMode(pi: ExtensionAPI, mode: BwrapMode, ctx: ExtensionCommandContext): void {
+  private switchMode(pi: ExtensionAPI, change: SandboxChange, ctx: ExtensionCommandContext): void {
     if (!ctx.hasUI) {
-      ctx.ui.notify("bwrap mode cannot be changed without an interactive UI", "warning");
+      ctx.ui.notify("bwrap modes cannot be changed without an interactive UI", "warning");
       return;
     }
-    this.setMode(ctx.cwd, mode);
-    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(mode)));
-    notifyMode(ctx, mode);
-    pi.sendMessage({
-      customType: "info",
-      content: `Bwrap sandbox mode changed to "${mode}".`,
-      display: true,
-    });
+    const runtime = this.setMode(ctx.cwd, change);
+    ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(runtime)));
+    notifyChange(ctx, change);
+    if (change.fs !== undefined) {
+      pi.sendMessage({
+        customType: "info",
+        content: `Bwrap filesystem mode changed to "${change.fs}".`,
+        display: true,
+      });
+    }
+    if (change.network !== undefined) {
+      pi.sendMessage({
+        customType: "info",
+        content: `Bwrap network mode changed to "${change.network}".`,
+        display: true,
+      });
+    }
   }
 
-  /** 状态行文案：模式 + 非沙盒请求策略（拒绝时标注，便于解释模型的请求为何被拒）。 */
-  private statusLabel(mode: BwrapMode): string {
-    return `bwrap: ${mode}${this.policy.deniesRequests() ? " (requests denied)" : ""}`;
+  /** 模式文案：fs 与 network 两轴。 */
+  private modeText(runtime: ResolvedBwrap): string {
+    return `fs: ${runtime.fs}, network: ${runtime.network}`;
+  }
+
+  /** 状态行文案：两轴模式 + 非沙盒请求策略（拒绝时标注，便于解释模型的请求为何被拒）。 */
+  private statusLabel(runtime: ResolvedBwrap): string {
+    return `bwrap: fs=${runtime.fs} net=${runtime.network}${this.policy.deniesRequests() ? " (requests denied)" : ""}`;
   }
 
   /**
@@ -970,7 +1028,7 @@ export class BwrapRuntime {
     );
     const runtime = this.resolve(ctx);
     if (ctx.hasUI && runtime.bwrapEnabled && !this.bwrapUnavailable) {
-      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(runtime.mode)));
+      ctx.ui.setStatus("bwrap", ctx.ui.theme.fg("accent", this.statusLabel(runtime)));
     }
   }
 

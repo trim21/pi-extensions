@@ -1,6 +1,6 @@
 /**
  * 沙箱执行层（src/bwrap/sandbox.ts）测试：
- * - loadSandboxConfig：单文件配置、mode 覆盖、"." 归一化、缺失文件报错
+ * - loadSandboxConfig：单文件配置、fs/network 覆盖、"." 归一化、缺失文件报错
  * - previewSandboxCommand：打印的 argv/环境 与实际执行语义一致（bind、--unshare-net、nsenter 包裹）
  * - runInSandbox / runSandboxCommand：本地（不经沙箱）与真实 bwrap 两条执行路径
  *
@@ -68,28 +68,33 @@ describe("loadSandboxConfig", () => {
   it("只读显式配置文件，并把 '.' 归一化成绝对工作区", () => {
     const directory = workspace();
     const file = config(directory, {
-      mode: "workspace-write",
-      writablePaths: [".", "/tmp"],
-      denyPaths: ["/etc/shadow"],
+      fs: {
+        mode: "workspace-write",
+        writablePaths: [".", "/tmp"],
+        denyPaths: ["/etc/shadow"],
+      },
     });
 
     const strategy = loadSandboxConfig({ workspace: directory, configPath: file });
 
-    expect(strategy.mode).toBe("workspace-write");
+    expect(strategy.fs).toBe("workspace-write");
     expect(strategy.bwrapEnabled).toBe(true);
-    expect(strategy.network).toBe(false);
+    expect(strategy.network).toBe("block");
     expect(strategy.writablePaths).toEqual([directory, "/tmp"]);
     expect(strategy.denyPaths).toEqual(["/etc/shadow"]);
   });
 
-  it("mode 参数覆盖配置文件", () => {
+  it("fsMode / networkMode 参数覆盖配置文件", () => {
     const directory = workspace();
-    const file = config(directory, { mode: "readonly" });
+    const file = config(directory, { fs: { mode: "readonly" } });
 
-    expect(loadSandboxConfig({ workspace: directory, configPath: file }).mode).toBe("readonly");
+    expect(loadSandboxConfig({ workspace: directory, configPath: file }).fs).toBe("readonly");
     expect(
-      loadSandboxConfig({ workspace: directory, configPath: file, mode: "allow-net" }).mode,
-    ).toBe("allow-net");
+      loadSandboxConfig({ workspace: directory, configPath: file, fsMode: "allow-all" }).fs,
+    ).toBe("allow-all");
+    expect(
+      loadSandboxConfig({ workspace: directory, configPath: file, networkMode: "limited" }).network,
+    ).toBe("limited");
   });
 
   it("显式配置文件不存在时直接报错，不静默回落到默认值", () => {
@@ -106,7 +111,7 @@ describe("previewSandboxCommand", () => {
     const directory = workspace();
     const strategy = loadSandboxConfig({
       workspace: directory,
-      configPath: config(directory, { mode: "workspace-write" }),
+      configPath: config(directory, { fs: { mode: "workspace-write" } }),
     });
 
     const preview = await previewSandboxCommand(strategy, {
@@ -131,7 +136,7 @@ describe("previewSandboxCommand", () => {
     const directory = workspace();
     const strategy = loadSandboxConfig({
       workspace: directory,
-      configPath: config(directory, { mode: "workspace-write" }),
+      configPath: config(directory, { fs: { mode: "workspace-write" } }),
     });
 
     const preview = await previewSandboxCommand(strategy, {
@@ -143,13 +148,12 @@ describe("previewSandboxCommand", () => {
     expect(preview.env.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
   });
 
-  it("net-allowlist：命令包在 nsenter 之内", async () => {
+  it("network limited：命令包在 nsenter 之内", async () => {
     const directory = workspace();
     const strategy = loadSandboxConfig({
       workspace: directory,
       configPath: config(directory, {
-        mode: "net-allowlist",
-        networkAllowlist: ["pypi.org"],
+        network: { mode: "limited", allowlist: ["pypi.org"] },
       }),
     });
 
@@ -182,7 +186,7 @@ describe("runInSandbox（不经 bwrap）", () => {
     const directory = workspace();
     const strategy = loadSandboxConfig({
       workspace: directory,
-      configPath: config(directory, { mode: "readonly" }),
+      configPath: config(directory, { fs: { mode: "readonly" } }),
     });
     let output = "";
 
@@ -199,14 +203,14 @@ describe("runInSandbox（不经 bwrap）", () => {
     expect(result.exitCode).toBe(7);
   });
 
-  it("allow-all 模式无需显式 unsandboxed 即可执行", async () => {
+  it("fs 与 network 均 allow-all 时无需显式 unsandboxed 即可执行", async () => {
     const directory = workspace();
     let output = "";
 
     const result = await runSandboxCommand({
       workspace: directory,
       command: "printf allow-all",
-      configPath: config(directory, { mode: "allow-all" }),
+      configPath: config(directory, { fs: { mode: "allow-all" }, network: { mode: "allow-all" } }),
       onData: (data) => {
         output += data.toString();
       },
@@ -223,7 +227,10 @@ describe("runInSandbox（不经 bwrap）", () => {
       runInSandbox(
         loadSandboxConfig({
           workspace: directory,
-          configPath: config(directory, { mode: "allow-all" }),
+          configPath: config(directory, {
+            fs: { mode: "allow-all" },
+            network: { mode: "allow-all" },
+          }),
         }),
         {
           workspace: directory,
@@ -245,7 +252,7 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
     const result = await runSandboxCommand({
       workspace: directory,
       command: "printf written > note.txt && cat note.txt",
-      configPath: config(directory, { mode: "workspace-write", writablePaths: ["."] }),
+      configPath: config(directory, { fs: { mode: "workspace-write", writablePaths: ["."] } }),
       onData: (data) => {
         output += data.toString();
       },
@@ -260,7 +267,7 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
     const directory = workspace();
     const readable = join(directory, "exists.txt");
     writeFileSync(readable, "host-content");
-    const configPath = config(directory, { mode: "readonly" });
+    const configPath = config(directory, { fs: { mode: "readonly" } });
 
     const read = await runSandboxCommand({
       workspace: directory,
@@ -290,7 +297,7 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
     const result = await runSandboxCommand({
       workspace: directory,
       command: `printf nope > ${join(outside, "nope.txt")}`,
-      configPath: config(directory, { mode: "workspace-write", writablePaths: ["."] }),
+      configPath: config(directory, { fs: { mode: "workspace-write", writablePaths: ["."] } }),
       onData: () => {},
     });
 
@@ -308,9 +315,11 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
       workspace: directory,
       command: `printf ok > ${join(directory, "link", "data", "note.txt")}`,
       configPath: config(directory, {
-        mode: "workspace-write",
-        writablePaths: ["."],
-        extraWritablePaths: [`${join(directory, "link", "data")}/`],
+        fs: {
+          mode: "workspace-write",
+          writablePaths: ["."],
+          extraWritablePaths: [`${join(directory, "link", "data")}/`],
+        },
       }),
       onData: () => {},
     });

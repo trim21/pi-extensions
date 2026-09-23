@@ -30,9 +30,9 @@
  * Security default: without an explicit `tools:` in the frontmatter, the
  * subagent only gets read-only tools (read/grep/find/ls) — no bash/write/edit.
  * A frontmatter `sandbox:` gives the bash tool a fixed bwrap sandbox config
- * (bwrap.json shape, e.g. mode readonly): it is passed to the subagent's bwrap
- * runtime as the complete config, unsandboxed execution requests are refused,
- * and /bwrap-* mode commands are not registered (see spawn-agent-agents.ts).
+ * (bwrap.json shape, e.g. fs.mode readonly): it is passed to the subagent's
+ * bwrap runtime as the complete config, unsandboxed execution requests are
+ * refused, and /bwrap-* commands are not registered (see spawn-agent-agents.ts).
  */
 
 import { existsSync } from "node:fs";

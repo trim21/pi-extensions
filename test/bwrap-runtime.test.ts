@@ -150,7 +150,8 @@ describe("BwrapRuntime", () => {
     const { pi } = setupRuntime();
     expect(pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
     expect(pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
-    expect(pi.registerCommand).toHaveBeenCalledWith("bwrap-readonly", expect.any(Object));
+    expect(pi.registerCommand).toHaveBeenCalledWith("bwrap-fs-readonly", expect.any(Object));
+    expect(pi.registerCommand).toHaveBeenCalledWith("bwrap-network-block", expect.any(Object));
     expect(pi.registerCommand).toHaveBeenCalledWith("bwrap-deny-request", expect.any(Object));
     expect(pi.registerCommand).toHaveBeenCalledWith("bwrap-allow-request", expect.any(Object));
   });
@@ -181,7 +182,7 @@ describe("BwrapRuntime", () => {
     it("still runs commands after the user explicitly switches to allow-all", async () => {
       const { runtime, pi } = setupRuntime();
       startSession(runtime, pi);
-      runtime.setMode(process.cwd(), "allow-all");
+      runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
       const result = await runtime.execute({
         toolCallId: "test",
         command: "printf runtime",
@@ -197,7 +198,7 @@ describe("BwrapRuntime", () => {
 
   it("executes through its selected allow-all policy", async () => {
     const { runtime } = setupRuntime();
-    runtime.setMode(process.cwd(), "allow-all");
+    runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
     const result = await runtime.execute({
       toolCallId: "test",
       command: "printf runtime",
@@ -212,7 +213,7 @@ describe("BwrapRuntime", () => {
 
   it("returns the full result for non-zero exit codes instead of throwing", async () => {
     const { runtime } = setupRuntime();
-    runtime.setMode(process.cwd(), "allow-all");
+    runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
     const result = await runtime.execute({
       toolCallId: "test",
       command: "sh -c 'printf oops; exit 3'",
@@ -227,7 +228,7 @@ describe("BwrapRuntime", () => {
 
   it("attaches partial output to timeout errors", async () => {
     const { runtime } = setupRuntime();
-    runtime.setMode(process.cwd(), "allow-all");
+    runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
     await expect(
       runtime.execute({
         toolCallId: "test",
@@ -249,7 +250,7 @@ describe("BwrapRuntime", () => {
 
   it("attaches partial output to abort errors", async () => {
     const { runtime } = setupRuntime();
-    runtime.setMode(process.cwd(), "allow-all");
+    runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
     const controller = new AbortController();
     const promise = runtime.execute({
       toolCallId: "test",
@@ -276,7 +277,7 @@ describe("BwrapRuntime", () => {
 
   it("excludes the approval dialog wait from the aborted duration", async () => {
     const { runtime } = setupRuntime();
-    runtime.setMode(process.cwd(), "workspace-write");
+    runtime.setMode(process.cwd(), { fs: "workspace-write" });
     const controller = new AbortController();
     // 审批弹窗停留 200ms 才放行：这段等待是用户 UI 操作，不属于命令运行时间
     const select = vi.fn(async () => {
@@ -313,7 +314,7 @@ describe("BwrapRuntime", () => {
   it("runs headless sessions under the configured mode instead of forcing readonly", async () => {
     writeFileSync(
       join(process.env.PI_CODING_AGENT_DIR!, "bwrap.json"),
-      JSON.stringify({ mode: "allow-all" }),
+      JSON.stringify({ fs: { mode: "allow-all" }, network: { mode: "allow-all" } }),
     );
     const { runtime } = setupRuntime();
     try {
@@ -350,7 +351,7 @@ describe("BwrapRuntime", () => {
 
     it("auto-allows commands matching an allow rule without a dialog", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       // workspace-write + approvalRules.allow(git status *) → 直接放行，不弹框
       const select = vi.fn();
       const result = await runtime.execute({
@@ -366,7 +367,7 @@ describe("BwrapRuntime", () => {
 
     it("auto-denies commands matching a deny rule without a dialog", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn();
       await expect(
         runtime.execute({
@@ -381,7 +382,7 @@ describe("BwrapRuntime", () => {
 
     it("falls back to the dialog when no rule matches", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn(async () => ALLOW_ONCE);
       const result = await runtime.execute({
         toolCallId: "test",
@@ -401,7 +402,7 @@ describe("BwrapRuntime", () => {
         }),
       );
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn(async () => DENY);
       await expect(
         runtime.execute({
@@ -425,7 +426,7 @@ describe("BwrapRuntime", () => {
       );
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-partial-allow-"));
       const { runtime } = setupRuntime();
-      runtime.setMode(directory, "workspace-write");
+      runtime.setMode(directory, { fs: "workspace-write" });
       const select = vi
         .fn()
         .mockResolvedValueOnce(EDIT_RULES)
@@ -456,7 +457,7 @@ describe("BwrapRuntime", () => {
   describe("full-access approval dialog", () => {
     it("runs the command when the user approves once", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn(async () => ALLOW_ONCE);
       const abort = vi.fn();
       const result = await runtime.execute({
@@ -471,7 +472,7 @@ describe("BwrapRuntime", () => {
 
     it("runs the command in the sandbox and reports it when the user picks Run this in sandbox", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn(async () => RUN_IN_SANDBOX);
       const result = await runtime.execute({
         toolCallId: "test",
@@ -494,7 +495,7 @@ describe("BwrapRuntime", () => {
     it("does not persist allow rules when the user picks Run this in sandbox", async () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-sandbox-choice-"));
       const { runtime } = setupRuntime();
-      runtime.setMode(directory, "workspace-write");
+      runtime.setMode(directory, { fs: "workspace-write" });
       // 子菜单勾选了 pattern，但主决策是「在沙盒内执行」：allow 规则会自动放行非沙盒
       // 执行，与该选择矛盾，不持久化
       const select = vi
@@ -515,7 +516,7 @@ describe("BwrapRuntime", () => {
 
     it("folds the persistable patterns behind the edit option instead of listing them", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn(async (_title: string, options: string[]) => {
         // 主决策层只列动作：pattern 不再直接铺开，收进 Edit approval rules
         expect(options).toEqual([ALLOW_ONCE, RUN_IN_SANDBOX, DENY, DENY_WITH_REASON, EDIT_RULES]);
@@ -533,7 +534,7 @@ describe("BwrapRuntime", () => {
     it("returns to the main decision when the edit submenu is dismissed", async () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-back-"));
       const { runtime } = setupRuntime();
-      runtime.setMode(directory, "workspace-write");
+      runtime.setMode(directory, { fs: "workspace-write" });
       // 子菜单关闭（Esc）= 回到主菜单：未勾选任何规则，Allow once 放行且不写配置
       const select = vi
         .fn()
@@ -552,7 +553,7 @@ describe("BwrapRuntime", () => {
 
     it("shows the resolved exec cwd inside the approval dialog when workdir is provided", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn(async () => ALLOW_ONCE);
       // workdir 传相对路径（原始参数值），cwd 是 bash 工具解析后的实际执行目录
       const execCwd = mkdtempSync(join(tmpdir(), "cc-bwrap-workdir-"));
@@ -572,7 +573,7 @@ describe("BwrapRuntime", () => {
 
     it("omits the workdir line when the workdir argument is absent", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn(async () => ALLOW_ONCE);
       await runtime.execute({
         toolCallId: "test",
@@ -589,7 +590,7 @@ describe("BwrapRuntime", () => {
 
     it("shows the dcg suggestion inside the approval dialog when available", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       dcgSuggestionMock.mockResolvedValue({
         kind: "suggestion",
         suggestion: { kind: "danger", text: "dcg 建议拦截: test" },
@@ -611,7 +612,7 @@ describe("BwrapRuntime", () => {
 
     it("renders the dialog without a dcg block when dcg is not installed", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       // 默认 not-installed：不显示建议块，也不 notify
       const notify = vi.fn();
       const select = vi.fn(async () => ALLOW_ONCE);
@@ -631,7 +632,7 @@ describe("BwrapRuntime", () => {
 
     it("notifies a warning when the dcg scan fails", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       dcgSuggestionMock.mockResolvedValue({ kind: "failed", detail: "dcg scan timed out" });
       const notify = vi.fn();
       const select = vi.fn(async () => ALLOW_ONCE);
@@ -652,7 +653,7 @@ describe("BwrapRuntime", () => {
 
     it("aborts and denies when the selection is dismissed", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn().mockResolvedValue(undefined);
       const abort = vi.fn();
       await expect(
@@ -668,7 +669,7 @@ describe("BwrapRuntime", () => {
 
     it("denies without feedback when the user denies", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn(async () => DENY);
       const abort = vi.fn();
       await expect(
@@ -684,7 +685,7 @@ describe("BwrapRuntime", () => {
 
     it("includes the typed reason when the user denies with reason", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn(async () => DENY_WITH_REASON);
       const input = vi.fn(async () => "too risky");
       await expect(
@@ -701,7 +702,7 @@ describe("BwrapRuntime", () => {
 
     it("denies without feedback when the reason input is cancelled", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn(async () => DENY_WITH_REASON);
       const input = vi.fn().mockResolvedValue(undefined);
       await expect(
@@ -719,7 +720,7 @@ describe("BwrapRuntime", () => {
 
     it("denies without reason text when the reason input is blank", async () => {
       const { runtime } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const select = vi.fn(async () => DENY_WITH_REASON);
       const input = vi.fn(async () => " ".repeat(3));
       await expect(
@@ -735,7 +736,7 @@ describe("BwrapRuntime", () => {
     it("persists rules picked in the edit submenu and auto-approves next time", async () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-forever-"));
       const { runtime } = setupRuntime();
-      runtime.setMode(directory, "workspace-write");
+      runtime.setMode(directory, { fs: "workspace-write" });
       // 主菜单 Edit approval rules → 勾选 `printf *`（☐ 前缀）→ Back → Allow once
       const select = vi
         .fn()
@@ -770,7 +771,7 @@ describe("BwrapRuntime", () => {
     it("persists only the checked patterns of a pipeline command", async () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-partial-"));
       const { runtime } = setupRuntime();
-      runtime.setMode(directory, "workspace-write");
+      runtime.setMode(directory, { fs: "workspace-write" });
       // `echo 1 | head` 识别出 `echo *` 与 `head *` 两个 pattern：
       // 主菜单 Edit approval rules → 子菜单只勾选 `echo *` → Back → Allow once
       const select = vi
@@ -807,7 +808,7 @@ describe("BwrapRuntime", () => {
     it("allow once without checking any rule runs without persisting", async () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-once-"));
       const { runtime } = setupRuntime();
-      runtime.setMode(directory, "workspace-write");
+      runtime.setMode(directory, { fs: "workspace-write" });
       const select = vi.fn(async () => ALLOW_ONCE);
       const result = await runtime.execute({
         toolCallId: "test",
@@ -832,7 +833,7 @@ describe("BwrapRuntime", () => {
     it("checked rules persist as allow even when the user denies", async () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-deny-allow-"));
       const { runtime } = setupRuntime();
-      runtime.setMode(directory, "workspace-write");
+      runtime.setMode(directory, { fs: "workspace-write" });
       // 子菜单勾选 `printf *` 后回主菜单点 Deny：本次拒绝，但规则持久化为 allow
       const select = vi
         .fn()
@@ -867,7 +868,7 @@ describe("BwrapRuntime", () => {
     it("checked rules persist as allow even when the user denies with reason", async () => {
       const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-deny-reason-"));
       const { runtime } = setupRuntime();
-      runtime.setMode(directory, "workspace-write");
+      runtime.setMode(directory, { fs: "workspace-write" });
       const select = vi
         .fn()
         .mockResolvedValueOnce(EDIT_RULES)
@@ -893,7 +894,7 @@ describe("BwrapRuntime", () => {
   describe("unsandboxed request policy", () => {
     it("denies a full-access request without a dialog after /bwrap-deny-request", async () => {
       const { runtime, pi } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       const { ctx, ui } = commandContext();
       await runBwrapCommand(pi, "bwrap-deny-request", ctx);
       expect(ui.notify).toHaveBeenCalledWith(
@@ -902,7 +903,7 @@ describe("BwrapRuntime", () => {
       );
       expect(ui.setStatus).toHaveBeenCalledWith(
         "bwrap",
-        "bwrap: workspace-write (requests denied)",
+        "bwrap: fs=workspace-write net=block (requests denied)",
       );
 
       const select = vi.fn();
@@ -924,7 +925,7 @@ describe("BwrapRuntime", () => {
         JSON.stringify({ approvalRules: [{ action: "allow", pattern: "printf *" }] }),
       );
       const { runtime, pi } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       await runBwrapCommand(pi, "bwrap-deny-request", commandContext().ctx);
 
       const select = vi.fn();
@@ -942,7 +943,7 @@ describe("BwrapRuntime", () => {
 
     it("leaves sandboxed commands untouched while requests are denied", async () => {
       const { runtime, pi } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       await runBwrapCommand(pi, "bwrap-deny-request", commandContext().ctx);
       // 策略只作用于非沙盒请求：普通命令仍走沙箱路径（沙箱可用时正常完成，
       // bwrap 缺失时以安装提示失败），两种结果都不是策略拒绝
@@ -960,7 +961,7 @@ describe("BwrapRuntime", () => {
 
     it("restores the approval dialog after /bwrap-allow-request", async () => {
       const { runtime, pi } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       await runBwrapCommand(pi, "bwrap-deny-request", commandContext().ctx);
       const { ctx, ui } = commandContext();
       await runBwrapCommand(pi, "bwrap-allow-request", ctx);
@@ -995,7 +996,7 @@ describe("BwrapRuntime", () => {
       const bus = createEventBus();
       const otherEntry = createRequestPolicy(bus);
       const { runtime, pi } = setupRuntime(createRequestPolicy(bus));
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
 
       await runBwrapCommand(pi, "bwrap-deny-request", commandContext().ctx);
       expect(otherEntry.deniesRequests()).toBe(true);
@@ -1008,7 +1009,7 @@ describe("BwrapRuntime", () => {
 
     it("re-enables approval on the next session start", async () => {
       const { runtime, pi } = setupRuntime();
-      runtime.setMode(process.cwd(), "workspace-write");
+      runtime.setMode(process.cwd(), { fs: "workspace-write" });
       await runBwrapCommand(pi, "bwrap-deny-request", commandContext().ctx);
       startSession(runtime, pi);
       expect(beforeAgentStart(pi)).not.toContain("currently denied");
@@ -1019,12 +1020,14 @@ describe("BwrapRuntime", () => {
     // 加载配置与创建解耦：创建时传入完整配置（如子代理元数据声明的 sandbox），
     // 沙箱随之固定——不注册 /bwrap-* 命令、非沙盒请求一律拒绝。
     const readonlyConfig: BwrapConfig = {
-      mode: "readonly",
-      writablePaths: [],
-      extraWritablePaths: [],
-      denyPaths: [],
+      fs: {
+        mode: "readonly",
+        writablePaths: [],
+        extraWritablePaths: [],
+        denyPaths: [],
+      },
+      network: { mode: "block", allowlist: [] },
       extraArgs: [],
-      networkAllowlist: [],
     };
 
     it("registers no bwrap commands so the sandbox cannot be loosened", () => {
@@ -1168,7 +1171,7 @@ describe("Windows (no bwrap): every command requires approval", () => {
   it("allow-all mode skips approval (explicit opt-out)", async () => {
     const { runtime, pi } = setupRuntime();
     startSession(runtime, pi);
-    runtime.setMode(process.cwd(), "allow-all");
+    runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
     const select = vi.fn();
     const result = await runtime.execute({
       toolCallId: "test",
@@ -1194,12 +1197,14 @@ describe("Windows (no bwrap): every command requires approval", () => {
 
 describe("describeSandbox", () => {
   const baseConfig: BwrapConfig = {
-    mode: "workspace-write",
-    writablePaths: [".", "/tmp"],
-    extraWritablePaths: [],
-    denyPaths: [],
+    fs: {
+      mode: "workspace-write",
+      writablePaths: [".", "/tmp"],
+      extraWritablePaths: [],
+      denyPaths: [],
+    },
+    network: { mode: "block", allowlist: [] },
     extraArgs: [],
-    networkAllowlist: [],
   };
   function render(overrides: Partial<BwrapConfig>, unsandboxed = false): string | undefined {
     return describeSandbox(resolveBwrap({ ...baseConfig, ...overrides }), unsandboxed);
@@ -1215,7 +1220,7 @@ describe("describeSandbox", () => {
   });
 
   it("reports read-only mode as a read-only filesystem", () => {
-    expect(render({ mode: "readonly" })).toMatchInlineSnapshot(`
+    expect(render({ fs: { ...baseConfig.fs, mode: "readonly" } })).toMatchInlineSnapshot(`
       "<system-reminder>
       This command ran in a sandbox: the filesystem is read-only; network access is off.
       If the command needs more than that, use the \`dangerouslyDisableSandbox\` parameter to request unsandboxed execution; the user must approve this request.
@@ -1223,19 +1228,31 @@ describe("describeSandbox", () => {
     `);
   });
 
+  it("reports fs allow-all as a fully writable filesystem", () => {
+    expect(render({ fs: { ...baseConfig.fs, mode: "allow-all" } })).toContain(
+      "the filesystem is fully writable",
+    );
+  });
+
   it("omits the unsandboxed escape hatch for a fixed sandbox", () => {
-    const hint = describeSandbox(resolveBwrap({ ...baseConfig, mode: "readonly" }), false, true);
+    const hint = describeSandbox(
+      resolveBwrap({ ...baseConfig, fs: { ...baseConfig.fs, mode: "readonly" } }),
+      false,
+      true,
+    );
     expect(hint).toContain("the filesystem is read-only");
     expect(hint).not.toContain("dangerouslyDisableSandbox");
   });
 
   it("separates unrestricted network from an allowlist", () => {
-    expect(render({ mode: "allow-net" })).toContain("network access is unrestricted");
-    expect(render({ mode: "net-allowlist", networkAllowlist: ["example.com"] })).toContain(
-      "network access is limited to allowlisted addresses",
+    expect(render({ network: { mode: "allow-all", allowlist: [] } })).toContain(
+      "network access is unrestricted",
+    );
+    expect(render({ network: { mode: "limited", allowlist: ["example.com"] } })).toContain(
+      "network access is limited to a white list",
     );
     // allowlist 域名不出现在提示里
-    expect(render({ mode: "net-allowlist", networkAllowlist: ["example.com"] })).not.toContain(
+    expect(render({ network: { mode: "limited", allowlist: ["example.com"] } })).not.toContain(
       "example.com",
     );
   });
@@ -1243,8 +1260,11 @@ describe("describeSandbox", () => {
   it("ignores configured extra writable paths: the hint describes the default layout", () => {
     expect(
       render({
-        writablePaths: ["."],
-        extraWritablePaths: ["/data", "sub", "~/cache"],
+        fs: {
+          ...baseConfig.fs,
+          writablePaths: ["."],
+          extraWritablePaths: ["/data", "sub", "~/cache"],
+        },
       }),
     ).toMatchInlineSnapshot(`
       "<system-reminder>
@@ -1255,7 +1275,7 @@ describe("describeSandbox", () => {
   });
 
   it("returns no hint when the command ran outside the sandbox", () => {
-    expect(render({ mode: "workspace-write" }, true)).toBeUndefined();
-    expect(render({ mode: "allow-all" }, true)).toBeUndefined();
+    expect(render({}, true)).toBeUndefined();
+    expect(render({ fs: { ...baseConfig.fs, mode: "allow-all" } }, true)).toBeUndefined();
   });
 });

@@ -16,16 +16,24 @@ async function configPaths() {
 describe("loadBwrapConfig", () => {
   it("validates file overrides before merging defaults", async () => {
     const { directory, global, project } = await configPaths();
-    await writeFile(global, JSON.stringify({ mode: "allow-net", extraWritablePaths: ["/cache"] }));
-    await writeFile(project, JSON.stringify({ writablePaths: ["."] }));
+    await writeFile(
+      global,
+      JSON.stringify({
+        network: { mode: "allow-all" },
+        fs: { extraWritablePaths: ["/cache"] },
+      }),
+    );
+    await writeFile(project, JSON.stringify({ fs: { writablePaths: ["."] } }));
 
     expect(loadBwrapConfig(directory, { global, project })).toEqual({
-      mode: "allow-net",
-      writablePaths: ["."],
-      extraWritablePaths: ["/cache"],
-      denyPaths: [],
+      fs: {
+        mode: "workspace-write",
+        writablePaths: ["."],
+        extraWritablePaths: ["/cache"],
+        denyPaths: [],
+      },
+      network: { mode: "allow-all", allowlist: [] },
       extraArgs: [],
-      networkAllowlist: [],
       approvalRules: [],
     });
   });
@@ -41,11 +49,11 @@ describe("loadBwrapConfig", () => {
 
   it("raises for an invalid mode with the field path", async () => {
     const { directory, global, project } = await configPaths();
-    await writeFile(global, JSON.stringify({ mode: "unsafe" }));
+    await writeFile(global, JSON.stringify({ fs: { mode: "unsafe" } }));
 
     const load = () => loadBwrapConfig(directory, { global, project });
     expect(load).toThrow(`Invalid bwrap configuration at ${global}`);
-    expect(load).toThrow(/\/mode: /);
+    expect(load).toThrow(/\/fs\/mode: /);
   });
 
   it("raises for an invalid array member with the field path", async () => {
@@ -59,15 +67,23 @@ describe("loadBwrapConfig", () => {
 
   it("ignores unknown configuration properties", async () => {
     const { directory, global, project } = await configPaths();
-    await writeFile(project, JSON.stringify({ mode: "allow-net", unknowable: { future: 1 } }));
+    await writeFile(
+      project,
+      JSON.stringify({
+        network: { mode: "limited", unknowable: { future: 1 } },
+        unknowable: { future: 1 },
+      }),
+    );
 
     expect(loadBwrapConfig(directory, { global, project })).toEqual({
-      mode: "allow-net",
-      writablePaths: [".", "/tmp"],
-      extraWritablePaths: [],
-      denyPaths: [],
+      fs: {
+        mode: "workspace-write",
+        writablePaths: [".", "/tmp"],
+        extraWritablePaths: [],
+        denyPaths: [],
+      },
+      network: { mode: "limited", allowlist: [] },
       extraArgs: [],
-      networkAllowlist: [],
       approvalRules: [],
     });
   });

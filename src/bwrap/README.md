@@ -1,12 +1,12 @@
 # bwrap 沙箱与网络栈架构
 
-本文档描述 `net-allowlist` 模式下的进程模型、网络路径与生命周期管理。
+本文档描述 `network: limited` 模式下的进程模型、网络路径与生命周期管理。
 基础沙箱（bwrap 文件系统隔离）见 `core.ts` / `sandbox.ts`；本文聚焦网络栈
 （`network-stack.ts` / `holder.ts` / `mihomo-config.ts`）。
 
 ## 进程模型
 
-`net-allowlist` 模式下，一个沙箱 session 的常驻进程树（宿主侧视角，共 4 个）：
+`network: limited` 模式下，一个沙箱 session 的常驻进程树（宿主侧视角，共 4 个）：
 
 ```
 pi 进程（network-stack.ts）
@@ -34,7 +34,7 @@ ns 跑命令。一个 session 内 N 条命令复用同一套常驻栈。
 ## 网络路径
 
 - **mihomo（③）**：TUN（`auto-route` + `strict-route`）+ fakeip +
-  deny-by-default。allowlist 域名进 `fake-ip-filter`（真实解析），DNS 层
+  deny-by-default。`network.allowlist` 域名进 `fake-ip-filter`（真实解析），DNS 层
   `DOMAIN-SUFFIX,…,DIRECT`；连接层未命中 allowlist 的流量 `MATCH,REJECT`。
   注意：fakeip 对不在 filter 里的域名**直接本地应答**，不会走到
   `dns.rules` 的 REJECT——未允许域名是先拿 fakeip、连接层再被拒。

@@ -1239,7 +1239,7 @@ describe("Bash", () => {
   beforeEach(() => {
     // 直接执行命令，不走沙箱
     const runtime = createBwrapRuntime();
-    runtime.setMode(process.cwd(), "allow-all");
+    runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
     bashTool = loadBashTool(runtime);
   });
 

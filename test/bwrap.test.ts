@@ -20,7 +20,7 @@ import {
   type ResolvedBwrap,
 } from "../src/bwrap/core.ts";
 
-/** 沙箱显式以调用进程的 uid/gid 运行（net-allowlist 下避免在沙箱内自称 root）。 */
+/** 沙箱显式以调用进程的 uid/gid 运行（network limited 下避免在沙箱内自称 root）。 */
 function identityArgs(): string[] {
   const uid = process.getuid?.();
   const gid = process.getgid?.();
@@ -64,61 +64,109 @@ describe("findMihomo", () => {
 });
 
 describe("resolveBwrap", () => {
-  it("resolves allow-net with sandbox on and network on", () => {
+  it("resolves fs workspace-write with network allow-all", () => {
     const resolved = resolveBwrap({
-      mode: "allow-net",
-      writablePaths: [".", "/tmp"],
-      extraWritablePaths: [],
-      denyPaths: [],
+      fs: {
+        mode: "workspace-write",
+        writablePaths: [".", "/tmp"],
+        extraWritablePaths: [],
+        denyPaths: [],
+      },
+      network: { mode: "allow-all", allowlist: [] },
       extraArgs: [],
-      networkAllowlist: [],
     });
 
-    expect(resolved.mode).toBe("allow-net");
+    expect(resolved.fs).toBe("workspace-write");
+    expect(resolved.network).toBe("allow-all");
     expect(resolved.bwrapEnabled).toBe(true);
-    expect(resolved.network).toBe(true);
     expect(resolved.writablePaths).toEqual([".", "/tmp"]);
   });
 
-  it("resolves workspace-write with network off", () => {
+  it("resolves fs workspace-write with network block", () => {
     const resolved = resolveBwrap({
-      mode: "workspace-write",
-      writablePaths: [".", "/tmp"],
-      extraWritablePaths: [],
-      denyPaths: [],
+      fs: {
+        mode: "workspace-write",
+        writablePaths: [".", "/tmp"],
+        extraWritablePaths: [],
+        denyPaths: [],
+      },
+      network: { mode: "block", allowlist: [] },
       extraArgs: [],
-      networkAllowlist: [],
     });
 
     expect(resolved.bwrapEnabled).toBe(true);
-    expect(resolved.network).toBe(false);
+    expect(resolved.network).toBe("block");
+  });
+
+  it("resolves fs readonly with network allow-all（旧 mode 矩阵表达不出的组合）", () => {
+    const resolved = resolveBwrap({
+      fs: { mode: "readonly", writablePaths: [".", "/tmp"], extraWritablePaths: [], denyPaths: [] },
+      network: { mode: "allow-all", allowlist: [] },
+      extraArgs: [],
+    });
+
+    expect(resolved.bwrapEnabled).toBe(true);
+    expect(resolved.writablePaths).toEqual([]);
+  });
+
+  it("resolves fs allow-all：沙箱内整根可写，但 network block 仍需包裹", () => {
+    const resolved = resolveBwrap({
+      fs: {
+        mode: "allow-all",
+        writablePaths: [".", "/tmp"],
+        extraWritablePaths: [],
+        denyPaths: [],
+      },
+      network: { mode: "block", allowlist: [] },
+      extraArgs: [],
+    });
+
+    expect(resolved.bwrapEnabled).toBe(true);
+    expect(resolved.writablePaths).toEqual(["/"]);
+  });
+
+  it("resolves fs allow-all with network allow-all：完全不经沙箱", () => {
+    const resolved = resolveBwrap({
+      fs: {
+        mode: "allow-all",
+        writablePaths: [".", "/tmp"],
+        extraWritablePaths: [],
+        denyPaths: [],
+      },
+      network: { mode: "allow-all", allowlist: [] },
+      extraArgs: [],
+    });
+
+    expect(resolved.bwrapEnabled).toBe(false);
   });
 });
 
 describe("completeBwrapConfig", () => {
   it("fills the defaults so callers can pass a minimal config file shape", () => {
-    const config = completeBwrapConfig({ mode: "readonly" });
+    const config = completeBwrapConfig({ fs: { mode: "readonly" } });
     expect(config).toMatchObject({
-      mode: "readonly",
-      writablePaths: [".", "/tmp"],
-      extraWritablePaths: [],
-      denyPaths: [],
+      fs: {
+        mode: "readonly",
+        writablePaths: [".", "/tmp"],
+        extraWritablePaths: [],
+        denyPaths: [],
+      },
+      network: { mode: "block", allowlist: [] },
       extraArgs: [],
-      networkAllowlist: [],
     });
   });
 
   it("keeps declared extraWritablePaths over the defaults", () => {
-    const config = completeBwrapConfig({ mode: "readonly", extraWritablePaths: ["/tmp"] });
-    expect(config.extraWritablePaths).toEqual(["/tmp"]);
+    const config = completeBwrapConfig({ fs: { mode: "readonly", extraWritablePaths: ["/tmp"] } });
+    expect(config.fs.extraWritablePaths).toEqual(["/tmp"]);
   });
 });
 
 describe("buildBwrapArgs", () => {
   const base: ResolvedBwrap = {
-    mode: "workspace-write",
+    fs: "workspace-write",
+    network: "block",
     bwrapEnabled: true,
-    network: false,
     writablePaths: [".", "/tmp"],
     extraWritablePaths: [],
     denyPaths: [],
@@ -159,7 +207,7 @@ describe("buildBwrapArgs", () => {
     const uid = process.getuid?.();
     const gid = process.getgid?.();
 
-    // net-allowlist 模式下 holder 的 userns 把 pi 的 uid 映射成 0，不显式指定时
+    // network limited 模式下 holder 的 userns 把 pi 的 uid 映射成 0，不显式指定时
     // 沙箱内 id/stat 会自称 root（落盘属主仍正确）；缺 uid/gid 的环境不应拼出半截参数。
     if (uid === undefined || gid === undefined) {
       expect(args).not.toContain("--uid");
@@ -260,6 +308,21 @@ describe("buildBwrapArgs", () => {
       join(workspace, ".agent"),
       join(workspace, ".git"),
     ]);
+  });
+
+  it("fs allow-all：整根可写、不做保护绑定", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-allowall-"));
+    mkdirSync(join(workspace, ".git"));
+    const args = await buildBwrapArgs(
+      { ...base, fs: "allow-all", writablePaths: ["/"] },
+      workspace,
+    );
+
+    expect(args).toEqual(expect.arrayContaining(["--bind-try", "/", "/"]));
+    const roBindTargets = args.flatMap((value, index) =>
+      value === "--ro-bind-try" ? [args[index + 1]] : [],
+    );
+    expect(roBindTargets).toEqual([]);
   });
 
   it("protects only the root .git when the workspace is a git repo", async () => {

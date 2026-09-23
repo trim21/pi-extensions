@@ -17,9 +17,10 @@
  *   model: claude-haiku-4-5     # optional; overrides the global default
  *   thinkingLevel: high         # optional; overrides the global default
  *   sandbox:                    # optional; fixed bwrap sandbox for the bash tool
- *     mode: readonly
- *     extraWritablePaths:
- *       - /tmp
+ *     fs:
+ *       mode: readonly
+ *       extraWritablePaths:
+ *         - /tmp
  *   ---
  *   System prompt for the agent goes here.
  *
@@ -34,8 +35,8 @@
  * so the user's bwrap.json is not consulted for that agent. Unsandboxed
  * execution requests are refused and /bwrap-* mode commands are not registered.
  * Fields are optional and fall back to the standard bwrap defaults (e.g.
- * `sandbox: {mode: readonly}` alone is enough for a read-only shell);
- * `extraWritablePaths` is the writable escape hatch under a read-only mode.
+ * `sandbox: { fs: { mode: readonly } }` alone is enough for a read-only shell);
+ * `fs.extraWritablePaths` is the writable escape hatch under a read-only fs mode.
  * Without `sandbox`, the subagent's bash follows the user bwrap config.
  *
  * Global defaults for provider/model/thinkingLevel come from

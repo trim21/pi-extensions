@@ -29,7 +29,7 @@ beforeAll(() => {
 function loadBashTool(): { tool: RegisteredTool; runtime: BwrapRuntime } {
   let tool: RegisteredTool | undefined;
   const runtime = createBwrapRuntime();
-  runtime.setMode(process.cwd(), "allow-all");
+  runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
   opencodeBash(
     {
       registerTool(def: RegisteredTool) {

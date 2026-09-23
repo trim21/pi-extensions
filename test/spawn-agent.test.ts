@@ -137,18 +137,21 @@ description: Read-only recon with shell access
 tools:
   - bash
 sandbox:
-  mode: readonly
-  extraWritablePaths:
-    - /tmp
+  fs:
+    mode: readonly
+    extraWritablePaths:
+      - /tmp
 ---
 Explorer prompt.
 `;
     withTempDir({ "explorer.md": md }, (dir) => {
       const [agent] = discoverAgents(dir);
       expect(agent.sandbox).toMatchObject({
-        mode: "readonly",
-        writablePaths: [".", "/tmp"],
-        extraWritablePaths: ["/tmp"],
+        fs: {
+          mode: "readonly",
+          writablePaths: [".", "/tmp"],
+          extraWritablePaths: ["/tmp"],
+        },
       });
     });
   });
@@ -160,7 +163,8 @@ description: Bad sandbox mode
 tools:
   - bash
 sandbox:
-  mode: yolo
+  fs:
+    mode: yolo
 ---
 Prompt.
 `;
@@ -369,7 +373,7 @@ describe("subagentShellExtension", () => {
   it("injects a runtime carrying the agent's declared sandbox config", async () => {
     const register = vi.fn();
     const extension = subagentShellExtension(
-      { ...BASE_AGENT, sandbox: completeBwrapConfig({ mode: "readonly" }) },
+      { ...BASE_AGENT, sandbox: completeBwrapConfig({ fs: { mode: "readonly" } }) },
       register,
     );
     await (extension as (pi: unknown) => void | Promise<void>)({ events: undefined });

@@ -36,7 +36,7 @@ const OUTSIDE = "/etc";
 
 function workspaceRuntime(workspace: string) {
   const runtime = createBwrapRuntime();
-  runtime.setMode(workspace, "workspace-write");
+  runtime.setMode(workspace, { fs: "workspace-write" });
   return runtime;
 }
 

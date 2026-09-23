@@ -19,11 +19,12 @@ import {
   buildBwrapInvocation,
   bwrapArgv,
   type BwrapConfig,
-  type BwrapMode,
   createBwrapBashOperations,
   createNetworkStack,
+  type FsMode,
   getBwrapConfigPaths,
   loadBwrapConfig,
+  type NetworkMode,
   type NetworkStackLog,
   resolveBwrap,
   resolveBwrapPath,
@@ -36,8 +37,10 @@ export interface SandboxConfigInput {
   workspace: string;
   /** 只使用该配置文件（跳过全局 + 项目两级合并）。 */
   configPath?: string;
-  /** 覆盖配置中的 mode（等价于会话内切 /bwrap 模式）。 */
-  mode?: BwrapMode;
+  /** 覆盖配置中的 fs.mode（等价于会话内切 /bwrap-fs-* 模式）。 */
+  fsMode?: FsMode;
+  /** 覆盖配置中的 network.mode（等价于会话内切 /bwrap-network-* 模式）。 */
+  networkMode?: NetworkMode;
 }
 
 export interface SandboxRunOptions {
@@ -53,7 +56,7 @@ export interface SandboxRunOptions {
   signal?: AbortSignal;
   /** 超时秒数：kill 整个进程组并以 TimeoutError 结束。 */
   timeout?: number;
-  /** 调用方已决定不经沙箱（审批通过的全权限、Windows）。allow-all 模式无需显式设置。 */
+  /** 调用方已决定不经沙箱（审批通过的全权限、Windows）。fs 与 network 均 allow-all 时无需显式设置。 */
   unsandboxed?: boolean;
   /** 网络栈子进程输出转发，仅诊断用（默认丢弃）。 */
   log?: NetworkStackLog;
@@ -92,13 +95,19 @@ export function loadSandboxConfig(input: SandboxConfigInput): ResolvedBwrap {
       : // 同一文件两侧：loadBwrapConfig 内部去重，等价于「只读这一个文件」
         { global: configPath, project: configPath };
   const config: BwrapConfig = loadBwrapConfig(workspace, paths);
-  const configured: BwrapConfig =
-    input.mode === undefined ? config : { ...config, mode: input.mode };
+  const configured: BwrapConfig = {
+    ...config,
+    fs: { ...config.fs, ...(input.fsMode !== undefined && { mode: input.fsMode }) },
+    network: {
+      ...config.network,
+      ...(input.networkMode !== undefined && { mode: input.networkMode }),
+    },
+  };
   return resolveSandboxPaths(resolveBwrap(configured), workspace);
 }
 
 /**
- * 在 resolved 描述的沙箱里执行一条命令；net-allowlist 模式下现建现停网络栈。
+ * 在 resolved 描述的沙箱里执行一条命令；network limited 模式下现建现停网络栈。
  * 超时与取消的错误语义由底层 operations.exec 抛出（TimeoutError / AbortError）。
  */
 export async function runInSandbox(

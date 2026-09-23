@@ -22,19 +22,18 @@ import {
 
 const PROTECTED_DIRS = [".pi", ".agent"];
 
-export const BWRAP_MODES = [
-  "allow-all",
-  "workspace-write",
-  "allow-net",
-  "net-allowlist",
-  "readonly",
-] as const;
+/** 文件系统策略：只读 / 工作区可写 / 完全放开。与网络策略正交，可任意组合。 */
+export const FS_MODES = ["readonly", "workspace-write", "allow-all"] as const;
 
-export type BwrapMode = (typeof BWRAP_MODES)[number];
+export type FsMode = (typeof FS_MODES)[number];
 
-const bwrapConfigProperties = {
-  mode: StringEnum(BWRAP_MODES),
-  bwrapPath: Type.Optional(Type.String()),
+/** 网络策略：断网 / 仅白名单过滤 / 完全放开。与文件系统策略正交，可任意组合。 */
+export const NETWORK_MODES = ["block", "limited", "allow-all"] as const;
+
+export type NetworkMode = (typeof NETWORK_MODES)[number];
+
+const fsConfigProperties = {
+  mode: StringEnum(FS_MODES),
   writablePaths: Type.Array(Type.String()),
   extraWritablePaths: Type.Array(Type.String()),
   denyPaths: Type.Array(
@@ -43,23 +42,31 @@ const bwrapConfigProperties = {
         "沙箱内隐藏的路径：以 / 结尾为目录（挂空 tmpfs），否则为文件（--ro-bind-try /dev/null）",
     }),
   ),
-  extraArgs: Type.Array(Type.String()),
-  networkAllowlist: Type.Array(
-    Type.String({ description: "允许直连的域名 / IP / CIDR，可带 :port" }),
+};
+
+const networkConfigProperties = {
+  mode: StringEnum(NETWORK_MODES),
+  allowlist: Type.Array(
+    Type.String({ description: "limited 模式允许直连的域名 / IP / CIDR，可带 :port" }),
   ),
   mihomoPath: Type.Optional(Type.String()),
   slirp4netnsPath: Type.Optional(Type.String()),
-  approvalRules: Type.Optional(
-    Type.Array(
-      Type.Object(
-        {
-          action: StringEnum(["allow", "deny"] as const),
-          pattern: Type.String({ description: '命令模式，如 "git push *"、"npm install *"' }),
-        },
-        { additionalProperties: true },
-      ),
-    ),
-  ),
+};
+
+const approvalRuleSchema = Type.Object(
+  {
+    action: StringEnum(["allow", "deny"] as const),
+    pattern: Type.String({ description: '命令模式，如 "git push *"、"npm install *"' }),
+  },
+  { additionalProperties: true },
+);
+
+const bwrapConfigProperties = {
+  fs: Type.Object(fsConfigProperties, { additionalProperties: true }),
+  network: Type.Object(networkConfigProperties, { additionalProperties: true }),
+  bwrapPath: Type.Optional(Type.String()),
+  extraArgs: Type.Array(Type.String()),
+  approvalRules: Type.Optional(Type.Array(approvalRuleSchema)),
 };
 
 // 配置文件容忍未知字段：schema 之外的字段（如新版本扩展新增的配置）会被忽略，
@@ -68,24 +75,37 @@ export const bwrapConfigSchema = Type.Object(bwrapConfigProperties, {
   additionalProperties: true,
 });
 
-export const bwrapConfigFileSchema = Type.Partial(bwrapConfigSchema, {
-  additionalProperties: true,
-});
+/** 配置文件形状：顶层与 fs / network 两级字段都可缺省，逐层回落默认值。 */
+export const bwrapConfigFileSchema = Type.Object(
+  {
+    fs: Type.Optional(
+      Type.Partial(Type.Object(fsConfigProperties, { additionalProperties: true })),
+    ),
+    network: Type.Optional(
+      Type.Partial(Type.Object(networkConfigProperties, { additionalProperties: true })),
+    ),
+    bwrapPath: Type.Optional(Type.String()),
+    extraArgs: Type.Optional(Type.Array(Type.String())),
+    approvalRules: Type.Optional(Type.Array(approvalRuleSchema)),
+  },
+  { additionalProperties: true },
+);
 
 export type BwrapConfig = Static<typeof bwrapConfigSchema>;
 export type BwrapConfigFile = Static<typeof bwrapConfigFileSchema>;
 
 export interface ResolvedBwrap {
-  mode: BwrapMode;
+  fs: FsMode;
+  network: NetworkMode;
+  /** 是否需要 bwrap 包裹：fs 或 network 任一需要沙箱强制；两者都 allow-all 时直接执行。 */
   bwrapEnabled: boolean;
-  network: boolean;
   bwrapPath?: string;
   writablePaths: string[];
   extraWritablePaths: string[];
   /** 沙箱内隐藏的路径：以 / 结尾为目录（挂空 tmpfs），否则为文件（--ro-bind-try /dev/null）。 */
   denyPaths: string[];
   extraArgs: string[];
-  /** 允许直连的域名 / IP / IP:port 白名单（非空 = 启用 mihomo 网络过滤）。 */
+  /** network limited 模式允许直连的域名 / IP / IP:port 白名单（空 = 全部拒绝）。 */
   networkAllowlist: string[];
   mihomoPath?: string;
   slirp4netnsPath?: string;
@@ -94,44 +114,41 @@ export interface ResolvedBwrap {
 }
 
 const DEFAULT_CONFIG: BwrapConfig = {
-  mode: "workspace-write",
-  writablePaths: [".", "/tmp"],
-  extraWritablePaths: [],
-  denyPaths: [],
+  fs: {
+    mode: "workspace-write",
+    writablePaths: [".", "/tmp"],
+    extraWritablePaths: [],
+    denyPaths: [],
+  },
+  network: {
+    mode: "block",
+    allowlist: [],
+  },
   extraArgs: [],
-  networkAllowlist: [],
 };
 
 export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
-  const base = {
-    mode: config.mode,
+  return {
+    fs: config.fs.mode,
+    network: config.network.mode,
+    bwrapEnabled: config.fs.mode !== "allow-all" || config.network.mode !== "allow-all",
     bwrapPath: config.bwrapPath,
-    writablePaths: config.writablePaths,
-    extraWritablePaths: config.extraWritablePaths,
-    denyPaths: config.denyPaths,
+    // readonly 无条件去掉默认可写路径（extraWritablePaths 仍是显式开口，保留）；
+    // allow-all 在沙箱内把整棵根挂成可写，保护绑定（.pi/.agent/.git）随之取消。
+    writablePaths:
+      config.fs.mode === "readonly"
+        ? []
+        : config.fs.mode === "allow-all"
+          ? ["/"]
+          : config.fs.writablePaths,
+    extraWritablePaths: config.fs.extraWritablePaths,
+    denyPaths: config.fs.denyPaths,
     extraArgs: config.extraArgs,
-    networkAllowlist: config.networkAllowlist,
-    mihomoPath: config.mihomoPath,
-    slirp4netnsPath: config.slirp4netnsPath,
+    networkAllowlist: config.network.allowlist,
+    mihomoPath: config.network.mihomoPath,
+    slirp4netnsPath: config.network.slirp4netnsPath,
     approvalRules: config.approvalRules ?? [],
   };
-  switch (config.mode) {
-    case "allow-all": {
-      return { ...base, bwrapEnabled: false, network: true };
-    }
-    case "workspace-write": {
-      return { ...base, bwrapEnabled: true, network: false };
-    }
-    case "allow-net": {
-      return { ...base, bwrapEnabled: true, network: true };
-    }
-    case "net-allowlist": {
-      return { ...base, bwrapEnabled: true, network: true };
-    }
-    case "readonly": {
-      return { ...base, bwrapEnabled: true, network: false, writablePaths: [] };
-    }
-  }
 }
 
 /**
@@ -143,17 +160,25 @@ export function completeBwrapConfig(file: BwrapConfigFile): BwrapConfig {
   return Value.Parse(bwrapConfigSchema, deepMerge(DEFAULT_CONFIG, file));
 }
 
-function deepMerge(base: BwrapConfig, overrides: Partial<BwrapConfig>): BwrapConfig {
+function deepMerge(base: BwrapConfig, overrides: BwrapConfigFile): BwrapConfig {
   return {
-    mode: overrides.mode ?? base.mode,
+    fs: {
+      mode: overrides.fs?.mode ?? base.fs.mode,
+      writablePaths: overrides.fs?.writablePaths ?? base.fs.writablePaths,
+      extraWritablePaths: [
+        ...base.fs.extraWritablePaths,
+        ...(overrides.fs?.extraWritablePaths ?? []),
+      ],
+      denyPaths: overrides.fs?.denyPaths ?? base.fs.denyPaths,
+    },
+    network: {
+      mode: overrides.network?.mode ?? base.network.mode,
+      allowlist: overrides.network?.allowlist ?? base.network.allowlist,
+      mihomoPath: overrides.network?.mihomoPath ?? base.network.mihomoPath,
+      slirp4netnsPath: overrides.network?.slirp4netnsPath ?? base.network.slirp4netnsPath,
+    },
     bwrapPath: overrides.bwrapPath ?? base.bwrapPath,
-    writablePaths: overrides.writablePaths ?? base.writablePaths,
-    extraWritablePaths: [...base.extraWritablePaths, ...(overrides.extraWritablePaths ?? [])],
-    denyPaths: overrides.denyPaths ?? base.denyPaths,
     extraArgs: overrides.extraArgs ?? base.extraArgs,
-    networkAllowlist: overrides.networkAllowlist ?? base.networkAllowlist,
-    mihomoPath: overrides.mihomoPath ?? base.mihomoPath,
-    slirp4netnsPath: overrides.slirp4netnsPath ?? base.slirp4netnsPath,
     approvalRules: [...(base.approvalRules ?? []), ...(overrides.approvalRules ?? [])],
   };
 }
@@ -353,7 +378,7 @@ async function realpathOrSelf(path: string): Promise<string> {
 export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Promise<string[]> {
   const args = ["--new-session", "--die-with-parent", "--unshare-user", "--unshare-pid"];
   // 沙箱进程以调用方（pi）的 uid/gid 运行，而不是 userns 里的 0。
-  // net-allowlist 模式下命令先经 nsenter 进入 holder 的 userns（unshare -r 把 pi 的 uid 映射成 0），
+  // network limited 模式下命令先经 nsenter 进入 holder 的 userns（unshare -r 把 pi 的 uid 映射成 0），
   // bwrap 默认继承该 uid 会让沙箱内 id/stat 自称 root、与宿主视角不一致；
   // 直接模式（无 holder）下这两个值本就等于 bwrap 的 real uid，等价于默认行为。
   const uid = process.getuid?.();
@@ -379,26 +404,29 @@ export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Prom
       args.push("--ro-bind-try", "/dev/null", target);
     }
   }
-  if (!resolved.network) args.push("--unshare-net");
-  // --ro-bind-try：目录不存在（或已被删除）时自动忽略
-  for (const name of PROTECTED_DIRS) {
-    const absolutePath = await realpathOrSelf(join(cwd, name));
-    args.push("--ro-bind-try", absolutePath, absolutePath);
-  }
-  // 工作区下所有 .git 一律只读：可写 bind 之上的覆盖绑定，防止命令篡改仓库元数据。
-  // 根目录本身是 git 仓库时只保护根 .git（递归扫描有成本，绝大多数情况根即唯一仓库）；
-  // 根不是 git 仓库时才递归扫描嵌套仓库（如 monorepo 子仓库）。
-  const rootGit = await realpathOrSelf(join(cwd, ".git"));
-  let gitDirs: string[];
-  try {
-    await stat(rootGit);
-    gitDirs = [rootGit];
-  } catch {
-    gitDirs = await findGitDirs(cwd);
-  }
-  for (const gitDir of gitDirs) {
-    const realGitDir = await realpathOrSelf(gitDir);
-    args.push("--ro-bind-try", realGitDir, realGitDir);
+  if (resolved.network === "block") args.push("--unshare-net");
+  // fs allow-all：整棵根可写，不做保护绑定（.pi/.agent/.git 的只读覆盖与「完整可写」矛盾）。
+  if (resolved.fs !== "allow-all") {
+    // --ro-bind-try：目录不存在（或已被删除）时自动忽略
+    for (const name of PROTECTED_DIRS) {
+      const absolutePath = await realpathOrSelf(join(cwd, name));
+      args.push("--ro-bind-try", absolutePath, absolutePath);
+    }
+    // 工作区下所有 .git 一律只读：可写 bind 之上的覆盖绑定，防止命令篡改仓库元数据。
+    // 根目录本身是 git 仓库时只保护根 .git（递归扫描有成本，绝大多数情况根即唯一仓库）；
+    // 根不是 git 仓库时才递归扫描嵌套仓库（如 monorepo 子仓库）。
+    const rootGit = await realpathOrSelf(join(cwd, ".git"));
+    let gitDirs: string[];
+    try {
+      await stat(rootGit);
+      gitDirs = [rootGit];
+    } catch {
+      gitDirs = await findGitDirs(cwd);
+    }
+    for (const gitDir of gitDirs) {
+      const realGitDir = await realpathOrSelf(gitDir);
+      args.push("--ro-bind-try", realGitDir, realGitDir);
+    }
   }
   args.push(...resolved.extraArgs);
   return args;
@@ -418,12 +446,12 @@ export interface NetworkStackLog {
   holder?: (chunk: string) => void;
 }
 
-/** 为 net-allowlist 模式创建网络栈；非该模式返回 undefined。每次命令现建现停。 */
+/** 为 network limited 模式创建网络栈；其余模式返回 undefined。每次命令现建现停。 */
 export async function createNetworkStack(
   resolved: ResolvedBwrap,
   log?: NetworkStackLog,
 ): Promise<NetworkStack | undefined> {
-  if (!resolved.network || resolved.networkAllowlist.length === 0) return undefined;
+  if (resolved.network !== "limited") return undefined;
   return startNetworkStack({
     allowlist: resolved.networkAllowlist,
     dnsServers: await resolveDnsServers(),
@@ -447,7 +475,7 @@ export interface BwrapInvocation {
   cwd: string;
   /** 沙箱内环境（不继承父进程） */
   env: Record<string, string>;
-  /** net-allowlist 模式：命令需先经 nsenter 进入 holder 的 netns。 */
+  /** network limited 模式：命令需先经 nsenter 进入 holder 的 netns。 */
   needsNetworkStack: boolean;
 }
 
@@ -490,7 +518,7 @@ export async function buildBwrapInvocation(
       // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
       PATH: "/usr/local/bin:/usr/bin:/bin",
     },
-    needsNetworkStack: resolved.network && resolved.networkAllowlist.length > 0,
+    needsNetworkStack: resolved.network === "limited",
   };
 }
 
@@ -520,7 +548,7 @@ export function createBwrapBashOperations(
 
       if (invocation.needsNetworkStack) {
         if (!networkStack) {
-          throw new Error("Network stack is not initialized for net-allowlist mode");
+          throw new Error("Network stack is not initialized for network limited mode");
         }
         return networkStack.exec({
           command,
