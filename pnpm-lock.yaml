@@ -39,8 +39,8 @@ importers:
         specifier: ^7.2.0
         version: 7.2.4
       undici:
-        specifier: ^7.29.0
-        version: 7.29.1
+        specifier: ^8.0.0
+        version: 8.9.0
       vscode-jsonrpc:
         specifier: ^9.0.1
         version: 9.0.2
