@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@cortexkit/aft-bridge':
-        specifier: 0.55.1
-        version: 0.55.1
+        specifier: 0.57.1
+        version: 0.57.1
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -137,8 +137,8 @@ importers:
         version: 5.0.1(@types/node@24.13.5)(@vitest/coverage-v8@5.0.1)(vite@8.3.0(@types/node@24.13.5)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
     optionalDependencies:
       '@cortexkit/aft-linux-x64':
-        specifier: 0.55.1
-        version: 0.55.1
+        specifier: 0.57.1
+        version: 0.57.1
 
 packages:
 
@@ -288,11 +288,11 @@ packages:
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
 
-  '@cortexkit/aft-bridge@0.55.1':
-    resolution: {integrity: sha512-IIB3GqfgR4zlckjILj1ngdndmg24leiiiss34dP6IHwR9hZ4lAi5sz4jRrDN82TXqSGdGpBbPzboZq36hSSmXQ==}
+  '@cortexkit/aft-bridge@0.57.1':
+    resolution: {integrity: sha512-z0uoDz9vQfcQbc6OaBs55AimvcpzYr2ztcjI1NhYfLmy7H6aZt47XSi9UPgkoFHiryRTZ9V1n3y4x06nkTryxA==}
 
-  '@cortexkit/aft-linux-x64@0.55.1':
-    resolution: {integrity: sha512-CFvot36GsMadgTcBfldjifQdAmSMiHSVgwa3/YCRrwmGpUd3W1KDDodTF8X7O2aDGQmbaGF11IdnLgfneYUL6A==}
+  '@cortexkit/aft-linux-x64@0.57.1':
+    resolution: {integrity: sha512-v4ntmxHH0EuVBqBLDAW0Xx+5lKug7CQ77ZvNb1tJNzLAScP1Jg5RI5hnh9SoaHpAeDfMZgkuUoir3E0EIFdTig==}
     cpu: [x64]
     os: [linux]
     hasBin: true
@@ -2996,12 +2996,12 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
-  '@cortexkit/aft-bridge@0.55.1':
+  '@cortexkit/aft-bridge@0.57.1':
     dependencies:
       '@cortexkit/subc-client': 0.8.1
       undici: 7.29.1
 
-  '@cortexkit/aft-linux-x64@0.55.1':
+  '@cortexkit/aft-linux-x64@0.57.1':
     optional: true
 
   '@cortexkit/subc-client@0.8.1': {}
