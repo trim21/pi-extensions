@@ -8,7 +8,7 @@ import {
   repoArgs,
   resolveRepo,
   subtitlePendant,
-  truncate,
+  toToolResultJson,
 } from "../base.js";
 
 export function addReadPrCommentsTool(_gh: GhClient, pi: ExtensionAPI) {
@@ -65,12 +65,9 @@ export function addReadPrCommentsTool(_gh: GhClient, pi: ExtensionAPI) {
           },
         );
       }
-      const { text, truncated } = truncate(out);
-      const pendant = subtitlePendant(params, "number");
-      return {
-        content: [{ type: "text", text }],
-        details: { input: params, truncated, ...(pendant && { pendant }) },
-      };
+      const result = toToolResultJson(out, params);
+      result.details.pendant = subtitlePendant(params, "number");
+      return result;
     },
   });
 }

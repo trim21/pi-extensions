@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { type GhClient, ghExec, repoArgs, subtitlePendant, toToolResult } from "../base.js";
+import { type GhClient, ghExec, repoArgs, subtitlePendant, toToolResultJson } from "../base.js";
 
 export function addReadIssueTool(_gh: GhClient, pi: ExtensionAPI) {
   pi.registerTool({
@@ -15,7 +15,7 @@ export function addReadIssueTool(_gh: GhClient, pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { number, repo } = params;
-      const result = toToolResult(
+      const result = toToolResultJson(
         await ghExec(
           [
             "issue",
