@@ -22,7 +22,10 @@
  * so one log entry is always exactly one rendered line. The final line is
  * always the subagent name as a code span (`` `scout` ``), followed by the
  * live usage stats when there are any; it rides outside the rolling window so
- * it is never trimmed.
+ * it is never trimmed. While the model is thinking, a transient
+ * `thinking ( N chars )` line sits between the log and the footer showing the
+ * live character count of the streamed thinking; it disappears when the
+ * thinking block ends.
  *
  * Security default: without an explicit `tools:` in the frontmatter, the
  * subagent only gets read-only tools (read/grep/find/ls) — no bash/write/edit.
@@ -418,6 +421,9 @@ export async function runAgent(
   // 不同名按调用顺序罗列;任何非工具行都会打断合并。
   let toolLineSegments: string[] = [];
   let toolLine: { name: string; count: number } | undefined;
+  // 思考中状态：thinking_start 打开、thinking_delta 累计字符数、thinking_end
+  // 关闭；非 undefined 时 emitUpdate 在 footer 上方插一行瞬态 thinking 状态。
+  let thinkingChars: number | undefined;
 
   const pushLogLine = (line: string) => {
     logLines.push(line);
@@ -460,8 +466,11 @@ export async function runAgent(
     const usageLine = formatUsageStats(result.usage, result.model);
     const name = sanitizeProgressLine(result.agent);
     const footer = usageLine ? `\`${name}\` ${usageLine}` : `\`${name}\``;
+    const lines = [...logLines];
+    if (thinkingChars !== undefined) lines.push(`thinking ( ${thinkingChars} chars )`);
+    lines.push(footer);
     onUpdate?.({
-      content: [{ type: "text", text: [...logLines, footer].join("\n") }],
+      content: [{ type: "text", text: lines.join("\n") }],
       details: {},
     });
   };
@@ -470,11 +479,33 @@ export async function runAgent(
     switch (event.type) {
       case "message_update": {
         // A completed text block (text_end carries the full content) becomes a
-        // `text:` log line. Deltas/thinking are intentionally not logged.
+        // `text:` log line. Deltas are intentionally not logged; thinking
+        // deltas feed the transient `thinking ( N chars )` status line instead.
         const delta = event.assistantMessageEvent;
-        if (delta.type === "text_end") {
-          pushLogLine(`text: ${foldProgressLine(sanitizeProgressLine(delta.content))}`);
-          emitUpdate();
+        switch (delta.type) {
+          case "text_end": {
+            pushLogLine(`text: ${foldProgressLine(sanitizeProgressLine(delta.content))}`);
+            emitUpdate();
+            break;
+          }
+          case "thinking_start": {
+            // 思考横跨轮次边界：打断工具行合并，下一批工具调用另起一行。
+            toolLine = undefined;
+            thinkingChars = 0;
+            emitUpdate();
+            break;
+          }
+          case "thinking_delta": {
+            thinkingChars = (thinkingChars ?? 0) + delta.delta.length;
+            emitUpdate();
+            break;
+          }
+          case "thinking_end": {
+            thinkingChars = undefined;
+            emitUpdate();
+            break;
+          }
+          // No default
         }
 
         break;
