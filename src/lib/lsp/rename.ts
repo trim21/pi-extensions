@@ -192,6 +192,48 @@ export function canonicalizeEdit(edit: WorkspaceEdit): string {
 
 const WORD_PATTERN = /[\p{L}\p{N}_$]+/gu;
 
+/** 两个路径集合是否一致（用于判断 references 结果是否收敛）。 */
+export function samePathSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const path of a) if (!b.has(path)) return false;
+  return true;
+}
+
+/** references 文件集合的稳定窗口：连续一致的采样累加计数，集合变化即重启窗口。 */
+export interface StabilityRun {
+  /** 本窗口采样到的文件集合（与后续采样比较用）。 */
+  readonly paths: ReadonlySet<string>;
+  /** 窗口起始时间戳（ms，最后一次集合变化的时刻）。 */
+  readonly since: number;
+  /** 窗口内连续一致的采样次数（≥1）。 */
+  readonly samples: number;
+}
+
+/**
+ * 用一次新的采样推进稳定窗口。服务器项目加载期间 references 只覆盖已发现
+ * 的文件，残缺答案可以连续多次一致——「两次一致」不等于「索引收敛」，所以
+ * 窗口还要持续足够时长（见 stabilityAcceptable）。
+ */
+export function trackStability(input: {
+  previous: StabilityRun | undefined;
+  paths: ReadonlySet<string>;
+  now: number;
+}): StabilityRun {
+  const { previous, paths, now } = input;
+  if (previous !== undefined && samePathSet(previous.paths, paths)) {
+    return { paths, since: previous.since, samples: previous.samples + 1 };
+  }
+  return { paths, since: now, samples: 1 };
+}
+
+/** 稳定窗口是否达到可接受的稳定度：连续 minSamples 次一致，且集合已持续一致 minStableMs 毫秒。 */
+export function stabilityAcceptable(
+  run: StabilityRun,
+  input: { now: number; minSamples: number; minStableMs: number },
+): boolean {
+  return run.samples >= input.minSamples && input.now - run.since >= input.minStableMs;
+}
+
 /**
  * 一行内 `symbol` 的候选位置（0-based，列相对行首）：
  * - `character` 缺省：枚举行内与 `symbol` 相同的词出现位置；

@@ -580,8 +580,8 @@ describe.concurrent("驻留淘汰：容量上限与等待诊断的文档", () =>
   }, 30_000);
 });
 
-// 该组保持串行：两个用例临时改写共享的 renameVerificationTiming（轮询间隔 / 预算），
-// 并发执行时保存与恢复会互相覆盖，把改后的预算泄漏给组内其他用例。
+// 该组保持串行：多个用例临时改写共享的 renameVerificationTiming（轮询间隔 / 预算 /
+// 稳定窗口），并发执行时保存与恢复会互相覆盖，把改后的预算泄漏给组内其他用例。
 describe("lsp client renameSymbol", () => {
   it("prepare + rename 成功：返回 WorkspaceEdit 与 placeholder，并先同步磁盘内容", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
@@ -767,6 +767,51 @@ describe("lsp client renameSymbol", () => {
     }
   });
 
+  it("从不推送诊断的服务器也不把残缺答案的假稳定当收敛（跨文件漏改回归）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
+    const file = join(dir, "a.py");
+    await writeFile(file, "x = 1\n");
+    // typescript-language-server 对干净文档永不推送诊断（空→空不发布、也不实现
+    // pull），就绪栅栏只能等满预算放行；此时 references 前两次只报 [self]（项目
+    // 仍在加载），按旧的「连续两次一致」会把残缺结果当收敛、rename 漏改跨文件
+    // 引用（CI 实测）。稳定窗口要求 references 文件集合持续一致才接受：第 3 次
+    // 起答案完整，收敛后 rename 必须覆盖两个文件。
+    const proc = spawn(process.execPath, [fixture], {
+      env: {
+        ...process.env,
+        MOCK_DIAGNOSTICS_NEVER: "1",
+        MOCK_RENAME_MODE: "ok",
+        MOCK_REFERENCES_MODE: "catch_up_late",
+        MOCK_RENAME_COVER_AFTER_REFS_CALLS: "3",
+      },
+    });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+      diagnosticsDocumentWaitTimeoutMs: 100,
+      diagnosticsSilentWaitTimeoutMs: 100,
+    });
+    const savedTiming = { ...renameVerificationTiming };
+    renameVerificationTiming.pollMs = 20;
+    renameVerificationTiming.budgetMs = 2_000;
+    renameVerificationTiming.settleSamples = 3;
+    renameVerificationTiming.stableFloorReadyMs = 0;
+    renameVerificationTiming.stableFloorUnreadyMs = 150;
+    try {
+      const result = await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
+      const uris = Object.keys(result.edit.changes ?? {});
+      expect(uris).toHaveLength(2);
+      expect(uris).toContain(pathToFileURL(file).href);
+      expect(uris).toContain(pathToFileURL(join(dir, "extra-a.py")).href);
+    } finally {
+      Object.assign(renameVerificationTiming, savedTiming);
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("references 稳定但 rename 漏文件：预算耗尽抛 RenameIncompleteError", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
     const file = join(dir, "a.py");
@@ -787,6 +832,9 @@ describe("lsp client renameSymbol", () => {
     const savedTiming = { ...renameVerificationTiming };
     renameVerificationTiming.pollMs = 20;
     renameVerificationTiming.budgetMs = 200;
+    renameVerificationTiming.settleSamples = 2;
+    renameVerificationTiming.stableFloorReadyMs = 0;
+    renameVerificationTiming.stableFloorUnreadyMs = 0;
     try {
       try {
         await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
@@ -823,6 +871,9 @@ describe("lsp client renameSymbol", () => {
     const savedTiming = { ...renameVerificationTiming };
     renameVerificationTiming.pollMs = 20;
     renameVerificationTiming.budgetMs = 200;
+    renameVerificationTiming.settleSamples = 2;
+    renameVerificationTiming.stableFloorReadyMs = 0;
+    renameVerificationTiming.stableFloorUnreadyMs = 0;
     try {
       const result = await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
       const uris = Object.keys(result.edit.changes ?? {});
@@ -856,6 +907,9 @@ describe("lsp client renameSymbol", () => {
     const savedTiming = { ...renameVerificationTiming };
     renameVerificationTiming.pollMs = 20;
     renameVerificationTiming.budgetMs = 200;
+    renameVerificationTiming.settleSamples = 2;
+    renameVerificationTiming.stableFloorReadyMs = 0;
+    renameVerificationTiming.stableFloorUnreadyMs = 0;
     try {
       try {
         await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });

@@ -42,6 +42,10 @@ const hangMethods = (process.env.MOCK_HANG_METHODS ?? "").split(",").filter(Bool
 const echoRequests = process.env.MOCK_ECHO_REQUESTS === "1";
 const renameMode = process.env.MOCK_RENAME_MODE ?? "";
 const referencesMode = process.env.MOCK_REFERENCES_MODE ?? "";
+// rename 覆盖 extra 文件的门槛：>0 时 rename 在 references 被调用 ≥N 次后才覆盖
+// extra（配合 catch_up_late 模拟"references 与 rename 同时落后于加载中的索引"，
+// 即 CI 上实测的"残缺答案假稳定、双向一致但漏改跨文件引用"）。
+const coverExtraAfterRefsCalls = Number(process.env.MOCK_RENAME_COVER_AFTER_REFS_CALLS ?? "0");
 const pushDelayMs = Number(process.env.MOCK_PUSH_DELAY_MS ?? "50");
 let referencesCalls = 0;
 // 项目"加载完成"的标志：首份诊断已推送（cold_until_push 以此为分界）
@@ -253,7 +257,8 @@ function handle(msg) {
     const referencesCoverExtra =
       renameMode === "ok_extra" ||
       (referencesMode === "grow_then_settle" && referencesCalls >= 2) ||
-      (referencesMode === "cold_until_push" && projectLoaded);
+      (referencesMode === "cold_until_push" && projectLoaded) ||
+      (coverExtraAfterRefsCalls > 0 && referencesCalls >= coverExtraAfterRefsCalls);
     const changes = {
       [msg.params.textDocument.uri]: [
         {

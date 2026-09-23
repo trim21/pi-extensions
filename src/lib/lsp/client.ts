@@ -32,7 +32,7 @@ import type {
 
 import type { LspServerHandle } from "./adapter.js";
 import { LANGUAGE_EXTENSIONS } from "./language.js";
-import { editFilePaths } from "./rename.js";
+import { editFilePaths, stabilityAcceptable, trackStability } from "./rename.js";
 import type { FileChange, FileChangeType } from "./watcher.js";
 
 // LSP spec 常量
@@ -60,13 +60,6 @@ const FILE_CHANGE_TYPE: Record<FileChangeType, number> = {
 };
 
 export type Diagnostic = VSCodeDiagnostic;
-
-/** 两个路径集合是否一致（用于判断 references 结果是否收敛）。 */
-function samePaths(a: Set<string>, b: Set<string>): boolean {
-  if (a.size !== b.size) return false;
-  for (const path of a) if (!b.has(path)) return false;
-  return true;
-}
 
 /** LSP MethodNotFound（-32601）：服务器未实现 prepareRename / rename 请求。 */
 const LSP_METHOD_NOT_FOUND = -32601;
@@ -115,6 +108,9 @@ export class RenameIncompleteError extends Error {
           `that textDocument/references did not report (${extra.join(", ")})`,
       );
     }
+    if (parts.length === 0) {
+      parts.push("the references result has not been stable long enough to trust");
+    }
     super(
       `LSP rename incomplete: ${parts.join("; ")}. ` +
         `The server index may still be loading; nothing was modified, retry shortly.`,
@@ -130,9 +126,20 @@ export class RenameIncompleteError extends Error {
  */
 export const renameVerificationTiming = {
   pollMs: 400,
-  budgetMs: 10_000,
+  budgetMs: 15_000,
   /** ContentModified(-32801) 重试上限：服务器处理期间文档被修改，重发请求即可。 */
   contentModifiedRetries: 3,
+  /** 接受结果所需的最少连续一致采样次数。 */
+  settleSamples: 3,
+  /** 就绪已证实（拿到过当前版本的诊断结论）时的稳定窗口下限（ms）。 */
+  stableFloorReadyMs: 400,
+  /**
+   * 就绪未证实（栅栏只是等满预算放行）时的稳定窗口下限（ms）。服务器加载
+   * 项目期间 references 只覆盖已发现的文件，残缺答案能连续多次一致（假稳定），
+   * 短窗口会把它误判成最终结果——CI 实测漏改跨文件引用，故要求 references
+   * 文件集合至少持续一致这么久才接受。
+   */
+  stableFloorUnreadyMs: 4_000,
 };
 
 /**
@@ -1027,19 +1034,24 @@ export async function create(input: CreateInput): Promise<LspClient> {
     });
   }
 
+  /**
+   * 等待「当前文档版本」的诊断结论。返回值表示就绪是否被证实：true = 拿到了
+   * 当前版本的诊断结果（push / pull / 已有结论）；false = 等满预算或连接关闭
+   * 都没等到——如 typescript-language-server 对干净文档永不推送、也不实现 pull。
+   */
   async function waitForDocumentDiagnostics(request: {
     path: string;
     version: number;
     after?: number;
     signal?: AbortSignal;
-  }): Promise<void> {
+  }): Promise<boolean> {
     // 服务器对当前内容的最新结论已在手（最后一次 push 晚于最后一次内容同步，
     // 即此后没有再通知过内容变化）：直接返回已有结果。部分服务器在诊断集合
     // 不变时不再推送（typescript-language-server 空→空不发布），等新 push 只会
     // 耗满整个窗口后得到同样的「无诊断」。
     const known = published.get(request.path);
     const document = files[request.path];
-    if (known !== undefined && document !== undefined && known.at >= document.syncedAt) return;
+    if (known !== undefined && document !== undefined && known.at >= document.syncedAt) return true;
 
     const startedAt = request.after ?? Date.now();
     // 「上一份 push 为空」的文档用短安静期（见 clientDefaults.diagnosticsSilentWaitTimeoutMs）。
@@ -1059,12 +1071,11 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
     while (!connectionClosed && !request.signal?.aborted) {
       const remaining = budget - (Date.now() - startedAt);
-      if (remaining <= 0) return;
+      if (remaining <= 0) return false;
       const result = await requestDocumentDiagnostics(request.path);
-      if (result.matched) return;
+      if (result.matched) return true;
       if (result.timedOut) {
-        await pushWait;
-        return;
+        return await pushWait;
       }
       const next = await Promise.race([
         pushWait.then((ready) => (ready ? ("push" as const) : ("timeout" as const))),
@@ -1073,8 +1084,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
         ),
         sleep(Math.min(remaining, PULL_RETRY_INTERVAL_MS)).then(() => "interval" as const),
       ]);
-      if (next === "push") return;
+      if (next === "push") return true;
     }
+    return false;
   }
 
   async function waitForFullDiagnostics(request: {
@@ -1301,13 +1313,15 @@ export async function create(input: CreateInput): Promise<LspClient> {
       // rename 前强制同步磁盘内容，保证服务器基于最新文本计算编辑
       const version = await openDocument({ path: resolvedPath });
       // 索引就绪栅栏：项目异步加载完成前，服务器对 references 的答复只包含当前
-      // 打开的文件（尚未发现其它文件），而"连续两次一致"会把它误判成"索引已收
-      // 敛"，于是 rename 漏掉跨文件引用——CI 上实测到（失败那次 3.0s 返回、只改
-      // 1 个文件，而通过的 7.9s）。服务器为本文件产生的第一份诊断报告要等项目加
-      // 载完成，用它当就绪信号；本会话已经收到过报告（文档早已驻留）时不再等待，
-      // 免得给常见路径白加延迟。
-      if (!published.has(resolvedPath) && !pullDiagnostics.has(resolvedPath)) {
-        await waitForDocumentDiagnostics({
+      // 打开的文件（尚未发现其它文件），稳定窗口太短会把它误判成"索引已收敛"，
+      // 于是 rename 漏掉跨文件引用——CI 上实测到。服务器为本文件产生的第一份诊断
+      // 报告要等项目加载完成，用它当就绪信号；本会话已经收到过报告（文档早已驻留）
+      // 时不再等待，免得给常见路径白加延迟。返回值记录就绪是否被证实：证明不了
+      //（typescript-language-server 对干净文档永不推送、也不实现 pull，栅栏只能
+      // 等满预算放行）时，下面的稳定窗口用更长的下限。
+      let indexReady = published.has(resolvedPath) || pullDiagnostics.has(resolvedPath);
+      if (!indexReady) {
+        indexReady = await waitForDocumentDiagnostics({
           path: resolvedPath,
           version,
           signal: request.signal,
@@ -1321,8 +1335,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
       // references 前置 + rename 双向校验：LSP 没有标准化的"索引完成"信号，
       // 服务器（如 tsserver）可能在项目加载完成前回答，导致 rename 漏掉
       // 尚未入索引的文件。对策分三层：
-      // 1. 收敛检测：references 连续两次文件集合一致才认为索引稳定，防止
-      //    "服务器根本还没发现某文件"时校验形同虚设；
+      // 1. 稳定窗口：references 文件集合连续 settleSamples 次一致、且持续
+      //    一致超过稳定下限（就绪未证实用长窗口）才认为收敛，防止"服务器
+      //    根本还没发现某文件"时残缺答案的假稳定被误判为最终结果；
       // 2. 覆盖校验（missing）：references 报告的文件必须都被 rename edit
       //    覆盖，缺失说明服务器索引落后，抛 RenameIncompleteError；
       // 3. 一致性校验（extra）：rename 触及的文件超出已收敛的 references
@@ -1404,37 +1419,54 @@ export async function create(input: CreateInput): Promise<LspClient> {
         return placeholder === undefined ? { edit } : { edit, placeholder };
       }
 
+      const minStableMs = indexReady
+        ? renameVerificationTiming.stableFloorReadyMs
+        : renameVerificationTiming.stableFloorUnreadyMs;
       const deadline = Date.now() + renameVerificationTiming.budgetMs;
-      let previous: Set<string> | undefined;
-      let current = toPaths(locations);
+      let stability = trackStability({
+        previous: undefined,
+        paths: toPaths(locations),
+        now: Date.now(),
+      });
       for (;;) {
         request.signal?.throwIfAborted();
-        const settled = previous !== undefined && samePaths(previous, current);
-        const expired = Date.now() >= deadline;
-        if (settled || expired) {
+        const now = Date.now();
+        const stable = stabilityAcceptable(stability, {
+          now,
+          minSamples: renameVerificationTiming.settleSamples,
+          minStableMs,
+        });
+        const expired = now >= deadline;
+        if (stable || expired) {
           const edit = await sendRename();
           if (!edit) throw notRenameable();
           const editPaths = editFilePaths(edit);
           const missing: string[] = [];
           const extra: string[] = [];
-          for (const path of current) {
+          for (const path of stability.paths) {
             if (!editPaths.has(path)) missing.push(path);
           }
           for (const path of editPaths) {
-            if (!current.has(path)) extra.push(path);
+            if (!stability.paths.has(path)) extra.push(path);
           }
           if (missing.length === 0 && extra.length === 0) {
-            return placeholder === undefined ? { edit } : { edit, placeholder };
+            if (stable) return placeholder === undefined ? { edit } : { edit, placeholder };
+            // 双向一致但稳定窗口未达标：索引可能仍在加载、残缺答案假稳定，
+            // 宁可报可重试的不完整错误，也不把残缺结果当成功写盘。
+            throw new RenameIncompleteError([], []);
           }
           if (expired || missing.length > 0) {
             throw new RenameIncompleteError(missing, extra);
           }
-          // 收敛后 rename 仍报出 references 没有的文件：references 快照已过时，
+          // rename 报出 references 没有的文件：references 快照已过时，
           // 继续轮询到重新收敛后再重发 rename 复检（预算耗尽则向上抛）。
         }
-        previous = current;
         await sleepWithSignal(renameVerificationTiming.pollMs, request.signal);
-        current = toPaths(await referencesRequest());
+        stability = trackStability({
+          previous: stability,
+          paths: toPaths(await referencesRequest()),
+          now: Date.now(),
+        });
       }
     },
     async definition(request: InspectPositionRequest): Promise<InspectLocation[]> {

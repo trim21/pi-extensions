@@ -4,19 +4,56 @@
  *   CRLF / 位置越界报错 / 文件级 document change 报不支持 / readText 失败
  * - canonicalizeEdit：URI 归一化后比较两次 rename 结果
  * - symbolCandidates：符号名 + 可选 character 的候选定位
+ * - trackStability / stabilityAcceptable：references 稳定窗口（防残缺答案假稳定）
  */
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { canonicalizeEdit, expandWorkspaceEdit, symbolCandidates } from "../src/lib/lsp/rename.js";
+import {
+  canonicalizeEdit,
+  expandWorkspaceEdit,
+  stabilityAcceptable,
+  symbolCandidates,
+  trackStability,
+} from "../src/lib/lsp/rename.js";
 
 const readFrom = (texts: Record<string, string>) => (path: string) => {
   const text = texts[path];
   if (text === undefined) return Promise.reject(new Error(`ENOENT: ${path}`));
   return Promise.resolve(text);
 };
+
+function pathSet(...paths: string[]): ReadonlySet<string> {
+  return new Set(paths);
+}
+
+describe("trackStability / stabilityAcceptable", () => {
+  it("连续一致累加样本且窗口起点不变，集合变化即重启窗口", () => {
+    let run = trackStability({ previous: undefined, paths: pathSet("a"), now: 100 });
+    expect(run).toMatchObject({ since: 100, samples: 1 });
+    run = trackStability({ previous: run, paths: pathSet("a"), now: 200 });
+    expect(run).toMatchObject({ since: 100, samples: 2 });
+    run = trackStability({ previous: run, paths: pathSet("a", "b"), now: 300 });
+    expect(run).toMatchObject({ since: 300, samples: 1 });
+    // 集合内容一致即可，与插入顺序无关
+    run = trackStability({ previous: run, paths: pathSet("b", "a"), now: 400 });
+    expect(run).toMatchObject({ since: 300, samples: 2 });
+  });
+
+  it("样本数与持续时长都达标才可接受", () => {
+    const first = trackStability({ previous: undefined, paths: pathSet("a"), now: 100 });
+    // 样本数不足：哪怕时长再长也不放行（残缺答案的假稳定）
+    expect(stabilityAcceptable(first, { now: 5_000, minSamples: 3, minStableMs: 0 })).toBe(false);
+    const second = trackStability({ previous: first, paths: pathSet("a"), now: 200 });
+    const third = trackStability({ previous: second, paths: pathSet("a"), now: 300 });
+    // 样本数达标但持续时长不足
+    expect(stabilityAcceptable(third, { now: 350, minSamples: 3, minStableMs: 400 })).toBe(false);
+    // 两者都达标
+    expect(stabilityAcceptable(third, { now: 500, minSamples: 3, minStableMs: 400 })).toBe(true);
+  });
+});
 
 const edit = (
   startLine: number,
