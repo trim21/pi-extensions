@@ -52,7 +52,6 @@ import {
   SessionManager,
   SettingsManager,
   truncateTail,
-  truncateToVisualLines,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -148,7 +147,7 @@ interface UsageStats {
   turns: number;
 }
 
-/** 子 agent 的一次运行结果：runAgent 的返回值，也是 details.result 的内容。 */
+/** 子 agent 的一次运行结果：runAgent 的返回值。 */
 interface SubagentResult {
   agent: string;
   task: string;
@@ -162,8 +161,6 @@ interface SubagentResult {
 }
 
 interface SubagentDetails {
-  /** 子 agent 运行结果（除 pendant 外的字段都收在这里）。 */
-  result: SubagentResult;
   /** 折叠 markdown 面板：父 agent 的 prompt 与父 agent 看到的子 agent 结果。 */
   pendant?: ToolPendant;
 }
@@ -465,7 +462,7 @@ export async function runAgent(
     const footer = usageLine ? `\`${name}\` ${usageLine}` : `\`${name}\``;
     onUpdate?.({
       content: [{ type: "text", text: [...logLines, footer].join("\n") }],
-      details: { result: { ...result } },
+      details: {},
     });
   };
 
@@ -591,20 +588,7 @@ export default function spawnAgent(pi: ExtensionAPI) {
               text: `Unknown agent "${params.agent}". Available agents: ${formatAgentList(agents)}`,
             },
           ],
-          details: {
-            result: {
-              agent: params.agent,
-              task: params.task,
-              exitCode: 1,
-              messages: [],
-              stderr: "",
-              usage: {
-                cost: 0,
-                contextTokens: 0,
-                turns: 0,
-              },
-            },
-          },
+          details: {},
           isError: true,
         };
       }
@@ -627,7 +611,6 @@ export default function spawnAgent(pi: ExtensionAPI) {
             { type: "text", text: `Subagent "${result.agent}" failed (${reason}):\n${message}` },
           ],
           details: {
-            result,
             pendant: {
               subtitle: result.agent,
               markdown: formatPendantMarkdown(params.task, message),
@@ -640,64 +623,16 @@ export default function spawnAgent(pi: ExtensionAPI) {
       const output = getFinalOutput(result.messages) || "(no output)";
       const truncation = truncateTail(output, { maxBytes: MAX_OUTPUT_BYTES });
       const text = truncation.truncated
-        ? `${truncation.content}\n\n[Output truncated to ${formatTokens(truncation.content.length)} bytes. Full result preserved in tool details.]`
+        ? `${truncation.content}\n\n[Output truncated to ${formatTokens(truncation.content.length)} bytes.]`
         : output;
       return {
         content: [{ type: "text", text }],
         details: {
-          result,
           pendant: {
             subtitle: result.agent,
             markdown: formatPendantMarkdown(params.task, text),
           } satisfies ToolPendant,
         },
-      };
-    },
-
-    renderCall(args, theme) {
-      const preview = args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task;
-      const line =
-        theme.fg("toolTitle", theme.bold("spawn_agent ")) + theme.fg("accent", args.agent);
-      const detail = `  ${theme.fg("dim", preview)}`;
-      return {
-        render: (width: number) =>
-          truncateToVisualLines(`${line}\n${detail}`, 2, width).visualLines,
-        invalidate: (): void => undefined,
-      };
-    },
-
-    renderResult(result, { expanded }, theme) {
-      const details = result.details.result;
-      const isError =
-        details.exitCode !== 0 ||
-        details.stopReason === "error" ||
-        details.stopReason === "aborted";
-      const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-      const finalOutput = getFinalOutput(details.messages);
-      const usageStr = formatUsageStats(details.usage, details.model);
-
-      const lines: string[] = [];
-      let header = `${icon} ${theme.fg("toolTitle", theme.bold(details.agent))}`;
-      if (details.stopReason) header += ` ${theme.fg("error", `[${details.stopReason}]`)}`;
-      lines.push(header);
-      if (isError && details.errorMessage) {
-        lines.push(theme.fg("error", `Error: ${details.errorMessage}`));
-      }
-      if (expanded) {
-        lines.push("", theme.fg("muted", "─── Task ───"), theme.fg("dim", details.task));
-        if (finalOutput) {
-          lines.push("", theme.fg("muted", "─── Output ───"), finalOutput.trim());
-        }
-      } else if (finalOutput) {
-        lines.push(theme.fg("toolOutput", finalOutput.split("\n").slice(0, 5).join("\n")));
-      } else {
-        lines.push(theme.fg("muted", "(no output)"));
-      }
-      if (usageStr) lines.push(theme.fg("dim", usageStr));
-      return {
-        render: (width: number) =>
-          truncateToVisualLines(lines.join("\n"), Infinity, width).visualLines,
-        invalidate: (): void => undefined,
       };
     },
   });
