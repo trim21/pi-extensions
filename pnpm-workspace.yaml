@@ -5,4 +5,11 @@ allowBuilds:
   protobufjs: false
   unrs-resolver: true
 
+autoInstallPeers: true
+
 minimumReleaseAge: 0
+
+publicHoistPattern:
+  - "*eslint*"
+  - "*prettier*"
+  - typebox
