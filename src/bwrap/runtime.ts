@@ -208,11 +208,13 @@ class BashOutput {
       this.tailBytes -= this.tail[0].length;
       this.tail.shift();
     }
-    if (this.tailBytes > BASH_TAIL_LIMIT_BYTES && this.tail.length === 1) {
-      // 单个 chunk 超过上限：截掉头部，只保留尾部
-      this.tail[0] = this.tail[0].subarray(this.tailBytes - BASH_TAIL_LIMIT_BYTES);
-      this.tailBytes = BASH_TAIL_LIMIT_BYTES;
+    if (this.tailBytes <= BASH_TAIL_LIMIT_BYTES || this.tail.length !== 1) {
+      return;
     }
+
+    // 单个 chunk 超过上限：截掉头部，只保留尾部
+    this.tail[0] = this.tail[0].subarray(this.tailBytes - BASH_TAIL_LIMIT_BYTES);
+    this.tailBytes = BASH_TAIL_LIMIT_BYTES;
   }
 
   close(): Promise<void> {

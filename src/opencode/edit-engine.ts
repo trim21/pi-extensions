@@ -119,20 +119,21 @@ const LineTrimmedReplacer: Replacer = function* (content, find) {
         break;
       }
     }
-    if (matches) {
-      let matchStartIndex = 0;
-      for (let k = 0; k < i; k++) {
-        matchStartIndex += originalLines[k].length + 1;
-      }
-      let matchEndIndex = matchStartIndex;
-      for (let k = 0; k < searchLines.length; k++) {
-        matchEndIndex += originalLines[i + k].length;
-        if (k < searchLines.length - 1) {
-          matchEndIndex += 1;
-        }
-      }
-      yield content.slice(matchStartIndex, matchEndIndex);
+    if (!matches) {
+      continue;
     }
+    let matchStartIndex = 0;
+    for (let k = 0; k < i; k++) {
+      matchStartIndex += originalLines[k].length + 1;
+    }
+    let matchEndIndex = matchStartIndex;
+    for (let k = 0; k < searchLines.length; k++) {
+      matchEndIndex += originalLines[i + k].length;
+      if (k < searchLines.length - 1) {
+        matchEndIndex += 1;
+      }
+    }
+    yield content.slice(matchStartIndex, matchEndIndex);
   }
 };
 
@@ -230,26 +231,29 @@ const BlockAnchorReplacer: Replacer = function* (content, find) {
     } else {
       similarity = 1;
     }
-    if (similarity > maxSimilarity) {
-      maxSimilarity = similarity;
-      bestMatch = candidate;
+    if (similarity <= maxSimilarity) {
+      continue;
+    }
+
+    maxSimilarity = similarity;
+    bestMatch = candidate;
+  }
+  if (!bestMatch || maxSimilarity < MULTIPLE_CANDIDATES_SIMILARITY_THRESHOLD) {
+    return;
+  }
+  const { startLine, endLine } = bestMatch;
+  let matchStartIndex = 0;
+  for (let k = 0; k < startLine; k++) {
+    matchStartIndex += originalLines[k].length + 1;
+  }
+  let matchEndIndex = matchStartIndex;
+  for (let k = startLine; k <= endLine; k++) {
+    matchEndIndex += originalLines[k].length;
+    if (k < endLine) {
+      matchEndIndex += 1;
     }
   }
-  if (bestMatch && maxSimilarity >= MULTIPLE_CANDIDATES_SIMILARITY_THRESHOLD) {
-    const { startLine, endLine } = bestMatch;
-    let matchStartIndex = 0;
-    for (let k = 0; k < startLine; k++) {
-      matchStartIndex += originalLines[k].length + 1;
-    }
-    let matchEndIndex = matchStartIndex;
-    for (let k = startLine; k <= endLine; k++) {
-      matchEndIndex += originalLines[k].length;
-      if (k < endLine) {
-        matchEndIndex += 1;
-      }
-    }
-    yield content.slice(matchStartIndex, matchEndIndex);
-  }
+  yield content.slice(matchStartIndex, matchEndIndex);
 };
 
 function normalizeWhitespace(text: string): string {
@@ -370,11 +374,13 @@ const ContextAwareReplacer: Replacer = function* (content, find) {
           for (let k = 1; k < blockLines.length - 1; k++) {
             const blockLine = blockLines[k].trim();
             const findLine = findLines[k].trim();
-            if (blockLine.length > 0 || findLine.length > 0) {
-              totalNonEmptyLines++;
-              if (blockLine === findLine) {
-                matchingLines++;
-              }
+            if (blockLine.length === 0 && findLine.length === 0) {
+              continue;
+            }
+
+            totalNonEmptyLines++;
+            if (blockLine === findLine) {
+              matchingLines++;
             }
           }
           if (totalNonEmptyLines === 0 || matchingLines / totalNonEmptyLines >= 0.5) {

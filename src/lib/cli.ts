@@ -299,13 +299,14 @@ export function parseCommand<TFlags extends TObject>(
         );
       }
     }
-    if (f.kind === "number" && typeof rawFlags[f.key] === "string") {
-      const n = Number(rawFlags[f.key]);
-      if (Number.isNaN(n)) {
-        return errorResult(spec, `Invalid value for '--${f.key}': '${String(rawFlags[f.key])}'`);
-      }
-      rawFlags[f.key] = n;
+    if (f.kind !== "number" || typeof rawFlags[f.key] !== "string") {
+      continue;
     }
+    const n = Number(rawFlags[f.key]);
+    if (Number.isNaN(n)) {
+      return errorResult(spec, `Invalid value for '--${f.key}': '${String(rawFlags[f.key])}'`);
+    }
+    rawFlags[f.key] = n;
   }
 
   const { min, max } = spec.arity ?? {};

@@ -110,6 +110,11 @@ export default defineConfig(
       "unicorn/require-array-sort-compare": "off",
       "unicorn/no-unreadable-for-of-expression": "off",
       "unicorn/prefer-includes-over-repeated-comparisons": "off",
+      // 合并相邻 guard 会把多分支判断并成超长条件（如 web/fetch.ts 的 mime 分支），
+      // 且 autofix 后的条件顺序还会连带触发 prefer-simple-condition-first。
+      "unicorn/prefer-combined-guards": "off",
+      // 把三元挪进子表达式会把 lsp client 的 contentChanges 写成嵌套数组，反而更难读。
+      "unicorn/prefer-minimal-ternary": "off",
       quotes: "off",
       "@typescript-eslint/quotes": "off",
       "n/no-missing-import": "off",

@@ -152,7 +152,7 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
       }
       const rawArgs = compactArgs({
         target: filesMode ? target : resolved,
-        files: filesMode ? true : undefined,
+        files: filesMode || undefined,
         includeTests: params.includeTests,
       });
 
@@ -232,7 +232,7 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
           1,
           Number.MAX_SAFE_INTEGER,
         ),
-        callgraph: coerceBoolean(params.callgraph) ? true : undefined,
+        callgraph: coerceBoolean(params.callgraph) || undefined,
       });
 
       const subtitle = buildZoomSubtitle(extCtx.cwd, params);
