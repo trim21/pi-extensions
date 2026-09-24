@@ -10,9 +10,9 @@ import { join } from "node:path";
 
 import {
   type AssistantMessage,
-  type Context,
   createAssistantMessageEventStream,
   type Model,
+  normalizeContext,
   type ProviderStreams,
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -353,7 +353,7 @@ describe("createOpenaiCostProvider", () => {
     contextWindow: 128000,
     maxTokens: 8192,
   };
-  const context: Context = { messages: [] };
+  const context = normalizeContext({ messages: [] });
 
   it("exposes static models without refresh", () => {
     const provider = createOpenaiCostProvider({
