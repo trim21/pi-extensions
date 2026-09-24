@@ -161,8 +161,11 @@ export function registerLspRenameTool(
       for (const { candidate, result: probe } of successes) {
         const key = canonicalizeEdit(probe.edit);
         const group = groups.get(key);
-        if (group) group.candidates.push(candidate);
-        else groups.set(key, { result: probe, candidates: [candidate] });
+        if (group) {
+          group.candidates.push(candidate);
+        } else {
+          groups.set(key, { result: probe, candidates: [candidate] });
+        }
       }
       if (groups.size > 1) {
         const listing = [...groups.values()]
@@ -180,7 +183,9 @@ export function registerLspRenameTool(
         );
       }
       const firstGroup = [...groups.values()].at(0);
-      if (!firstGroup) throw new Error("LSP rename returned no target");
+      if (!firstGroup) {
+        throw new Error("LSP rename returned no target");
+      }
       const { result } = firstGroup;
 
       // ── 内存展开 → 审批 → 写盘 → 诊断 ────────────────────────────────────
@@ -218,7 +223,9 @@ export function registerLspRenameTool(
           notify,
           signal,
         });
-        if (diagnostics.text !== "") diagnosticText += `${diagnostics.text}\n`;
+        if (diagnostics.text !== "") {
+          diagnosticText += `${diagnostics.text}\n`;
+        }
       }
 
       const renamed =

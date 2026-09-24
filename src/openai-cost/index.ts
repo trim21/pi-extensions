@@ -9,6 +9,8 @@ import { createOpenaiCostProvider } from "./provider.js";
 
 export default async function openaiCostExtension(pi: ExtensionAPI) {
   const config = await loadOpenaiCostConfig();
-  if (!config) return;
+  if (!config) {
+    return;
+  }
   pi.registerProvider(createOpenaiCostProvider(config));
 }

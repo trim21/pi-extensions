@@ -131,7 +131,9 @@ function loadBashTool(runtime: BwrapRuntime): RegisteredTool {
   registerShellTools(
     {
       registerTool(tool: RegisteredTool) {
-        if (tool.name === "Bash") bashTool = tool;
+        if (tool.name === "Bash") {
+          bashTool = tool;
+        }
       },
       registerFlag: vi.fn(),
       registerCommand: vi.fn(),
@@ -1215,7 +1217,9 @@ describe("Glob and Grep", () => {
     const exec = vi.fn(async () => ({ code: 0, stdout: `${b}\n${a}`, stderr: "" }));
     claudeCodeTools({
       registerTool: (registered: RegisteredTool) => {
-        if (registered.name === "Grep") tool = registered;
+        if (registered.name === "Grep") {
+          tool = registered;
+        }
       },
       registerFlag: vi.fn(),
       registerCommand: vi.fn(),

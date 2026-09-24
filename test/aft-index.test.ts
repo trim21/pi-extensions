@@ -86,7 +86,9 @@ async function registerWith(
   const pi = {
     registerTool: (tool: { name: string; description?: string }) => {
       names.push(tool.name);
-      if (tool.description) descriptions.push(tool.description);
+      if (tool.description) {
+        descriptions.push(tool.description);
+      }
     },
     on: (event: string, handler: (event: unknown, ctx: unknown) => Promise<void> | void) => {
       handlers.set(event, handler);

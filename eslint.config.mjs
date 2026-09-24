@@ -69,7 +69,6 @@ export default defineConfig(
       "@typescript-eslint/restrict-template-expressions": "off",
       "unicorn/import-style": "off",
       "unused-imports/no-unused-imports": "error",
-      curly: ["error"],
       "no-new-object": "error",
       "no-console": "error",
       "no-new-wrappers": "error",
@@ -224,5 +223,12 @@ export default defineConfig(
     },
   },
   eslintConfigPrettier,
+  {
+    // eslint-config-prettier 把 curly 关掉了（大括号风格被它算作格式化问题），
+    // 所以必须放在它之后重新打开：控制语句体一律写大括号，换行由 prettier 展开成多行。
+    rules: {
+      curly: ["error", "all"],
+    },
+  },
   erasableSyntaxOnly.configs.recommended,
 );

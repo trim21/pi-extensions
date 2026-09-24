@@ -35,7 +35,9 @@ const BASH_PROMPT = readFileSync(fileURLToPath(new URL("bash.md", import.meta.ur
  */
 function formatBashError(exitCode: number | null, output: string): string {
   const full = [`Exit code ${exitCode ?? 1}`, output].filter(Boolean).join("\n");
-  if (full.length <= MAX_ERROR_CHARS) return full;
+  if (full.length <= MAX_ERROR_CHARS) {
+    return full;
+  }
   const half = MAX_ERROR_CHARS / 2;
   return (
     full.slice(0, half) +
@@ -50,7 +52,9 @@ function appendTruncationNotice(
   truncation: TruncationResult,
   fullOutputPath: string | undefined,
 ): string {
-  if (!fullOutputPath || !truncation.truncated) return text;
+  if (!fullOutputPath || !truncation.truncated) {
+    return text;
+  }
   const startLine = truncation.totalLines - truncation.outputLines + 1;
   const endLine = truncation.totalLines;
   if (truncation.lastLinePartial) {
@@ -145,7 +149,9 @@ export function registerShellTools(
           onUpdate,
         });
       } catch (error) {
-        if (!(error instanceof Error)) throw error;
+        if (!(error instanceof Error)) {
+          throw error;
+        }
         if (error instanceof BashInterruptedError) {
           // 输出在前（必要时带截断提示），状态文本在最后
           const text = appendTruncationNotice(

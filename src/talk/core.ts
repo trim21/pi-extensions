@@ -102,12 +102,20 @@ export const TALK_JOIN_ENTRY_TYPE = "talk:join";
 export function restoreTalkAgentId(branchEntries: readonly unknown[]): string | undefined {
   let agentId: string | undefined;
   for (const entry of branchEntries) {
-    if (!isRecord(entry)) continue;
+    if (!isRecord(entry)) {
+      continue;
+    }
     const { type, customType, data } = entry;
-    if (type !== "custom" || customType !== TALK_JOIN_ENTRY_TYPE) continue;
-    if (!isRecord(data)) continue;
+    if (type !== "custom" || customType !== TALK_JOIN_ENTRY_TYPE) {
+      continue;
+    }
+    if (!isRecord(data)) {
+      continue;
+    }
     const recorded = data.agentId;
-    if (typeof recorded === "string" && recorded.length > 0) agentId = recorded;
+    if (typeof recorded === "string" && recorded.length > 0) {
+      agentId = recorded;
+    }
   }
   return agentId;
 }
@@ -161,7 +169,9 @@ export class TalkCore {
 
   private requireSelf(): AgentRecord {
     const self = this.self;
-    if (!self) throw new Error("Talk core is not started");
+    if (!self) {
+      throw new Error("Talk core is not started");
+    }
     return self;
   }
 
@@ -201,10 +211,18 @@ export class TalkCore {
   }
 
   async stop(): Promise<void> {
-    if (this.initialDrain) clearTimeout(this.initialDrain);
-    if (this.watchPoller) clearInterval(this.watchPoller);
-    if (this.inboxPoll) clearInterval(this.inboxPoll);
-    if (this.sweeper) clearInterval(this.sweeper);
+    if (this.initialDrain) {
+      clearTimeout(this.initialDrain);
+    }
+    if (this.watchPoller) {
+      clearInterval(this.watchPoller);
+    }
+    if (this.inboxPoll) {
+      clearInterval(this.inboxPoll);
+    }
+    if (this.sweeper) {
+      clearInterval(this.sweeper);
+    }
     if (this.self) {
       try {
         await this.writeSelf({ status: "idle", offline: true });
@@ -232,7 +250,9 @@ export class TalkCore {
   }
 
   private async writeSelf(patch: Partial<AgentRecord>): Promise<void> {
-    if (!this.self) return;
+    if (!this.self) {
+      return;
+    }
     // A dead agent pins lastSeenAt to 0 so no later event re-freshens it.
     this.self = { ...this.self, ...patch, lastSeenAt: this.dead ? 0 : this.now() };
     try {
@@ -247,7 +267,9 @@ export class TalkCore {
    * 该动作下次成功后再失败会重新上报。通知通道本身出错也不能逃逸。
    */
   private notifyBackgroundFailure(action: string, error: unknown): void {
-    if (this.backgroundFailuresReported.has(action)) return;
+    if (this.backgroundFailuresReported.has(action)) {
+      return;
+    }
     this.backgroundFailuresReported.add(action);
     const detail = error instanceof Error ? error.message : String(error);
     try {
@@ -271,7 +293,9 @@ export class TalkCore {
   }
 
   private startInboxPoll(): void {
-    if (this.inboxPoll) return;
+    if (this.inboxPoll) {
+      return;
+    }
     this.inboxPoll = setInterval(() => {
       this.runInBackground("inbox poll", () => this.checkInbox());
     }, INBOX_POLL_MS);
@@ -283,11 +307,17 @@ export class TalkCore {
   /** Drain the inbox and hand each letter to the adapter. Public so tests can drive it. */
   async checkInbox(): Promise<void> {
     const self = this.self;
-    if (!self) return;
-    if (this.now() - this.lastDeliveryFailureAt < DELIVERY_BACKOFF_MS) return;
+    if (!self) {
+      return;
+    }
+    if (this.now() - this.lastDeliveryFailureAt < DELIVERY_BACKOFF_MS) {
+      return;
+    }
     // Refuse mode: never drain — letters stay queued (receipts honestly read
     // 'queued') instead of being silently consumed and dropped.
-    if (!inboundAccepts()) return;
+    if (!inboundAccepts()) {
+      return;
+    }
     const items = await listInbox(this.storage, self.addr);
     for (const item of items) {
       if (this.deliveredIds.has(item.letter.id)) {
@@ -388,7 +418,9 @@ export class TalkCore {
     const memberIds = await this.myGroupMemberIds();
     const others = records.filter((r) => r.addr !== self.addr && memberIds?.has(r.agentId));
     const target = others.find((r) => r.agentId === to);
-    if (!target) return { ok: false, error: refusalUnknown(to) };
+    if (!target) {
+      return { ok: false, error: refusalUnknown(to) };
+    }
     return { ok: true, record: target };
   }
 
@@ -404,7 +436,9 @@ export class TalkCore {
         ? 0
         : await unreadCount(this.storage, target.addr);
     const verdict = this.policy.check(body, backlog, target.addr);
-    if (!verdict.ok) return { ok: false, error: verdict.reason };
+    if (!verdict.ok) {
+      return { ok: false, error: verdict.reason };
+    }
     const letter: Letter = {
       id: newMessageId(),
       from: { addr: self.addr, name: self.name, cwd: self.cwd, agentId: self.agentId },
@@ -448,8 +482,11 @@ export class TalkCore {
       );
       const onAbort = () => settle({ reason: "aborted" });
       this.askWaiters.set(askId, settle);
-      if (signal?.aborted) onAbort();
-      else signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) {
+        onAbort();
+      } else {
+        signal?.addEventListener("abort", onAbort, { once: true });
+      }
     });
   }
 
@@ -458,7 +495,9 @@ export class TalkCore {
     const self = this.requireSelf();
     for (const askId of await outgoingAskIds(this.storage, self.addr)) {
       const out = await readOutgoingAsk(this.storage, self.addr, askId);
-      if (out && out.toAddr === toAddr) return out;
+      if (out && out.toAddr === toAddr) {
+        return out;
+      }
     }
     return undefined;
   }
@@ -480,14 +519,20 @@ export class TalkCore {
   private async resolveInterlock(letter: Letter): Promise<void> {
     const self = this.requireSelf();
     const myAsk = await this.findOutAskTo(letter.from.addr);
-    if (!myAsk) return;
+    if (!myAsk) {
+      return;
+    }
     const waiter = this.askWaiters.get(myAsk.askId);
-    if (!waiter) return;
+    if (!waiter) {
+      return;
+    }
     const peerFirst = peerAskedFirst(
       { ts: letter.ts, cwd: letter.from.cwd, agentId: letter.from.agentId },
       { ts: myAsk.ts, cwd: self.cwd, agentId: self.agentId },
     );
-    if (!peerFirst) return; // we asked first; keep waiting — the peer will yield
+    if (!peerFirst) {
+      return; // we asked first; keep waiting — the peer will yield
+    }
     this.askWaiters.delete(myAsk.askId);
     waiter({
       reason: `peer asked first (their ask id ${letter.id.slice(-8)}) — respond with a message before re-asking`,
@@ -508,7 +553,9 @@ export class TalkCore {
     const all = await listRecords(this.storage);
     const memberIds = await this.myGroupMemberIds();
     const records = all.filter((r) => {
-      if (r.addr === self.addr) return !this.dead;
+      if (r.addr === self.addr) {
+        return !this.dead;
+      }
       return memberIds?.has(r.agentId) ?? false;
     });
     return formatListing(records, self.addr, presenceOf);
@@ -520,8 +567,12 @@ export class TalkCore {
     const records = await listRecords(this.storage);
     const memberIds = await this.myGroupMemberIds();
     const filtered = records.filter((r) => {
-      if (r.cwd !== cwd) return false;
-      if (r.addr === self.addr) return !this.dead;
+      if (r.cwd !== cwd) {
+        return false;
+      }
+      if (r.addr === self.addr) {
+        return !this.dead;
+      }
       return memberIds?.has(r.agentId) ?? false;
     });
     return formatListing(filtered, self.addr, presenceOf);
@@ -548,7 +599,9 @@ export class TalkCore {
       return "Marked this agent as dead.";
     }
     const resolved = await this.resolveTarget(target);
-    if (!resolved.ok) return resolved.error;
+    if (!resolved.ok) {
+      return resolved.error;
+    }
     await writeRecord(this.storage, { ...resolved.record, lastSeenAt: 0, offline: true });
     return `Marked "${resolved.record.name}" as dead.`;
   }
@@ -568,7 +621,9 @@ export class TalkCore {
   private async leaveCurrentGroup(): Promise<boolean> {
     const self = this.requireSelf();
     const group = await groupForAgent(this.storage, self.agentId);
-    if (!group) return false;
+    if (!group) {
+      return false;
+    }
     const others = group.members.filter((m) => m !== self.agentId);
     if (others.length === 0) {
       await deleteGroup(this.storage, group.id);
@@ -636,7 +691,9 @@ export class TalkCore {
    */
   async groupJoinLast(agentName?: string): Promise<string> {
     const groups = await listGroups(this.storage);
-    if (groups.length === 0) return "No groups. Create one with /talk-group-join.";
+    if (groups.length === 0) {
+      return "No groups. Create one with /talk-group-join.";
+    }
     const latest = groups.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
     return this.groupJoin(latest.id, agentName);
   }
@@ -645,7 +702,9 @@ export class TalkCore {
   async groupLeave(): Promise<string> {
     const self = this.requireSelf();
     const group = await groupForAgent(this.storage, self.agentId);
-    if (!group) return "Not in any group.";
+    if (!group) {
+      return "Not in any group.";
+    }
     const others = group.members.filter((m) => m !== self.agentId);
     if (others.length === 0) {
       await deleteGroup(this.storage, group.id);
@@ -660,9 +719,13 @@ export class TalkCore {
   /** Delete a group by name; its members become ungrouped. */
   async groupDelete(groupName: string): Promise<string> {
     const name = groupName.trim();
-    if (!isValidGroupName(name)) return `Invalid group name '${name}'.`;
+    if (!isValidGroupName(name)) {
+      return `Invalid group name '${name}'.`;
+    }
     const group = await readGroup(this.storage, name);
-    if (!group) return `Unknown group '${name}'. Run /talk-group-list to see groups.`;
+    if (!group) {
+      return `Unknown group '${name}'. Run /talk-group-list to see groups.`;
+    }
     await deleteGroup(this.storage, name);
     return `Deleted group ${name} (${group.members.length} member(s)).`;
   }
@@ -670,7 +733,9 @@ export class TalkCore {
   /** Delete every group; all agents become ungrouped. */
   async groupClear(): Promise<string> {
     const groups = await listGroups(this.storage);
-    for (const group of groups) await deleteGroup(this.storage, group.id);
+    for (const group of groups) {
+      await deleteGroup(this.storage, group.id);
+    }
     return groups.length === 0 ? "No groups." : `Deleted ${groups.length} group(s).`;
   }
 
@@ -681,7 +746,9 @@ export class TalkCore {
   async groupList(): Promise<string> {
     const self = this.requireSelf();
     const groups = await listGroups(this.storage);
-    if (groups.length === 0) return "No groups.";
+    if (groups.length === 0) {
+      return "No groups.";
+    }
     const records = await listRecords(this.storage);
     const label = (agentId: string): string => {
       const rec = records.find((r) => r.agentId === agentId);
@@ -719,32 +786,48 @@ export class TalkCore {
   async groupStatus(): Promise<string | undefined> {
     const self = this.requireSelf();
     const group = await groupForAgent(this.storage, self.agentId);
-    if (!group) return undefined;
+    if (!group) {
+      return undefined;
+    }
     return self.alias ? `${self.alias}@${group.id}` : `@${group.id}`;
   }
 
   async send(to: string, body: string): Promise<string> {
-    if (!to) return 'send requires "to".';
-    if (!body) return 'send requires "message".';
+    if (!to) {
+      return 'send requires "to".';
+    }
+    if (!body) {
+      return 'send requires "message".';
+    }
     if (to === "*" || to === "cwd") {
       return "send requires a single agent id; broadcasting is disabled.";
     }
     const resolved = await this.resolveTarget(to);
-    if (!resolved.ok) return resolved.error;
+    if (!resolved.ok) {
+      return resolved.error;
+    }
     const sent = await this.sendLetter(resolved.record, "message", body);
-    if (!sent.ok) return sent.error;
+    if (!sent.ok) {
+      return sent.error;
+    }
     return `Sent to "${resolved.record.name}" (${shortAddr(resolved.record.addr)}) [id ${sent.letter.id.slice(-8)}]: ${sent.verdict}.`;
   }
 
   async ask(to: string, body: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
-    if (!to) return 'ask requires "to".';
-    if (!body) return 'ask requires "message".';
+    if (!to) {
+      return 'ask requires "to".';
+    }
+    if (!body) {
+      return 'ask requires "message".';
+    }
     if (to === "*" || to === "cwd") {
       return "ask is 1:1 and cannot broadcast.";
     }
     const self = this.requireSelf();
     const resolved = await this.resolveTarget(to);
-    if (!resolved.ok) return resolved.error;
+    if (!resolved.ok) {
+      return resolved.error;
+    }
     const record = resolved.record;
     // Fast-path deadlock avoidance: if the target already sent us something,
     // answer them first instead of blocking on a fresh ask. This closes the
@@ -755,7 +838,9 @@ export class TalkCore {
       return `You have ${fromTarget.length} unread message(s) from "${record.name}" — respond to them before asking.`;
     }
     const sent = await this.sendLetter(record, "ask", body);
-    if (!sent.ok) return sent.error;
+    if (!sent.ok) {
+      return sent.error;
+    }
     await trackOutgoingAsk(this.storage, self.addr, {
       askId: sent.letter.id,
       toAddr: record.addr,
@@ -776,16 +861,22 @@ export class TalkCore {
   // ── Presence watch ─────────────────────────────────────────────────────
 
   async watch(to: string): Promise<string> {
-    if (!to) return "watch requires 'to' (a peer name or address prefix).";
+    if (!to) {
+      return "watch requires 'to' (a peer name or address prefix).";
+    }
     const resolved = await this.resolveTarget(to);
-    if (!resolved.ok) return resolved.error;
+    if (!resolved.ok) {
+      return resolved.error;
+    }
     this.watched.set(resolved.record.addr, presenceOf(resolved.record));
     this.startWatchPoller();
     return `Watching "${resolved.record.name}" (${shortAddr(resolved.record.addr)}) for presence transitions. Notifications arrive as talk messages.`;
   }
 
   private startWatchPoller(): void {
-    if (this.watchPoller) return;
+    if (this.watchPoller) {
+      return;
+    }
     this.watchPoller = setInterval(() => {
       this.runInBackground("presence watch", () => this.pollWatched());
     }, WATCH_POLL_MS);
@@ -793,11 +884,15 @@ export class TalkCore {
   }
 
   private async pollWatched(): Promise<void> {
-    if (!this.self || this.watched.size === 0) return;
+    if (!this.self || this.watched.size === 0) {
+      return;
+    }
     for (const [addr, prev] of this.watched) {
       const rec = await readRecord(this.storage, addr);
       const now: Presence = rec ? presenceOf(rec) : "offline";
-      if (now === prev) continue;
+      if (now === prev) {
+        continue;
+      }
       this.watched.set(addr, now);
       const label = rec ? `"${rec.name}"` : shortAddr(addr);
       const state = now === "live" ? (rec?.status ?? "idle") : "offline";

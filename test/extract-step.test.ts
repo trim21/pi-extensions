@@ -33,7 +33,9 @@ function extractStepFromLog_current(
 ): string | null {
   const sorted = [...apiSteps].toSorted((a, b) => a.number - b.number);
   const stepIdx = sorted.findIndex((s) => s.number === stepNumber);
-  if (stepIdx === -1) return null;
+  if (stepIdx === -1) {
+    return null;
+  }
 
   const lines = log.split("\n");
   const runStarts: number[] = [];
@@ -41,7 +43,9 @@ function extractStepFromLog_current(
 
   for (const [i, line] of lines.entries()) {
     if (line.includes("##[endgroup]")) {
-      if (depth > 0) depth--;
+      if (depth > 0) {
+        depth--;
+      }
       continue;
     }
     if (!line.includes("##[group]")) {
@@ -51,7 +55,9 @@ function extractStepFromLog_current(
     if (depth === 0) {
       const m = /##\[group\](.*)/.exec(line);
       const name = m ? m[1].trim() : "";
-      if (name.startsWith("Run ")) runStarts.push(i);
+      if (name.startsWith("Run ")) {
+        runStarts.push(i);
+      }
     }
     depth++;
   }
@@ -62,7 +68,9 @@ function extractStepFromLog_current(
   }
 
   const runIdx = stepIdx - 1;
-  if (runIdx < 0 || runIdx >= runStarts.length) return null;
+  if (runIdx < 0 || runIdx >= runStarts.length) {
+    return null;
+  }
 
   const start = runStarts[runIdx];
   const end = runIdx + 1 < runStarts.length ? runStarts[runIdx + 1] : lines.length;
@@ -197,7 +205,9 @@ describe("log structure analysis", () => {
     let depth = 0;
     for (const [i, line] of lines.entries()) {
       if (line.includes("##[endgroup]")) {
-        if (depth > 0) depth--;
+        if (depth > 0) {
+          depth--;
+        }
         continue;
       }
       if (!line.includes("##[group]")) {

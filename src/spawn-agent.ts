@@ -189,7 +189,9 @@ function getFinalOutput(messages: AgentMessage[]): string {
     const msg = messages[i];
     if (msg.role === "assistant") {
       for (const part of msg.content) {
-        if (part.type === "text") return part.text;
+        if (part.type === "text") {
+          return part.text;
+        }
       }
     }
   }
@@ -205,14 +207,18 @@ export function formatSubagentError(result: SubagentResult): { reason: string; m
   const reason =
     result.stopReason ?? (result.exitCode === 0 ? "failed" : `exit ${result.exitCode}`);
   const parts: string[] = [];
-  if (result.errorMessage) parts.push(`error: ${result.errorMessage}`);
+  if (result.errorMessage) {
+    parts.push(`error: ${result.errorMessage}`);
+  }
   const stderr = truncateTail(result.stderr, { maxBytes: MAX_STDERR_ERROR_BYTES });
   if (stderr.content.trim()) {
     const truncatedMark = stderr.truncated ? "\n[stderr truncated]" : "";
     parts.push(`stderr: ${stderr.content.trim()}${truncatedMark}`);
   }
   const output = getFinalOutput(result.messages);
-  if (output) parts.push(`output: ${output}`);
+  if (output) {
+    parts.push(`output: ${output}`);
+  }
   return { reason, message: parts.length > 0 ? parts.join("\n") : "(no output)" };
 }
 
@@ -223,7 +229,9 @@ export function formatSubagentError(result: SubagentResult): { reason: string; m
  * returned as-is.
  */
 function foldProgressLine(text: string): string {
-  if (text.length <= MAX_PROGRESS_CHARS_PER_LINE) return text;
+  if (text.length <= MAX_PROGRESS_CHARS_PER_LINE) {
+    return text;
+  }
   const keep = Math.floor((MAX_PROGRESS_CHARS_PER_LINE - 3) / 2);
   return `${text.slice(0, keep)} … ${text.slice(-keep)}`;
 }
@@ -238,18 +246,32 @@ function sanitizeProgressLine(text: string): string {
 }
 
 function formatTokens(count: number): string {
-  if (count < 1000) return count.toString();
-  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+  if (count < 1000) {
+    return count.toString();
+  }
+  if (count < 10_000) {
+    return `${(count / 1000).toFixed(1)}k`;
+  }
+  if (count < 1_000_000) {
+    return `${Math.round(count / 1000)}k`;
+  }
   return `${(count / 1_000_000).toFixed(1)}M`;
 }
 
 function formatUsageStats(usage: UsageStats, model?: string): string {
   const parts: string[] = [];
-  if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-  if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-  if (usage.contextTokens > 0) parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
-  if (model) parts.push(model);
+  if (usage.turns) {
+    parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
+  }
+  if (usage.cost) {
+    parts.push(`$${usage.cost.toFixed(4)}`);
+  }
+  if (usage.contextTokens > 0) {
+    parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
+  }
+  if (model) {
+    parts.push(model);
+  }
   return parts.join(" ");
 }
 
@@ -326,12 +348,16 @@ export function resolveModel(
   agent: AgentConfig,
   settingsManager: SettingsManager,
 ): ReturnType<ModelRuntime["getModel"]> {
-  if (!agent.model) return undefined;
+  if (!agent.model) {
+    return undefined;
+  }
   const slash = agent.model.indexOf("/");
   if (slash > 0) {
     return modelRuntime.getModel(agent.model.slice(0, slash), agent.model.slice(slash + 1));
   }
-  if (agent.provider) return modelRuntime.getModel(agent.provider, agent.model);
+  if (agent.provider) {
+    return modelRuntime.getModel(agent.provider, agent.model);
+  }
   const defaultProvider = settingsManager.getDefaultProvider();
   return defaultProvider ? modelRuntime.getModel(defaultProvider, agent.model) : undefined;
 }
@@ -487,7 +513,9 @@ export async function runAgent(
     const name = sanitizeProgressLine(result.agent);
     const footer = usageLine ? `\`${name}\` ${usageLine}` : `\`${name}\``;
     const lines = [...logLines];
-    if (thinkingChars !== undefined) lines.push(`thinking ( ${thinkingChars} chars )`);
+    if (thinkingChars !== undefined) {
+      lines.push(`thinking ( ${thinkingChars} chars )`);
+    }
     lines.push(footer);
     onUpdate?.({
       content: [{ type: "text", text: lines.join("\n") }],
@@ -541,9 +569,13 @@ export async function runAgent(
           result.usage.turns++;
           result.usage.cost += msg.usage.cost.total;
           result.usage.contextTokens = msg.usage.totalTokens;
-          if (!result.model) result.model = msg.model;
+          if (!result.model) {
+            result.model = msg.model;
+          }
           result.stopReason = msg.stopReason;
-          if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+          if (msg.errorMessage) {
+            result.errorMessage = msg.errorMessage;
+          }
         }
         emitUpdate();
 
@@ -562,8 +594,11 @@ export async function runAgent(
     void session.abort();
   };
   if (signal) {
-    if (signal.aborted) onAbort();
-    else signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
   }
 
   try {

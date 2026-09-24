@@ -39,7 +39,9 @@ export const GROUPS_NS = "groups";
 const GROUP_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
 export function assertGroupId(id: string): void {
-  if (!GROUP_ID_PATTERN.test(id)) throw new TypeError(`Invalid group name: ${id}`);
+  if (!GROUP_ID_PATTERN.test(id)) {
+    throw new TypeError(`Invalid group name: ${id}`);
+  }
 }
 
 export function isValidGroupName(id: string): boolean {
@@ -60,7 +62,9 @@ export async function listGroups(storage: TalkStorage): Promise<Group[]> {
   const out: Group[] = [];
   for (const key of await storage.listKeys(GROUPS_NS)) {
     const raw = await storage.readJson(GROUPS_NS, key);
-    if (Value.Check(GroupSchema, raw)) out.push(raw);
+    if (Value.Check(GroupSchema, raw)) {
+      out.push(raw);
+    }
   }
   return out.toSorted((a, b) => a.createdAt - b.createdAt);
 }
@@ -85,7 +89,9 @@ export async function deleteGroup(storage: TalkStorage, id: string): Promise<boo
  */
 export async function groupForAgent(storage: TalkStorage, agentId: string): Promise<Group | null> {
   for (const group of await listGroups(storage)) {
-    if (group.members.includes(agentId)) return group;
+    if (group.members.includes(agentId)) {
+      return group;
+    }
   }
   return null;
 }

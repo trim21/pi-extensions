@@ -152,7 +152,9 @@ export interface ResolvedLspConfig {
 function parseTimeoutString(value: string): number {
   // 单位组永远参与匹配（缺省为空串），避免"可选捕获组在类型上不可空"的歧义
   const match = /^(\d+(?:\.\d+)?)(ms|s|m|h|)\s*$/.exec(value.trim());
-  if (!match) return NaN;
+  if (!match) {
+    return NaN;
+  }
   const amount = Number(match[1]);
   const factors: Record<string, number | undefined> = {
     "": 1,
@@ -167,7 +169,9 @@ function parseTimeoutString(value: string): number {
 
 /** 时长字段换算为 ms：number 原样、字符串按 parseTimeoutString；无效值返回 undefined。 */
 function toMs(value: number | string | undefined): number | undefined {
-  if (value === undefined) return undefined;
+  if (value === undefined) {
+    return undefined;
+  }
   const ms = typeof value === "number" ? value : parseTimeoutString(value);
   return Number.isFinite(ms) && ms > 0 ? ms : undefined;
 }
@@ -224,11 +228,15 @@ function unknownFieldWarnings(config: LspConfig, filePath: string): string[] {
   const warnings: string[] = [];
   const check = (record: object, known: Record<string, unknown>, scope: string): void => {
     for (const key of Object.keys(record)) {
-      if (!(key in known)) warnings.push(`${filePath}${scope}: unknown field "${key}" ignored`);
+      if (!(key in known)) {
+        warnings.push(`${filePath}${scope}: unknown field "${key}" ignored`);
+      }
     }
   };
   check(config, lspConfigSchema.properties, "");
-  if (config.watch) check(config.watch, watchConfigSchema.properties, " watch");
+  if (config.watch) {
+    check(config.watch, watchConfigSchema.properties, " watch");
+  }
   for (const [id, server] of Object.entries(config.servers ?? {})) {
     check(server, serverConfigSchema.properties, ` (server "${id}")`);
   }
@@ -243,10 +251,14 @@ async function readConfigFile(
   try {
     const raw = await readFile(filePath, "utf8");
     const config = Value.Parse(lspConfigSchema, JSON.parse(raw) as unknown);
-    for (const message of unknownFieldWarnings(config, filePath)) onWarning?.(message);
+    for (const message of unknownFieldWarnings(config, filePath)) {
+      onWarning?.(message);
+    }
     return config;
   } catch (error) {
-    if (isMissingFile(error)) return {};
+    if (isMissingFile(error)) {
+      return {};
+    }
     throw error;
   }
 }
@@ -256,10 +268,14 @@ function readConfigFileSync(filePath: string, onWarning?: (message: string) => v
   try {
     const raw = readFileSync(filePath, "utf8");
     const config = Value.Parse(lspConfigSchema, JSON.parse(raw) as unknown);
-    for (const message of unknownFieldWarnings(config, filePath)) onWarning?.(message);
+    for (const message of unknownFieldWarnings(config, filePath)) {
+      onWarning?.(message);
+    }
     return config;
   } catch (error) {
-    if (isMissingFile(error)) return {};
+    if (isMissingFile(error)) {
+      return {};
+    }
     throw error;
   }
 }
@@ -288,7 +304,9 @@ function mergeWatch(
   globalWatch: LspConfig["watch"],
   localWatch: LspConfig["watch"],
 ): LspConfig["watch"] {
-  if (!globalWatch && !localWatch) return undefined;
+  if (!globalWatch && !localWatch) {
+    return undefined;
+  }
   return {
     ...globalWatch,
     ...localWatch,
@@ -337,8 +355,12 @@ export function filterAdapters(
 ): LspServerAdapter[] {
   validateConfig(config, adapters);
   return adapters.filter((adapter) => {
-    if (config.enabled && !config.enabled.has(adapter.id)) return false;
-    if (config.disabled?.has(adapter.id)) return false;
+    if (config.enabled && !config.enabled.has(adapter.id)) {
+      return false;
+    }
+    if (config.disabled?.has(adapter.id)) {
+      return false;
+    }
     return true;
   });
 }
@@ -532,7 +554,9 @@ export function createLspService(
 
   /** 配置缓存：同一 cwd 内复用；cwd 变化或 reload 清缓存后重读。 */
   async function currentConfig(cwd: string): Promise<ResolvedLspConfig> {
-    if (state.config && state.configCwd === cwd) return state.config;
+    if (state.config && state.configCwd === cwd) {
+      return state.config;
+    }
     const config = await loadLspConfig(cwd, globalConfigPath, (message) =>
       sessionNotify?.(message, "warning"),
     );
@@ -553,8 +577,12 @@ export function createLspService(
    * 退化为 cwd（client 只服务 cwd 内的文件）；与 cwd 无交集时返回 undefined。
    */
   function watchDirFor(root: string, cwd: string): string | undefined {
-    if (containsPath(root, cwd)) return root;
-    if (containsPath(cwd, root)) return cwd;
+    if (containsPath(root, cwd)) {
+      return root;
+    }
+    if (containsPath(cwd, root)) {
+      return cwd;
+    }
     return undefined;
   }
 
@@ -563,7 +591,9 @@ export function createLspService(
     const dirs = new Set<string>();
     for (const client of state.clients) {
       const dir = watchDirFor(client.root, cwd);
-      if (dir && !watcherFailed.has(dir)) dirs.add(dir);
+      if (dir && !watcherFailed.has(dir)) {
+        dirs.add(dir);
+      }
     }
     return [...dirs]
       .filter((dir) => [...dirs].every((other) => other === dir || !containsPath(dir, other)))
@@ -646,7 +676,9 @@ export function createLspService(
     cwd: string,
     notify?: ExtensionUIContext["notify"],
   ): Promise<void> {
-    if (state.closing || state.disabled) return;
+    if (state.closing || state.disabled) {
+      return;
+    }
     let config: ResolvedLspConfig;
     try {
       config = await currentConfig(cwd);
@@ -663,23 +695,31 @@ export function createLspService(
     const desired = config.watch.enabled ? desiredWatchRoots(cwd) : [];
     // Map 迭代期间删除当前项是安全的
     for (const [root, watcher] of watchers) {
-      if (desired.includes(root)) continue;
+      if (desired.includes(root)) {
+        continue;
+      }
       watchers.delete(root);
       void watcher.stop().catch(() => {
         // 停止失败不影响流程
       });
     }
     for (const root of desired) {
-      if (watchers.has(root)) continue;
+      if (watchers.has(root)) {
+        continue;
+      }
       const watcher = await startWatcher(root, config.watch, notify);
-      if (watcher) watchers.set(root, watcher);
+      if (watcher) {
+        watchers.set(root, watcher);
+      }
     }
   }
 
   /** 事件按各 client 的 root 前缀 / 注册 pattern / 扩展名过滤后投递。 */
   async function fanOut(changes: FileChange[]): Promise<void> {
     const cwd = state.cwd;
-    if (!cwd) return;
+    if (!cwd) {
+      return;
+    }
     await Promise.all(
       state.clients.map(async (client) => {
         const filtered = changes.filter((change) => {
@@ -705,7 +745,9 @@ export function createLspService(
                 (minimatch(relativeCandidate, watcher.pattern) ||
                   minimatch(absoluteCandidate, watcher.pattern)),
             );
-            if (!matched) return false;
+            if (!matched) {
+              return false;
+            }
           }
           const extensions = state.clientExtensions.get(client);
           return (
@@ -714,7 +756,9 @@ export function createLspService(
             extensions.includes(extname(change.path))
           );
         });
-        if (filtered.length === 0) return;
+        if (filtered.length === 0) {
+          return;
+        }
         try {
           await client.notify.watchedFiles(filtered);
         } catch {
@@ -726,7 +770,9 @@ export function createLspService(
 
   /** 汇总当前所有 LSP server 状态并渲染到 footer status。 */
   function updateStatusText(): void {
-    if (!renderStatus) return;
+    if (!renderStatus) {
+      return;
+    }
     if (state.disabled) {
       renderStatus("lsp: disabled");
       return;
@@ -792,7 +838,9 @@ export function createLspService(
   ): Promise<LspClient | undefined> {
     const key = root + adapter.id;
     const inflight = state.spawning.get(key);
-    if (inflight) return inflight;
+    if (inflight) {
+      return inflight;
+    }
     const task = (async () => {
       try {
         const handle = await adapter.spawn(root, cwd);
@@ -845,7 +893,9 @@ export function createLspService(
     })();
     state.spawning.set(key, task);
     void task.finally(() => {
-      if (state.spawning.get(key) === task) state.spawning.delete(key);
+      if (state.spawning.get(key) === task) {
+        state.spawning.delete(key);
+      }
     });
     return task;
   }
@@ -856,8 +906,12 @@ export function createLspService(
     notify?: ExtensionUIContext["notify"],
     adapterFilter?: (adapter: LspServerAdapter) => boolean,
   ): Promise<LspClient[]> {
-    if (state.closing || state.disabled) return [];
-    if (!containsPath(file, cwd)) return [];
+    if (state.closing || state.disabled) {
+      return [];
+    }
+    if (!containsPath(file, cwd)) {
+      return [];
+    }
     const config = await currentConfig(cwd);
     const active = filterAdapters(adapters ?? createAdapters(config.servers), config);
     const extension = extname(file) || file;
@@ -870,15 +924,25 @@ export function createLspService(
     }
 
     for (const adapter of active) {
-      if (adapterFilter && !adapterFilter(adapter)) continue;
-      if (adapter.extensions.length > 0 && !adapter.extensions.includes(extension)) continue;
+      if (adapterFilter && !adapterFilter(adapter)) {
+        continue;
+      }
+      if (adapter.extensions.length > 0 && !adapter.extensions.includes(extension)) {
+        continue;
+      }
       const root = serverRoot(adapter, file, cwd);
-      if (!containsPath(file, root)) continue;
-      if (!matchesInclude(adapter.include ?? [], file, root, cwd)) continue;
+      if (!containsPath(file, root)) {
+        continue;
+      }
+      if (!matchesInclude(adapter.include ?? [], file, root, cwd)) {
+        continue;
+      }
       const key = root + adapter.id;
       const failedAt = state.brokenFailAt.get(key);
       if (failedAt !== undefined) {
-        if (Date.now() - failedAt < retryCooldownMs) continue;
+        if (Date.now() - failedAt < retryCooldownMs) {
+          continue;
+        }
         // 冷却已过：允许重试；重试成功后下面会清除 broken 记录
         state.brokenFailAt.delete(key);
       }
@@ -890,7 +954,9 @@ export function createLspService(
       }
 
       const client = await startClient(adapter, root, cwd, config, notify);
-      if (client) result.push(client);
+      if (client) {
+        result.push(client);
+      }
     }
 
     return result;
@@ -911,7 +977,9 @@ export function createLspService(
       clients.map(async (client) => {
         const after = Date.now();
         const version = await client.notify.open({ path: file });
-        if (!diagnostics) return;
+        if (!diagnostics) {
+          return;
+        }
         await abortable(
           client.waitForDiagnostics({
             path: file,
@@ -948,7 +1016,9 @@ export function createLspService(
     cwd: string,
     options?: LspRequestOptions,
   ): Promise<DiagnosticReport> {
-    if (options?.signal?.aborted) return EMPTY_DIAGNOSTIC_REPORT;
+    if (options?.signal?.aborted) {
+      return EMPTY_DIAGNOSTIC_REPORT;
+    }
     await touchFile(file, cwd, "document", options);
     const all = await diagnostics();
     const normalized = normalize(file);
@@ -1107,7 +1177,9 @@ export function createLspService(
     running: readonly { serverID: string; root: string }[],
   ): Promise<string[]> {
     const cwd = state.cwd;
-    if (!cwd) return [];
+    if (!cwd) {
+      return [];
+    }
     let config: ResolvedLspConfig;
     try {
       config = await currentConfig(cwd);
@@ -1125,7 +1197,9 @@ export function createLspService(
     const restarted = await Promise.all(
       [...unique.values()].map(async ({ serverID, root }): Promise<string | undefined> => {
         const adapter = active.find((candidate) => candidate.id === serverID);
-        if (!adapter) return;
+        if (!adapter) {
+          return;
+        }
         const client = await startClient(adapter, root, cwd, config);
         return client ? serverID : undefined;
       }),
@@ -1144,9 +1218,13 @@ export function createLspService(
       // 个别进程退出失败不阻止清理流程
     });
     state.clients = state.clients.filter((client) => client.serverID !== serverID);
-    for (const client of targets) state.clientExtensions.delete(client);
+    for (const client of targets) {
+      state.clientExtensions.delete(client);
+    }
     for (const [key, server] of state.servers) {
-      if (server.serverID !== serverID) continue;
+      if (server.serverID !== serverID) {
+        continue;
+      }
       state.brokenFailAt.delete(key);
       state.brokenNotifiedAt.delete(key);
       state.servers.delete(key);
@@ -1155,9 +1233,13 @@ export function createLspService(
     state.disabled = false;
     // reload 是资源耗尽后的重试入口：清掉停用记录并按新配置重算监听范围
     watcherFailed.clear();
-    if (state.cwd) await reconcileWatchers(state.cwd);
+    if (state.cwd) {
+      await reconcileWatchers(state.cwd);
+    }
     updateStatusText();
-    if (running.length === 0) return [];
+    if (running.length === 0) {
+      return [];
+    }
     return respawnRunning(running);
   }
 
@@ -1180,7 +1262,9 @@ export function createLspService(
     state.closing = false;
     state.disabled = false;
     watcherFailed.clear();
-    if (state.cwd) await reconcileWatchers(state.cwd);
+    if (state.cwd) {
+      await reconcileWatchers(state.cwd);
+    }
     updateStatusText();
     return respawnRunning(running);
   }
@@ -1247,8 +1331,12 @@ function getNoopService(): LspService {
 function enabledServerCount(config: ResolvedLspConfig, adapters?: LspServerAdapter[]): number {
   const ids = adapters ? adapters.map((adapter) => adapter.id) : Object.keys(config.servers);
   return ids.filter((id) => {
-    if (config.enabled && !config.enabled.has(id)) return false;
-    if (config.disabled?.has(id)) return false;
+    if (config.enabled && !config.enabled.has(id)) {
+      return false;
+    }
+    if (config.disabled?.has(id)) {
+      return false;
+    }
     return true;
   }).length;
 }
@@ -1286,7 +1374,9 @@ export function createLspManager(
         }
       });
       validateConfig(config, options?.adapters);
-      if (enabledServerCount(config, options?.adapters) === 0) return;
+      if (enabledServerCount(config, options?.adapters) === 0) {
+        return;
+      }
       // 下面两个闭包被 service 长期持有，可能在会话被替换或 reload 后仍触发
       // （session_shutdown 清理、后台 watcher 错误、in-flight spawn 失败），
       // 而旧 ctx 已被 pi 标记 stale，ctx.ui getter 会直接抛错。UI 写入是尽力
@@ -1317,7 +1407,9 @@ export function createLspManager(
       hooks.onEnabled(pi, next);
     } catch (error) {
       service = undefined;
-      if (error instanceof Error) ctx.ui.notify(error.message, "error");
+      if (error instanceof Error) {
+        ctx.ui.notify(error.message, "error");
+      }
     }
   });
 

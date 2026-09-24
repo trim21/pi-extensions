@@ -38,33 +38,65 @@ const MAX_MARKDOWN_BYTES = 100 * 1024;
 
 function isPrivateIpv4(ip: string): boolean {
   const parts = ip.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((p) => Number.isNaN(p))) return false;
+  if (parts.length !== 4 || parts.some((p) => Number.isNaN(p))) {
+    return false;
+  }
   const [a, b, c] = parts;
-  if (a === 0) return true; // 0.0.0.0/8
-  if (a === 10) return true; // 10.0.0.0/8
-  if (a === 127) return true; // 127.0.0.0/8 loopback
-  if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local
-  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
-  if (a === 192 && b === 168) return true; // 192.168.0.0/16
-  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT
-  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 benchmarking
-  if (a === 192 && b === 0 && c === 0) return true; // 192.0.0.0/24
+  if (a === 0) {
+    return true; // 0.0.0.0/8
+  }
+  if (a === 10) {
+    return true; // 10.0.0.0/8
+  }
+  if (a === 127) {
+    return true; // 127.0.0.0/8 loopback
+  }
+  if (a === 169 && b === 254) {
+    return true; // 169.254.0.0/16 link-local
+  }
+  if (a === 172 && b >= 16 && b <= 31) {
+    return true; // 172.16.0.0/12
+  }
+  if (a === 192 && b === 168) {
+    return true; // 192.168.0.0/16
+  }
+  if (a === 100 && b >= 64 && b <= 127) {
+    return true; // 100.64.0.0/10 CGNAT
+  }
+  if (a === 198 && (b === 18 || b === 19)) {
+    return true; // 198.18.0.0/15 benchmarking
+  }
+  if (a === 192 && b === 0 && c === 0) {
+    return true; // 192.0.0.0/24
+  }
   return a >= 224; // 224.0.0.0/3 multicast + reserved
 }
 
 function isPrivateIpv6(ip: string): boolean {
   const lower = ip.toLowerCase();
-  if (lower === "::" || lower === "::1") return true; // unspecified / loopback
-  if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // fc00::/7 ULA
-  if (/^fe[89ab]/.test(lower)) return true; // fe80::/10 link-local
-  if (lower.startsWith("::ffff:")) return isPrivateIpv4(lower.slice(7));
+  if (lower === "::" || lower === "::1") {
+    return true; // unspecified / loopback
+  }
+  if (lower.startsWith("fc") || lower.startsWith("fd")) {
+    return true; // fc00::/7 ULA
+  }
+  if (/^fe[89ab]/.test(lower)) {
+    return true; // fe80::/10 link-local
+  }
+  if (lower.startsWith("::ffff:")) {
+    return isPrivateIpv4(lower.slice(7));
+  }
   return false;
 }
 
 export function isPrivateAddress(ip: string): boolean {
   const version = isIP(ip);
-  if (version === 4) return isPrivateIpv4(ip);
-  if (version === 6) return isPrivateIpv6(ip);
+  if (version === 4) {
+    return isPrivateIpv4(ip);
+  }
+  if (version === 6) {
+    return isPrivateIpv6(ip);
+  }
   return true; // 非 IP 一律拒绝
 }
 
@@ -181,7 +213,9 @@ export async function fetchPage(url: string, signal?: AbortSignal): Promise<Fetc
     const decoder = new TextDecoder();
     for (;;) {
       const chunk = (await reader.read()) as { done: boolean; value: Uint8Array };
-      if (chunk.done) break;
+      if (chunk.done) {
+        break;
+      }
       body += decoder.decode(chunk.value, { stream: true });
       if (Buffer.byteLength(body, "utf8") > MAX_BYTES) {
         throw new Error(`页面过大，上限 ${MAX_BYTES} bytes`);
@@ -222,7 +256,9 @@ export async function saveUrlToFile(
       const reader = response.body.getReader();
       for (;;) {
         const chunk = (await reader.read()) as { done: boolean; value: Uint8Array };
-        if (chunk.done) break;
+        if (chunk.done) {
+          break;
+        }
         bytes += chunk.value.byteLength;
         if (bytes > MAX_FILE_BYTES) {
           throw new Error(`文件过大，上限 ${MAX_FILE_BYTES} bytes`);
@@ -248,10 +284,18 @@ export async function saveUrlToFile(
 /** 按 mime 主体分类响应；html 走 readability，其余文本类原样返回 */
 function classifyContentType(contentType: string): "html" | "text" | null {
   const mime = contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  if (mime === "text/html" || mime === "application/xhtml+xml") return "html";
-  if (mime.startsWith("text/")) return "text";
-  if (mime === "application/json" || mime.endsWith("+json")) return "text";
-  if (mime === "application/xml" || mime.endsWith("+xml")) return "text";
+  if (mime === "text/html" || mime === "application/xhtml+xml") {
+    return "html";
+  }
+  if (mime.startsWith("text/")) {
+    return "text";
+  }
+  if (mime === "application/json" || mime.endsWith("+json")) {
+    return "text";
+  }
+  if (mime === "application/xml" || mime.endsWith("+xml")) {
+    return "text";
+  }
   return null;
 }
 
@@ -272,7 +316,9 @@ interface ParsedDocument {
  */
 function unshadowReactStreaming(document: ParsedDocument): void {
   for (const el of document.querySelectorAll("[hidden]")) {
-    if (/^S:\d+$/.test(el.id ?? "")) el.removeAttribute("hidden");
+    if (/^S:\d+$/.test(el.id ?? "")) {
+      el.removeAttribute("hidden");
+    }
   }
 }
 
@@ -285,7 +331,9 @@ export function extractMarkdown(html: string, sourceUrl: string): FetchedPage {
   // linkedom document 的兼容方法，cast 桥接即可
   const article = new Readability(parsed.document).parse();
   let title = article?.title ?? document.title?.trim() ?? sourceUrl;
-  if (typeof title !== "string" || title.length === 0) title = sourceUrl;
+  if (typeof title !== "string" || title.length === 0) {
+    title = sourceUrl;
+  }
   let body = article?.content;
   if (!body || body.length === 0) {
     body = document.body?.textContent ?? "";
@@ -303,7 +351,9 @@ export function extractMarkdown(html: string, sourceUrl: string): FetchedPage {
 }
 
 function truncateMarkdown(text: string): { text: string; truncated: boolean } {
-  if (Buffer.byteLength(text, "utf8") <= MAX_MARKDOWN_BYTES) return { text, truncated: false };
+  if (Buffer.byteLength(text, "utf8") <= MAX_MARKDOWN_BYTES) {
+    return { text, truncated: false };
+  }
   const bytes = Buffer.from(text, "utf8");
   const sliced = bytes.subarray(0, MAX_MARKDOWN_BYTES).toString("utf8");
   const cut = sliced.lastIndexOf("\n", sliced.length - 1);

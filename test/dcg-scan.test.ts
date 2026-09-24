@@ -35,7 +35,9 @@ class FakeChildProcess extends EventEmitter {
   }
 
   exit(code: number, stdout = ""): void {
-    if (stdout) this.stdout.write(stdout);
+    if (stdout) {
+      this.stdout.write(stdout);
+    }
     this.emit("close", code);
   }
 
@@ -69,7 +71,9 @@ const denyOutput = (overrides: Record<string, unknown> = {}) =>
 
 function expectSuggestion(result: Awaited<ReturnType<typeof dcgSuggestion>>): DcgSuggestion {
   expect(result.kind).toBe("suggestion");
-  if (result.kind !== "suggestion") throw new Error("expected suggestion");
+  if (result.kind !== "suggestion") {
+    throw new Error("expected suggestion");
+  }
   return result.suggestion;
 }
 

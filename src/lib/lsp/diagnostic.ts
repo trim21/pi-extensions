@@ -60,7 +60,9 @@ export function report(file: string, issues: Diagnostic[]): DiagnosticReport {
   const errors = issues.filter((item) => severityOf(item) === 1);
   const warnings = issues.filter((item) => item.severity === 2);
   const relevant = [...errors, ...warnings];
-  if (relevant.length === 0) return EMPTY_DIAGNOSTIC_REPORT;
+  if (relevant.length === 0) {
+    return EMPTY_DIAGNOSTIC_REPORT;
+  }
   const limited = relevant.slice(0, MAX_PER_FILE);
   const hidden = relevant.slice(MAX_PER_FILE);
   const suffix = hidden.length > 0 ? `\n... and ${hiddenSummary(hidden)}` : "";
@@ -73,6 +75,8 @@ export function report(file: string, issues: Diagnostic[]): DiagnosticReport {
 
 /** 把 LSP 诊断块接到工具成功文案后面；无诊断时原样返回。 */
 export function appendLspDiagnosticText(message: string, diagnosticText: string): string {
-  if (diagnosticText === "") return message;
+  if (diagnosticText === "") {
+    return message;
+  }
   return `${message}\n\nLSP diagnostics detected in this file\n${diagnosticText}`;
 }

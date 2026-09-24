@@ -34,7 +34,9 @@ async function waitFor(
   predicate: () => Promise<boolean>,
 ): Promise<boolean> {
   for (let i = 0; i < attempts; i++) {
-    if (await predicate()) return true;
+    if (await predicate()) {
+      return true;
+    }
     await sleep(delayMs);
   }
   return false;

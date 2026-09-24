@@ -49,11 +49,19 @@ export type LetterKind = Letter["kind"];
  * unchanged; anything else returns null.
  */
 export function normalizeLetter(value: unknown): Letter | null {
-  if (Value.Check(LetterSchema, value)) return value;
-  if (!isRecord(value)) return null;
+  if (Value.Check(LetterSchema, value)) {
+    return value;
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
   const from = value.from;
-  if (!isRecord(from)) return null;
-  if (typeof from.sessionId !== "string") return null;
+  if (!isRecord(from)) {
+    return null;
+  }
+  if (typeof from.sessionId !== "string") {
+    return null;
+  }
   const migrated = {
     ...value,
     from: { ...from, agentId: from.sessionId },
@@ -98,7 +106,9 @@ export function newMessageId(): string {
 }
 
 function assertMessageId(id: string): void {
-  if (!MESSAGE_ID_PATTERN.test(id)) throw new TypeError(`Invalid talk message id: ${id}`);
+  if (!MESSAGE_ID_PATTERN.test(id)) {
+    throw new TypeError(`Invalid talk message id: ${id}`);
+  }
 }
 
 /** The storage key for a letter: `<ts>-<id>.json`, sorted oldest-first. */
@@ -112,7 +122,9 @@ export function letterFileName(letter: Letter): string {
 
 /** Structural validation plus filename safety (id/timestamp shape). */
 export function isValidLetter(value: unknown): value is Letter {
-  if (!Value.Check(LetterSchema, value)) return false;
+  if (!Value.Check(LetterSchema, value)) {
+    return false;
+  }
   try {
     letterFileName(value);
     return true;
@@ -153,7 +165,9 @@ export async function listInbox(storage: TalkStorage, addr: string): Promise<Inb
   for (const fileName of await storage.listKeys(inboxNs(addr))) {
     const raw = await storage.readJson(inboxNs(addr), fileName);
     const letter = normalizeLetter(raw);
-    if (letter && isValidLetter(letter)) out.push({ fileName, letter });
+    if (letter && isValidLetter(letter)) {
+      out.push({ fileName, letter });
+    }
     // corrupt letters are skipped; the caller may remove them separately
   }
   return out; // keys are already sorted by listKeys
@@ -194,7 +208,9 @@ export async function awaitReceipt(
   while (Date.now() < deadline) {
     const inbox = await listInbox(storage, toAddr);
     const stillThere = inbox.some((i) => i.letter.id === letter.id);
-    if (!stillThere) return "delivered";
+    if (!stillThere) {
+      return "delivered";
+    }
     await sleep(100);
   }
   const inbox = await listInbox(storage, toAddr);
@@ -236,7 +252,9 @@ export async function clearAsk(storage: TalkStorage, addr: string, askId: string
 export async function outgoingAskIds(storage: TalkStorage, addr: string): Promise<string[]> {
   const out: string[] = [];
   for (const key of await storage.listKeys(asksNs(addr))) {
-    if (!key.startsWith("out-") || !key.endsWith(".json")) continue;
+    if (!key.startsWith("out-") || !key.endsWith(".json")) {
+      continue;
+    }
     out.push(key.slice("out-".length, -".json".length));
   }
   return out;
@@ -271,7 +289,9 @@ export async function readAudit(storage: TalkStorage, limit = 50): Promise<Audit
   for (const line of await storage.readLog(AUDIT_LOG)) {
     try {
       const parsed: unknown = JSON.parse(line);
-      if (Value.Check(AuditRecordSchema, parsed)) out.push(parsed);
+      if (Value.Check(AuditRecordSchema, parsed)) {
+        out.push(parsed);
+      }
     } catch {
       // skip corrupt line — append-only, never fatal
     }

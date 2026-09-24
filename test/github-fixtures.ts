@@ -70,8 +70,12 @@ function jsonResponse(url: string, body: unknown, headers: Record<string, string
 }
 
 function requestUrl(input: Parameters<typeof globalThis.fetch>[0]): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.href;
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
   return input.url;
 }
 
@@ -88,7 +92,9 @@ function fixtureFile(file: string): URL {
  */
 function recordingToken(): string | undefined {
   const fromEnv = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
-  if (fromEnv?.trim()) return fromEnv.trim();
+  if (fromEnv?.trim()) {
+    return fromEnv.trim();
+  }
   try {
     const token = execFileSync("gh", ["auth", "token"], { encoding: "utf8" }).trim();
     return token || undefined;
@@ -104,7 +110,9 @@ function recordingToken(): string | undefined {
  */
 function redact(json: string, token: string | undefined): string {
   let out = json;
-  if (token) out = out.split(token).join("REDACTED");
+  if (token) {
+    out = out.split(token).join("REDACTED");
+  }
   return out.replaceAll(
     /\b(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
     "REDACTED",
@@ -120,8 +128,11 @@ async function record(
 ): Promise<unknown> {
   const token = recordingToken();
   const auth = new Headers(init?.headers);
-  if (token) auth.set("authorization", `token ${token}`);
-  else auth.delete("authorization");
+  if (token) {
+    auth.set("authorization", `token ${token}`);
+  } else {
+    auth.delete("authorization");
+  }
 
   const response = await globalThis.fetch(input, { ...init, headers: auth });
   const text = await response.text();
@@ -152,7 +163,9 @@ export function githubCassette(routes: FixtureRoutes): GithubCassette {
     calls.push(url);
 
     for (const [match, route] of Object.entries(routes)) {
-      if (!url.includes(match)) continue;
+      if (!url.includes(match)) {
+        continue;
+      }
       used.add(match);
 
       const file = typeof route === "string" ? route : "file" in route ? route.file : undefined;

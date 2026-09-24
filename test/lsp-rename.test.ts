@@ -21,7 +21,9 @@ import {
 
 const readFrom = (texts: Record<string, string>) => (path: string) => {
   const text = texts[path];
-  if (text === undefined) return Promise.reject(new Error(`ENOENT: ${path}`));
+  if (text === undefined) {
+    return Promise.reject(new Error(`ENOENT: ${path}`));
+  }
   return Promise.resolve(text);
 };
 

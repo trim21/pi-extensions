@@ -55,7 +55,9 @@ function toPath(uri: string): string {
 function lineStartOffsets(text: string): number[] {
   const starts = [0];
   for (let i = 0; i < text.length; i++) {
-    if (text.codePointAt(i) === 10) starts.push(i + 1);
+    if (text.codePointAt(i) === 10) {
+      starts.push(i + 1);
+    }
   }
   return starts;
 }
@@ -64,7 +66,9 @@ function lineStartOffsets(text: string): number[] {
 function lineContentLength(text: string, starts: readonly number[], line: number): number {
   const base = starts[line];
   let end = line + 1 < starts.length ? starts[line + 1] - 1 : text.length;
-  if (end > base && text.codePointAt(end - 1) === 13) end--;
+  if (end > base && text.codePointAt(end - 1) === 13) {
+    end--;
+  }
   return end - base;
 }
 
@@ -117,8 +121,11 @@ function collectTextEdits(edit: WorkspaceEdit): Map<string, RangeLike[]> {
   const byPath = new Map<string, RangeLike[]>();
   const push = (path: string, edits: readonly RangeLike[]): void => {
     const existing = byPath.get(path);
-    if (existing) existing.push(...edits);
-    else byPath.set(path, [...edits]);
+    if (existing) {
+      existing.push(...edits);
+    } else {
+      byPath.set(path, [...edits]);
+    }
   };
   for (const [uri, edits] of Object.entries(edit.changes ?? {})) {
     push(toPath(uri), edits.filter(isRangeLike));
@@ -190,8 +197,14 @@ const WORD_PATTERN = /[\p{L}\p{N}_$]+/gu;
 
 /** 两个路径集合是否一致（用于判断 references 结果是否收敛）。 */
 export function samePathSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
-  if (a.size !== b.size) return false;
-  for (const path of a) if (!b.has(path)) return false;
+  if (a.size !== b.size) {
+    return false;
+  }
+  for (const path of a) {
+    if (!b.has(path)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -244,7 +257,9 @@ export function symbolCandidates(
   character?: number,
 ): LspPosition[] {
   const starts = lineStartOffsets(text);
-  if (line < 0 || line >= starts.length) return [];
+  if (line < 0 || line >= starts.length) {
+    return [];
+  }
   const base = starts[line];
   const length = lineContentLength(text, starts, line);
   const matches = [...text.slice(base, base + length).matchAll(WORD_PATTERN)];
@@ -264,7 +279,9 @@ export function symbolCandidates(
   }
   const candidates: LspPosition[] = [];
   for (const match of matches) {
-    if (match[0] === symbol) candidates.push({ line, character: match.index });
+    if (match[0] === symbol) {
+      candidates.push({ line, character: match.index });
+    }
   }
   return candidates;
 }

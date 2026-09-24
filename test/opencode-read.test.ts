@@ -175,7 +175,9 @@ function loadTool(): Tool {
   let tool: Tool | undefined;
   opencodeFileTools({
     registerTool: (def: Tool) => {
-      if (def.name === "read") tool = def;
+      if (def.name === "read") {
+        tool = def;
+      }
     },
     on: vi.fn(),
     registerCommand: vi.fn(),
@@ -471,7 +473,9 @@ describe("opencode read reports LSP diagnostics", () => {
     opencodeFileTools(
       {
         registerTool: (def: Tool) => {
-          if (def.name === "read") tool = def;
+          if (def.name === "read") {
+            tool = def;
+          }
         },
         on(event: string, handler: (...args: any[]) => unknown) {
           handlers.set(event, [...(handlers.get(event) ?? []), handler]);

@@ -111,7 +111,9 @@ async function runBwrapCommand(
   ctx: unknown,
 ): Promise<void> {
   const call = pi.registerCommand.mock.calls.find((c) => c[0] === name);
-  if (!call) throw new Error(`command not registered: ${name}`);
+  if (!call) {
+    throw new Error(`command not registered: ${name}`);
+  }
   const { handler } = call[1] as { handler: (args: string, ctx: unknown) => Promise<void> };
   await handler("", ctx);
 }

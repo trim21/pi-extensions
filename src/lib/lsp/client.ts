@@ -151,8 +151,12 @@ async function retryOnContentModified<T>(fn: () => Promise<T>): Promise<T> {
     try {
       return await fn();
     } catch (error) {
-      if (!(error instanceof ResponseError && error.code === LSP_CONTENT_MODIFIED)) throw error;
-      if (attempt >= renameVerificationTiming.contentModifiedRetries) throw error;
+      if (!(error instanceof ResponseError && error.code === LSP_CONTENT_MODIFIED)) {
+        throw error;
+      }
+      if (attempt >= renameVerificationTiming.contentModifiedRetries) {
+        throw error;
+      }
     }
   }
 }
@@ -199,12 +203,16 @@ type DefinitionResult = LspLocation | LspLocation[] | LocationLink | LocationLin
 
 /** Location / LocationLink → path + 0-based 坐标；非 file: URI 是服务器的意外行为，跳过。 */
 function toInspectLocations(result: DefinitionResult): InspectLocation[] {
-  if (result === null) return [];
+  if (result === null) {
+    return [];
+  }
   const items = Array.isArray(result) ? result : [result];
   const locations: InspectLocation[] = [];
   for (const item of items) {
     if ("targetUri" in item) {
-      if (!item.targetUri.startsWith("file:")) continue;
+      if (!item.targetUri.startsWith("file:")) {
+        continue;
+      }
       const range =
         (item as Omit<LocationLink, "targetSelectionRange"> & { targetSelectionRange?: Range })
           .targetSelectionRange ?? item.targetRange;
@@ -214,7 +222,9 @@ function toInspectLocations(result: DefinitionResult): InspectLocation[] {
         character: range.start.character,
       });
     } else {
-      if (!item.uri.startsWith("file:")) continue;
+      if (!item.uri.startsWith("file:")) {
+        continue;
+      }
       locations.push({
         path: normalize(fileURLToPath(item.uri)),
         line: item.range.start.line,
@@ -230,14 +240,18 @@ const STDERR_TAIL_CHARS = 4_000;
 
 /** 展开 Error 的 cause 链为一条 message；流包装错误只包一层，逐层展开即可还原根因。 */
 function errorChainMessage(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
   const parts: string[] = [];
   let current: unknown = error;
   while (current instanceof Error && current.message && !parts.includes(current.message)) {
     parts.push(current.message);
     current = current.cause;
   }
-  if (typeof current === "string" || typeof current === "number") parts.push(String(current));
+  if (typeof current === "string" || typeof current === "number") {
+    parts.push(String(current));
+  }
   return parts.join(": ");
 }
 
@@ -248,9 +262,13 @@ function describeStartupFailure(
   stderrTail: string,
 ): string {
   const parts = [errorChainMessage(error)];
-  if (exitDescription) parts.push(`server ${exitDescription}`);
+  if (exitDescription) {
+    parts.push(`server ${exitDescription}`);
+  }
   const stderr = stderrTail.trim();
-  if (stderr) parts.push(`stderr: ${stderr}`);
+  if (stderr) {
+    parts.push(`stderr: ${stderr}`);
+  }
   return parts.join("; ");
 }
 
@@ -393,14 +411,20 @@ export interface LspClient {
 export type Info = LspClient;
 
 function getFilePath(uri: string): string | undefined {
-  if (!uri.startsWith("file://")) return undefined;
+  if (!uri.startsWith("file://")) {
+    return undefined;
+  }
   return normalize(fileURLToPath(uri));
 }
 
 function getSyncKind(capabilities?: ServerCapabilities): number | undefined {
-  if (!capabilities) return undefined;
+  if (!capabilities) {
+    return undefined;
+  }
   const sync = capabilities.textDocumentSync;
-  if (typeof sync === "number") return sync;
+  if (typeof sync === "number") {
+    return sync;
+  }
   return sync?.change;
 }
 
@@ -426,16 +450,22 @@ function dedupeDiagnostics(items: Diagnostic[]): Diagnostic[] {
       source: item.source,
       range: item.range,
     });
-    if (seen.has(key)) return false;
+    if (seen.has(key)) {
+      return false;
+    }
     seen.add(key);
     return true;
   });
 }
 
 function configurationValue(settings: unknown, section?: string): unknown {
-  if (!section) return settings ?? null;
+  if (!section) {
+    return settings ?? null;
+  }
   const result = section.split(".").reduce<unknown>((acc, key) => {
-    if (!acc || typeof acc !== "object" || !(key in acc)) return;
+    if (!acc || typeof acc !== "object" || !(key in acc)) {
+      return;
+    }
     return (acc as Record<string, unknown>)[key];
   }, settings);
   return result ?? null;
@@ -451,7 +481,9 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
       }),
     ]);
   } finally {
-    if (timer) clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -464,7 +496,9 @@ function abortReason(signal: AbortSignal): Error {
 
 /** 可中止的 sleep：中止时以 signal.reason 拒绝，而不是白等到轮询间隔结束。 */
 function sleepWithSignal(ms: number, signal: AbortSignal | undefined): Promise<void> {
-  if (!signal) return sleep(ms);
+  if (!signal) {
+    return sleep(ms);
+  }
   return new Promise<void>((resolve, reject) => {
     const onAbort = (): void => {
       clearTimeout(timer);
@@ -486,7 +520,9 @@ function sleepWithSignal(ms: number, signal: AbortSignal | undefined): Promise<v
 const PULL_RETRY_INTERVAL_MS = 100;
 
 function stopProcess(process: LspServerHandle["process"]): Promise<void> {
-  if (process.exitCode !== null) return Promise.resolve();
+  if (process.exitCode !== null) {
+    return Promise.resolve();
+  }
   try {
     process.kill();
   } catch {
@@ -530,8 +566,11 @@ export function evictionPlan(options: {
   const stale: string[] = [];
   const evictable: string[] = [];
   for (const path of options.order) {
-    if (!options.isResident(path)) stale.push(path);
-    else if (!options.isWaiting(path)) evictable.push(path);
+    if (!options.isResident(path)) {
+      stale.push(path);
+    } else if (!options.isWaiting(path)) {
+      evictable.push(path);
+    }
   }
   const excess = options.order.length - stale.length - options.maxOpenDocuments;
   return { stale, evict: excess > 0 ? evictable.slice(0, excess) : [] };
@@ -591,14 +630,17 @@ export async function create(input: CreateInput): Promise<LspClient> {
     ]);
   const updatePushDiagnostics = (filePath: string, next: Diagnostic[]): void => {
     pushDiagnostics.set(filePath, next);
-    for (const listener of diagnosticListeners)
+    for (const listener of diagnosticListeners) {
       listener({ path: filePath, serverID: input.serverID });
+    }
   };
   const updatePullDiagnostics = (filePath: string, next: Diagnostic[]): void => {
     pullDiagnostics.set(filePath, next);
   };
   const emitRegistrationChange = (): void => {
-    for (const listener of registrationListeners) listener();
+    for (const listener of registrationListeners) {
+      listener();
+    }
   };
 
   // ── LSP 连接处理器 ─────────────────────────────────────────────────────────
@@ -607,7 +649,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
     "textDocument/publishDiagnostics",
     (params: { uri: string; version?: number; diagnostics: Diagnostic[] }) => {
       const filePath = getFilePath(params.uri);
-      if (!filePath) return;
+      if (!filePath) {
+        return;
+      }
       // 服务器版本滞后于已发送版本时，该 push 对应的是旧内容（异步重算未完成
       // 时的迟到结果）。忽略，避免与当前版本结果混淆。
       const currentVersion = documentVersions.get(filePath);
@@ -615,13 +659,17 @@ export async function create(input: CreateInput): Promise<LspClient> {
         typeof params.version === "number" &&
         currentVersion !== undefined &&
         params.version !== currentVersion;
-      if (isStalePush) return;
+      if (isStalePush) {
+        return;
+      }
       published.set(filePath, {
         at: Date.now(),
         version: typeof params.version === "number" ? params.version : undefined,
       });
       const document = files[filePath];
-      if (document !== undefined) document.lastPushEmpty = params.diagnostics.length === 0;
+      if (document !== undefined) {
+        document.lastPushEmpty = params.diagnostics.length === 0;
+      }
       updatePushDiagnostics(filePath, params.diagnostics);
     },
   );
@@ -651,7 +699,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
         changed = true;
       }
     }
-    if (changed) emitRegistrationChange();
+    if (changed) {
+      emitRegistrationChange();
+    }
   });
   connection.onRequest("client/unregisterCapability", (params) => {
     const registrations =
@@ -665,7 +715,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
         changed = true;
       }
     }
-    if (changed) emitRegistrationChange();
+    if (changed) {
+      emitRegistrationChange();
+    }
   });
   connection.onRequest("workspace/workspaceFolders", () => [
     { name: "workspace", uri: pathToFileURL(input.root).href },
@@ -762,7 +814,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
       isWaiting: (path) => waitingForDiagnostics.has(path),
       maxOpenDocuments,
     });
-    for (const path of plan.stale) lruOrder.delete(path);
+    for (const path of plan.stale) {
+      lruOrder.delete(path);
+    }
     for (const path of plan.evict) {
       lruOrder.delete(path);
       await connection.sendNotification("textDocument/didClose", {
@@ -794,7 +848,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
       }
     }
 
-    if (matched && !merged.has(filePath)) merged.set(filePath, []);
+    if (matched && !merged.has(filePath)) {
+      merged.set(filePath, []);
+    }
     for (const [target, items] of merged) {
       updatePullDiagnostics(target, dedupeDiagnostics(items));
     }
@@ -814,7 +870,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
       }),
       diagnosticsRequestTimeoutMs,
     ).catch((error: unknown) => {
-      if (error instanceof Error && error.message.startsWith("Timeout after")) timedOut = true;
+      if (error instanceof Error && error.message.startsWith("Timeout after")) {
+        timedOut = true;
+      }
       return null;
     });
     if (!report) {
@@ -836,7 +894,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
     }
     for (const [uri, related] of Object.entries(report.relatedDocuments ?? {})) {
       const relatedPath = getFilePath(uri);
-      if (!relatedPath || !Array.isArray(related.items)) continue;
+      if (!relatedPath || !Array.isArray(related.items)) {
+        continue;
+      }
       push(relatedPath, related.items);
       handled = true;
       matched ||= relatedPath === filePath;
@@ -857,7 +917,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
       }),
       diagnosticsRequestTimeoutMs,
     ).catch((error: unknown) => {
-      if (error instanceof Error && error.message.startsWith("Timeout after")) timedOut = true;
+      if (error instanceof Error && error.message.startsWith("Timeout after")) {
+        timedOut = true;
+      }
       return null;
     });
     if (!report) {
@@ -868,7 +930,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
     let matched = false;
     for (const item of report.items ?? []) {
       const relatedPath = item.uri ? getFilePath(item.uri) : undefined;
-      if (!relatedPath || !Array.isArray(item.items)) continue;
+      if (!relatedPath || !Array.isArray(item.items)) {
+        continue;
+      }
       const existing = byFile.get(relatedPath) ?? [];
       byFile.set(relatedPath, [...existing, ...item.items]);
       matched ||= relatedPath === filePath;
@@ -906,15 +970,21 @@ export async function create(input: CreateInput): Promise<LspClient> {
     requests: Promise<DiagnosticRequestResult>[],
     done: (results: DiagnosticRequestResult[]) => boolean,
   ): Promise<PullResult> {
-    if (requests.length === 0) return { handled: false, matched: false, timedOut: false };
+    if (requests.length === 0) {
+      return { handled: false, matched: false, timedOut: false };
+    }
 
     return new Promise<PullResult>((resolve) => {
       const results: DiagnosticRequestResult[] = [];
       let pending = requests.length;
       let resolved = false;
       const finish = (merged: PullResult, force = false) => {
-        if (resolved) return;
-        if (!force && !done(results)) return;
+        if (resolved) {
+          return;
+        }
+        if (!force && !done(results)) {
+          return;
+        }
         resolved = true;
         resolve(merged);
       };
@@ -926,12 +996,16 @@ export async function create(input: CreateInput): Promise<LspClient> {
             pending -= 1;
             const merged = mergeResults(filePath, results);
             finish(merged);
-            if (pending === 0) finish(merged, true);
+            if (pending === 0) {
+              finish(merged, true);
+            }
             return;
           })
           .catch(() => {
             pending -= 1;
-            if (pending === 0) finish(mergeResults(filePath, results), true);
+            if (pending === 0) {
+              finish(mergeResults(filePath, results), true);
+            }
             return;
           });
       }
@@ -942,7 +1016,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
   // 慢的 pull 继续在后台合并，不按 identifier 串行。见 opencode PR #23771。
   async function requestDocumentDiagnostics(filePath: string): Promise<PullResult> {
     const state = documentPullState();
-    if (!state.supported) return { handled: false, matched: false, timedOut: false };
+    if (!state.supported) {
+      return { handled: false, matched: false, timedOut: false };
+    }
     return requestDiagnostics(
       filePath,
       [
@@ -977,12 +1053,16 @@ export async function create(input: CreateInput): Promise<LspClient> {
   }
 
   function waitForRegistrationChange(timeout: number): Promise<boolean> {
-    if (timeout <= 0) return Promise.resolve(false);
+    if (timeout <= 0) {
+      return Promise.resolve(false);
+    }
     return new Promise<boolean>((resolve) => {
       let finished = false;
       const timer = setTimeout(() => finish(false), timeout);
       const finish = (result: boolean) => {
-        if (finished) return;
+        if (finished) {
+          return;
+        }
         finished = true;
         clearTimeout(timer);
         registrationListeners.delete(listener);
@@ -999,26 +1079,40 @@ export async function create(input: CreateInput): Promise<LspClient> {
     after: number;
     timeout: number;
   }): Promise<boolean> {
-    if (request.timeout <= 0) return Promise.resolve(false);
+    if (request.timeout <= 0) {
+      return Promise.resolve(false);
+    }
     return new Promise<boolean>((resolve) => {
       let finished = false;
       let debounceTimer: ReturnType<typeof setTimeout> | undefined;
       const timeoutTimer = setTimeout(() => finish(false), request.timeout);
       const unsub = () => diagnosticListeners.delete(listener);
       const finish = (result: boolean) => {
-        if (finished) return;
+        if (finished) {
+          return;
+        }
         finished = true;
-        if (debounceTimer) clearTimeout(debounceTimer);
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+        }
         clearTimeout(timeoutTimer);
         unsub();
         resolve(result);
       };
       const schedule = () => {
         const hit = published.get(request.path);
-        if (!hit) return;
-        if (typeof hit.version === "number" && hit.version !== request.version) return;
-        if (hit.at < request.after && hit.version !== request.version) return;
-        if (debounceTimer) clearTimeout(debounceTimer);
+        if (!hit) {
+          return;
+        }
+        if (typeof hit.version === "number" && hit.version !== request.version) {
+          return;
+        }
+        if (hit.at < request.after && hit.version !== request.version) {
+          return;
+        }
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+        }
         debounceTimer = setTimeout(
           () => finish(true),
           Math.max(0, diagnosticsDebounceMs - (Date.now() - hit.at)),
@@ -1026,7 +1120,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
       };
 
       const listener = (event: { path: string; serverID: string }) => {
-        if (event.path !== request.path || event.serverID !== input.serverID) return;
+        if (event.path !== request.path || event.serverID !== input.serverID) {
+          return;
+        }
         schedule();
       };
       diagnosticListeners.add(listener);
@@ -1051,7 +1147,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
     // 耗满整个窗口后得到同样的「无诊断」。
     const known = published.get(request.path);
     const document = files[request.path];
-    if (known !== undefined && document !== undefined && known.at >= document.syncedAt) return true;
+    if (known !== undefined && document !== undefined && known.at >= document.syncedAt) {
+      return true;
+    }
 
     const startedAt = request.after ?? Date.now();
     // 「上一份 push 为空」的文档用短安静期（见 clientDefaults.diagnosticsSilentWaitTimeoutMs）。
@@ -1071,9 +1169,13 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
     while (!connectionClosed && !request.signal?.aborted) {
       const remaining = budget - (Date.now() - startedAt);
-      if (remaining <= 0) return false;
+      if (remaining <= 0) {
+        return false;
+      }
       const result = await requestDocumentDiagnostics(request.path);
-      if (result.matched) return true;
+      if (result.matched) {
+        return true;
+      }
       if (result.timedOut) {
         return await pushWait;
       }
@@ -1084,7 +1186,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
         ),
         sleep(Math.min(remaining, PULL_RETRY_INTERVAL_MS)).then(() => "interval" as const),
       ]);
-      if (next === "push") return true;
+      if (next === "push") {
+        return true;
+      }
     }
     return false;
   }
@@ -1105,9 +1209,13 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
     while (!connectionClosed && !request.signal?.aborted) {
       const remaining = diagnosticsFullWaitTimeoutMs - (Date.now() - startedAt);
-      if (remaining <= 0) return;
+      if (remaining <= 0) {
+        return;
+      }
       const result = await requestFullDiagnostics(request.path);
-      if (result.handled || result.matched) return;
+      if (result.handled || result.matched) {
+        return;
+      }
       if (result.timedOut) {
         await pushWait;
         return;
@@ -1119,7 +1227,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
         ),
         sleep(Math.min(remaining, PULL_RETRY_INTERVAL_MS)).then(() => "interval" as const),
       ]);
-      if (next === "push") return;
+      if (next === "push") {
+        return;
+      }
     }
   }
 
@@ -1206,8 +1316,12 @@ export async function create(input: CreateInput): Promise<LspClient> {
     params: object,
     signal: AbortSignal | undefined,
   ): Promise<T> {
-    if (!signal) return await connection.sendRequest<T>(method, params);
-    if (signal.aborted) throw abortReason(signal);
+    if (!signal) {
+      return await connection.sendRequest<T>(method, params);
+    }
+    if (signal.aborted) {
+      throw abortReason(signal);
+    }
     const source = new CancellationTokenSource();
     const aborted = Promise.withResolvers<never>();
     // 中止可能恰好在请求已返回之后才触发：那时 race 已经结算，而这个 promise 的
@@ -1276,7 +1390,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
           const document = files[resolvedPath];
           if (document !== undefined) {
             // 写后诊断等待中的文档不退场（didClose 可能抹掉本次写入的诊断结果）
-            if (waitingForDiagnostics.has(resolvedPath)) continue;
+            if (waitingForDiagnostics.has(resolvedPath)) {
+              continue;
+            }
             // 驻留文档被外部改动：内容一致的自身写入 echo 完全忽略；否则先 didClose
             // 让服务器回落磁盘，再以文件事件通知——不 bump 版本，避免与写后等待竞态。
             if (change.type === "changed") {
@@ -1286,7 +1402,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
               } catch {
                 // 文件已被删除或不可读：按磁盘状态变化处理
               }
-              if (disk === document.text) continue;
+              if (disk === document.text) {
+                continue;
+              }
             }
             await connection.sendNotification("textDocument/didClose", {
               textDocument: { uri: pathToFileURL(resolvedPath).href },
@@ -1299,7 +1417,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
             type: FILE_CHANGE_TYPE[change.type],
           });
         }
-        if (notified.length === 0) return;
+        if (notified.length === 0) {
+          return;
+        }
         await connection.sendNotification("workspace/didChangeWatchedFiles", {
           changes: notified,
         });
@@ -1405,17 +1525,25 @@ export async function create(input: CreateInput): Promise<LspClient> {
           }
           throw error;
         }
-        if (!prepared) throw notRenameable();
-        if (typeof prepared.placeholder === "string") placeholder = prepared.placeholder;
+        if (!prepared) {
+          throw notRenameable();
+        }
+        if (typeof prepared.placeholder === "string") {
+          placeholder = prepared.placeholder;
+        }
       }
 
       let locations: { uri: string }[] | null;
       try {
         locations = await referencesRequest();
       } catch (error) {
-        if (!(error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND)) throw error;
+        if (!(error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND)) {
+          throw error;
+        }
         const edit = await sendRename();
-        if (!edit) throw notRenameable();
+        if (!edit) {
+          throw notRenameable();
+        }
         return placeholder === undefined ? { edit } : { edit, placeholder };
       }
 
@@ -1439,18 +1567,26 @@ export async function create(input: CreateInput): Promise<LspClient> {
         const expired = now >= deadline;
         if (stable || expired) {
           const edit = await sendRename();
-          if (!edit) throw notRenameable();
+          if (!edit) {
+            throw notRenameable();
+          }
           const editPaths = editFilePaths(edit);
           const missing: string[] = [];
           const extra: string[] = [];
           for (const path of stability.paths) {
-            if (!editPaths.has(path)) missing.push(path);
+            if (!editPaths.has(path)) {
+              missing.push(path);
+            }
           }
           for (const path of editPaths) {
-            if (!stability.paths.has(path)) extra.push(path);
+            if (!stability.paths.has(path)) {
+              extra.push(path);
+            }
           }
           if (missing.length === 0 && extra.length === 0) {
-            if (stable) return placeholder === undefined ? { edit } : { edit, placeholder };
+            if (stable) {
+              return placeholder === undefined ? { edit } : { edit, placeholder };
+            }
             // 双向一致但稳定窗口未达标：索引可能仍在加载、残缺答案假稳定，
             // 宁可报可重试的不完整错误，也不把残缺结果当成功写盘。
             throw new RenameIncompleteError([], []);

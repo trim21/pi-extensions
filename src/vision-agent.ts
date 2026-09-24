@@ -120,7 +120,9 @@ export function resolveImagePaths(params: { path?: string | string[] }): string[
 }
 
 function toTrimmedList(value: string | string[] | undefined): string[] {
-  if (value === undefined) return [];
+  if (value === undefined) {
+    return [];
+  }
   const list = Array.isArray(value) ? value : [value];
   return list.map((s) => s.trim()).filter((s) => s.length > 0);
 }
@@ -143,9 +145,13 @@ export function loadVisionConfig(settingsPath = SETTINGS_PATH): VisionConfigSett
   } catch {
     return undefined;
   }
-  if (!Value.Check(visionSettingsSchema, parsed)) return undefined;
+  if (!Value.Check(visionSettingsSchema, parsed)) {
+    return undefined;
+  }
   const config = parsed.visionConfig;
-  if (config === undefined) return undefined;
+  if (config === undefined) {
+    return undefined;
+  }
   const provider = config.provider?.trim() || undefined;
   const defaultProvider = parsed.defaultProvider?.trim() || undefined;
   return {
@@ -210,9 +216,15 @@ export function buildPendantMarkdown(params: {
 
 /** 按文件头识别真实图片类型，识别不出返回 undefined */
 function sniffMime(buf: Buffer): string | undefined {
-  if (buf.length >= 8 && buf.readUInt32BE(0) === 0x89504e47) return "image/png";
-  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
-  if (buf.length >= 6 && buf.toString("ascii", 0, 4) === "GIF8") return "image/gif";
+  if (buf.length >= 8 && buf.readUInt32BE(0) === 0x89504e47) {
+    return "image/png";
+  }
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (buf.length >= 6 && buf.toString("ascii", 0, 4) === "GIF8") {
+    return "image/gif";
+  }
   if (
     buf.length >= 12 &&
     buf.toString("ascii", 0, 4) === "RIFF" &&
@@ -220,14 +232,18 @@ function sniffMime(buf: Buffer): string | undefined {
   ) {
     return "image/webp";
   }
-  if (buf.length >= 2 && buf[0] === 0x42 && buf[1] === 0x4d) return "image/bmp";
+  if (buf.length >= 2 && buf[0] === 0x42 && buf[1] === 0x4d) {
+    return "image/bmp";
+  }
   return undefined;
 }
 
 /** 读取图片文件 → base64 + mimeType + 展示名 */
 function loadImageBytes(path: string): { base64: string; mimeType: string; label: string } {
   const ext = extname(path).toLowerCase();
-  if (!IMAGE_EXTS.has(ext)) throw new Error(`不支持的文件格式: ${ext || "(无扩展名)"}`);
+  if (!IMAGE_EXTS.has(ext)) {
+    throw new Error(`不支持的文件格式: ${ext || "(无扩展名)"}`);
+  }
 
   let stat;
   try {
@@ -238,8 +254,12 @@ function loadImageBytes(path: string): { base64: string; mimeType: string; label
       { cause: error },
     );
   }
-  if (!stat.isFile()) throw new Error(`不是普通文件: ${path}`);
-  if (stat.size === 0) throw new Error(`文件为空: ${path}`);
+  if (!stat.isFile()) {
+    throw new Error(`不是普通文件: ${path}`);
+  }
+  if (stat.size === 0) {
+    throw new Error(`文件为空: ${path}`);
+  }
   if (stat.size > MAX_IMAGE_BYTES) {
     throw new Error(`图片过大 (${(stat.size / 1024 / 1024).toFixed(1)}MB)，上限 10MB`);
   }
@@ -293,7 +313,9 @@ export async function callVision(
     );
   } catch (error) {
     // 用户主动取消（signal abort）不是失败，转成 VisionAbortError 由调用方处理
-    if (error instanceof Error && error.name === "AbortError") throw new VisionAbortError();
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new VisionAbortError();
+    }
     throw error;
   }
   const text = contentText(result.content).trim();
@@ -325,11 +347,14 @@ export default function visionAgent(pi: ExtensionAPI) {
     const hasTool = active.includes(TOOL_NAME);
     if (hasTool && isMultimodal(model)) {
       pi.setActiveTools(active.filter((t) => t !== TOOL_NAME));
-      if (notify) notify(`主模型 ${model?.id ?? "?"} 支持视觉 → 已隐藏 ${TOOL_NAME}，图片原生透传`);
+      if (notify) {
+        notify(`主模型 ${model?.id ?? "?"} 支持视觉 → 已隐藏 ${TOOL_NAME}，图片原生透传`);
+      }
     } else if (!hasTool && !isMultimodal(model)) {
       pi.setActiveTools([...active, TOOL_NAME]);
-      if (notify)
+      if (notify) {
         notify(`主模型 ${model?.id ?? "?"} 不支持视觉 → 已启用 ${TOOL_NAME}，由视觉模型代理识别`);
+      }
     }
   }
 
@@ -347,7 +372,9 @@ export default function visionAgent(pi: ExtensionAPI) {
   // baseUrl/apiKey 由 pi 的模型注册表在调用时解析（execute 里 find），
   // 配置好 settings.json / models.json 后重新加载（/reload）即可生效。
   const visionConfig = loadVisionConfig();
-  if (!visionConfig?.model) return;
+  if (!visionConfig?.model) {
+    return;
+  }
 
   pi.registerTool({
     name: TOOL_NAME,

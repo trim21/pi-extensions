@@ -13,8 +13,12 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
  * - anything else (including `~user`) is left untouched.
  */
 export function expandHome(p: string): string {
-  if (p === "~") return homedir();
-  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  if (p === "~") {
+    return homedir();
+  }
+  if (p.startsWith("~/")) {
+    return join(homedir(), p.slice(2));
+  }
   return p;
 }
 
@@ -72,18 +76,26 @@ export function formatDisplayPath(cwd: string, filePath: string): string {
 export const MAX_SUBTITLE_PATH_LENGTH = 30;
 
 function shortenSubtitlePath(filePath: string, display: string): string {
-  if (display.length <= MAX_SUBTITLE_PATH_LENGTH) return display;
+  if (display.length <= MAX_SUBTITLE_PATH_LENGTH) {
+    return display;
+  }
   const name = basename(filePath);
   const parentDir = dirname(filePath);
   const parentName = basename(parentDir);
-  if (parentName === "" || parentName === "." || parentDir === parentName) return name;
+  if (parentName === "" || parentName === "." || parentDir === parentName) {
+    return name;
+  }
   return join(parentName, name);
 }
 
 function formatSubtitleCounts(errorCount?: number, warningCount?: number): string {
   const parts: string[] = [];
-  if (errorCount) parts.push(`ⓧ ${errorCount}`);
-  if (warningCount) parts.push(`⚠ ${warningCount}`);
+  if (errorCount) {
+    parts.push(`ⓧ ${errorCount}`);
+  }
+  if (warningCount) {
+    parts.push(`⚠ ${warningCount}`);
+  }
   return parts.join(" ");
 }
 

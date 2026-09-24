@@ -34,7 +34,9 @@ import {
 export default function aftReadTools(pi: ExtensionAPI): void {
   const cwd = process.cwd();
   const cfg = loadAftConfig(resolveCortexKitConfigPaths(cwd).userConfigPath);
-  if (!cfg.enabled) return;
+  if (!cfg.enabled) {
+    return;
+  }
 
   // bridge 状态跟 session 生命周期走，作用域就是本工厂闭包，不落到模块级。
   let state: Awaited<ReturnType<typeof createAftState>> | null = null;
@@ -88,7 +90,9 @@ export default function aftReadTools(pi: ExtensionAPI): void {
   const shutdown = async (): Promise<void> => {
     const current = state;
     state = null;
-    if (!current) return;
+    if (!current) {
+      return;
+    }
     try {
       await shutdownAftPool(current.pool);
       await current.logger.drain();

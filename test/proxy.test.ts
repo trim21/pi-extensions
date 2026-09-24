@@ -38,7 +38,9 @@ async function listen(server: Server): Promise<number> {
     server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("server has no TCP port");
+  if (address === null || typeof address === "string") {
+    throw new Error("server has no TCP port");
+  }
   return address.port;
 }
 
@@ -83,7 +85,9 @@ async function startProxy(): Promise<TestServer & { connects: string[] }> {
     const [host, port] = target.split(":", 2);
     const upstream = netConnect(Number(port), host, () => {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head.length > 0) upstream.write(head);
+      if (head.length > 0) {
+        upstream.write(head);
+      }
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);
     });

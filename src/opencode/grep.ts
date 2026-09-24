@@ -57,7 +57,9 @@ function normalizeRipgrepPath(text: string): string {
 /** 行文本：去掉行尾换行，超长截断（不留半个 surrogate pair）。 */
 function normalizeLineText(text: string): string {
   const line = text.replace(/[\r\n]+$/u, "");
-  if (line.length <= MAX_LINE_LENGTH) return line;
+  if (line.length <= MAX_LINE_LENGTH) {
+    return line;
+  }
   return line.slice(0, MAX_LINE_LENGTH).replace(/[\uD800-\uDBFF]$/u, "") + "...";
 }
 
@@ -106,12 +108,16 @@ export function buildGrepArgs(
 
 /** 渲染搜索结果：上游格式，按文件分组。 */
 export function renderGrepOutput(matches: readonly GrepMatch[], truncated: boolean): string {
-  if (matches.length === 0) return "No files found";
+  if (matches.length === 0) {
+    return "No files found";
+  }
   const output = [`Found ${matches.length} matches${truncated ? " (more matches available)" : ""}`];
   let current = "";
   for (const match of matches) {
     if (current !== match.path) {
-      if (current !== "") output.push("");
+      if (current !== "") {
+        output.push("");
+      }
       current = match.path;
       output.push(`${match.path}:`);
     }
@@ -125,7 +131,9 @@ export function renderGrepOutput(matches: readonly GrepMatch[], truncated: boole
 
 /** 搜索根：绝对路径原样，相对路径按调用 cwd 解析。 */
 export function resolveSearchRoot(path: string | undefined, cwd: string): string {
-  if (path === undefined || path === "") return cwd;
+  if (path === undefined || path === "") {
+    return cwd;
+  }
   return isAbsolute(path) ? path : join(cwd, path);
 }
 

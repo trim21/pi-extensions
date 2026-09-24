@@ -134,9 +134,13 @@ const IMAGE_SIGNATURES: {
 ];
 
 function startsWithAscii(buf: Uint8Array, offset: number, text: string): boolean {
-  if (buf.length < offset + text.length) return false;
+  if (buf.length < offset + text.length) {
+    return false;
+  }
   for (let i = 0; i < text.length; i++) {
-    if (buf[offset + i] !== text.codePointAt(i)) return false;
+    if (buf[offset + i] !== text.codePointAt(i)) {
+      return false;
+    }
   }
   return true;
 }
@@ -151,7 +155,9 @@ function detectImageMimeType(buffer: Uint8Array): string | null {
 }
 
 function startsWith(buffer: Uint8Array, bytes: Uint8Array): boolean {
-  if (buffer.length < bytes.length) return false;
+  if (buffer.length < bytes.length) {
+    return false;
+  }
   return bytes.every((b, i) => buffer[i] === b);
 }
 
@@ -179,11 +185,17 @@ function isBinaryExtension(filePath: string): boolean {
 }
 
 function isBinaryFileBySample(sample: Uint8Array): boolean {
-  if (sample.length === 0) return false;
+  if (sample.length === 0) {
+    return false;
+  }
   let nonPrintableCount = 0;
   for (const byte of sample) {
-    if (byte === 0) return true;
-    if (byte < 9 || (byte > 13 && byte < 32)) nonPrintableCount++;
+    if (byte === 0) {
+      return true;
+    }
+    if (byte < 9 || (byte > 13 && byte < 32)) {
+      nonPrintableCount++;
+    }
   }
   return nonPrintableCount / sample.length > 0.3;
 }
@@ -222,7 +234,9 @@ export async function readLines(
   filePath: string,
   opts: { offset: number; limit: number; maxBytes?: number; signal?: AbortSignal },
 ): Promise<LinePage> {
-  if (opts.offset < 0) return readTailLines(filePath, opts);
+  if (opts.offset < 0) {
+    return readTailLines(filePath, opts);
+  }
   const start = opts.offset - 1;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   const raw: string[] = [];
@@ -238,7 +252,9 @@ export async function readLines(
       // 大文件的全量扫描可能持续数秒：每行检查一次取消，别等到读完才响应
       opts.signal?.throwIfAborted();
       count += 1;
-      if (count <= start) continue;
+      if (count <= start) {
+        continue;
+      }
 
       if (raw.length >= opts.limit) {
         more = true;
@@ -287,7 +303,9 @@ async function readTailLines(
       const line =
         text.length > MAX_LINE_LENGTH ? text.slice(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : text;
       window.push(line);
-      if (window.length > windowSize) head += 1;
+      if (window.length > windowSize) {
+        head += 1;
+      }
     }
   } finally {
     rl.close();
@@ -808,7 +826,9 @@ function registerWriteTool(
             try {
               existing = Buffer.alloc(3);
               const { bytesRead } = await fh.read(existing, 0, 3, 0);
-              if (bytesRead < 3) existing = undefined;
+              if (bytesRead < 3) {
+                existing = undefined;
+              }
             } finally {
               await fh.close();
             }

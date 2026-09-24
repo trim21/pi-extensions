@@ -14,9 +14,13 @@ export function shortAddr(addr: string): string {
 
 export function age(ts: number, now: number = Date.now()): string {
   const s = Math.max(0, Math.round((now - ts) / 1000));
-  if (s < 60) return `${s}s ago`;
+  if (s < 60) {
+    return `${s}s ago`;
+  }
   const m = Math.round(s / 60);
-  if (m < 60) return `${m}m ago`;
+  if (m < 60) {
+    return `${m}m ago`;
+  }
   return `${Math.round(m / 60)}h ago`;
 }
 
@@ -45,12 +49,16 @@ export function formatListing(
   selfAddr: string,
   presence: (r: AgentRecord) => Presence,
 ): string {
-  if (records.length === 0) return "[]";
+  if (records.length === 0) {
+    return "[]";
+  }
   const items: AgentListItem[] = records.map((r) => {
     const p = presence(r);
     const status = p === "live" ? r.status : "offline";
     const item: AgentListItem = { status, work_dir: r.cwd, id: r.agentId, name: r.name };
-    if (r.addr === selfAddr) item.self = true;
+    if (r.addr === selfAddr) {
+      item.self = true;
+    }
     return item;
   });
   return JSON.stringify(items, null, 2);

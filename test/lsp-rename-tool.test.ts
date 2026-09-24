@@ -40,7 +40,9 @@ function loadRenameTool(service: LspService): RegisteredTool {
     { policy: createRequestPolicy() },
   );
   const tool = tools.get("lsp-rename");
-  if (!tool) throw new Error("lsp-rename was not registered");
+  if (!tool) {
+    throw new Error("lsp-rename was not registered");
+  }
   return tool;
 }
 

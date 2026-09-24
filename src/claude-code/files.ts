@@ -44,9 +44,15 @@ const MAX_READ_TOKENS = 25_000;
 const MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024; // 1 GiB
 
 function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
@@ -81,7 +87,9 @@ async function assertReadableFile(filePath: string): Promise<Stats> {
   if (value.isDirectory()) {
     throw new Error(`EISDIR: illegal operation on a directory, read '${filePath}'`);
   }
-  if (!value.isFile()) throw new Error(`File not found: ${filePath}`);
+  if (!value.isFile()) {
+    throw new Error(`File not found: ${filePath}`);
+  }
   await access(filePath, constants.R_OK);
   return value;
 }
@@ -89,8 +97,12 @@ async function assertReadableFile(filePath: string): Promise<Stats> {
 function isBinary(sample: Uint8Array): boolean {
   let suspicious = 0;
   for (const byte of sample) {
-    if (byte === 0) return true;
-    if (byte < 9 || (byte > 13 && byte < 32)) suspicious++;
+    if (byte === 0) {
+      return true;
+    }
+    if (byte < 9 || (byte > 13 && byte < 32)) {
+      suspicious++;
+    }
   }
   return sample.length > 0 && suspicious / sample.length > 0.3;
 }
@@ -104,7 +116,9 @@ function isBinary(sample: Uint8Array): boolean {
  */
 function splitFileLines(content: string): string[] {
   const text = content.replace(/^\uFEFF/, "");
-  if (text === "") return [];
+  if (text === "") {
+    return [];
+  }
   return (text.endsWith("\n") ? text : `${text}\n`)
     .split("\n")
     .map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
@@ -157,7 +171,9 @@ export function formatReadOutput(
 }
 
 function countMatches(content: string, needle: string): number {
-  if (needle === "") return 0;
+  if (needle === "") {
+    return 0;
+  }
   let count = 0;
   let index = 0;
   while ((index = content.indexOf(needle, index)) !== -1) {
@@ -173,17 +189,24 @@ export function exactReplace(
   newString: string,
   replaceAll = false,
 ): string {
-  if (oldString === newString)
+  if (oldString === newString) {
     throw new Error("No changes to apply: old_string and new_string are identical.");
-  if (oldString === "") throw new Error("old_string must not be empty.");
+  }
+  if (oldString === "") {
+    throw new Error("old_string must not be empty.");
+  }
   const matches = countMatches(content, oldString);
-  if (matches === 0) throw new Error("String to replace not found in file.");
+  if (matches === 0) {
+    throw new Error("String to replace not found in file.");
+  }
   if (!replaceAll && matches > 1) {
     throw new Error(
       `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, provide more context to make old_string unique.`,
     );
   }
-  if (replaceAll) return content.split(oldString).join(newString);
+  if (replaceAll) {
+    return content.split(oldString).join(newString);
+  }
   const index = content.indexOf(oldString);
   return content.slice(0, index) + newString + content.slice(index + oldString.length);
 }
@@ -284,8 +307,9 @@ export function registerFileTools(
       const key = await readStateKey(filePath);
       const buffer = await readFile(filePath);
 
-      if (isBinary(buffer.subarray(0, SAMPLE_BYTES)))
+      if (isBinary(buffer.subarray(0, SAMPLE_BYTES))) {
         throw new Error(`Cannot read binary file: ${filePath}`);
+      }
       // 全读（limit 未传）时受字节上限约束（对齐 Claude Code）
       if (params.limit === undefined && buffer.length > MAX_READ_SIZE_BYTES) {
         throw new Error(
@@ -398,7 +422,9 @@ export function registerFileTools(
               throw error;
             }
           }
-          if (!exists) await mkdir(dirname(filePath), { recursive: true });
+          if (!exists) {
+            await mkdir(dirname(filePath), { recursive: true });
+          }
           await writeFile(filePath, newString, "utf8");
           const snapshot = snapshotOf(newString);
           const key = await readStateKey(filePath);

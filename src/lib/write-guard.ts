@@ -33,10 +33,14 @@ function isInside(dir: string, filePath: string): boolean {
 }
 
 function isPathAllowed(absolutePath: string, cwd: string): boolean {
-  if (isInside(cwd, absolutePath)) return true;
+  if (isInside(cwd, absolutePath)) {
+    return true;
+  }
 
   for (const allowed of ALWAYS_ALLOW) {
-    if (isInside(allowed, absolutePath)) return true;
+    if (isInside(allowed, absolutePath)) {
+      return true;
+    }
   }
 
   return false;
@@ -144,9 +148,13 @@ export async function guardWriteAccess(
   ctx: WriteGuardContext | undefined,
   opts: WriteGuardOptions,
 ): Promise<void> {
-  if (!ctx) return;
+  if (!ctx) {
+    return;
+  }
   const { absolutePath } = opts;
-  if (isPathAllowed(absolutePath, ctx.cwd)) return;
+  if (isPathAllowed(absolutePath, ctx.cwd)) {
+    return;
+  }
 
   // 非沙盒请求策略生效时不弹审批框：工作区外写入按用户点 "Block"（无理由）处理。
   // 放在 win32 / 无 UI 分支之前，策略优先级高于各平台的降级路径。
@@ -182,12 +190,18 @@ export async function guardWriteAccess(
       ctx.abort?.();
       throw new Error(`user deny ${opts.toolName}: cancelled`);
     }
-    if (choice === "Approve once") return;
-    if (choice === "Block") throw new Error(`user deny ${opts.toolName}: blocked`);
+    if (choice === "Approve once") {
+      return;
+    }
+    if (choice === "Block") {
+      throw new Error(`user deny ${opts.toolName}: blocked`);
+    }
     const feedback = await ctx.ui.input("Why was this write denied?", undefined, {
       signal: opts.signal,
     });
-    if (feedback === undefined) continue;
+    if (feedback === undefined) {
+      continue;
+    }
     throw new Error(
       feedback ? `user deny ${opts.toolName}: ${feedback}` : `user deny ${opts.toolName}: blocked`,
     );

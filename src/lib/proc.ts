@@ -14,7 +14,9 @@ export async function forEachLine(
     while ((newline = buffer.indexOf("\n")) !== -1) {
       const line = buffer.slice(0, newline);
       buffer = buffer.slice(newline + 1);
-      if (callback(line) === false) return;
+      if (callback(line) === false) {
+        return;
+      }
     }
   }
 }

@@ -106,7 +106,9 @@ function extractParts(node: Node): { name: string; args: string[] } {
   };
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
-    if (child) visit(child);
+    if (child) {
+      visit(child);
+    }
   }
   return { name: name.join(" "), args };
 }
@@ -117,24 +119,34 @@ const FILE_OUTPUT_REDIRECT_OPS = new Set([">", ">>", ">|", "&>", "&>>"]);
 function fileRedirectWritesToFile(node: Node): boolean {
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
-    if (!child) continue;
-    if (FILE_OUTPUT_REDIRECT_OPS.has(child.type)) return true;
+    if (!child) {
+      continue;
+    }
+    if (FILE_OUTPUT_REDIRECT_OPS.has(child.type)) {
+      return true;
+    }
     // `<>` 被解析成 `<` + 含 `>` 的 ERROR
-    if (child.type === "ERROR" && child.text.includes(">")) return true;
+    if (child.type === "ERROR" && child.text.includes(">")) {
+      return true;
+    }
   }
   return false;
 }
 
 function treeHasFileOutputRedirect(root: Node): boolean {
   for (const node of root.descendantsOfType("file_redirect")) {
-    if (fileRedirectWritesToFile(node)) return true;
+    if (fileRedirectWritesToFile(node)) {
+      return true;
+    }
   }
   return false;
 }
 
 function collectCommand(node: Node, all: Node[]): BashCommand | undefined {
   const { name, args } = extractParts(node);
-  if (!name) return undefined;
+  if (!name) {
+    return undefined;
+  }
   // 嵌套命令 = 完全落在本命令范围内的其他 command 节点（含 `$(...)` 内的）。
   // 用位置判断而非 descendantsOfType 递归：0.26 的 descendantsOfType 会包含
   // 自身且每次返回新 wrapper，`===` 比较失效会无限递归。
@@ -166,7 +178,9 @@ export async function parseBashCommands(command: string): Promise<ParsedBash> {
     const commands: BashCommand[] = [];
     for (const node of all) {
       const parsed = collectCommand(node, all);
-      if (parsed) commands.push(parsed);
+      if (parsed) {
+        commands.push(parsed);
+      }
     }
     return { commands, hasFileOutputRedirect: treeHasFileOutputRedirect(tree.rootNode) };
   } catch (error) {
@@ -189,7 +203,9 @@ export function matchRule(input: string, pattern: string): boolean {
     .replaceAll(/[.+^${}()|[\]\\]/g, String.raw`\$&`)
     .replaceAll("*", ".*")
     .replaceAll("?", ".");
-  if (escaped.endsWith(" .*")) escaped = escaped.slice(0, -3) + "( .*)?";
+  if (escaped.endsWith(" .*")) {
+    escaped = escaped.slice(0, -3) + "( .*)?";
+  }
   return new RegExp(`^${escaped}$`, "s").test(input);
 }
 
@@ -214,16 +230,28 @@ export async function evaluateBashApproval(
   const raws: string[] = [];
   const visit = (cmd: BashCommand) => {
     raws.push(cmd.raw);
-    for (const nested of cmd.nested) visit(nested);
+    for (const nested of cmd.nested) {
+      visit(nested);
+    }
   };
-  for (const cmd of parsed.commands) visit(cmd);
-  if (raws.length === 0) return;
+  for (const cmd of parsed.commands) {
+    visit(cmd);
+  }
+  if (raws.length === 0) {
+    return;
+  }
   let allowed = 0;
   for (const raw of raws) {
     const rule = rules.findLast((r) => matchRule(raw, r.pattern));
-    if (rule?.action === "deny") return "deny";
-    if (rule?.action === "allow") allowed++;
+    if (rule?.action === "deny") {
+      return "deny";
+    }
+    if (rule?.action === "allow") {
+      allowed++;
+    }
   }
-  if (parsed.hasFileOutputRedirect) return;
+  if (parsed.hasFileOutputRedirect) {
+    return;
+  }
   return allowed === raws.length ? "allow" : undefined;
 }

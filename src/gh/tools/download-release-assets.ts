@@ -54,7 +54,9 @@ export function releaseAssetDir(repo: string, tag: string): string {
 
 /** Split the comma-separated `pattern` toolcall parameter into gh pattern values. */
 export function releasePatterns(pattern: string | undefined): string[] {
-  if (pattern === undefined) return [];
+  if (pattern === undefined) {
+    return [];
+  }
   return pattern
     .split(",")
     .map((value) => value.trim())
@@ -75,8 +77,12 @@ export function releaseDownloadArgs(options: {
 }): string[] {
   const { tag, repo, dir, patterns, archive } = options;
   const args = ["release", "download", tag, ...repoArgs(repo)];
-  if (archive !== undefined) args.push("--archive", archive);
-  for (const pattern of patterns) args.push("--pattern", pattern);
+  if (archive !== undefined) {
+    args.push("--archive", archive);
+  }
+  for (const pattern of patterns) {
+    args.push("--pattern", pattern);
+  }
   args.push("--dir", dir, "--skip-existing");
   return args;
 }
@@ -86,7 +92,9 @@ async function listReleaseFiles(dir: string): Promise<ReleaseFile[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: ReleaseFile[] = [];
   for (const entry of entries) {
-    if (!entry.isFile()) continue;
+    if (!entry.isFile()) {
+      continue;
+    }
     const path = join(dir, entry.name);
     const info = await stat(path);
     files.push({ name: entry.name, path, bytes: info.size });

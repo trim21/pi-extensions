@@ -132,7 +132,9 @@ export function loadSessionNameConfig(settingsPath = SETTINGS_PATH): SessionName
     return undefined; // 结构不符（非 object / sessionName 非 object 等）
   }
   const sn = settings.sessionName;
-  if (!sn) return undefined; // 未配置 sessionName
+  if (!sn) {
+    return undefined; // 未配置 sessionName
+  }
   return {
     provider: nonEmpty(sn.provider) ?? nonEmpty(settings.defaultProvider),
     model: nonEmpty(sn.model),
@@ -150,12 +152,20 @@ function nonEmpty(value: string | undefined): string | undefined {
 
 /** 从消息 content（字符串或分片数组）提取文本 */
 function messageText(content: unknown): string {
-  if (typeof content === "string") return content.trim();
-  if (!Array.isArray(content)) return "";
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
   return content
     .map((part: unknown) => {
-      if (typeof part === "string") return part;
-      if (isRecord(part) && typeof part.text === "string") return part.text;
+      if (typeof part === "string") {
+        return part;
+      }
+      if (isRecord(part) && typeof part.text === "string") {
+        return part.text;
+      }
       return "";
     })
     .join("")
@@ -172,9 +182,13 @@ export function extractFirstUserPrompt(
 ): string | undefined {
   const trimmed = currentPrompt.trim();
   for (const entry of branch) {
-    if (entry.type !== "message") continue;
+    if (entry.type !== "message") {
+      continue;
+    }
     const text = messageText(entry.message?.content);
-    if (text) return text;
+    if (text) {
+      return text;
+    }
   }
   return trimmed || undefined;
 }
@@ -182,8 +196,12 @@ export function extractFirstUserPrompt(
 /** 折叠空白、限制长度；空结果返回 undefined */
 export function sanitizeName(raw: string, maxLength = DEFAULT_MAX_LENGTH): string | undefined {
   const collapsed = raw.replaceAll(/\s+/g, " ").trim();
-  if (!collapsed) return undefined;
-  if (collapsed.length <= maxLength) return collapsed;
+  if (!collapsed) {
+    return undefined;
+  }
+  if (collapsed.length <= maxLength) {
+    return collapsed;
+  }
   return `${collapsed.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
@@ -267,7 +285,9 @@ export async function generateSessionName(
       );
       if (raw) {
         const name = sanitizeName(raw, maxLength);
-        if (name) return name;
+        if (name) {
+          return name;
+        }
       }
       options.onModelFallback?.("model-error");
     } else {
@@ -307,7 +327,9 @@ export async function nameSession(
       }
     },
   });
-  if (!name) return;
+  if (!name) {
+    return;
+  }
   pi.setSessionName(name);
   if (ctx.hasUI) {
     ctx.notify?.(`会话已命名为: ${name}`);
@@ -321,9 +343,13 @@ export default function sessionNameExtension(pi: ExtensionAPI) {
   // 会话切换 / reload 后捕获的 pi 会抛 stale 错误，被 catch 忽略，名字
   // 绝不会写到错误的 session。
   pi.on("before_agent_start", (event, ctx) => {
-    if (pi.getSessionName()) return;
+    if (pi.getSessionName()) {
+      return;
+    }
     const text = extractFirstUserPrompt(ctx.sessionManager.getBranch(), event.prompt);
-    if (!text) return;
+    if (!text) {
+      return;
+    }
     void nameSession(pi, text, {
       hasUI: ctx.hasUI,
       notify: (message, level = "info") => ctx.ui.notify(message, level),

@@ -14,7 +14,9 @@ export function resolveToolFilePath(filePath: string, cwd: string): string {
 
 /** Resolve a search root path against the working directory. */
 export function searchRoot(path: string | undefined, cwd: string): string {
-  if (!path) return cwd;
+  if (!path) {
+    return cwd;
+  }
   return isAbsolute(path) ? path : resolve(cwd, path);
 }
 
@@ -82,6 +84,8 @@ export async function suggestPathUnderCwd(
 /** "Did you mean" 建议：优先 cwd 重定位，其次同名不同扩展（对齐 Claude Code）。 */
 export async function didYouMean(filePath: string, cwd: string): Promise<string | undefined> {
   const cwdSuggestion = await suggestPathUnderCwd(filePath, cwd);
-  if (cwdSuggestion) return cwdSuggestion;
+  if (cwdSuggestion) {
+    return cwdSuggestion;
+  }
   return findSimilarFile(filePath);
 }

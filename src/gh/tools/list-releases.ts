@@ -16,7 +16,9 @@ export function addListReleasesTool(_gh: GhClient, pi: ExtensionAPI) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { repo, limit } = params;
       const args = ["release", "list", ...repoArgs(repo)];
-      if (limit) args.push("--limit", String(limit));
+      if (limit) {
+        args.push("--limit", String(limit));
+      }
       const result = toToolResult(
         await ghExec(args, { cwd: ctx.cwd, signal, input: params }),
         params,

@@ -42,8 +42,12 @@ function stubAuthToken(): void {
 type FetchInput = Parameters<typeof globalThis.fetch>[0];
 
 function requestUrl(input: FetchInput): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.href;
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
   return input.url;
 }
 
@@ -105,7 +109,9 @@ describe("createGithubSearch fetch injection", () => {
 
     expect(spy).toHaveBeenCalledTimes(1);
     const [firstCall] = spy.mock.calls;
-    if (!firstCall) throw new Error("global fetch was not called");
+    if (!firstCall) {
+      throw new Error("global fetch was not called");
+    }
     expect(requestUrl(firstCall[0])).toContain("/search/issues");
   });
 });

@@ -84,7 +84,9 @@ const HOLDER_PATH = fileURLToPath(new URL("holder.js", import.meta.url));
 const SBIN_PATH_SUFFIX = "/usr/local/sbin:/usr/sbin:/sbin";
 
 function killProcess(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM"): void {
-  if (!pid) return;
+  if (!pid) {
+    return;
+  }
   try {
     process.kill(pid, signal);
   } catch {
@@ -136,7 +138,9 @@ async function waitForNewUserns(pid: number, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      if ((await readlink(`/proc/${pid}/ns/user`)) !== self) return;
+      if ((await readlink(`/proc/${pid}/ns/user`)) !== self) {
+        return;
+      }
     } catch {
       // /proc/<pid> 尚未就绪，重试
     }
@@ -153,12 +157,16 @@ function waitForMihomoStarted(holder: ChildProcess, timeoutMs = 20000): Promise<
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       reject(new Error("Timed out waiting for mihomo to start"));
     }, timeoutMs);
     const onReady = (): void => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       resolve();
@@ -168,7 +176,9 @@ function waitForMihomoStarted(holder: ChildProcess, timeoutMs = 20000): Promise<
       if (stream) {
         // 不提前停止：holder 生命周期内持续消费输出，避免流无消费者触发背压
         void forEachLine(stream, (line) => {
-          if (line.includes("Tun adapter listening")) onReady();
+          if (line.includes("Tun adapter listening")) {
+            onReady();
+          }
         }).catch(() => {
           // 就绪判定由超时与 holder exit 兜底，流的 error 忽略
         });
@@ -178,7 +188,9 @@ function waitForMihomoStarted(holder: ChildProcess, timeoutMs = 20000): Promise<
 }
 
 function killChild(pid: number | undefined): void {
-  if (!pid) return;
+  if (!pid) {
+    return;
+  }
   try {
     process.kill(-pid, "SIGKILL");
   } catch {
@@ -404,14 +416,20 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
           execOptions.signal?.addEventListener("abort", onAbort, { once: true });
 
           child.once("error", (error) => {
-            if (settled) return;
+            if (settled) {
+              return;
+            }
             settled = true;
             reject(error);
           });
           child.once("close", (exitCode) => {
-            if (settled) return;
+            if (settled) {
+              return;
+            }
             settled = true;
-            if (timeoutHandle) clearTimeout(timeoutHandle);
+            if (timeoutHandle) {
+              clearTimeout(timeoutHandle);
+            }
             execOptions.signal?.removeEventListener("abort", onAbort);
             // 中断：reject signal.reason（默认是 name=AbortError 的 DOMException）
             if (execOptions.signal?.aborted) {
@@ -423,7 +441,9 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
             } else if (timedOut) {
               // 超时：name=TimeoutError（对齐标准错误分类）
               reject(new TimeoutError(execOptions.timeout));
-            } else resolve({ exitCode });
+            } else {
+              resolve({ exitCode });
+            }
           });
         });
       },

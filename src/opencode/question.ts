@@ -125,7 +125,9 @@ async function askSingle(
     ctx.ui,
     { signal },
   );
-  if (result === undefined) return [];
+  if (result === undefined) {
+    return [];
+  }
   return result.prompted ? (result.input ? [result.input] : []) : [result.label];
 }
 

@@ -41,8 +41,12 @@ async function waitForLog(logFile: string, needle: string, timeoutMs = 2_000): P
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const content = await readFile(logFile, "utf8").catch(() => "");
-    if (content.includes(needle)) return content;
-    if (Date.now() > deadline) throw new Error(`log entry not found: ${needle}`);
+    if (content.includes(needle)) {
+      return content;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`log entry not found: ${needle}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }

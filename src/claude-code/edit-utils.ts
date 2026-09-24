@@ -12,6 +12,8 @@
  * convertLeadingTabsToSpaces）。仅用于 details 里展示的 diff，不影响写盘内容。
  */
 export function convertLeadingTabsToSpaces(content: string): string {
-  if (!content.includes("\t")) return content;
+  if (!content.includes("\t")) {
+    return content;
+  }
   return content.replaceAll(/^\t+/gm, (tabs) => "  ".repeat(tabs.length));
 }

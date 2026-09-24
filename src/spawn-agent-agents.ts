@@ -118,8 +118,12 @@ export function discoverAgents(dir = join(getAgentDir(), "agents")): AgentConfig
 
   const agents: AgentConfig[] = [];
   for (const entry of entries) {
-    if (!entry.name.endsWith(".md")) continue;
-    if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+    if (!entry.name.endsWith(".md")) {
+      continue;
+    }
+    if (!entry.isFile() && !entry.isSymbolicLink()) {
+      continue;
+    }
 
     const filePath = join(dir, entry.name);
     let content: string;
@@ -131,7 +135,9 @@ export function discoverAgents(dir = join(getAgentDir(), "agents")): AgentConfig
 
     const { frontmatter, body } = parseFrontmatter(content);
     const fm = parseAgentFrontmatter(frontmatter);
-    if (!fm) continue; // missing name/description or wrong field types → not an agent
+    if (!fm) {
+      continue; // missing name/description or wrong field types → not an agent
+    }
 
     agents.push({
       name: fm.name,
@@ -172,7 +178,9 @@ export function loadSpawnAgentConfig(
   } catch {
     return undefined; // 结构不符（非 object / thinkingLevel 非法等）
   }
-  if (!config.provider && !config.model && !config.thinkingLevel) return undefined;
+  if (!config.provider && !config.model && !config.thinkingLevel) {
+    return undefined;
+  }
 
   let fallback: SpawnAgentSettingsFallback | undefined;
   try {
@@ -225,7 +233,9 @@ export function applyAgentDefaults(
   agents: AgentConfig[],
   defaults: SpawnAgentDefaults | undefined,
 ): AgentConfig[] {
-  if (!defaults) return agents;
+  if (!defaults) {
+    return agents;
+  }
   return agents.map((agent) => ({
     ...agent,
     provider: agent.provider ?? defaults.provider,
@@ -235,6 +245,8 @@ export function applyAgentDefaults(
 }
 
 export function formatAgentList(agents: AgentConfig[]): string {
-  if (agents.length === 0) return "none";
+  if (agents.length === 0) {
+    return "none";
+  }
   return agents.map((a) => `${a.name}: ${a.description}`).join("; ");
 }

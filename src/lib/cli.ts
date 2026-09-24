@@ -84,16 +84,28 @@ interface FlagInfo {
 
 /** schema 的种类名，仅用于报错文案。 */
 function schemaKindLabel(schema: TSchema): string {
-  if ("~kind" in schema && typeof schema["~kind"] === "string") return schema["~kind"];
-  if ("type" in schema && typeof schema.type === "string") return schema.type;
+  if ("~kind" in schema && typeof schema["~kind"] === "string") {
+    return schema["~kind"];
+  }
+  if ("type" in schema && typeof schema.type === "string") {
+    return schema.type;
+  }
   return "unknown";
 }
 
 function kindOf(key: string, schema: TSchema): FlagKind {
-  if (IsKind(schema, "Boolean")) return "boolean";
-  if (IsKind(schema, "String")) return "string";
-  if (IsKind(schema, "Number") || IsKind(schema, "Integer")) return "number";
-  if (IsKind(schema, "Union")) return "enum";
+  if (IsKind(schema, "Boolean")) {
+    return "boolean";
+  }
+  if (IsKind(schema, "String")) {
+    return "string";
+  }
+  if (IsKind(schema, "Number") || IsKind(schema, "Integer")) {
+    return "number";
+  }
+  if (IsKind(schema, "Union")) {
+    return "enum";
+  }
   throw new TypeError(
     `Unsupported flag type for '${key}': ${schemaKindLabel(schema)} ` +
       "(use Type.Boolean/String/Number/Integer or a string literal union)",
@@ -118,10 +130,14 @@ function flagDescription(schema: TSchema): string {
 
 /** Allowed values for a string-literal union flag, or undefined for mixed unions. */
 function enumValues(schema: TSchema): string[] | undefined {
-  if (!("anyOf" in schema) || !isUnknownArray(schema.anyOf)) return undefined;
+  if (!("anyOf" in schema) || !isUnknownArray(schema.anyOf)) {
+    return undefined;
+  }
   const values: string[] = [];
   for (const variant of schema.anyOf) {
-    if (!isRecord(variant) || typeof variant.const !== "string") return undefined;
+    if (!isRecord(variant) || typeof variant.const !== "string") {
+      return undefined;
+    }
     values.push(variant.const);
   }
   return values;
@@ -164,7 +180,9 @@ function helpResult<TFlags extends TObject>(
   autoHelp: boolean,
 ): CommandResult<TFlags> {
   const lines = [`Usage: /${spec.name} ${spec.usage}`];
-  if (spec.description) lines.push("", spec.description);
+  if (spec.description) {
+    lines.push("", spec.description);
+  }
   const rows = flags.map((f) => ({
     rawName:
       (f.short ? `-${f.short}, ` : "") +
@@ -172,15 +190,21 @@ function helpResult<TFlags extends TObject>(
       (f.kind === "boolean" ? "" : ` ${f.placeholder}`),
     description: f.description,
   }));
-  if (autoHelp) rows.push({ rawName: "-h, --help", description: "Display this message" });
+  if (autoHelp) {
+    rows.push({ rawName: "-h, --help", description: "Display this message" });
+  }
   if (rows.length > 0) {
     lines.push("", "Options:");
     const width = Math.max(...rows.map((r) => r.rawName.length));
-    for (const r of rows) lines.push(`  ${r.rawName.padEnd(width)}  ${r.description}`);
+    for (const r of rows) {
+      lines.push(`  ${r.rawName.padEnd(width)}  ${r.description}`);
+    }
   }
   if (spec.examples?.length) {
     lines.push("", "Examples:");
-    for (const e of spec.examples) lines.push(`  ${e}`);
+    for (const e of spec.examples) {
+      lines.push(`  ${e}`);
+    }
   }
   return { kind: "help", text: lines.join("\n") };
 }
@@ -233,9 +257,13 @@ export function parseCommand<TFlags extends TObject>(
       const body = token.slice(2);
       const eq = body.indexOf("=");
       const name = eq === -1 ? body : body.slice(0, eq);
-      if (autoHelp && name === "help") return helpResult(spec, flags, autoHelp);
+      if (autoHelp && name === "help") {
+        return helpResult(spec, flags, autoHelp);
+      }
       const info = byLong.get(name);
-      if (!info) return errorResult(spec, `Unknown option '--${name}'`);
+      if (!info) {
+        return errorResult(spec, `Unknown option '--${name}'`);
+      }
       const inline = eq === -1 ? undefined : body.slice(eq + 1);
       if (inline !== undefined) {
         rawFlags[info.key] = inline;
@@ -258,9 +286,13 @@ export function parseCommand<TFlags extends TObject>(
       const rest = token.slice(1);
       for (let j = 0; j < rest.length; j++) {
         const c = rest[j];
-        if (autoHelp && c === "h") return helpResult(spec, flags, autoHelp);
+        if (autoHelp && c === "h") {
+          return helpResult(spec, flags, autoHelp);
+        }
         const info = byShort.get(c);
-        if (!info) return errorResult(spec, `Unknown option '-${c}'`);
+        if (!info) {
+          return errorResult(spec, `Unknown option '-${c}'`);
+        }
         if (info.kind === "boolean") {
           rawFlags[info.key] = true;
           continue;

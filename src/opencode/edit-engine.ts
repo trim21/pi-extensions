@@ -28,7 +28,9 @@ export function normalizeToLF(text: string): string {
 
 /** Convert LF text to the file's line ending. Input must already be LF. */
 export function convertToLineEnding(text: string, ending: "\r\n" | "\n"): string {
-  if (ending === "\n") return text;
+  if (ending === "\n") {
+    return text;
+  }
   return text.replaceAll("\n", "\r\n");
 }
 
@@ -301,7 +303,9 @@ const WhitespaceNormalizedReplacer: Replacer = function* (content, find) {
 function removeIndentation(text: string): string {
   const lines = text.split("\n");
   const nonEmptyLines = lines.filter((line) => line.trim().length > 0);
-  if (nonEmptyLines.length === 0) return text;
+  if (nonEmptyLines.length === 0) {
+    return text;
+  }
   const minIndent = Math.min(
     ...nonEmptyLines.map((line) => {
       const match = /^(\s*)/.exec(line);
@@ -327,7 +331,9 @@ const MultiOccurrenceReplacer: Replacer = function* (content, find) {
   let startIndex = 0;
   for (;;) {
     const index = content.indexOf(find, startIndex);
-    if (index === -1) break;
+    if (index === -1) {
+      break;
+    }
     yield find;
     startIndex = index + find.length;
   }
@@ -363,7 +369,9 @@ const ContextAwareReplacer: Replacer = function* (content, find) {
   const firstLine = findLines[0].trim();
   const lastLine = findLines.at(-1)?.trim() ?? "";
   for (let i = 0; i < contentLines.length; i++) {
-    if (contentLines[i].trim() !== firstLine) continue;
+    if (contentLines[i].trim() !== firstLine) {
+      continue;
+    }
     for (let j = i + 2; j < contentLines.length; j++) {
       if (contentLines[j].trim() === lastLine) {
         const blockLines = contentLines.slice(i, j + 1);
@@ -397,8 +405,12 @@ const ContextAwareReplacer: Replacer = function* (content, find) {
 function isDisproportionateMatch(search: string, oldString: string) {
   const oldLines = oldString.split("\n").length;
   const searchLines = search.split("\n").length;
-  if (searchLines >= Math.max(oldLines + 3, oldLines * 2)) return true;
-  if (oldLines === 1) return false;
+  if (searchLines >= Math.max(oldLines + 3, oldLines * 2)) {
+    return true;
+  }
+  if (oldLines === 1) {
+    return false;
+  }
   return (
     search.trim().length > Math.max(oldString.trim().length + 500, oldString.trim().length * 4)
   );
@@ -438,7 +450,9 @@ export function replace(
   ]) {
     for (const search of replacer(content, oldString)) {
       const index = content.indexOf(search);
-      if (index === -1) continue;
+      if (index === -1) {
+        continue;
+      }
       notFound = false;
       if (isDisproportionateMatch(search, oldString)) {
         throw new Error(
@@ -450,7 +464,9 @@ export function replace(
         return content.replaceAll(search, newString);
       }
       const lastIndex = content.lastIndexOf(search);
-      if (index !== lastIndex) continue;
+      if (index !== lastIndex) {
+        continue;
+      }
       return (
         content.slice(0, Math.max(0, index)) +
         newString +

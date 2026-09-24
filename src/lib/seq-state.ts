@@ -25,7 +25,9 @@ export function createSeqState(): SeqState {
 
       tails.set(key, tail);
       void tail.finally(() => {
-        if (tails.get(key) === tail) tails.delete(key);
+        if (tails.get(key) === tail) {
+          tails.delete(key);
+        }
       });
 
       return run;

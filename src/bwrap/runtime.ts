@@ -166,7 +166,9 @@ const BASH_TAIL_LIMIT_BYTES = 1024 * 1024;
 function countNewlines(data: Buffer): number {
   let count = 0;
   for (const byte of data) {
-    if (byte === 0x0a) count++;
+    if (byte === 0x0a) {
+      count++;
+    }
   }
   return count;
 }
@@ -219,7 +221,9 @@ class BashOutput {
   }
 
   close(): Promise<void> {
-    if (!this.stream) return Promise.resolve();
+    if (!this.stream) {
+      return Promise.resolve();
+    }
     const stream = this.stream;
     this.stream = undefined;
     return new Promise((resolve) => {
@@ -286,8 +290,12 @@ function notifyChange(
   ctx: { ui: { notify: (message: string, type?: "info" | "warning" | "error") => void } },
   change: SandboxChange,
 ): void {
-  if (change.fs !== undefined) ctx.ui.notify(FS_LABELS[change.fs], "info");
-  if (change.network !== undefined) ctx.ui.notify(NETWORK_LABELS[change.network], "info");
+  if (change.fs !== undefined) {
+    ctx.ui.notify(FS_LABELS[change.fs], "info");
+  }
+  if (change.network !== undefined) {
+    ctx.ui.notify(NETWORK_LABELS[change.network], "info");
+  }
 }
 
 /** 沙箱默认写边界：根只读、工作区与 /tmp 可写、.git 只读。不展开用户配置的额外可写路径。 */
@@ -342,7 +350,9 @@ export function describeSandbox(
   unsandboxed: boolean,
   fixed = false,
 ): string | undefined {
-  if (unsandboxed) return undefined;
+  if (unsandboxed) {
+    return undefined;
+  }
   return [
     "<system-reminder>",
     `This command ran in a sandbox: ${describeLimits(resolved)}.`,
@@ -464,7 +474,9 @@ export class BwrapRuntime {
 
     // 固定沙箱（创建时显式传入配置）不注册 /bwrap-* 命令：切模式与恢复提权审批
     // 都可能放宽声明的沙箱
-    if (this.config === undefined) this.registerCommands(pi);
+    if (this.config === undefined) {
+      this.registerCommands(pi);
+    }
   }
 
   setMode(cwd: string, change: SandboxChange): ResolvedBwrap {
@@ -663,7 +675,9 @@ export class BwrapRuntime {
   }
 
   private resolve(ctx: Pick<ExtensionContext, "cwd">): ResolvedBwrap {
-    if (!this.resolved) this.resolved = resolveBwrap(this.config ?? loadBwrapConfig(ctx.cwd));
+    if (!this.resolved) {
+      this.resolved = resolveBwrap(this.config ?? loadBwrapConfig(ctx.cwd));
+    }
     return this.resolved;
   }
 
@@ -674,7 +688,9 @@ export class BwrapRuntime {
     execCwd: string,
   ): Promise<FullAccessGrant> {
     // hasUI 判定推迟到审批时刻：无 UI 会话弹不了审批框，按用户点 Deny 的标准文案拒绝
-    if (!ctx.hasUI) throw new Error(UNSANDBOXED_DENIED);
+    if (!ctx.hasUI) {
+      throw new Error(UNSANDBOXED_DENIED);
+    }
     const decision = await this.approveFullAccessUI(ctx, command, reason, execCwd);
     // 关闭对话框 = 中断并拒绝，不循环重问
     if (decision === undefined) {
@@ -802,7 +818,9 @@ export class BwrapRuntime {
       const verdict = await selectWithOptionalInput(description + pending, actions, ctx.ui, {
         signal: ctx.signal,
       });
-      if (verdict === undefined) return undefined;
+      if (verdict === undefined) {
+        return undefined;
+      }
       if (verdict.label !== EDIT_RULES) {
         return {
           result: verdict.label,
@@ -826,7 +844,9 @@ export class BwrapRuntime {
     patterns?: string[],
   ): Promise<void> {
     const rulePatterns = patterns ?? (await commandPatternsFor(command));
-    if (rulePatterns.length === 0) return; // 解析失败：本次处理，不写规则
+    if (rulePatterns.length === 0) {
+      return; // 解析失败：本次处理，不写规则
+    }
     const newRules: ApprovalRule[] = rulePatterns.map((pattern) => ({ action: "allow", pattern }));
     const { project } = getBwrapConfigPaths(ctx.cwd);
     let config: Record<string, unknown> = {};
