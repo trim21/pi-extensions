@@ -43,7 +43,9 @@ export function createAftLogger(sessionId?: string): AftLogger {
   }
 
   function flush(): void {
-    if (buffer.length === 0) return;
+    if (buffer.length === 0) {
+      return;
+    }
     const data = buffer.join("");
     buffer = [];
     try {
@@ -54,7 +56,9 @@ export function createAftLogger(sessionId?: string): AftLogger {
   }
 
   function scheduleFlush(): void {
-    if (flushTimer) return;
+    if (flushTimer) {
+      return;
+    }
     flushTimer = setTimeout(() => {
       flushTimer = null;
       flush();
@@ -92,7 +96,9 @@ export function createAftLogger(sessionId?: string): AftLogger {
     getLogFilePath: logFilePath,
     drain: async (): Promise<void> => {
       flush();
-      if (sink) await sink.drain();
+      if (sink) {
+        await sink.drain();
+      }
     },
   };
 }

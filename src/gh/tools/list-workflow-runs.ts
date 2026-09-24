@@ -20,9 +20,15 @@ export function addListWorkflowRunsTool(_gh: GhClient, pi: ExtensionAPI) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { repo, limit, status, workflow } = params;
       const args = ["run", "list", ...repoArgs(repo)];
-      if (limit) args.push("--limit", String(limit));
-      if (status) args.push("--status", status);
-      if (workflow) args.push("--workflow", workflow);
+      if (limit) {
+        args.push("--limit", String(limit));
+      }
+      if (status) {
+        args.push("--status", status);
+      }
+      if (workflow) {
+        args.push("--workflow", workflow);
+      }
       const result = toToolResult(
         await ghExec(args, { cwd: ctx.cwd, signal, input: params }),
         params,

@@ -86,8 +86,12 @@ function remoteOf(semantic: RawConfig["semantic"]): SemanticRemote | undefined {
   const backend = trimmedOrUndefined(semantic?.backend);
   // 去掉尾斜杠：aft 侧按 base_url + /embeddings 拼请求。
   const baseUrl = trimmedOrUndefined(semantic?.base_url)?.replace(/\/+$/, "");
-  if (backend === undefined || baseUrl === undefined) return undefined;
-  if (!isRemoteBackend(backend)) return undefined;
+  if (backend === undefined || baseUrl === undefined) {
+    return undefined;
+  }
+  if (!isRemoteBackend(backend)) {
+    return undefined;
+  }
   return {
     backend,
     baseUrl,
@@ -110,7 +114,9 @@ function toReadConfig(raw: RawConfig): AftReadConfig {
  */
 export function loadAftConfig(userConfigPath: string): AftReadConfig {
   try {
-    if (!existsSync(userConfigPath)) return DEFAULTS;
+    if (!existsSync(userConfigPath)) {
+      return DEFAULTS;
+    }
     const parsed: unknown = parse(readFileSync(userConfigPath, "utf8"));
     return toReadConfig(parseWithSchema(rawConfigSchema, parsed ?? {}));
   } catch {

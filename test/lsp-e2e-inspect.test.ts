@@ -133,7 +133,9 @@ async function retryUntil(
   for (;;) {
     const result = await run();
     const text: string = result.content[0].text;
-    if (until(text) || Date.now() >= deadline) return text;
+    if (until(text) || Date.now() >= deadline) {
+      return text;
+    }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 }

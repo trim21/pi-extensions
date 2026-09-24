@@ -66,10 +66,14 @@ export interface GhResult {
 export function isGhAvailable(): boolean {
   const pathEnv = process.env.PATH ?? "";
   for (const directory of pathEnv.split(delimiter)) {
-    if (existsSync(join(directory, "gh"))) return true;
+    if (existsSync(join(directory, "gh"))) {
+      return true;
+    }
   }
   for (const candidate of ["/usr/bin/gh", "/usr/local/bin/gh", "/run/current-system/sw/bin/gh"]) {
-    if (existsSync(candidate)) return true;
+    if (existsSync(candidate)) {
+      return true;
+    }
   }
   return false;
 }
@@ -110,7 +114,9 @@ export function runGh(
       killReason = reason;
       proc.kill("SIGTERM");
       setTimeout(() => {
-        if (!proc.killed) proc.kill("SIGKILL");
+        if (!proc.killed) {
+          proc.kill("SIGKILL");
+        }
       }, 5000);
     };
 
@@ -144,7 +150,9 @@ export function runGh(
     });
 
     proc.on("close", (code) => {
-      if (timeoutId) clearTimeout(timeoutId);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       if (onAbort && ctx.signal) {
         ctx.signal.removeEventListener("abort", onAbort);
       }
@@ -163,7 +171,9 @@ export function runGh(
     });
 
     proc.on("error", (err: Error) => {
-      if (timeoutId) clearTimeout(timeoutId);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       if (onAbort && ctx.signal) {
         ctx.signal.removeEventListener("abort", onAbort);
       }
@@ -284,7 +294,9 @@ export async function resolveRepo(
   cwd: string | undefined,
   input?: unknown,
 ): Promise<string> {
-  if (repo) return repo;
+  if (repo) {
+    return repo;
+  }
   const stdout = await ghExec(["repo", "view", "--json", "nameWithOwner"], { cwd, signal, input });
   const { nameWithOwner } = Value.Parse(repoViewSchema, JSON.parse(stdout));
   return nameWithOwner;
@@ -303,13 +315,19 @@ export function truncate(
   const out: string[] = [];
   let bytes = 0;
   for (const line of lines) {
-    if (out.length >= maxLines) break;
+    if (out.length >= maxLines) {
+      break;
+    }
     const lineBytes = Buffer.byteLength(line + "\n", "utf8");
-    if (bytes + lineBytes > maxBytes) break;
+    if (bytes + lineBytes > maxBytes) {
+      break;
+    }
     out.push(line);
     bytes += lineBytes;
   }
-  if (out.length > 0) return { text: out.join("\n"), truncated: true };
+  if (out.length > 0) {
+    return { text: out.join("\n"), truncated: true };
+  }
 
   // 首行自己就超过 maxBytes（如单行超长文本）：保底保留字节前缀，
   // 不能把非空输出截成空字符串。
@@ -361,10 +379,16 @@ export function subtitlePendant<IdKey extends string = never>(
   idKey?: IdKey,
 ): ToolPendant | undefined {
   const parts: string[] = [];
-  if (params.repo) parts.push(`repo=${params.repo}`);
+  if (params.repo) {
+    parts.push(`repo=${params.repo}`);
+  }
   const id = idKey === undefined ? undefined : params[idKey];
-  if (typeof id === "string" || typeof id === "number") parts.push(`${idKey}=${id}`);
-  if (parts.length === 0) return undefined;
+  if (typeof id === "string" || typeof id === "number") {
+    parts.push(`${idKey}=${id}`);
+  }
+  if (parts.length === 0) {
+    return undefined;
+  }
   return { subtitle: parts.join(" ") };
 }
 
@@ -394,12 +418,24 @@ export function listGithubArgs(kind: "issue" | "pr", params: ListFilters): strin
   const { repo, state, label, author, assignee, milestone, limit } = params;
 
   const args = [kind, "list", ...repoArgs(repo)];
-  if (state) args.push("--state", state);
-  if (label) args.push("--label", label);
-  if (author) args.push("--author", author);
-  if (assignee) args.push("--assignee", assignee);
-  if (milestone) args.push("--milestone", milestone);
-  if (limit) args.push("--limit", String(limit));
+  if (state) {
+    args.push("--state", state);
+  }
+  if (label) {
+    args.push("--label", label);
+  }
+  if (author) {
+    args.push("--author", author);
+  }
+  if (assignee) {
+    args.push("--assignee", assignee);
+  }
+  if (milestone) {
+    args.push("--milestone", milestone);
+  }
+  if (limit) {
+    args.push("--limit", String(limit));
+  }
   return args;
 }
 
@@ -472,14 +508,20 @@ export interface MergedCheck {
 }
 
 function statusBucket(state: string): CheckBucket {
-  if (state === "success") return "pass";
-  if (state === "failure" || state === "error") return "fail";
+  if (state === "success") {
+    return "pass";
+  }
+  if (state === "failure" || state === "error") {
+    return "fail";
+  }
   // pending, expected, and anything unknown must not end the wait
   return "pending";
 }
 
 function checkRunBucket(run: CheckRun): CheckBucket {
-  if (run.status !== "completed" || run.conclusion === null) return "pending";
+  if (run.status !== "completed" || run.conclusion === null) {
+    return "pending";
+  }
   switch (run.conclusion) {
     case "success": {
       return "pass";
@@ -640,7 +682,9 @@ export async function pollPrChecks(options: PollPrChecksOptions): Promise<Checks
   let everSucceeded = false;
 
   for (let round = 1; ; round++) {
-    if (signal.aborted) throw new Error("PR checks polling was aborted");
+    if (signal.aborted) {
+      throw new Error("PR checks polling was aborted");
+    }
     try {
       const [statuses, runs] = await Promise.all([
         checks.statuses(owner, repo, headSha, signal),
@@ -782,8 +826,12 @@ export function renderChecksVerdict(options: {
         `    - workflow: [${j.runName} (#${j.runId})](${j.runUrl})`,
       );
     }
-    if (enrichmentError) lines.push(`  - _Actions job details unavailable: ${enrichmentError}_`);
-    if (pending.length > 0) lines.push(`\n_${pending.length} other check(s) still in flight._`);
+    if (enrichmentError) {
+      lines.push(`  - _Actions job details unavailable: ${enrichmentError}_`);
+    }
+    if (pending.length > 0) {
+      lines.push(`\n_${pending.length} other check(s) still in flight._`);
+    }
 
     return {
       status: "failure",

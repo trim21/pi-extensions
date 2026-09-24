@@ -34,7 +34,9 @@ function spawnMock(env?: Record<string, string>) {
     while ((index = buffer.indexOf("\n")) >= 0) {
       const line = buffer.slice(0, index);
       buffer = buffer.slice(index + 1);
-      if (line.trim()) notifications.push(JSON.parse(line));
+      if (line.trim()) {
+        notifications.push(JSON.parse(line));
+      }
     }
   });
   return { proc, notifications };

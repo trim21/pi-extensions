@@ -110,7 +110,9 @@ function selfStartTime(): number {
 /** Extract the group name from a groupJoin "Created group" result string. */
 function groupIdFrom(result: string): string {
   const m = /Created group ([^\s.]+)/.exec(result);
-  if (!m) throw new Error(`cannot parse group id from: ${result}`);
+  if (!m) {
+    throw new Error(`cannot parse group id from: ${result}`);
+  }
   return m[1];
 }
 
@@ -204,7 +206,9 @@ describe("registry", () => {
   });
 
   it("presence treats a reused pid (start time mismatch) as offline", () => {
-    if (process.platform !== "linux") return; // /proc start time is Linux-only
+    if (process.platform !== "linux") {
+      return; // /proc start time is Linux-only
+    }
     const base = makeSelf("aaaaaaaaaaaa");
     const start = selfStartTime();
     expect(start).toBeGreaterThan(0);

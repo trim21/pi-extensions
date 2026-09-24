@@ -81,7 +81,9 @@ export function deriveAddr(cwd: string, agentId: string): string {
 
 /** Validate a talk address before it becomes a storage key. */
 export function assertAddress(addr: string): void {
-  if (!ADDRESS_PATTERN.test(addr)) throw new TypeError(`Invalid talk address: ${addr}`);
+  if (!ADDRESS_PATTERN.test(addr)) {
+    throw new TypeError(`Invalid talk address: ${addr}`);
+  }
 }
 
 // ── Storage namespaces ───────────────────────────────────────────────────
@@ -111,7 +113,9 @@ export async function writeRecord(storage: TalkStorage, record: AgentRecord): Pr
 
 export async function readRecord(storage: TalkStorage, addr: string): Promise<AgentRecord | null> {
   const raw = await storage.readJson(RECORDS_NS, recordKey(addr));
-  if (Value.Check(AgentRecordSchema, raw)) return raw;
+  if (Value.Check(AgentRecordSchema, raw)) {
+    return raw;
+  }
   // Migrate legacy records in place of the `sessionId` → `agentId` rename.
   if (Value.Check(LegacyAgentRecordSchema, raw)) {
     // Value.Check 是类型守卫，raw 已收窄成 legacy 记录的形状，不需要再断言。
@@ -126,9 +130,13 @@ export async function listRecords(storage: TalkStorage): Promise<AgentRecord[]> 
   const out: AgentRecord[] = [];
   for (const key of await storage.listKeys(RECORDS_NS)) {
     const addr = key.slice(0, -".json".length);
-    if (!ADDRESS_PATTERN.test(addr)) continue;
+    if (!ADDRESS_PATTERN.test(addr)) {
+      continue;
+    }
     const record = await readRecord(storage, addr);
-    if (record) out.push(record);
+    if (record) {
+      out.push(record);
+    }
   }
   return out.toSorted((a, b) => a.startedAt - b.startedAt);
 }
@@ -160,22 +168,30 @@ export function readStartTime(pid: number): number | undefined {
  * unreadable — we fall back to the bare pid check.
  */
 function pidAlive(pid: number, pidStart?: number): boolean {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return false;
+  }
   try {
     process.kill(pid, 0);
   } catch (error) {
     // EPERM means the process exists but isn't ours — still alive
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
-  if (pidStart === undefined) return true;
+  if (pidStart === undefined) {
+    return true;
+  }
   const start = readStartTime(pid);
   // 读不到启动时间时保守认为「pid 还活着」，只有两边都读到且不同才判定被复用
   return start === undefined || start === pidStart;
 }
 
 export function presenceOf(record: AgentRecord): Presence {
-  if (record.offline) return "offline";
-  if (!pidAlive(record.pid, record.pidStart)) return "offline";
+  if (record.offline) {
+    return "offline";
+  }
+  if (!pidAlive(record.pid, record.pidStart)) {
+    return "offline";
+  }
   return "live";
 }
 
@@ -196,12 +212,18 @@ export async function sweep(storage: TalkStorage, now: number = Date.now()): Pro
   for (const record of await listRecords(storage)) {
     // Without a heartbeat, lastSeenAt only tracks the last event, so an idle
     // live agent would look long-quiet — never reap a live process.
-    if (pidAlive(record.pid, record.pidStart)) continue;
+    if (pidAlive(record.pid, record.pidStart)) {
+      continue;
+    }
     const quietFor = now - record.lastSeenAt;
-    if (quietFor < SWEEP_OFFLINE_GRACE_MS) continue;
+    if (quietFor < SWEEP_OFFLINE_GRACE_MS) {
+      continue;
+    }
     const hasMail =
       (await storage.hasKeys(inboxNs(record.addr))) || (await storage.hasKeys(asksNs(record.addr)));
-    if (hasMail && quietFor < SWEEP_MAIL_KEEP_MS) continue;
+    if (hasMail && quietFor < SWEEP_MAIL_KEEP_MS) {
+      continue;
+    }
     await storage.removeNamespace(inboxNs(record.addr));
     await storage.removeNamespace(asksNs(record.addr));
     await storage.removeKey(RECORDS_NS, recordKey(record.addr));

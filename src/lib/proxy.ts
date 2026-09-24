@@ -63,7 +63,9 @@ const NO_PROXY_ENV_NAMES = ["NO_PROXY", "no_proxy"];
 function firstEnv(names: readonly string[], env: NodeJS.ProcessEnv): string | undefined {
   for (const name of names) {
     const value = env[name]?.trim();
-    if (value) return value;
+    if (value) {
+      return value;
+    }
   }
   return undefined;
 }
@@ -124,7 +126,9 @@ export function readProxySettings(
 /** 要注入 gh 子进程的代理环境变量；未配置代理时为空对象（子进程继承父进程环境）。 */
 export function proxyEnvVars(settings: HttpProxySettings): NodeJS.ProcessEnv {
   const { proxy, noProxy } = settings;
-  if (!proxy) return {};
+  if (!proxy) {
+    return {};
+  }
   return {
     // gh 是 Go 程序，https 目标只认 HTTPS_PROXY；统一填全部变量，避免用户只设了
     // HTTP_PROXY 时 https 请求直连。小写变体给 curl 系的子进程用。
@@ -179,7 +183,9 @@ export function createHttpProxy(
   let dispatcher: EnvHttpProxyAgent | undefined;
 
   const fetch: typeof undiciFetch = (input, init) => {
-    if (!proxy) return undiciFetch(input, init);
+    if (!proxy) {
+      return undiciFetch(input, init);
+    }
     dispatcher ??= createProxyDispatcher(proxy, noProxy);
     return undiciFetch(input, { ...init, dispatcher });
   };

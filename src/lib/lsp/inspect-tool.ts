@@ -138,14 +138,19 @@ async function formatReferenceLocations(
   const byPath = new Map<string, InspectLocation[]>();
   for (const location of locations) {
     const existing = byPath.get(location.path);
-    if (existing) existing.push(location);
-    else byPath.set(location.path, [location]);
+    if (existing) {
+      existing.push(location);
+    } else {
+      byPath.set(location.path, [location]);
+    }
   }
   const paths = [...byPath.keys()];
   const sections = [`Found ${locations.length} reference(s) in ${paths.length} file(s):`];
   for (const path of paths.slice(0, MAX_FILES_LISTED)) {
     const entries = byPath.get(path);
-    if (!entries) continue;
+    if (!entries) {
+      continue;
+    }
     const shown = entries.slice(0, MAX_ENTRIES_PER_FILE);
     sections.push(`### ${path} (${entries.length})`);
     for (const entry of shown) {
@@ -177,11 +182,15 @@ function formatMarkedString(marked: MarkedString): string {
 
 /** hover contents 原样透传：仅做结构格式化（MarkedString → code fence），不改写内容。 */
 function formatHoverContents(contents: Hover["contents"]): string {
-  if (typeof contents === "string") return contents;
+  if (typeof contents === "string") {
+    return contents;
+  }
   if (Array.isArray(contents)) {
     return contents.map((marked) => formatMarkedString(marked)).join("\n\n");
   }
-  if ("language" in contents) return formatMarkedString(contents);
+  if ("language" in contents) {
+    return formatMarkedString(contents);
+  }
   return contents.value;
 }
 
@@ -217,10 +226,15 @@ async function probeSymbolCandidates(options: {
   const groups = new Map<string, { output: InspectOutput; candidates: LspPosition[] }>();
   for (const [index, candidate] of candidates.entries()) {
     const output = outputs.at(index);
-    if (!output) continue;
+    if (!output) {
+      continue;
+    }
     const group = groups.get(output.text);
-    if (group) group.candidates.push(candidate);
-    else groups.set(output.text, { output, candidates: [candidate] });
+    if (group) {
+      group.candidates.push(candidate);
+    } else {
+      groups.set(output.text, { output, candidates: [candidate] });
+    }
   }
   if (groups.size > 1) {
     const listing = [...groups.values()]
@@ -235,7 +249,9 @@ async function probeSymbolCandidates(options: {
     );
   }
   const first = [...groups.values()].at(0);
-  if (!first) throw new Error("LSP inspect returned no result");
+  if (!first) {
+    throw new Error("LSP inspect returned no result");
+  }
   return first.output;
 }
 

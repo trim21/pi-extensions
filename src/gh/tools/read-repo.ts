@@ -15,7 +15,9 @@ export function addReadRepoTool(_gh: GhClient, pi: ExtensionAPI) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       const { repo } = params;
       const args = ["repo", "view"];
-      if (repo) args.push(repo);
+      if (repo) {
+        args.push(repo);
+      }
       const result = toToolResult(
         await ghExec(args, { cwd: ctx.cwd, signal, input: params }),
         params,

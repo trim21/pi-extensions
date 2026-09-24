@@ -115,7 +115,9 @@ async function setupProject(disabled: string[] = [], maxOpenDocuments?: number) 
     servers: SERVERS,
     ...(disabled.length > 0 && { disabled }),
   };
-  if (maxOpenDocuments !== undefined) lspConfig.maxOpenDocuments = maxOpenDocuments;
+  if (maxOpenDocuments !== undefined) {
+    lspConfig.maxOpenDocuments = maxOpenDocuments;
+  }
   await writeFile(join(directory, ".pi", "lsp.json"), JSON.stringify(lspConfig));
   const filePath = join(directory, "bad.py");
   await writeFile(

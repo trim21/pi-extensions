@@ -148,7 +148,9 @@ export function buildTodoMarkdown(todos: readonly TodoInfo[]): string {
  */
 export function buildTodoWidgetLines(todos: readonly TodoInfo[]): string[] | undefined {
   const visible = todos;
-  if (visible.length === 0) return undefined;
+  if (visible.length === 0) {
+    return undefined;
+  }
   return visible.map((t) => formatTodoLine(t));
 }
 

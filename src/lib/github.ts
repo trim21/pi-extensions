@@ -91,7 +91,9 @@ export function buildSearchQuery(kind: SearchKind, params: SearchParams): string
   const state = params.state ?? "open";
 
   const parts: string[] = [];
-  if (repo) parts.push(`repo:${repo}`);
+  if (repo) {
+    parts.push(`repo:${repo}`);
+  }
   parts.push(kind === "issue" ? "is:issue" : "is:pr");
   switch (state) {
     case "open": {
@@ -105,7 +107,9 @@ export function buildSearchQuery(kind: SearchKind, params: SearchParams): string
       break;
     }
     case "merged": {
-      if (kind === "issue") throw new Error("state=merged is only valid for PR searches");
+      if (kind === "issue") {
+        throw new Error("state=merged is only valid for PR searches");
+      }
       parts.push("is:merged");
 
       break;
@@ -118,17 +122,29 @@ export function buildSearchQuery(kind: SearchKind, params: SearchParams): string
       }
     }
   }
-  if (keywords) parts.push(keywords);
-  if (label) parts.push(`label:${quoteQualifier(label)}`);
-  if (author) parts.push(`author:${author}`);
-  if (assignee) parts.push(`assignee:${assignee}`);
-  if (milestone) parts.push(`milestone:${quoteQualifier(milestone)}`);
+  if (keywords) {
+    parts.push(keywords);
+  }
+  if (label) {
+    parts.push(`label:${quoteQualifier(label)}`);
+  }
+  if (author) {
+    parts.push(`author:${author}`);
+  }
+  if (assignee) {
+    parts.push(`assignee:${assignee}`);
+  }
+  if (milestone) {
+    parts.push(`milestone:${quoteQualifier(milestone)}`);
+  }
   return parts.join(" ");
 }
 
 /** Quote a qualifier value that contains whitespace or special characters. */
 function quoteQualifier(value: string): string {
-  if (/^[\w@./-]+$/.test(value)) return value;
+  if (/^[\w@./-]+$/.test(value)) {
+    return value;
+  }
   return `"${value.replaceAll('"', String.raw`\"`)}"`;
 }
 
@@ -251,10 +267,15 @@ export class GithubSearchError extends Error {
 }
 
 function describeHttpError(status: number | undefined): string {
-  if (status === 401)
+  if (status === 401) {
     return 'GitHub auth failed (401): token invalid or expired — run "gh auth login"';
-  if (status === 403) return "GitHub rate limit or permissions error (403)";
-  if (status === 404) return "repository not found, or the token has no access to it (404)";
+  }
+  if (status === 403) {
+    return "GitHub rate limit or permissions error (403)";
+  }
+  if (status === 404) {
+    return "repository not found, or the token has no access to it (404)";
+  }
   return `GitHub API error${status === undefined ? "" : ` (HTTP ${status})`}`;
 }
 
@@ -530,7 +551,9 @@ export function createGithubChecks(options: GithubClientOptions = {}): GithubChe
         );
         for (const run of commitRuns) {
           const id = String(run.id);
-          if (runIds.has(id)) events.set(id, run.event);
+          if (runIds.has(id)) {
+            events.set(id, run.event);
+          }
         }
       }
       return runs.map((run) => {

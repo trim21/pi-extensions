@@ -104,7 +104,9 @@ describe("read-github-pr-status", () => {
     const combinedStatus = api.body<CombinedStatusFixture>(STATUS_ROUTE);
     const checkRuns = api.body<CheckRunsFixture>("check-runs");
     const [firstStatus] = combinedStatus.statuses;
-    if (!firstStatus) throw new Error("fixture has no commit status");
+    if (!firstStatus) {
+      throw new Error("fixture has no commit status");
+    }
     const text = result.content[0]?.text ?? "";
     const payload = JSON.parse(text) as {
       pr: number;

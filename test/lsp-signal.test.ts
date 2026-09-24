@@ -24,7 +24,9 @@ const services: LspService[] = [];
 
 afterEach(async () => {
   await Promise.all(services.splice(0).map((service) => service.shutdownAll()));
-  for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 /** 启动 mock 服务器的 adapter，并把子进程回显的方法名（JSONL）收集起来。 */
@@ -47,7 +49,9 @@ function mockAdapter(env: Record<string, string>): {
           while ((index = buffer.indexOf("\n")) >= 0) {
             const line = buffer.slice(0, index);
             buffer = buffer.slice(index + 1);
-            if (!line.trim()) continue;
+            if (!line.trim()) {
+              continue;
+            }
             try {
               methods.push((JSON.parse(line) as { method?: string }).method ?? "");
             } catch {

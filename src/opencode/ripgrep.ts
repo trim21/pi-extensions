@@ -62,21 +62,27 @@ export function runRipgrep<R>(
     const items: R[] = [];
 
     const stop = () => {
-      if (state.done) return;
+      if (state.done) {
+        return;
+      }
       state.done = true;
       child.kill("SIGTERM");
     };
 
     /** 收尾（resolve/reject 只会发生一次，并摘掉 abort 监听）。 */
     const settle = (finish: () => void) => {
-      if (state.settled) return;
+      if (state.settled) {
+        return;
+      }
       state.settled = true;
       signal?.removeEventListener("abort", onAbort);
       finish();
     };
 
     const parseLine = (line: string) => {
-      if (state.done || line.length === 0) return;
+      if (state.done || line.length === 0) {
+        return;
+      }
       let item: R | undefined;
       try {
         item = options.parse(line);
@@ -86,7 +92,9 @@ export function runRipgrep<R>(
         stop();
         return;
       }
-      if (item === undefined) return;
+      if (item === undefined) {
+        return;
+      }
       items.push(item);
       if (items.length <= options.limit) {
         return;
@@ -98,7 +106,9 @@ export function runRipgrep<R>(
 
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      if (stderr.length < ERROR_BYTES) stderr += chunk;
+      if (stderr.length < ERROR_BYTES) {
+        stderr += chunk;
+      }
     });
 
     child.stdout.setEncoding("utf8");
@@ -107,7 +117,9 @@ export function runRipgrep<R>(
       const lines = pending.split("\n");
       // 末尾没有换行的部分是不完整记录，留到下一块
       pending = lines.pop() ?? "";
-      for (const line of lines) parseLine(line);
+      for (const line of lines) {
+        parseLine(line);
+      }
     });
 
     child.on("error", (error) => {

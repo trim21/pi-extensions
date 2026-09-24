@@ -226,7 +226,9 @@ export function loadBwrapConfig(cwd: string, paths = getBwrapConfigPaths(cwd)): 
   // 去重：调用方用同一路径表达「只读这一个文件」时不做二次合并
   // （否则 extraWritablePaths / approvalRules 会被重复拼接）
   for (const path of new Set([paths.global, paths.project])) {
-    if (!existsSync(path)) continue;
+    if (!existsSync(path)) {
+      continue;
+    }
     config = deepMerge(config, parseBwrapConfigFile(path));
   }
   return Value.Parse(bwrapConfigSchema, config);
@@ -241,14 +243,18 @@ function findDefaultBwrap(): string {
   const pathEnv = process.env.PATH ?? "";
   for (const directory of pathEnv.split(delimiter)) {
     const candidate = join(directory, "bwrap");
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate)) {
+      return candidate;
+    }
   }
   for (const candidate of [
     "/usr/bin/bwrap",
     "/usr/local/bin/bwrap",
     "/run/current-system/sw/bin/bwrap",
   ]) {
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate)) {
+      return candidate;
+    }
   }
   throw new Error(
     "bwrap (bubblewrap) not found in PATH. Install it:\n" +
@@ -272,7 +278,9 @@ function findCommandInPath(name: string, hint: string): string {
   const pathEnv = process.env.PATH ?? "";
   for (const directory of pathEnv.split(delimiter)) {
     const candidate = join(directory, name);
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate)) {
+      return candidate;
+    }
   }
   throw new Error(hint);
 }
@@ -335,7 +343,9 @@ class ScanLimitError extends Error {}
 export async function findGitDirs(root: string): Promise<string[]> {
   const found: string[] = [];
   const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > MAX_GIT_SCAN_DEPTH) return;
+    if (depth > MAX_GIT_SCAN_DEPTH) {
+      return;
+    }
     let entries: Dirent[];
     try {
       entries = await readdir(dir, { withFileTypes: true });
@@ -343,19 +353,25 @@ export async function findGitDirs(root: string): Promise<string[]> {
       return;
     }
     for (const entry of entries) {
-      if (found.length >= MAX_GIT_DIRS) throw new ScanLimitError();
+      if (found.length >= MAX_GIT_DIRS) {
+        throw new ScanLimitError();
+      }
       if (entry.name === ".git" && entry.isDirectory()) {
         found.push(join(dir, ".git"));
         continue;
       }
-      if (!entry.isDirectory() || GIT_DIR_SCAN_SKIP.has(entry.name)) continue;
+      if (!entry.isDirectory() || GIT_DIR_SCAN_SKIP.has(entry.name)) {
+        continue;
+      }
       await walk(join(dir, entry.name), depth + 1);
     }
   };
   try {
     await walk(root, 0);
   } catch (error) {
-    if (!(error instanceof ScanLimitError)) throw error;
+    if (!(error instanceof ScanLimitError)) {
+      throw error;
+    }
   }
   return found;
 }
@@ -403,7 +419,9 @@ export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Prom
       args.push("--ro-bind-try", "/dev/null", target);
     }
   }
-  if (resolved.network === "block") args.push("--unshare-net");
+  if (resolved.network === "block") {
+    args.push("--unshare-net");
+  }
   // fs allow-all：整棵根可写，不做保护绑定（.pi/.agent/.git 的只读覆盖与「完整可写」矛盾）。
   if (resolved.fs !== "allow-all") {
     // --ro-bind-try：目录不存在（或已被删除）时自动忽略
@@ -432,7 +450,9 @@ export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Prom
 }
 
 function killChild(child: ChildProcess): void {
-  if (!child.pid) return;
+  if (!child.pid) {
+    return;
+  }
   try {
     process.kill(-child.pid, "SIGKILL");
   } catch {
@@ -450,7 +470,9 @@ export async function createNetworkStack(
   resolved: ResolvedBwrap,
   log?: NetworkStackLog,
 ): Promise<NetworkStack | undefined> {
-  if (resolved.network !== "limited") return undefined;
+  if (resolved.network !== "limited") {
+    return undefined;
+  }
   return startNetworkStack({
     allowlist: resolved.networkAllowlist,
     dnsServers: await resolveDnsServers(),
@@ -584,7 +606,9 @@ export function createBwrapBashOperations(
         signal?.addEventListener("abort", onAbort, { once: true });
         child.once("error", reject);
         child.once("close", (exitCode) => {
-          if (timeoutHandle) clearTimeout(timeoutHandle);
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+          }
           signal?.removeEventListener("abort", onAbort);
           // 中断：reject signal.reason（默认是 name=AbortError 的 DOMException）
           if (signal?.aborted) {
@@ -596,7 +620,9 @@ export function createBwrapBashOperations(
           } else if (timedOut) {
             // 超时：name=TimeoutError（对齐标准错误分类）
             reject(new TimeoutError(timeout));
-          } else resolve({ exitCode });
+          } else {
+            resolve({ exitCode });
+          }
         });
       });
     },

@@ -35,7 +35,9 @@ export function shlexSplit(raw: string): string[] {
       continue;
     }
     if (c === "\\") {
-      if (i + 1 < raw.length) cur += raw[i + 1];
+      if (i + 1 < raw.length) {
+        cur += raw[i + 1];
+      }
       i += 2;
       continue;
     }
@@ -53,6 +55,8 @@ export function shlexSplit(raw: string): string[] {
   if (quote !== undefined) {
     throw new SyntaxError(`unterminated quote in command arguments: ${raw}`);
   }
-  if (cur) tokens.push(cur);
+  if (cur) {
+    tokens.push(cur);
+  }
   return tokens;
 }

@@ -69,7 +69,9 @@ export function mapRemoteModels(
   const models: Model<"openai-completions">[] = [];
   for (const item of payload.data) {
     const id = item.id.trim();
-    if (!id) continue;
+    if (!id) {
+      continue;
+    }
     models.push(
       toPiModel(config, {
         id,
@@ -93,7 +95,9 @@ export async function fetchRemoteModels(
 ): Promise<Model<"openai-completions">[]> {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (options.apiKey) headers.Authorization = `Bearer ${options.apiKey}`;
+  if (options.apiKey) {
+    headers.Authorization = `Bearer ${options.apiKey}`;
+  }
   const response = await fetchImpl(modelsUrl(config.baseUrl), { headers, signal: options.signal });
   const raw = await response.text();
   if (!response.ok) {

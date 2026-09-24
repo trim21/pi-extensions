@@ -42,9 +42,13 @@ export async function selectWithOptionalInput(
     actions.map((action) => action.label),
     { signal },
   );
-  if (choice === undefined) return undefined;
+  if (choice === undefined) {
+    return undefined;
+  }
   const action = actions.find((candidate) => candidate.label === choice);
-  if (action?.inputPrompt === undefined) return { label: choice, prompted: false };
+  if (action?.inputPrompt === undefined) {
+    return { label: choice, prompted: false };
+  }
   const answer = await ui.input(title, action.inputPrompt, { signal });
   return {
     label: choice,
@@ -87,7 +91,9 @@ export async function selectMultiple(
     }
     // 经 inputPrompt 输入的自定义答案不是固定条目：单独列出，同样可反选
     for (const label of selected) {
-      if (entries.some((entry) => entry.label === label)) continue;
+      if (entries.some((entry) => entry.label === label)) {
+        continue;
+      }
       const display = `${CHECKED_PREFIX}${label}`;
       displayToLabel.set(display, label);
       round.push({ label: display });
@@ -98,16 +104,25 @@ export async function selectMultiple(
       ui,
       opts,
     );
-    if (result === undefined || result.label === opts.doneLabel) break;
+    if (result === undefined || result.label === opts.doneLabel) {
+      break;
+    }
     if (result.prompted) {
       // 自定义答案进入已选并继续循环：可反选或继续勾选，最终手动提交
-      if (result.input && !selectedSet.has(result.input)) selected.push(result.input);
+      if (result.input && !selectedSet.has(result.input)) {
+        selected.push(result.input);
+      }
       continue;
     }
     const label = displayToLabel.get(result.label);
-    if (label === undefined) continue;
-    if (selectedSet.has(label)) selected.splice(selected.indexOf(label), 1);
-    else selected.push(label);
+    if (label === undefined) {
+      continue;
+    }
+    if (selectedSet.has(label)) {
+      selected.splice(selected.indexOf(label), 1);
+    } else {
+      selected.push(label);
+    }
   }
   return selected;
 }

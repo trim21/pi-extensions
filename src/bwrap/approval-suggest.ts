@@ -30,9 +30,13 @@ export function commandPattern(command: BashCommand): string {
   for (let len = tokens.length; len > 0; len--) {
     const prefix = tokens.slice(0, len).join(" ");
     const arity = ARITY[prefix];
-    if (arity !== undefined) return [...tokens.slice(0, arity), "*"].join(" ");
+    if (arity !== undefined) {
+      return [...tokens.slice(0, arity), "*"].join(" ");
+    }
   }
-  if (tokens.length === 0) return "*";
+  if (tokens.length === 0) {
+    return "*";
+  }
   return [tokens[0], "*"].join(" ");
 }
 
@@ -41,9 +45,13 @@ function patternsFromCommands(commands: BashCommand[]): string[] {
   const flat: string[] = [];
   const visit = (cmd: BashCommand) => {
     flat.push(commandPattern(cmd));
-    for (const nested of cmd.nested) visit(nested);
+    for (const nested of cmd.nested) {
+      visit(nested);
+    }
   };
-  for (const cmd of commands) visit(cmd);
+  for (const cmd of commands) {
+    visit(cmd);
+  }
   return flat;
 }
 

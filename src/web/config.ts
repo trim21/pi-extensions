@@ -20,7 +20,9 @@ export function webSearchConfigPath(): string {
 /** ~/.pi/web-search.json 的 search1apiApiKey，或 SEARCH1API_KEY 环境变量。 */
 export async function loadSearch1ApiKey(path = webSearchConfigPath()): Promise<string | undefined> {
   const envKey = process.env.SEARCH1API_KEY;
-  if (envKey) return envKey;
+  if (envKey) {
+    return envKey;
+  }
   try {
     const raw = await readFile(path, "utf8");
     const parsed = Value.Parse(webSearchSchema, JSON.parse(raw));

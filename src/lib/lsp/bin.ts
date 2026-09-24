@@ -21,9 +21,13 @@ export function walkUp(fromDir: string, stopDir: string): string[] {
   const stop = normalize(stopDir);
   for (;;) {
     dirs.push(current);
-    if (current === stop) break;
+    if (current === stop) {
+      break;
+    }
     const parent = dirname(current);
-    if (parent === current) break;
+    if (parent === current) {
+      break;
+    }
     current = parent;
   }
   return dirs;
@@ -55,7 +59,9 @@ export function findBinaryInWorkspace(
     for (const root of roots) {
       for (const name of binaryNames(cmd)) {
         const candidate = join(root, name);
-        if (exists(candidate)) return Promise.resolve(candidate);
+        if (exists(candidate)) {
+          return Promise.resolve(candidate);
+        }
       }
     }
   }
@@ -68,7 +74,9 @@ export function which(cmd: string): string | undefined {
   for (const dir of pathDirs) {
     for (const name of binaryNames(cmd)) {
       const candidate = join(dir, name);
-      if (existsSync(candidate)) return candidate;
+      if (existsSync(candidate)) {
+        return candidate;
+      }
     }
   }
   return undefined;

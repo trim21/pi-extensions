@@ -57,7 +57,9 @@ export interface LspServerAdapter {
 function dirChain(cwd: string, target: string): string[] {
   const dirs = [cwd];
   const rel = relative(cwd, target);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return dirs;
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    return dirs;
+  }
   let current = cwd;
   for (const part of rel.split(sep)) {
     current = join(current, part);
@@ -84,7 +86,9 @@ export function serverRoot(
   const markers = adapter.rootMarkers ?? [];
   if (markers.length > 0) {
     for (const dir of dirChain(cwd, dirname(file))) {
-      if (markers.some((marker) => exists(join(dir, marker)))) return dir;
+      if (markers.some((marker) => exists(join(dir, marker)))) {
+        return dir;
+      }
     }
     return cwd;
   }

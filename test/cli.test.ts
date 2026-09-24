@@ -26,7 +26,9 @@ describe("parseCommand", () => {
   it("parses positionals and long flags", () => {
     const r = parseCommand(spec, "frontend --name web");
     expect(r.kind).toBe("ok");
-    if (r.kind !== "ok") return;
+    if (r.kind !== "ok") {
+      return;
+    }
     expect(r.args).toEqual(["frontend"]);
     expect(r.flags.name).toBe("web");
   });
@@ -34,7 +36,9 @@ describe("parseCommand", () => {
   it("supports --flag=value", () => {
     const r = parseCommand(spec, "--name=web");
     expect(r.kind).toBe("ok");
-    if (r.kind !== "ok") return;
+    if (r.kind !== "ok") {
+      return;
+    }
     expect(r.flags.name).toBe("web");
   });
 
@@ -42,7 +46,9 @@ describe("parseCommand", () => {
     for (const input of ["-n web", "-n=web", "-nweb"]) {
       const r = parseCommand(spec, input);
       expect(r.kind).toBe("ok");
-      if (r.kind !== "ok") return;
+      if (r.kind !== "ok") {
+        return;
+      }
       expect(r.flags.name).toBe("web");
     }
   });
@@ -50,7 +56,9 @@ describe("parseCommand", () => {
   it("combines short boolean flags and switches to a value flag", () => {
     const r = parseCommand(spec, "-an web");
     expect(r.kind).toBe("ok");
-    if (r.kind !== "ok") return;
+    if (r.kind !== "ok") {
+      return;
+    }
     expect(r.flags.all).toBe(true);
     expect(r.flags.name).toBe("web");
   });
@@ -58,19 +66,25 @@ describe("parseCommand", () => {
   it("coerces number values, including negatives", () => {
     const r = parseCommand(spec, "--count 3");
     expect(r.kind).toBe("ok");
-    if (r.kind !== "ok") return;
+    if (r.kind !== "ok") {
+      return;
+    }
     expect(r.flags.count).toBe(3);
 
     const neg = parseCommand(spec, "--count -5");
     expect(neg.kind).toBe("ok");
-    if (neg.kind !== "ok") return;
+    if (neg.kind !== "ok") {
+      return;
+    }
     expect(neg.flags.count).toBe(-5);
   });
 
   it("applies defaults and leaves optional flags unset", () => {
     const r = parseCommand(spec, "");
     expect(r.kind).toBe("ok");
-    if (r.kind !== "ok") return;
+    if (r.kind !== "ok") {
+      return;
+    }
     expect(r.flags.level).toBe(1);
     expect(r.flags.name).toBeUndefined();
   });
@@ -78,7 +92,9 @@ describe("parseCommand", () => {
   it("treats everything after -- as positional", () => {
     const r = parseCommand(spec, "-- --name");
     expect(r.kind).toBe("ok");
-    if (r.kind !== "ok") return;
+    if (r.kind !== "ok") {
+      return;
+    }
     expect(r.args).toEqual(["--name"]);
     expect(r.flags.name).toBeUndefined();
   });
@@ -87,7 +103,9 @@ describe("parseCommand", () => {
     for (const input of ["-h", "--help"]) {
       const r = parseCommand(spec, input);
       expect(r.kind).toBe("help");
-      if (r.kind !== "help") return;
+      if (r.kind !== "help") {
+        return;
+      }
       expect(r.text).toContain("Usage: /talk-group-join [group name] [options]");
       expect(r.text).toContain("Join or create a private agent group.");
       expect(r.text).toContain("-n, --name <alias>");
@@ -106,20 +124,26 @@ describe("parseCommand", () => {
   it("reports unknown long and short options", () => {
     const long = parseCommand(spec, "--bogus");
     expect(long.kind).toBe("error");
-    if (long.kind !== "error") return;
+    if (long.kind !== "error") {
+      return;
+    }
     expect(long.text).toContain("Unknown option '--bogus'");
     expect(long.text).toContain("Try '/talk-group-join --help' for usage.");
 
     const short = parseCommand(spec, "-z");
     expect(short.kind).toBe("error");
-    if (short.kind !== "error") return;
+    if (short.kind !== "error") {
+      return;
+    }
     expect(short.text).toContain("Unknown option '-z'");
   });
 
   it("reports a missing value", () => {
     const r = parseCommand(spec, "--name");
     expect(r.kind).toBe("error");
-    if (r.kind !== "error") return;
+    if (r.kind !== "error") {
+      return;
+    }
     expect(r.text).toContain("Option '--name' requires a value");
   });
 
@@ -132,28 +156,36 @@ describe("parseCommand", () => {
     };
     const r = parseCommand(del, "");
     expect(r.kind).toBe("error");
-    if (r.kind !== "error") return;
+    if (r.kind !== "error") {
+      return;
+    }
     expect(r.text).toContain("Missing required argument");
   });
 
   it("reports too many arguments", () => {
     const r = parseCommand(spec, "a b");
     expect(r.kind).toBe("error");
-    if (r.kind !== "error") return;
+    if (r.kind !== "error") {
+      return;
+    }
     expect(r.text).toContain("Too many arguments");
   });
 
   it("rejects invalid enum values", () => {
     const r = parseCommand(spec, "--mode zzz");
     expect(r.kind).toBe("error");
-    if (r.kind !== "error") return;
+    if (r.kind !== "error") {
+      return;
+    }
     expect(r.text).toContain("expected one of: fast, slow");
   });
 
   it("rejects invalid numbers", () => {
     const r = parseCommand(spec, "--count abc");
     expect(r.kind).toBe("error");
-    if (r.kind !== "error") return;
+    if (r.kind !== "error") {
+      return;
+    }
     expect(r.text).toContain("Invalid value for '--count'");
   });
 
@@ -161,35 +193,45 @@ describe("parseCommand", () => {
     const req = { name: "x", usage: "", flags: Type.Object({ out: Type.String() }) };
     const r = parseCommand(req, "");
     expect(r.kind).toBe("error");
-    if (r.kind !== "error") return;
+    if (r.kind !== "error") {
+      return;
+    }
     expect(r.text).toContain("Missing required option '--out'");
   });
 
   it("sets a bare long boolean flag to true", () => {
     const r = parseCommand(spec, "--all");
     expect(r.kind).toBe("ok");
-    if (r.kind !== "ok") return;
+    if (r.kind !== "ok") {
+      return;
+    }
     expect(r.flags.all).toBe(true);
   });
 
   it("treats a lone dash as a positional", () => {
     const r = parseCommand(spec, "-");
     expect(r.kind).toBe("ok");
-    if (r.kind !== "ok") return;
+    if (r.kind !== "ok") {
+      return;
+    }
     expect(r.args).toEqual(["-"]);
   });
 
   it("reports a missing value for a short flag", () => {
     const r = parseCommand(spec, "-n");
     expect(r.kind).toBe("error");
-    if (r.kind !== "error") return;
+    if (r.kind !== "error") {
+      return;
+    }
     expect(r.text).toContain("Option '-n' requires a value");
   });
 
   it("turns a tokenizer failure into an error result", () => {
     const r = parseCommand(spec, `--name "unterminated`);
     expect(r.kind).toBe("error");
-    if (r.kind !== "error") return;
+    if (r.kind !== "error") {
+      return;
+    }
     expect(r.text).toContain("unterminated quote");
   });
 
@@ -218,7 +260,9 @@ describe("parseCommand", () => {
     };
     const r = parseCommand(mixed, "--u z");
     expect(r.kind).toBe("error");
-    if (r.kind !== "error") return;
+    if (r.kind !== "error") {
+      return;
+    }
     expect(r.text).toContain("Invalid arguments");
   });
 
@@ -247,7 +291,9 @@ describe("parseCommand", () => {
     const bare = { name: "x", usage: "[args]", flags: Type.Object({}) };
     const r = parseCommand(bare, "-h");
     expect(r.kind).toBe("help");
-    if (r.kind !== "help") return;
+    if (r.kind !== "help") {
+      return;
+    }
     expect(r.text).toContain("Usage: /x [args]");
     expect(r.text).not.toContain("Examples:");
     expect(r.text).toContain("-h, --help");

@@ -40,11 +40,15 @@ function extractGlobBaseDirectory(pattern: string): {
   }
   const staticPrefix = pattern.slice(0, match.index);
   const lastSepIndex = Math.max(staticPrefix.lastIndexOf("/"), staticPrefix.lastIndexOf(sep));
-  if (lastSepIndex === -1) return { baseDir: "", relativePattern: pattern };
+  if (lastSepIndex === -1) {
+    return { baseDir: "", relativePattern: pattern };
+  }
   let baseDir = staticPrefix.slice(0, lastSepIndex);
   const relativePattern = pattern.slice(lastSepIndex + 1);
   // 根目录 pattern（如 /*.txt）：baseDir 为空但应使用 "/"
-  if (baseDir === "" && lastSepIndex === 0) baseDir = "/";
+  if (baseDir === "" && lastSepIndex === 0) {
+    baseDir = "/";
+  }
   return { baseDir, relativePattern };
 }
 
@@ -89,7 +93,9 @@ export async function globFiles(
   } catch (error) {
     // rg exit code 1 = 搜索完成但无匹配，对齐 Claude Code 的 ripGrep（正常空结果）
     const code = (error as { code?: unknown }).code;
-    if (code === 1) return { files: [], truncated: false };
+    if (code === 1) {
+      return { files: [], truncated: false };
+    }
     const detail =
       (error as { stderr?: string }).stderr?.trim() ||
       (error instanceof Error ? error.message : String(error));
@@ -143,7 +149,9 @@ export function registerGlobTool(pi: ExtensionAPI): void {
           }
           throw error;
         }
-        if (!stats.isDirectory()) throw new Error(`Path is not a directory: ${params.path}`);
+        if (!stats.isDirectory()) {
+          throw new Error(`Path is not a directory: ${params.path}`);
+        }
       }
       const { files, truncated } = await globFiles(params.pattern, root, signal);
       const filenames = files.map((filePath) => toRelativePath(filePath, ctx.cwd));

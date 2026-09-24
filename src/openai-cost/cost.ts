@@ -48,10 +48,16 @@ const chunkSchema = Type.Object(
 function costFromUsage(
   usage: { cost?: number | { total?: number } } | undefined,
 ): number | undefined {
-  if (!usage) return undefined;
+  if (!usage) {
+    return undefined;
+  }
   const asNumber = finiteNumber(usage.cost);
-  if (asNumber !== undefined) return asNumber;
-  if (usage.cost && typeof usage.cost === "object") return finiteNumber(usage.cost.total);
+  if (asNumber !== undefined) {
+    return asNumber;
+  }
+  if (usage.cost && typeof usage.cost === "object") {
+    return finiteNumber(usage.cost.total);
+  }
   return undefined;
 }
 
@@ -64,19 +70,27 @@ export function extractReportedCost(value: unknown): number | undefined {
     return undefined;
   }
   const fromUsage = costFromUsage(chunk.usage);
-  if (fromUsage !== undefined) return fromUsage;
+  if (fromUsage !== undefined) {
+    return fromUsage;
+  }
   for (const choice of chunk.choices ?? []) {
     const fromChoice = costFromUsage(choice.usage);
-    if (fromChoice !== undefined) return fromChoice;
+    if (fromChoice !== undefined) {
+      return fromChoice;
+    }
   }
   return undefined;
 }
 
 export function costFromSseLine(line: string): number | undefined {
   const trimmed = line.trim();
-  if (!trimmed.startsWith("data:")) return undefined;
+  if (!trimmed.startsWith("data:")) {
+    return undefined;
+  }
   const data = trimmed.slice("data:".length).trim();
-  if (!data || data === "[DONE]") return undefined;
+  if (!data || data === "[DONE]") {
+    return undefined;
+  }
   try {
     return extractReportedCost(JSON.parse(data) as unknown);
   } catch {
@@ -92,18 +106,24 @@ export async function scanSseCost(body: ReadableStream<Uint8Array>): Promise<num
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
       for (const line of lines) {
         const cost = costFromSseLine(line);
-        if (cost !== undefined) last = cost;
+        if (cost !== undefined) {
+          last = cost;
+        }
       }
     }
     buffer += decoder.decode();
     const cost = costFromSseLine(buffer);
-    if (cost !== undefined) last = cost;
+    if (cost !== undefined) {
+      last = cost;
+    }
     return last;
   } catch {
     return last;
@@ -115,14 +135,22 @@ export async function scanSseCost(body: ReadableStream<Uint8Array>): Promise<num
 type FetchInput = Parameters<typeof globalThis.fetch>[0];
 
 function requestUrl(input: FetchInput): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.href;
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
   return input.url;
 }
 
 function shouldScan(input: FetchInput, response: Response): boolean {
-  if (!response.ok || !response.body) return false;
-  if (requestUrl(input).includes("/chat/completions")) return true;
+  if (!response.ok || !response.body) {
+    return false;
+  }
+  if (requestUrl(input).includes("/chat/completions")) {
+    return true;
+  }
   const contentType = response.headers.get("content-type") ?? "";
   return contentType.includes("text/event-stream");
 }
@@ -133,7 +161,9 @@ export function createReportedCostCapture(
   let scan: Promise<number | undefined> | undefined;
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const response = await innerFetch(input, init);
-    if (!shouldScan(input, response) || !response.body) return response;
+    if (!shouldScan(input, response) || !response.body) {
+      return response;
+    }
     const [forSdk, forScan] = response.body.tee();
     scan = scanSseCost(forScan);
     return new Response(forSdk, {
@@ -157,8 +187,12 @@ export function applyReportedCost(usage: Usage, reported: number): void {
 }
 
 function messageOf(event: AssistantMessageEvent): AssistantMessage {
-  if (event.type === "done") return event.message;
-  if (event.type === "error") return event.error;
+  if (event.type === "done") {
+    return event.message;
+  }
+  if (event.type === "error") {
+    return event.error;
+  }
   return event.partial;
 }
 
@@ -166,7 +200,9 @@ export function applyCostToEvent(
   event: AssistantMessageEvent,
   reported: number | undefined,
 ): AssistantMessageEvent {
-  if (reported === undefined) return event;
+  if (reported === undefined) {
+    return event;
+  }
   applyReportedCost(messageOf(event).usage, reported);
   return event;
 }

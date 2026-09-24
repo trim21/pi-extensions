@@ -105,7 +105,9 @@ async function search(flags: {
         return;
       }
       const text = formatProgress(snapshot);
-      if (text !== undefined) console.error(text);
+      if (text !== undefined) {
+        console.error(text);
+      }
     });
     try {
       const { text } = await callAftTool(bridge, "search", rawArgs, undefined, {

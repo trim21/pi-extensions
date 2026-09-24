@@ -68,7 +68,9 @@ export interface WorkspaceWatcher {
 
 function isIgnored(path: string, dir: string, patterns: string[]): boolean {
   const candidate = relative(dir, path).split(sep).join("/");
-  if (candidate.startsWith("..")) return false;
+  if (candidate.startsWith("..")) {
+    return false;
+  }
   return patterns.some((pattern) => minimatch(candidate, pattern));
 }
 
@@ -98,15 +100,21 @@ export function watchWorkspace(
   let maxTimer: ReturnType<typeof setTimeout> | undefined;
 
   const clearTimers = (): void => {
-    if (flushTimer) clearTimeout(flushTimer);
-    if (maxTimer) clearTimeout(maxTimer);
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+    }
+    if (maxTimer) {
+      clearTimeout(maxTimer);
+    }
     flushTimer = undefined;
     maxTimer = undefined;
   };
 
   const flush = (): void => {
     clearTimers();
-    if (pending.length === 0) return;
+    if (pending.length === 0) {
+      return;
+    }
     let batch = pending;
     pending = [];
     if (batch.length > maxBatch) {
@@ -117,34 +125,54 @@ export function watchWorkspace(
   };
 
   const push = (change: FileChange): void => {
-    if (stopped) return;
-    if (pending.length === 0) maxTimer = setTimeout(flush, flushMs);
+    if (stopped) {
+      return;
+    }
+    if (pending.length === 0) {
+      maxTimer = setTimeout(flush, flushMs);
+    }
     pending.push(change);
-    if (flushTimer) clearTimeout(flushTimer);
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+    }
     flushTimer = setTimeout(flush, debounceMs);
   };
 
   const classify = async (path: string, type: FileChangeType): Promise<FileChange | undefined> => {
-    if (path === dir) return undefined;
+    if (path === dir) {
+      return undefined;
+    }
     let isDirectory = false;
     let exists = true;
     try {
       const info = await lstat(path);
       isDirectory = info.isDirectory();
-      if (isDirectory) seenDirectories.add(path);
+      if (isDirectory) {
+        seenDirectories.add(path);
+      }
     } catch {
       exists = false;
-      if (seenDirectories.delete(path)) isDirectory = true;
+      if (seenDirectories.delete(path)) {
+        isDirectory = true;
+      }
     }
-    if (type === "deleted") return { path, type, isDirectory };
+    if (type === "deleted") {
+      return { path, type, isDirectory };
+    }
     // 事件与 lstat 之间的竞态：目标已消失按删除处理
-    if (!exists) return { path, type: "deleted", isDirectory };
-    if (isDirectory) return undefined;
+    if (!exists) {
+      return { path, type: "deleted", isDirectory };
+    }
+    if (isDirectory) {
+      return undefined;
+    }
     return { path, type, isDirectory };
   };
 
   const handleError = (error: unknown): void => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
     options?.onError?.(`workspace watcher failed for ${dir}: ${String(error)}`);
   };
 
@@ -155,13 +183,19 @@ export function watchWorkspace(
     }
     void (async () => {
       for (const event of events) {
-        if (stopped) return;
+        if (stopped) {
+          return;
+        }
         const path = normalize(event.path);
         const type: FileChangeType =
           event.type === "create" ? "created" : event.type === "update" ? "changed" : "deleted";
         const change = await classify(path, type);
-        if (!change) continue;
-        if (isIgnored(change.path, dir, ignorePatterns)) continue;
+        if (!change) {
+          continue;
+        }
+        if (isIgnored(change.path, dir, ignorePatterns)) {
+          continue;
+        }
         push(change);
       }
     })();

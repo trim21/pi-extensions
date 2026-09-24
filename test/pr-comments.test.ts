@@ -28,7 +28,9 @@ class FakeChildProcess extends EventEmitter {
   }
 
   exit(code: number, stdout = ""): void {
-    if (stdout) this.stdout.write(stdout);
+    if (stdout) {
+      this.stdout.write(stdout);
+    }
     this.emit("close", code);
   }
 }
@@ -57,7 +59,9 @@ function getExecutor(): ToolDef["execute"] {
   const tool = tools.find(
     (t): t is ToolDef => (t as { name?: string }).name === "read-github-pr-comments",
   );
-  if (!tool) throw new Error("read-github-pr-comments not registered");
+  if (!tool) {
+    throw new Error("read-github-pr-comments not registered");
+  }
   return tool.execute;
 }
 

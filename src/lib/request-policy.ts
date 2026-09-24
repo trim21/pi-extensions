@@ -33,7 +33,9 @@ export function createRequestPolicy(events?: EventBus): RequestPolicy {
   let denyRequests = false;
 
   events?.on(REQUEST_POLICY_CHANNEL, (data) => {
-    if (Value.Check(requestPolicyMessageSchema, data)) denyRequests = data.denyRequests;
+    if (Value.Check(requestPolicyMessageSchema, data)) {
+      denyRequests = data.denyRequests;
+    }
   });
 
   return {

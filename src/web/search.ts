@@ -51,13 +51,17 @@ export interface SearchOptions {
 }
 
 function clampNumResults(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 5;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 5;
+  }
   return Math.max(1, Math.min(Math.floor(value), 50));
 }
 
 function normalizeDomain(raw: string): string | undefined {
   const input = raw.trim().toLowerCase().replace(/^-/, "").trim();
-  if (!input) return undefined;
+  if (!input) {
+    return undefined;
+  }
   try {
     const host = input.includes("://")
       ? new URL(input).hostname
@@ -76,7 +80,9 @@ function splitDomainFilter(domainFilter: string[] | undefined): {
   const excludeSites: string[] = [];
   for (const raw of domainFilter ?? []) {
     const domain = normalizeDomain(raw);
-    if (!domain) continue;
+    if (!domain) {
+      continue;
+    }
     (raw.trimStart().startsWith("-") ? excludeSites : includeSites).push(domain);
   }
   return { includeSites, excludeSites };
@@ -90,10 +96,18 @@ export function buildSearchBody(query: string, options: SearchOptions): Record<s
     max_results: numResults,
     crawl_results: options.includeContent ? Math.min(numResults, 5) : 0,
   };
-  if (options.recencyFilter) body.time_range = options.recencyFilter;
-  if (options.searchService) body.search_service = options.searchService;
-  if (includeSites.length > 0) body.include_sites = includeSites;
-  if (excludeSites.length > 0) body.exclude_sites = excludeSites;
+  if (options.recencyFilter) {
+    body.time_range = options.recencyFilter;
+  }
+  if (options.searchService) {
+    body.search_service = options.searchService;
+  }
+  if (includeSites.length > 0) {
+    body.include_sites = includeSites;
+  }
+  if (excludeSites.length > 0) {
+    body.exclude_sites = excludeSites;
+  }
   return body;
 }
 
@@ -108,14 +122,18 @@ function mapHits(
   const hits: SearchHit[] = [];
   for (const item of results) {
     const url = item.link?.trim();
-    if (!url) continue;
+    if (!url) {
+      continue;
+    }
     const hit: SearchHit = {
       title: item.title?.trim() || url,
       url,
       snippet: item.snippet?.replaceAll(/\s+/g, " ").trim() || "",
     };
     const content = item.content?.trim();
-    if (content) hit.content = content;
+    if (content) {
+      hit.content = content;
+    }
     hits.push(hit);
   }
   return hits;
@@ -232,7 +250,9 @@ export default function webSearchTool(pi: ExtensionAPI): void {
         const hits: SearchHit[] = [];
         for (const result of results) {
           for (const hit of result.hits) {
-            if (seen.has(hit.url)) continue;
+            if (seen.has(hit.url)) {
+              continue;
+            }
             seen.add(hit.url);
             hits.push(hit);
           }

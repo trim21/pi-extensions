@@ -88,7 +88,9 @@ export function mergeServerRecords(
 ): Record<string, ServerConfig> | undefined {
   const merged: Record<string, ServerConfig> = {};
   for (const record of records) {
-    if (!record) continue;
+    if (!record) {
+      continue;
+    }
     Object.assign(merged, record);
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
@@ -118,8 +120,12 @@ function interpolateEnvVars(value: string, env: NodeJS.ProcessEnv): string {
 
 /** 深遍历配置值，对所有字符串做环境变量插值。 */
 function interpolateEnvDeep(value: unknown, env: NodeJS.ProcessEnv): unknown {
-  if (typeof value === "string") return interpolateEnvVars(value, env);
-  if (Array.isArray(value)) return value.map((item) => interpolateEnvDeep(item, env));
+  if (typeof value === "string") {
+    return interpolateEnvVars(value, env);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => interpolateEnvDeep(item, env));
+  }
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [key, interpolateEnvDeep(item, env)]),
@@ -135,7 +141,9 @@ async function resolveEnv(
   cwd: string,
 ): Promise<NodeJS.ProcessEnv | undefined> {
   const entries = Object.entries(config ?? {});
-  if (entries.length === 0) return undefined;
+  if (entries.length === 0) {
+    return undefined;
+  }
   const resolved = await Promise.all(
     entries.map(async ([key, value]): Promise<[string, string]> => {
       if (typeof value === "string") {
@@ -226,8 +234,12 @@ function parseInitializationOptionsOutput(
 
 /** 非法输出的类型描述（typebox 的 ParseError 只有 "Parse"，自己给出可读文案）。 */
 function describeValue(value: unknown): string {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
+  if (value === null) {
+    return "null";
+  }
+  if (Array.isArray(value)) {
+    return "array";
+  }
   return typeof value;
 }
 
@@ -246,7 +258,9 @@ async function resolveInitializationOptions(
   const staticOptions = interpolateEnvDeep(config.initializationOptions, variables) as
     Record<string, unknown> | undefined;
   const command = config.initializationOptionsCommand;
-  if (!command) return staticOptions;
+  if (!command) {
+    return staticOptions;
+  }
   const argv = command.map((arg) => interpolateEnvVars(resolveTemplate(arg, root, cwd), variables));
   const output = await runConfigCommand(argv, {
     cwd: root,
@@ -258,7 +272,9 @@ async function resolveInitializationOptions(
 
 /** 解析可执行文件：绝对/相对路径直接用；名字走项目工作区（node_modules/.bin 等）→ PATH。 */
 async function resolveBinary(bin: string, root: string, cwd: string): Promise<string | undefined> {
-  if (isAbsolute(bin)) return existsSync(bin) ? bin : undefined;
+  if (isAbsolute(bin)) {
+    return existsSync(bin) ? bin : undefined;
+  }
   if (bin.includes("/") || bin.includes("\\")) {
     const relativePath = join(cwd, bin);
     return exists(relativePath) ? relativePath : undefined;
@@ -277,14 +293,21 @@ export function matchesInclude(
   root: string,
   cwd: string,
 ): boolean {
-  if (patterns.length === 0) return true;
+  if (patterns.length === 0) {
+    return true;
+  }
   const positives: string[] = [];
   const negatives: string[] = [];
   for (const pattern of patterns) {
-    if (pattern.startsWith("!")) negatives.push(pattern.slice(1));
-    else positives.push(pattern);
+    if (pattern.startsWith("!")) {
+      negatives.push(pattern.slice(1));
+    } else {
+      positives.push(pattern);
+    }
   }
-  if (positives.length === 0) positives.push("**");
+  if (positives.length === 0) {
+    positives.push("**");
+  }
   const candidates = [relative(root, file), relative(cwd, file)]
     .map((p) => p.split(sep).join("/"))
     .filter((p) => !p.startsWith(".."));
@@ -319,9 +342,13 @@ export class ConfigAdapter implements LspServerAdapter {
 
   async spawn(root: string, cwd: string): Promise<LspServerHandle | undefined> {
     const bin = this.config.bin;
-    if (!bin) return undefined;
+    if (!bin) {
+      return undefined;
+    }
     const resolved = await resolveBinary(bin, root, cwd);
-    if (!resolved) return undefined;
+    if (!resolved) {
+      return undefined;
+    }
     const env = await resolveEnv(this.config.env, root, cwd);
     const initialization = await resolveInitializationOptions(this.config, root, cwd, env);
     return {

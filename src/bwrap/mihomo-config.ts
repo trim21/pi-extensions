@@ -58,7 +58,9 @@ function isIp(host: string): boolean {
 
 /** 单 IP 补掩码为 CIDR（IPv4 /32、IPv6 /128），带掩码原样返回。 */
 function toCidr(host: string): string {
-  if (host.includes("/")) return host;
+  if (host.includes("/")) {
+    return host;
+  }
   return host.includes(":") ? `${host}/128` : `${host}/32`;
 }
 
@@ -79,7 +81,9 @@ function parseAllowlistEntry(entry: string): AllowlistEntry {
   let port: number | undefined;
   if (entry.startsWith("[")) {
     const match = /^\[(.+)\](?::(\d+))?$/.exec(entry);
-    if (match?.[1] === undefined) throw new Error(`Invalid allowlist entry "${entry}"`);
+    if (match?.[1] === undefined) {
+      throw new Error(`Invalid allowlist entry "${entry}"`);
+    }
     host = match[1];
     // 端口组 (?::(\d+))? 可选：无端口时 at(2) 是 undefined
     const portPart = match.at(2);
@@ -87,13 +91,19 @@ function parseAllowlistEntry(entry: string): AllowlistEntry {
   } else {
     const colon = entry.lastIndexOf(":");
     if (colon === -1) {
-      if (entry.length === 0) throw new Error(`Invalid allowlist entry ""`);
+      if (entry.length === 0) {
+        throw new Error(`Invalid allowlist entry ""`);
+      }
       host = entry;
     } else {
       const portPart = entry.slice(colon + 1);
-      if (!/^\d+$/.test(portPart)) throw new Error(`Invalid allowlist entry "${entry}"`);
+      if (!/^\d+$/.test(portPart)) {
+        throw new Error(`Invalid allowlist entry "${entry}"`);
+      }
       host = entry.slice(0, colon);
-      if (host.length === 0) throw new Error(`Invalid allowlist entry "${entry}"`);
+      if (host.length === 0) {
+        throw new Error(`Invalid allowlist entry "${entry}"`);
+      }
       if (host.includes(":")) {
         throw new Error(`IPv6 addresses must be wrapped in brackets, e.g. "[${host}]:${portPart}"`);
       }
@@ -101,7 +111,9 @@ function parseAllowlistEntry(entry: string): AllowlistEntry {
     }
   }
   if (isIp(host)) {
-    if (!IP_CHARS_PATTERN.test(host)) throw new Error(`Invalid allowlist entry "${entry}"`);
+    if (!IP_CHARS_PATTERN.test(host)) {
+      throw new Error(`Invalid allowlist entry "${entry}"`);
+    }
   } else if (!DOMAIN_PATTERN.test(host)) {
     throw new Error(`Invalid allowlist entry "${entry}"`);
   }

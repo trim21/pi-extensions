@@ -29,9 +29,13 @@ function appendTruncationNotice(
   truncation: TruncationResult,
   fullOutputPath: string | undefined,
 ): string {
-  if (!truncation.truncated) return text;
+  if (!truncation.truncated) {
+    return text;
+  }
   let out = `${text}\n\n${CAPTURE_TRUNCATED_NOTICE}`;
-  if (fullOutputPath) out += `\nFull output: ${fullOutputPath}`;
+  if (fullOutputPath) {
+    out += `\nFull output: ${fullOutputPath}`;
+  }
   return out;
 }
 
@@ -106,7 +110,9 @@ export default function opencodeBash(
           onUpdate,
         });
       } catch (error) {
-        if (!(error instanceof Error)) throw error;
+        if (!(error instanceof Error)) {
+          throw error;
+        }
         if (error instanceof BashInterruptedError) {
           const text = appendTruncationNotice(
             error.partial.output || "",

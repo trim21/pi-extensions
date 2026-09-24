@@ -57,7 +57,9 @@ function stepBlocks(log: string, job: RunJob): [number, string | null][] {
   const lines = log.split("\n");
   return job.steps.map((s) => {
     const span = spans.get(s.number);
-    if (span === undefined) return [s.number, null];
+    if (span === undefined) {
+      return [s.number, null];
+    }
     const line = (lines[span.start] ?? "").replace(/^\uFEFF?\S+Z /, "").replace(/\r$/, "");
     return [s.number, line.startsWith("##[group]") ? line.slice("##[group]".length) : "<preamble>"];
   });
@@ -66,7 +68,9 @@ function stepBlocks(log: string, job: RunJob): [number, string | null][] {
 /** The text a model gets by reading a step's line range out of the raw file. */
 function readStepRange(log: string, job: RunJob, stepNumber: number): string | null {
   const step = jobLogIndex(job, log).steps.find((s) => s.number === stepNumber);
-  if (step?.start_line === undefined || step.end_line === undefined) return null;
+  if (step?.start_line === undefined || step.end_line === undefined) {
+    return null;
+  }
   return log
     .split("\n")
     .slice(step.start_line - 1, step.end_line)
@@ -89,7 +93,9 @@ describe("jobLogIndex", () => {
     // every emitted range is inside the file and ordered
     const lines = lintRawLog.split("\n").length;
     for (const step of index.steps) {
-      if (step.start_line === undefined) continue;
+      if (step.start_line === undefined) {
+        continue;
+      }
       expect(step.start_line).toBeGreaterThan(0);
       expect(step.end_line!).toBeGreaterThanOrEqual(step.start_line);
       expect(step.end_line!).toBeLessThanOrEqual(lines);

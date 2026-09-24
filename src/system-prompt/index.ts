@@ -78,7 +78,9 @@ export function formatGuidelines(promptGuidelines: string[] | undefined): string
     .map((g) => g.trim())
     .filter((g) => g.length > 0)
     .toSorted((a, b) => a.localeCompare(b));
-  if (items.length === 0) return "";
+  if (items.length === 0) {
+    return "";
+  }
   return `## Guidelines\n\n${items.join("\n\n")}`;
 }
 
@@ -86,7 +88,9 @@ export function formatGuidelines(promptGuidelines: string[] | undefined): string
 export function formatContextFiles(
   contextFiles: { path: string; content: string }[] | undefined,
 ): string {
-  if (!contextFiles || contextFiles.length === 0) return "";
+  if (!contextFiles || contextFiles.length === 0) {
+    return "";
+  }
   const inner = contextFiles
     .toSorted((a, b) => a.path.localeCompare(b.path))
     .map(
@@ -105,7 +109,9 @@ export function formatSkills(skills: SkillLike[] | undefined): string {
   const visible = (skills ?? [])
     .filter((skill) => !skill.disableModelInvocation)
     .toSorted((a, b) => a.name.localeCompare(b.name) || a.filePath.localeCompare(b.filePath));
-  if (visible.length === 0) return "";
+  if (visible.length === 0) {
+    return "";
+  }
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
     "Use the read tool to load a skill's file when the task matches its description.",

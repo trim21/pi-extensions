@@ -595,7 +595,9 @@ describe("Windows: spawn-agent disabled", () => {
           tools.push(def);
         },
         on: (event: string, h: unknown) => {
-          if (event === "session_start") sessionStart = h as never;
+          if (event === "session_start") {
+            sessionStart = h as never;
+          }
         },
       } as never);
 
@@ -629,7 +631,9 @@ function fakeSessionHarness() {
     listeners.push(listener);
     return () => {
       const index = listeners.indexOf(listener);
-      if (index !== -1) listeners.splice(index, 1);
+      if (index !== -1) {
+        listeners.splice(index, 1);
+      }
     };
   });
   // 挂起直到测试 settle()，与真实 SDK 中 prompt 在事件流之后才 resolve 的时序一致。
@@ -647,7 +651,9 @@ function fakeSessionHarness() {
     session,
     factory: vi.fn(async () => session),
     emit: (event: unknown) => {
-      for (const listener of listeners) listener(event as never);
+      for (const listener of listeners) {
+        listener(event as never);
+      }
     },
     settle: () => resolvePrompt?.(),
     subscribe,
@@ -1051,7 +1057,9 @@ async function runWithEvents(events: unknown[]) {
     undefined,
     (u) => {
       const part = u.content[0];
-      if (part.type === "text") updates.push(part.text);
+      if (part.type === "text") {
+        updates.push(part.text);
+      }
     },
     undefined,
     h.factory,

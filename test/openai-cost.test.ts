@@ -58,8 +58,12 @@ function jsonFetch(data: unknown): typeof fetch {
 }
 
 function fetchInputUrl(input: Parameters<typeof fetch>[0]): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.href;
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
   return input.url;
 }
 

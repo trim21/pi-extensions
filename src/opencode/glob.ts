@@ -34,7 +34,9 @@ function normalizeRipgrepPath(text: string): string {
 }
 
 export function renderGlobOutput(files: readonly string[], truncated: boolean): string {
-  if (files.length === 0) return "No files found";
+  if (files.length === 0) {
+    return "No files found";
+  }
   const output = [...files];
   if (truncated) {
     output.push(

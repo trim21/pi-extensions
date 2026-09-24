@@ -444,7 +444,9 @@ export function subscribeBridgeStatus(
   bridge: AftProjectTransport,
   listener: (snapshot: StatusSnapshot) => void,
 ): (() => void) | undefined {
-  if (!isStatusSubscribable(bridge)) return undefined;
+  if (!isStatusSubscribable(bridge)) {
+    return undefined;
+  }
   return bridge.subscribeStatus(listener);
 }
 

@@ -754,7 +754,9 @@ describe("lsp config integration", () => {
 
     let healthy = false;
     const spawn = vi.fn(async () => {
-      if (!healthy) throw new Error("boom");
+      if (!healthy) {
+        throw new Error("boom");
+      }
       return { process: spawnProcess(process.execPath, [fixture]) };
     });
     const adapter: LspServerAdapter = {
@@ -925,7 +927,9 @@ describe("lsp service watcher", () => {
         while ((index = buffer.indexOf("\n")) >= 0) {
           const line = buffer.slice(0, index);
           buffer = buffer.slice(index + 1);
-          if (line.trim()) notifications.push(JSON.parse(line));
+          if (line.trim()) {
+            notifications.push(JSON.parse(line));
+          }
         }
       });
       return { process: proc };

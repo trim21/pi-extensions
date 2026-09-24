@@ -80,8 +80,12 @@ describe("selectMultiple", () => {
     const select = vi.fn(async (_t: string, options: string[]) => {
       calls.push(options);
       // 依次勾选 A、B，然后提交
-      if (calls.length === 1) return "☐ A";
-      if (calls.length === 2) return "☐ B";
+      if (calls.length === 1) {
+        return "☐ A";
+      }
+      if (calls.length === 2) {
+        return "☐ B";
+      }
       return doneLabel;
     });
     await expect(selectMultiple("Pick", entries, uiWith(select), { doneLabel })).resolves.toEqual([

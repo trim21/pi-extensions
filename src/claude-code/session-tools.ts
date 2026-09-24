@@ -63,7 +63,9 @@ const questionSchema = Type.Object(
 type QuestionInput = Static<typeof questionSchema>;
 
 function formatTodos(todos: readonly ClaudeCodeTodo[]): string[] | undefined {
-  if (todos.length === 0) return undefined;
+  if (todos.length === 0) {
+    return undefined;
+  }
   const markers: Record<TodoStatus, string> = {
     pending: " ",
     in_progress: ">",
@@ -95,7 +97,9 @@ async function askSingle(
     ctx.ui,
     { signal },
   );
-  if (result === undefined) return "Unanswered";
+  if (result === undefined) {
+    return "Unanswered";
+  }
   return result.prompted ? result.input || "Unanswered" : result.label;
 }
 
@@ -123,8 +127,12 @@ export function registerSessionTools(pi: ExtensionAPI): void {
   // 的列表重新渲染（完整列表替换语义，后出现的覆盖前面的）。
   pi.on("session_start", (_event, ctx) => {
     for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
-      if (entry.message.toolName !== "TodoWrite") continue;
+      if (entry.type !== "message" || entry.message.role !== "toolResult") {
+        continue;
+      }
+      if (entry.message.toolName !== "TodoWrite") {
+        continue;
+      }
       if (Value.Check(todoSchema, entry.message.details)) {
         ctx.ui.setWidget("claude-code-todos", formatTodos(entry.message.details.todos));
       }
@@ -152,7 +160,9 @@ export function registerSessionTools(pi: ExtensionAPI): void {
         throw new Error("Todo content and activeForm must not be blank.");
       }
       const inProgress = todos.filter((todo) => todo.status === "in_progress");
-      if (inProgress.length > 1) throw new Error("Only one todo may be in_progress at a time.");
+      if (inProgress.length > 1) {
+        throw new Error("Only one todo may be in_progress at a time.");
+      }
       ctx.ui.setWidget("claude-code-todos", formatTodos(todos));
       return Promise.resolve({
         content: [
@@ -190,7 +200,9 @@ export function registerSessionTools(pi: ExtensionAPI): void {
     ),
     executionMode: "sequential",
     async execute(_id, params, signal, _onUpdate, ctx) {
-      if (!ctx.hasUI) throw new Error("Cannot ask questions: interactive UI is not available");
+      if (!ctx.hasUI) {
+        throw new Error("Cannot ask questions: interactive UI is not available");
+      }
       const answers: Record<string, string> = {};
       for (const question of params.questions) {
         signal?.throwIfAborted();

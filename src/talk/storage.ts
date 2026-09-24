@@ -100,7 +100,9 @@ export class SqliteTalkStorage implements TalkStorage {
     const row = this.db
       .prepare("SELECT value FROM talk_kv WHERE namespace = ? AND key = ?")
       .get(namespace, key) as { value: string } | undefined;
-    if (row === undefined) return Promise.resolve(null);
+    if (row === undefined) {
+      return Promise.resolve(null);
+    }
     try {
       return Promise.resolve(JSON.parse(row.value) as unknown);
     } catch {

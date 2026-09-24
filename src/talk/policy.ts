@@ -53,7 +53,9 @@ export class OutboundPolicy {
       };
     }
     const windowStart = now - RATE_LIMIT_WINDOW_MS;
-    while (this.sentAt.length > 0 && this.sentAt[0] < windowStart) this.sentAt.shift();
+    while (this.sentAt.length > 0 && this.sentAt[0] < windowStart) {
+      this.sentAt.shift();
+    }
     if (this.sentAt.length >= RATE_LIMIT_MAX) {
       return {
         ok: false,
@@ -73,7 +75,9 @@ export class OutboundPolicy {
     }
     const cutoff = this.now() - DEDUPE_WINDOW_MS;
     for (const [key, ts] of this.recentBodies) {
-      if (ts < cutoff) this.recentBodies.delete(key);
+      if (ts < cutoff) {
+        this.recentBodies.delete(key);
+      }
     }
   }
 }

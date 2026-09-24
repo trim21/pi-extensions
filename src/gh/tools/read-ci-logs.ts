@@ -138,7 +138,9 @@ const TIME_MATCH_SCORE = 2;
 
 function headerTimestamp(line: string): number | null {
   const match = LOG_TIMESTAMP_RE.exec(line);
-  if (match === null) return null;
+  if (match === null) {
+    return null;
+  }
   const ms = Date.parse(match[1]);
   return Number.isNaN(ms) ? null : ms;
 }
@@ -149,12 +151,18 @@ function stepHeaders(lines: string[]): StepHeader[] {
   let depth = 0;
   for (const [i, line] of lines.entries()) {
     if (line.includes("##[endgroup]")) {
-      if (depth > 0) depth--;
+      if (depth > 0) {
+        depth--;
+      }
       continue;
     }
-    if (!line.includes("##[group]")) continue;
+    if (!line.includes("##[group]")) {
+      continue;
+    }
     depth++;
-    if (depth !== 1) continue;
+    if (depth !== 1) {
+      continue;
+    }
     const name = /##\[group\](.*)/.exec(line)?.[1].trim() ?? "";
     if (HEADER_PREFIX_RE.test(name)) {
       headers.push({
@@ -252,7 +260,9 @@ function alignStepsToHeaders(
 
 /** Exclusive end index with trailing blank lines dropped, so a span slices to real text. */
 function trimTrailingBlankLines(lines: string[], start: number, end: number): number {
-  while (end > start && (lines[end - 1] ?? "").trim() === "") end--;
+  while (end > start && (lines[end - 1] ?? "").trim() === "") {
+    end--;
+  }
   return end;
 }
 
@@ -306,7 +316,9 @@ export function extractStepFromLog(
   apiSteps: readonly { number: number; name: string }[],
 ): string | null {
   const span = stepLineSpans(log, apiSteps).get(stepNumber);
-  if (span === undefined) return null;
+  if (span === undefined) {
+    return null;
+  }
   return log.split("\n").slice(span.start, span.end).join("\n").trimEnd();
 }
 
@@ -382,7 +394,9 @@ async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<ToolRe
     target = await gh.checks.job(owner, name, jobId, signal);
   } catch (error) {
     const status = (error as { status?: number }).status;
-    if (status !== 404) throw error;
+    if (status !== 404) {
+      throw error;
+    }
     return failure(
       `Job ${jobId} not found in ${effectiveRepo} — job IDs come from \`get-github-workflow-jobs\`.`,
     );

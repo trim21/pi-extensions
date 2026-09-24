@@ -86,7 +86,9 @@ function readTalkSettings(): { dbPath?: string; deliver?: "steer" | "queue" } {
     const raw = fs.readFileSync(path.join(getAgentDir(), "settings.json"), "utf8");
     const parsed = JSON.parse(raw) as { talk?: { db_path?: unknown; deliver?: unknown } };
     const talk = parsed.talk;
-    if (!talk) return {};
+    if (!talk) {
+      return {};
+    }
     const dbPath = typeof talk.db_path === "string" ? talk.db_path : undefined;
     const deliver = talk.deliver === "steer" || talk.deliver === "queue" ? talk.deliver : undefined;
     return { dbPath, deliver };
@@ -151,14 +153,18 @@ export default function talk(pi: ExtensionAPI) {
   });
 
   function requireInit(): string | undefined {
-    if (!core.selfAddr) return "Talk is not initialized (no session_start yet).";
+    if (!core.selfAddr) {
+      return "Talk is not initialized (no session_start yet).";
+    }
     return undefined;
   }
 
   /** Refresh the talk footer/status-bar text: "alias@group", or "@group" with no explicit alias. */
   function refreshGroupStatus(ui: ExtensionUIContext): void {
     void (async () => {
-      if (!self) return;
+      if (!self) {
+        return;
+      }
       try {
         const text = await core.groupStatus();
         ui.setStatus("talk", text && ui.theme.fg("accent", text));
@@ -205,7 +211,9 @@ export default function talk(pi: ExtensionAPI) {
   pi.on("session_info_changed", () => {
     // A name set explicitly via `--name` wins over pi's session title;
     // otherwise follow pi's session name.
-    if (self) core.setAgentName(explicitName ?? pi.getSessionName() ?? self.name);
+    if (self) {
+      core.setAgentName(explicitName ?? pi.getSessionName() ?? self.name);
+    }
   });
   pi.on("session_shutdown", () => {
     void core.stop();
@@ -223,7 +231,9 @@ export default function talk(pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params) {
       const initError = requireInit();
-      if (initError) return toolResult(initError);
+      if (initError) {
+        return toolResult(initError);
+      }
       return toolResult(params.cwd ? await core.listCwd(params.cwd) : await core.list());
     },
   });
@@ -243,7 +253,9 @@ export default function talk(pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params, signal) {
       const initError = requireInit();
-      if (initError) return toolResult(initError);
+      if (initError) {
+        return toolResult(initError);
+      }
       return toolResult(
         await core.ask(
           params.to,
@@ -267,7 +279,9 @@ export default function talk(pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params) {
       const initError = requireInit();
-      if (initError) return toolResult(initError);
+      if (initError) {
+        return toolResult(initError);
+      }
       return toolResult(await core.send(params.to, params.message));
     },
   });
@@ -417,7 +431,9 @@ export default function talk(pi: ExtensionAPI) {
         ctx,
         async (parsed) => {
           const agentName = parsed.flags.name?.trim() || undefined;
-          if (agentName !== undefined) explicitName = agentName;
+          if (agentName !== undefined) {
+            explicitName = agentName;
+          }
           return core.groupJoin(parsed.args[0], agentName);
         },
         { sendToContext: true },
@@ -433,7 +449,9 @@ export default function talk(pi: ExtensionAPI) {
         ctx,
         async (parsed) => {
           const agentName = parsed.flags.name?.trim() || undefined;
-          if (agentName !== undefined) explicitName = agentName;
+          if (agentName !== undefined) {
+            explicitName = agentName;
+          }
           return core.groupJoinLast(agentName);
         },
         { sendToContext: true },
@@ -496,7 +514,9 @@ export default function talk(pi: ExtensionAPI) {
   for (const type of [LIST_TYPE, NOTIFY_TYPE]) {
     pi.registerEntryRenderer<string>(type, (entry, _options, theme) => {
       const text = typeof entry.data === "string" ? entry.data : "";
-      if (!text) return;
+      if (!text) {
+        return;
+      }
       return {
         render: (width: number) =>
           truncateToVisualLines(text, Infinity, width, 1).visualLines.map((line) =>

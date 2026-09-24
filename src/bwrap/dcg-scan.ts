@@ -50,7 +50,9 @@ export async function dcgSuggestion(command: string): Promise<DcgScanOutcome> {
   try {
     stdout = await runDcgScan(command);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "not-installed" };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { kind: "not-installed" };
+    }
     return { kind: "failed", detail: error instanceof Error ? error.message : String(error) };
   }
 
@@ -102,11 +104,16 @@ function runDcgScan(command: string): Promise<string> {
       settle(new Error("dcg scan timed out"));
     }, DCG_SCAN_TIMEOUT_MS);
     const settle = (error?: Error) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timeoutId);
-      if (error) reject(error);
-      else resolve(stdout);
+      if (error) {
+        reject(error);
+      } else {
+        resolve(stdout);
+      }
     };
     proc.stdout.setEncoding("utf8");
     proc.stdout.on("data", (chunk: string) => {
@@ -119,8 +126,11 @@ function runDcgScan(command: string): Promise<string> {
     proc.on("close", (code) => {
       // dcg 的退出码是决策结果（deny 时非 0），不是失败标志：只要 stdout
       // 有内容就交给上层解析；真正出错时（参数错误等）stdout 为空。
-      if (code === 0 || stdout.length > 0) settle();
-      else settle(new Error(`dcg exited with code ${String(code)}`));
+      if (code === 0 || stdout.length > 0) {
+        settle();
+      } else {
+        settle(new Error(`dcg exited with code ${String(code)}`));
+      }
     });
     proc.stdin.end(command);
   });

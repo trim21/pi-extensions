@@ -35,7 +35,9 @@ const VCS_DIRECTORIES_TO_EXCLUDE = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"]
 const DEFAULT_HEAD_LIMIT = 250;
 
 function truncateOutput(output: string, maxCharacters = 30_000): string {
-  if (output.length <= maxCharacters) return output;
+  if (output.length <= maxCharacters) {
+    return output;
+  }
   return `${output.slice(0, maxCharacters)}\n\n[Output truncated at ${maxCharacters} characters]`;
 }
 
@@ -102,22 +104,36 @@ export function buildGrepArguments(params: GrepParameters, cwd: string): string[
     case "content": {
       args.push("--no-heading", "--with-filename");
       const showLineNumbers = params["-n"] === true || params["-n"] === undefined;
-      if (showLineNumbers) args.push("--line-number");
+      if (showLineNumbers) {
+        args.push("--line-number");
+      }
       const before = params["-B"];
       const after = params["-A"];
       const around = params.context ?? params["-C"];
       if (around === undefined) {
-        if (before !== undefined) args.push("--before-context", String(before));
-        if (after !== undefined) args.push("--after-context", String(after));
-      } else args.push("--context", String(around));
+        if (before !== undefined) {
+          args.push("--before-context", String(before));
+        }
+        if (after !== undefined) {
+          args.push("--after-context", String(after));
+        }
+      } else {
+        args.push("--context", String(around));
+      }
 
       break;
     }
     // No default
   }
-  if (params["-i"] === true) args.push("--ignore-case");
-  if (params.type) args.push("--type", params.type);
-  if (params.multiline === true) args.push("--multiline", "--multiline-dotall");
+  if (params["-i"] === true) {
+    args.push("--ignore-case");
+  }
+  if (params.type) {
+    args.push("--type", params.type);
+  }
+  if (params.multiline === true) {
+    args.push("--multiline", "--multiline-dotall");
+  }
   // glob 按逗号/空格拆分（花括号模式不拆），对齐 Claude Code
   if (params.glob) {
     const globPatterns: string[] = [];
@@ -129,12 +145,17 @@ export function buildGrepArguments(params: GrepParameters, cwd: string): string[
       }
     }
     for (const globPattern of globPatterns) {
-      if (globPattern) args.push("--glob", globPattern);
+      if (globPattern) {
+        args.push("--glob", globPattern);
+      }
     }
   }
   // 以 - 开头的 pattern 用 -e 显式声明，防止被 rg 当作选项
-  if (params.pattern.startsWith("-")) args.push("-e", params.pattern);
-  else args.push(params.pattern);
+  if (params.pattern.startsWith("-")) {
+    args.push("-e", params.pattern);
+  } else {
+    args.push(params.pattern);
+  }
   args.push(searchRoot(params.path, cwd));
   return args;
 }
@@ -147,7 +168,9 @@ export function buildGrepArguments(params: GrepParameters, cwd: string): string[
  */
 export async function sortFilesByMtime(output: string): Promise<string> {
   const paths = output.replace(/\n$/, "").split("\n").filter(Boolean);
-  if (paths.length <= 1) return output;
+  if (paths.length <= 1) {
+    return output;
+  }
   const stats = await Promise.allSettled(paths.map((path) => stat(path)));
   const sorted = paths
     .map((path, index) => ({
@@ -208,8 +231,12 @@ function formatLimitInfo(
   appliedOffset: number | undefined,
 ): string {
   const parts: string[] = [];
-  if (appliedLimit !== undefined) parts.push(`limit: ${appliedLimit}`);
-  if (appliedOffset) parts.push(`offset: ${appliedOffset}`);
+  if (appliedLimit !== undefined) {
+    parts.push(`limit: ${appliedLimit}`);
+  }
+  if (appliedOffset) {
+    parts.push(`offset: ${appliedOffset}`);
+  }
   return parts.join(", ");
 }
 

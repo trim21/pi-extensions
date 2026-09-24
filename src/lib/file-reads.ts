@@ -64,7 +64,9 @@ export async function digestIfExists(filePath: string): Promise<string | undefin
   try {
     return await fileDigest(filePath);
   } catch (error) {
-    if (isMissingPath(error)) return undefined;
+    if (isMissingPath(error)) {
+      return undefined;
+    }
     throw error;
   }
 }
@@ -77,7 +79,9 @@ export async function readStateKey(filePath: string): Promise<string> {
   try {
     return await realpath(filePath);
   } catch (error) {
-    if (isMissingPath(error)) return filePath;
+    if (isMissingPath(error)) {
+      return filePath;
+    }
     throw error;
   }
 }
@@ -120,7 +124,9 @@ export function requireUnchangedRead(
   currentDigest: string | undefined,
 ): void {
   const readSnapshot = state.reads.get(key);
-  if (!readSnapshot) return;
+  if (!readSnapshot) {
+    return;
+  }
   if (currentDigest === undefined || readSnapshot.digest !== currentDigest) {
     throw new Error(
       "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.",
@@ -135,9 +141,13 @@ export function requireUnchangedRead(
  */
 export function deserializeReads(data: unknown): Map<string, FileSnapshot> {
   const reads = new Map<string, FileSnapshot>();
-  if (typeof data !== "object" || data === null || Array.isArray(data)) return reads;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return reads;
+  }
   for (const [filePath, snapshot] of Object.entries(data)) {
-    if (Value.Check(fileSnapshotSchema, snapshot)) reads.set(filePath, snapshot);
+    if (Value.Check(fileSnapshotSchema, snapshot)) {
+      reads.set(filePath, snapshot);
+    }
   }
   return reads;
 }
@@ -153,10 +163,16 @@ export function restoreReads(
 ): void {
   state.reads.clear();
   for (const entry of sessionManager.getBranch()) {
-    if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
-    if (!toolNames.has(entry.message.toolName)) continue;
+    if (entry.type !== "message" || entry.message.role !== "toolResult") {
+      continue;
+    }
+    if (!toolNames.has(entry.message.toolName)) {
+      continue;
+    }
     const details = entry.message.details;
-    if (!isRecord(details) || !details.reads) continue;
+    if (!isRecord(details) || !details.reads) {
+      continue;
+    }
     for (const [filePath, snapshot] of deserializeReads(details.reads)) {
       state.reads.set(filePath, snapshot);
     }
