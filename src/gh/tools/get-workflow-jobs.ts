@@ -9,7 +9,7 @@ import {
   type ToolCall,
   type ToolResult,
   toPositiveId,
-  toToolResult,
+  toToolResultJson,
 } from "../base.js";
 
 interface RunIdParams {
@@ -25,7 +25,7 @@ async function workflowJobs(gh: GhClient, call: ToolCall<RunIdParams>): Promise<
   const { owner, repo: name } = splitRepo(effectiveRepo);
 
   const jobs = await gh.checks.runJobs(owner, name, runId, signal);
-  const result = toToolResult(JSON.stringify({ total_count: jobs.length, jobs }), params);
+  const result = toToolResultJson(JSON.stringify({ total_count: jobs.length, jobs }), params);
   result.details.pendant = subtitlePendant(params, "run_id");
   return result;
 }

@@ -151,11 +151,11 @@ export function runGh(
       resolve({
         stdout,
         stderr,
-        // When killed by a signal the close event's code is null; report the
-        // process as failed instead of pretending it succeeded. -1 is a
-        // sentinel for "did not exit normally" — distinct from a real gh
-        // failure exit code (1), which is always in 0-255.
-        code: code ?? (killed ? -1 : 0),
+        // When killed by a signal the close event's code is null — including
+        // kills we did not initiate. Report failure instead of pretending it
+        // succeeded. -1 is a sentinel for "did not exit normally" — distinct
+        // from a real gh failure exit code (1), which is always in 0-255.
+        code: code ?? -1,
         killed,
         combined: combined.join(""),
         reason: killReason,
@@ -309,11 +309,19 @@ export function truncate(
     out.push(line);
     bytes += lineBytes;
   }
-  return { text: out.join("\n"), truncated: true };
+  if (out.length > 0) return { text: out.join("\n"), truncated: true };
+
+  // 首行自己就超过 maxBytes（如单行超长文本）：保底保留字节前缀，
+  // 不能把非空输出截成空字符串。
+  return {
+    text: Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8"),
+    truncated: true,
+  };
 }
 
 /**
- * Format a successful gh invocation's stdout into a tool result.
+ * Format a successful gh invocation's text stdout into a tool result,
+ * line-truncated. JSON output must go through `toToolResultJson` instead.
  * Failures are thrown by `ghExec` as `GhError`, so only the success path lives here.
  */
 export function toToolResult(
@@ -327,6 +335,19 @@ export function toToolResult(
   return {
     content: [{ type: "text", text }],
     details: { ...(input !== undefined && { input }), truncated },
+  };
+}
+
+/**
+ * Format a successful gh invocation's JSON stdout into a tool result, passed
+ * through whole. Line-based truncation must not touch JSON: it would cut the
+ * payload into invalid JSON, and since `gh --json` prints one line, any
+ * over-budget payload used to be blanked entirely.
+ */
+export function toToolResultJson(json: string, input?: unknown): ToolResult {
+  return {
+    content: [{ type: "text", text: json }],
+    details: { ...(input !== undefined && { input }), truncated: false },
   };
 }
 

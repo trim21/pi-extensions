@@ -42,21 +42,23 @@ describe("findMihomo", () => {
     expect(() => findMihomo("/nonexistent/mihomo")).toThrow(/not found at configured path/);
   });
 
-  it("falls back to the bundled binary when mihomo is not in PATH", () => {
+  it("returns mihomo found in PATH", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bwrap-test-"));
+    symlinkSync(process.execPath, join(dir, "mihomo"));
     const originalPath = process.env.PATH;
-    process.env.PATH = "";
+    process.env.PATH = dir;
     try {
-      expect(findMihomo(undefined, process.execPath)).toBe(process.execPath);
+      expect(findMihomo()).toBe(join(dir, "mihomo"));
     } finally {
       process.env.PATH = originalPath;
     }
   });
 
-  it("throws when neither PATH nor the bundled binary has mihomo", () => {
+  it("throws when mihomo is not in PATH", () => {
     const originalPath = process.env.PATH;
     process.env.PATH = "";
     try {
-      expect(() => findMihomo(undefined, "/nonexistent/mihomo")).toThrow(/bundled/);
+      expect(() => findMihomo()).toThrow(/mihomo not found in PATH/);
     } finally {
       process.env.PATH = originalPath;
     }
