@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { Type } from "typebox";
-import { EnvHttpProxyAgent } from "undici";
+import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 
 import { parseWithSchema } from "./parse-with-schema.js";
 
@@ -144,17 +144,15 @@ export function proxyEnvVars(settings: HttpProxySettings): NodeJS.ProcessEnv {
  * `agent` 选项，@octokit/request 的选项里没有这个字段，也没有任何地方把它转交给
  * fetch），所以代理只能从 fetch 挂进去。
  */
-function createProxyDispatcher(
-  proxy: string,
-  noProxy: string | undefined,
-): NonNullable<RequestInit["dispatcher"]> {
-  // undici 包与 Node 全局 fetch 各带一份 Dispatcher 类型声明（@types/node 走
-  // undici-types），结构一致但 compose 重载对不上，这里只做类型层面的转换。
+function createProxyDispatcher(proxy: string, noProxy: string | undefined): EnvHttpProxyAgent {
   return new EnvHttpProxyAgent({
     httpProxy: proxy,
     httpsProxy: proxy,
+    // undici 8 起只有 https 目标默认走 CONNECT 隧道，http 目标改为 absolute-form
+    // 转发；这里保持隧道语义统一，http 与 https 一律 CONNECT。
+    proxyTunnel: true,
     ...(noProxy && { noProxy }),
-  }) as unknown as NonNullable<RequestInit["dispatcher"]>;
+  });
 }
 
 export interface HttpProxy {
@@ -162,14 +160,15 @@ export interface HttpProxy {
   readonly settings: HttpProxySettings;
   /** 要注入 gh 子进程的代理环境变量；未配置代理时为空对象。 */
   readonly env: NodeJS.ProcessEnv;
-  /** 走代理的 fetch；未配置代理时就是全局 fetch。 */
+  /** 请求用的 fetch：undici 的 fetch，配置了代理时挂上 dispatcher。 */
   readonly fetch: typeof globalThis.fetch;
 }
 
 /**
- * 读一次配置并组装代理层。缓存的是 dispatcher（连接池复用），**不是**
- * `globalThis.fetch` 本身：每次调用都取当前的全局 fetch，否则首个请求之后替换
- * `globalThis.fetch`（插桩、测试替身）就不再生效。
+ * 读一次配置并组装代理层。请求一律走 undici 自己的 fetch——undici 8 的 dispatcher
+ * 换了 handler 协议，Node 全局 fetch 挂不上它（抛 `invalid onRequestStart method`），
+ * 所以测试替身 mock undici 的 fetch 即可覆盖全部请求。缓存的是 dispatcher（连接池
+ * 复用），不是 fetch 本身。
  */
 export function createHttpProxy(
   configPath: string = proxyConfigPath(),
@@ -177,13 +176,20 @@ export function createHttpProxy(
 ): HttpProxy {
   const settings = readProxySettings(configPath, env);
   const { proxy, noProxy } = settings;
-  let dispatcher: NonNullable<RequestInit["dispatcher"]> | undefined;
+  let dispatcher: EnvHttpProxyAgent | undefined;
 
-  const fetch: typeof globalThis.fetch = (input, init) => {
-    if (!proxy) return globalThis.fetch(input, init);
+  const fetch: typeof undiciFetch = (input, init) => {
+    if (!proxy) return undiciFetch(input, init);
     dispatcher ??= createProxyDispatcher(proxy, noProxy);
-    return globalThis.fetch(input, { ...init, dispatcher });
+    return undiciFetch(input, { ...init, dispatcher });
   };
 
-  return { settings, env: proxyEnvVars(settings), fetch };
+  return {
+    settings,
+    env: proxyEnvVars(settings),
+    // undici 的 fetch 与 Node 全局 fetch（@types/node 走 undici-types）各带一份
+    // Request/Response 类型声明，结构一致但对不上；调用方只传 string | URL，
+    // 这里只做类型层面的转换。
+    fetch: fetch as typeof globalThis.fetch,
+  };
 }
