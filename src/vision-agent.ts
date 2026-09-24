@@ -33,6 +33,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 
 import { type ToolPendant } from "./lib/pendant.js";
 
@@ -84,6 +85,21 @@ export interface VisionConfigSettings {
 }
 
 /**
+ * ~/.pi/agent/settings.json 里本扩展读取的字段：默认 provider 与视觉模型配置。
+ * 未声明的键（packages / defaultModel 等 pi 自己的配置）忽略；声明了的字段类型
+ * 不符则整份配置视为不可用，退回「未配置」而不是猜。
+ */
+const visionSettingsSchema = Type.Object({
+  defaultProvider: Type.Optional(Type.String()),
+  visionConfig: Type.Optional(
+    Type.Object({
+      provider: Type.Optional(Type.String()),
+      model: Type.Optional(Type.String()),
+    }),
+  ),
+});
+
+/**
  * 视觉识别所需的模型注册表操作：扩展传 ctx.modelRegistry，测试传 mock。
  * 结构化类型（duck typing），只声明用到的两个方法。
  */
@@ -121,26 +137,21 @@ export function loadVisionConfig(settingsPath = SETTINGS_PATH): VisionConfigSett
   } catch {
     return undefined;
   }
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    const settings = parsed as Record<string, unknown>;
-    const vc = settings.visionConfig;
-    if (!vc || typeof vc !== "object" || Array.isArray(vc)) return undefined;
-    const config = vc as Record<string, unknown>;
-    const provider =
-      typeof config.provider === "string" ? config.provider.trim() || undefined : undefined;
-    const defaultProvider =
-      typeof settings.defaultProvider === "string"
-        ? settings.defaultProvider.trim() || undefined
-        : undefined;
-    return {
-      provider: provider ?? defaultProvider,
-      model: typeof config.model === "string" ? config.model.trim() || undefined : undefined,
-    };
+    parsed = JSON.parse(raw);
   } catch {
     return undefined;
   }
+  if (!Value.Check(visionSettingsSchema, parsed)) return undefined;
+  const config = parsed.visionConfig;
+  if (config === undefined) return undefined;
+  const provider = config.provider?.trim() || undefined;
+  const defaultProvider = parsed.defaultProvider?.trim() || undefined;
+  return {
+    provider: provider ?? defaultProvider,
+    model: config.model?.trim() || undefined,
+  };
 }
 
 /**

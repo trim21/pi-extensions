@@ -17,6 +17,7 @@ import { type TObject, Type } from "typebox";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
 import { fenceCodeBlock } from "../lib/markdown.js";
+import { isUnknownArray } from "../lib/narrow.js";
 import { formatDisplayPath } from "../lib/path.js";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
 import { type SelectAction, selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
@@ -832,9 +833,8 @@ export class BwrapRuntime {
     if (existsSync(project)) {
       config = JSON.parse(readFileSync(project, "utf8")) as Record<string, unknown>;
     }
-    const existing = Array.isArray(config.approvalRules)
-      ? (config.approvalRules as ApprovalRule[])
-      : [];
+    // 既有规则按不透明值原样保留（形状不认识也不丢），只追加本次允许的规则。
+    const existing = isUnknownArray(config.approvalRules) ? config.approvalRules : [];
     config.approvalRules = [...existing, ...newRules];
     await mkdir(dirname(project), { recursive: true });
     await writeFile(project, `${JSON.stringify(config, null, 2)}\n`, "utf8");

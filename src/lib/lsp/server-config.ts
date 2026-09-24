@@ -25,6 +25,7 @@ import { minimatch } from "minimatch";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { isRecord } from "../narrow.js";
 import { type LspServerAdapter, type LspServerHandle, type ServerKind } from "./adapter.js";
 import { exists, findBinaryInWorkspace, which } from "./bin.js";
 import { spawnProcess } from "./launch.js";
@@ -184,11 +185,6 @@ async function runConfigCommand(argv: string[], options: ConfigCommandOptions): 
 
 /** 命令 stdout 即 initializationOptions：JSON 对象，经 typebox 校验后作为配置值。 */
 const initializationOptionsOutputSchema = Type.Record(Type.String(), Type.Unknown());
-
-/** 纯对象判定（数组与 null 不算），用于深合并与命令输出校验。 */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** 深合并 initializationOptions：两侧都是纯对象时逐层递归，其余类型整体覆盖（override 优先）。 */
 function mergeInitializationOptions(

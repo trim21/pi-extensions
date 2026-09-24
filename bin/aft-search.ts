@@ -20,11 +20,7 @@
 
 import { resolve } from "node:path";
 
-import {
-  type AftProjectTransport,
-  resolveCortexKitConfigPaths,
-  type StatusSnapshot,
-} from "@cortexkit/aft-bridge";
+import { resolveCortexKitConfigPaths } from "@cortexkit/aft-bridge";
 import { defineCommand, runMain } from "citty";
 
 import {
@@ -35,7 +31,11 @@ import {
   shutdownAftPool,
 } from "../src/aft/bridge.js";
 import { loadAftConfig } from "../src/aft/config.js";
-import { compactArgs, createSemanticIndexProgressFormatter } from "../src/aft/tools.js";
+import {
+  compactArgs,
+  createSemanticIndexProgressFormatter,
+  subscribeBridgeStatus,
+} from "../src/aft/tools.js";
 import { expandHome } from "../src/lib/path.js";
 
 type AftState = Awaited<ReturnType<typeof createAftState>>;
@@ -55,18 +55,6 @@ function releaseActiveState(): void {
       diagnose(`释放 bridge 失败：${error instanceof Error ? error.message : String(error)}`);
     });
   }
-}
-
-/** `AftProjectTransport.subscribeStatus` 的能力探测：类型接口上未暴露。 */
-function subscribeBridgeStatus(
-  bridge: AftProjectTransport,
-  listener: (snapshot: StatusSnapshot) => void,
-): (() => void) | undefined {
-  const subscribable = bridge as AftProjectTransport & {
-    subscribeStatus?(listener: (snapshot: StatusSnapshot) => void): () => void;
-  };
-  if (typeof subscribable.subscribeStatus !== "function") return undefined;
-  return subscribable.subscribeStatus(listener);
 }
 
 async function search(flags: {

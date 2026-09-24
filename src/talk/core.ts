@@ -14,6 +14,7 @@
  * poll — so a swallowed sendMessage error no longer destroys the letter.
  */
 
+import { isRecord } from "../lib/narrow.js";
 import { age, formatListing, refusalUnknown, shortAddr } from "./format.js";
 import {
   deleteGroup,
@@ -101,14 +102,11 @@ export const TALK_JOIN_ENTRY_TYPE = "talk:join";
 export function restoreTalkAgentId(branchEntries: readonly unknown[]): string | undefined {
   let agentId: string | undefined;
   for (const entry of branchEntries) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const { type, customType, data } = entry as {
-      type?: unknown;
-      customType?: unknown;
-      data?: unknown;
-    };
+    if (!isRecord(entry)) continue;
+    const { type, customType, data } = entry;
     if (type !== "custom" || customType !== TALK_JOIN_ENTRY_TYPE) continue;
-    const recorded = (data as { agentId?: unknown } | undefined)?.agentId;
+    if (!isRecord(data)) continue;
+    const recorded = data.agentId;
     if (typeof recorded === "string" && recorded.length > 0) agentId = recorded;
   }
   return agentId;

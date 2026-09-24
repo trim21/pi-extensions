@@ -11,6 +11,9 @@
 import { spawn } from "node:child_process";
 
 import { Octokit } from "octokit";
+import { type Static, Type } from "typebox";
+
+import { parseWithSchema } from "./parse-with-schema.js";
 
 export type SearchKind = "issue" | "pr";
 
@@ -25,24 +28,36 @@ export interface SearchParams {
   limit?: number;
 }
 
-/** REST /search/issues response shape we consume (item is an issue/pr union). */
-interface RawSearchItem {
-  number: number;
-  state: string;
-  title: string;
-  html_url: string;
+/**
+ * REST /search/issues 里本客户端消费的 item 形状（issue / PR 联合）。只声明真正
+ * 读取的字段，其余键忽略；未声明的字段类型不符时按「响应形状变了」处理，报错而
+ * 不是把 undefined 混进结果。labels 兼容字符串与 {name} 两种形态（openapi 里是
+ * 联合类型）。
+ */
+const searchItemSchema = Type.Object({
+  number: Type.Number(),
+  state: Type.Union([Type.Literal("open"), Type.Literal("closed")]),
+  title: Type.String(),
+  html_url: Type.String(),
   /** The search API exposes the repo as a URL, not as an object. */
-  repository_url: string;
-  user: { login: string } | null;
-  labels: { name: string }[];
-  milestone: { title: string } | null;
-  assignees: { login: string }[];
-  comments: number;
-  created_at: string;
-  updated_at: string;
-  closed_at: string | null;
-  pull_request: { merged_at: string | null } | null;
-}
+  repository_url: Type.String(),
+  user: Type.Union([Type.Object({ login: Type.String() }), Type.Null()]),
+  labels: Type.Array(
+    Type.Union([Type.String(), Type.Object({ name: Type.Optional(Type.String()) })]),
+  ),
+  milestone: Type.Union([Type.Object({ title: Type.Optional(Type.String()) }), Type.Null()]),
+  assignees: Type.Array(Type.Object({ login: Type.String() })),
+  comments: Type.Number(),
+  created_at: Type.String(),
+  updated_at: Type.String(),
+  closed_at: Type.Union([Type.String(), Type.Null()]),
+  pull_request: Type.Union([
+    Type.Object({ merged_at: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
+    Type.Null(),
+  ]),
+});
+
+type SearchItem = Static<typeof searchItemSchema>;
 
 export interface SearchHit {
   number: number;
@@ -162,21 +177,21 @@ function toDate(iso: string | null | undefined): string {
 const REPO_URL_RE = /\/repos\/([^/]+\/[^/]+)$/;
 
 /** repository_url looks like https://api.github.com/repos/OWNER/REPO */
-function repoName(raw: RawSearchItem): string {
+function repoName(raw: SearchItem): string {
   const match = REPO_URL_RE.exec(raw.repository_url);
   return match?.[1] ?? "";
 }
 
-function normalize(raw: RawSearchItem): SearchHit {
+function normalize(raw: SearchItem): SearchHit {
   const mergedAt = raw.pull_request?.merged_at ?? "";
   return {
     number: raw.number,
-    state: mergedAt ? "merged" : (raw.state as "open" | "closed"),
+    state: mergedAt ? "merged" : raw.state,
     title: raw.title,
     url: raw.html_url,
     repo: repoName(raw),
     author: raw.user?.login ?? "",
-    labels: raw.labels.map((l) => l.name),
+    labels: raw.labels.map((label) => (typeof label === "string" ? label : (label.name ?? ""))),
     milestone: raw.milestone?.title ?? "",
     assignees: raw.assignees.map((a) => a.login),
     comments: raw.comments,
@@ -320,7 +335,7 @@ export function createGithubSearch(options: GithubClientOptions = {}): GithubSea
           q,
           per_page: limit,
         });
-        return data.items.map((item) => normalize(item as RawSearchItem));
+        return data.items.map((item) => normalize(parseWithSchema(searchItemSchema, item)));
       } catch (error) {
         const status = (error as { status?: number }).status;
         const message = (error as { message?: string }).message ?? String(error);

@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { isRecord } from "../lib/narrow.js";
 import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { didYouMean } from "./files.js";
 import { RIPGREP_RESULT_LIMIT, runRipgrep } from "./ripgrep.js";
@@ -74,7 +75,7 @@ export function parseGrepRecord(line: string): GrepMatch | undefined {
   } catch (error) {
     throw new Error("Invalid ripgrep JSON output", { cause: error });
   }
-  if (typeof json !== "object" || json === null || (json as { type?: unknown }).type !== "match") {
+  if (!isRecord(json) || json.type !== "match") {
     return undefined;
   }
   const record = parseWithSchema(rawMatchSchema, json);

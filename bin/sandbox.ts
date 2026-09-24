@@ -21,7 +21,14 @@ import { resolve } from "node:path";
 
 import { defineCommand, runMain } from "citty";
 
-import { FS_MODES, type FsMode, NETWORK_MODES, type NetworkMode } from "../src/bwrap/core.js";
+import {
+  FS_MODES,
+  type FsMode,
+  isFsMode,
+  isNetworkMode,
+  NETWORK_MODES,
+  type NetworkMode,
+} from "../src/bwrap/core.js";
 import {
   HOLDER_PID_PLACEHOLDER,
   loadSandboxConfig,
@@ -113,17 +120,17 @@ const command = defineCommand({
 
     let fsMode: FsMode | undefined;
     if (args.fs !== undefined) {
-      if (!(FS_MODES as readonly string[]).includes(args.fs)) {
+      if (!isFsMode(args.fs)) {
         usageError(`未知 fs.mode '${args.fs}'，可选：${FS_MODES.join(", ")}`);
       }
-      fsMode = args.fs as FsMode;
+      fsMode = args.fs;
     }
     let networkMode: NetworkMode | undefined;
     if (args.network !== undefined) {
-      if (!(NETWORK_MODES as readonly string[]).includes(args.network)) {
+      if (!isNetworkMode(args.network)) {
         usageError(`未知 network.mode '${args.network}'，可选：${NETWORK_MODES.join(", ")}`);
       }
-      networkMode = args.network as NetworkMode;
+      networkMode = args.network;
     }
 
     const verbose = args.verbose === true;

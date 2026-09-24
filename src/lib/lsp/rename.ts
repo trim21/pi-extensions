@@ -17,6 +17,8 @@ import { fileURLToPath } from "node:url";
 
 import type { TextEdit, WorkspaceEdit } from "vscode-languageserver-types";
 
+import { isRecord } from "../narrow.js";
+
 /** 单个文件展开后的编辑结果。 */
 export interface AppliedFileEdit {
   readonly path: string;
@@ -38,13 +40,7 @@ interface RangeLike {
 
 /** 编辑联合里 SnippetTextEdit 没有 newText，应用层不支持且无法静默处理。 */
 function isRangeLike(edit: unknown): edit is RangeLike {
-  return (
-    typeof edit === "object" &&
-    edit !== null &&
-    "range" in edit &&
-    "newText" in edit &&
-    typeof (edit as { newText: unknown }).newText === "string"
-  );
+  return isRecord(edit) && "range" in edit && "newText" in edit && typeof edit.newText === "string";
 }
 
 /** file:// URI → 规范化本地路径；非 file scheme 是服务器的意外行为，直接报错。 */

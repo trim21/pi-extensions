@@ -36,6 +36,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { isRecord } from "./lib/narrow.js";
+
 // ── constants ────────────────────────────────────────────────────────────────
 
 /** ~/.pi/agent/settings.json：sessionName 配置所在文件 */
@@ -153,13 +155,7 @@ function messageText(content: unknown): string {
   return content
     .map((part: unknown) => {
       if (typeof part === "string") return part;
-      if (
-        part &&
-        typeof part === "object" &&
-        typeof (part as Record<string, unknown>).text === "string"
-      ) {
-        return (part as Record<string, unknown>).text as string;
-      }
+      if (isRecord(part) && typeof part.text === "string") return part.text;
       return "";
     })
     .join("")
