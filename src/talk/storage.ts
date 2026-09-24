@@ -92,7 +92,7 @@ export class SqliteTalkStorage implements TalkStorage {
   listKeys(namespace: string): Promise<string[]> {
     const rows = this.db
       .prepare("SELECT key FROM talk_kv WHERE namespace = ? ORDER BY key")
-      .all(namespace) as unknown as { key: string }[];
+      .all(namespace) as { key: string }[];
     return Promise.resolve(rows.map((r) => r.key));
   }
 
@@ -142,7 +142,7 @@ export class SqliteTalkStorage implements TalkStorage {
   readLog(logName: string): Promise<string[]> {
     const rows = this.db
       .prepare("SELECT line FROM talk_log WHERE name = ? ORDER BY seq")
-      .all(logName) as unknown as { line: string }[];
+      .all(logName) as { line: string }[];
     return Promise.resolve(rows.map((r) => r.line));
   }
 }

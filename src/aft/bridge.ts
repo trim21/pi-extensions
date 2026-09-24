@@ -26,12 +26,9 @@ import { type AftLogger, createAftLogger } from "./logger.js";
 
 export { findBinary } from "@cortexkit/aft-bridge";
 
-/** Pi 会话 ID：Rust 侧用它做 session 作用域（undo/checkpoint），感知工具可留空。 */
-export function resolveSessionId(extCtx: ExtensionContext): string | undefined {
-  const manager = (extCtx as unknown as { sessionManager?: { getSessionId?: () => string } })
-    .sessionManager;
-  const id = manager?.getSessionId?.();
-  return typeof id === "string" && id.length > 0 ? id : undefined;
+/** Pi 会话 ID：Rust 侧用它做 session 作用域（undo/checkpoint）。 */
+export function resolveSessionId(extCtx: ExtensionContext): string {
+  return extCtx.sessionManager.getSessionId();
 }
 
 export interface AftPool {
@@ -140,18 +137,20 @@ export async function createAftPool(
  *
  * `signal`：宿主取消信号，透传给 bridge 的 abortSignal——standalone transport
  * 会在 abort 时向 Rust 发 cancel_request（subc route 忽略，靠 route 关闭取消）。
+ *
+ * `sessionId` 由调用方从自己的 context 解析（工具走 resolveSessionId(ctx)），
+ * 独立 CLI 没有 session，传 undefined。
  */
 export async function callAftTool(
   bridge: AftProjectTransport,
   command: string,
   rawArgs: Record<string, unknown>,
-  extCtx: ExtensionContext,
+  sessionId: string | undefined,
   options?: BridgeRequestOptions & { preview?: boolean },
   softCodes?: ReadonlySet<string>,
   signal?: AbortSignal,
 ): Promise<{ text: string; response: Record<string, unknown> }> {
   const timeoutMs = timeoutForCommand(command);
-  const sessionId = resolveSessionId(extCtx);
   const sendOptions = {
     ...(timeoutMs !== undefined && { timeoutMs }),
     ...options,
@@ -168,14 +167,14 @@ export async function callAftTool(
     if (softCodes?.has(code)) {
       return {
         text: response.text || response.message || "",
-        response: response as unknown as Record<string, unknown>,
+        response,
       };
     }
     throw new Error(response.text || response.message || `${command} failed`);
   }
   return {
     text: typeof response.text === "string" ? response.text : "",
-    response: response as unknown as Record<string, unknown>,
+    response,
   };
 }
 

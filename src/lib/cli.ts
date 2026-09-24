@@ -127,7 +127,7 @@ function buildFlagInfos<TFlags extends TObject>(spec: CommandSpec<TFlags>): Flag
   const meta = spec.flagMeta as Record<string, FlagMeta> | undefined;
   const infos: FlagInfo[] = [];
   for (const [key, rawSchema] of Object.entries(spec.flags.properties)) {
-    const schema = rawSchema as unknown as FlagSchema;
+    const schema = rawSchema as FlagSchema;
     const m = meta?.[key];
     infos.push({
       key,

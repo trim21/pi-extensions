@@ -25,7 +25,12 @@ import { Value } from "typebox/value";
 
 import { formatDisplayPath, formatSubtitlePath, resolvePathArg } from "../lib/path.js";
 import { type ToolPendant } from "../lib/pendant.js";
-import { type AftState, callAftTool, SEMANTIC_INDEX_WAIT_TIMEOUT_MS } from "./bridge.js";
+import {
+  type AftState,
+  callAftTool,
+  resolveSessionId,
+  SEMANTIC_INDEX_WAIT_TIMEOUT_MS,
+} from "./bridge.js";
 
 /** 工具使用指南，以 markdown 形式维护，读起来像文档。 */
 const OUTLINE_PROMPT = readFileSync(
@@ -157,7 +162,7 @@ export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void
         bridgeFor(ctx),
         "outline",
         rawArgs,
-        extCtx,
+        resolveSessionId(extCtx),
         undefined,
         undefined,
         signal,
@@ -236,7 +241,7 @@ export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
         bridgeFor(ctx),
         "zoom",
         rawArgs,
-        extCtx,
+        resolveSessionId(extCtx),
         undefined,
         undefined,
         signal,
@@ -343,7 +348,7 @@ export async function callCallgraphWithBuildRetry(
       bridge,
       "callgraph",
       rawArgs,
-      extCtx,
+      resolveSessionId(extCtx),
       undefined,
       CALLGRAPH_SOFT_CODES,
       signal,
@@ -637,7 +642,7 @@ export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void 
           bridge,
           "search",
           rawArgs,
-          extCtx,
+          resolveSessionId(extCtx),
           {
             // 默认 search 传输超时仅 60s，会早于索引等待（600s）触发；覆盖为等待
             // 上限 + 常规执行预算。超时只说明响应被挤掉而非 bridge 挂死，保留

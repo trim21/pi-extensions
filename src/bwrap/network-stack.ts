@@ -329,8 +329,7 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
     // Node 没有公开 API 拿它（stdio[3].fd 恒为 undefined，只能读 _handle，且仅在
     // 子进程存活期间有效）；pipe 要跨两个子进程共享（holder 持写端、slirp4netns
     // 持读端），所以必须把父进程侧的 fd 重新 dup 给 slirp4netns。
-    const exitReadFd = (holder.stdio[3] as unknown as { _handle?: { fd?: number } } | null)?._handle
-      ?.fd;
+    const exitReadFd = (holder.stdio[3] as { _handle?: { fd?: number } } | null)?._handle?.fd;
     if (typeof exitReadFd !== "number") {
       throw new TypeError("Failed to resolve exit-fd from holder stdio");
     }

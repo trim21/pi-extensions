@@ -25,7 +25,6 @@ import {
   resolveCortexKitConfigPaths,
   type StatusSnapshot,
 } from "@cortexkit/aft-bridge";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineCommand, runMain } from "citty";
 
 import {
@@ -107,7 +106,7 @@ async function search(flags: {
       topK: flags.topK,
       includeTests: flags.includeTests,
     });
-    // CLI 没有 session，传空 context（callAftTool 只读 sessionManager）；
+    // CLI 没有 session，session id 传 undefined；
     // 超时策略与 aft_search 工具一致：覆盖默认 60s，容纳首次索引构建等待。
     // 等待期间订阅 bridge status：语义索引 Building 时把进度（含剩余时间估计）
     // 打到 stderr，--raw-status 则打印收到的完整快照（调试真实字段形状用）。
@@ -121,16 +120,10 @@ async function search(flags: {
       if (text !== undefined) console.error(text);
     });
     try {
-      const { text } = await callAftTool(
-        bridge,
-        "search",
-        rawArgs,
-        {} as unknown as ExtensionContext,
-        {
-          transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
-          keepBridgeOnTimeout: true,
-        },
-      );
+      const { text } = await callAftTool(bridge, "search", rawArgs, undefined, {
+        transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
+        keepBridgeOnTimeout: true,
+      });
       console.log(text);
       return 0;
     } finally {

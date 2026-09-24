@@ -18,6 +18,7 @@ import { resolvePathArg } from "../src/lib/path.js";
 
 vi.mock("../src/aft/bridge.js", () => ({
   callAftTool: vi.fn(),
+  resolveSessionId: vi.fn(() => "session-test"),
   SEMANTIC_INDEX_WAIT_TIMEOUT_MS: 3_600_000,
 }));
 

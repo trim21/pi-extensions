@@ -320,7 +320,7 @@ export function createGithubSearch(options: GithubClientOptions = {}): GithubSea
           q,
           per_page: limit,
         });
-        return data.items.map((item) => normalize(item as unknown as RawSearchItem));
+        return data.items.map((item) => normalize(item as RawSearchItem));
       } catch (error) {
         const status = (error as { status?: number }).status;
         const message = (error as { message?: string }).message ?? String(error);
