@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { isRecord } from "../lib/narrow.js";
 import { asksNs, assertAddress, inboxNs } from "./registry.js";
 import type { TalkStorage } from "./storage.js";
 
@@ -49,14 +50,13 @@ export type LetterKind = Letter["kind"];
  */
 export function normalizeLetter(value: unknown): Letter | null {
   if (Value.Check(LetterSchema, value)) return value;
-  const record = value as { from?: unknown } | null;
-  const from = record?.from;
-  if (typeof from !== "object" || from === null) return null;
-  const fromRecord = from as Record<string, unknown>;
-  if (typeof fromRecord.sessionId !== "string") return null;
+  if (!isRecord(value)) return null;
+  const from = value.from;
+  if (!isRecord(from)) return null;
+  if (typeof from.sessionId !== "string") return null;
   const migrated = {
-    ...(value as object),
-    from: { ...fromRecord, agentId: fromRecord.sessionId },
+    ...value,
+    from: { ...from, agentId: from.sessionId },
   };
   return Value.Check(LetterSchema, migrated) ? migrated : null;
 }

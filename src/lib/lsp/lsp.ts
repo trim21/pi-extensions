@@ -370,12 +370,23 @@ export type StatusRenderer = (text: string | undefined) => void;
 export type LspInspectQuery = "definition" | "references" | "hover";
 
 /**
- * 返回类型与 query 泛型关联：query 为 "hover" 时返回 hover 内容，否则返回
- * 位置列表。实现内部用 cast 建立关联（TS 无法验证分支与泛型的对应关系）。
+ * 返回类型与 query 关联：query 为 "hover" 时返回 hover 内容，否则返回位置列表。
+ * 关联由 `inspect` 的重载签名建立（泛型参数下 TS 无法验证分支与返回体的对应关系，
+ * 所以接口按 query 分重载，实现体只需返回这个联合）。
  */
 export type LspInspectResult<Q extends LspInspectQuery = LspInspectQuery> = Q extends "hover"
   ? { serverID: string; query: "hover"; hover: Hover | null }
   : { serverID: string; query: "definition" | "references"; locations: InspectLocation[] };
+
+/** 只读符号查询的入参：query 决定返回体（见 LspInspectResult）。line / character 为 0-based。 */
+export interface LspInspectRequest<Q extends LspInspectQuery = LspInspectQuery> {
+  file: string;
+  cwd: string;
+  line: number;
+  character: number;
+  query: Q;
+  options?: LspRequestOptions;
+}
 
 export interface LspRequestOptions {
   notify?: ExtensionUIContext["notify"];
@@ -427,14 +438,11 @@ export interface LspService {
    * 的服务器，按配置顺序取第一个成功结果；服务器不支持该方法（MethodNotFound）
    * 时跳过并尝试下一个，全部不支持时抛聚合错误。line / character 为 0-based。
    */
-  inspect<Q extends LspInspectQuery>(request: {
-    file: string;
-    cwd: string;
-    line: number;
-    character: number;
-    query: Q;
-    options?: LspRequestOptions;
-  }): Promise<LspInspectResult<Q>>;
+  inspect(request: LspInspectRequest<"hover">): Promise<LspInspectResult<"hover">>;
+  inspect(
+    request: LspInspectRequest<"definition" | "references">,
+  ): Promise<LspInspectResult<"definition" | "references">>;
+  inspect(request: LspInspectRequest): Promise<LspInspectResult>;
   shutdownAll(): Promise<void>;
   /** 停止全部服务器并禁用 LSP：之后工具调用不再 spawn，直到 start/reload。 */
   stop(): Promise<void>;
@@ -994,14 +1002,12 @@ export function createLspService(
   }
 
   /** 只读符号查询：与 rename 同款多服务器策略，但 MethodNotFound 是"跳过"而非失败。 */
-  async function inspect<Q extends LspInspectQuery>(request: {
-    file: string;
-    cwd: string;
-    line: number;
-    character: number;
-    query: Q;
-    options?: LspRequestOptions;
-  }): Promise<LspInspectResult<Q>> {
+  async function inspect(request: LspInspectRequest<"hover">): Promise<LspInspectResult<"hover">>;
+  async function inspect(
+    request: LspInspectRequest<"definition" | "references">,
+  ): Promise<LspInspectResult<"definition" | "references">>;
+  async function inspect(request: LspInspectRequest): Promise<LspInspectResult>;
+  async function inspect(request: LspInspectRequest): Promise<LspInspectResult> {
     const clients = await getClients(
       request.file,
       request.cwd,
@@ -1024,7 +1030,7 @@ export function createLspService(
       try {
         if (request.query === "hover") {
           const hover = await client.hover(position);
-          return { serverID: client.serverID, query: "hover", hover } as LspInspectResult<Q>;
+          return { serverID: client.serverID, query: "hover", hover };
         }
         const locations =
           request.query === "definition"
@@ -1034,7 +1040,7 @@ export function createLspService(
           serverID: client.serverID,
           query: request.query,
           locations,
-        } as LspInspectResult<Q>;
+        };
       } catch (error) {
         // 调用方取消不是"服务器失败"：直接向上抛，别折叠成 all-servers-failed
         request.options?.signal?.throwIfAborted();

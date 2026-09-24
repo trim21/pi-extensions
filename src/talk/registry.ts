@@ -114,8 +114,9 @@ export async function readRecord(storage: TalkStorage, addr: string): Promise<Ag
   if (Value.Check(AgentRecordSchema, raw)) return raw;
   // Migrate legacy records in place of the `sessionId` → `agentId` rename.
   if (Value.Check(LegacyAgentRecordSchema, raw)) {
-    const { sessionId, ...rest } = raw as { sessionId: string } & Record<string, unknown>;
-    return { ...rest, agentId: sessionId } as AgentRecord;
+    // Value.Check 是类型守卫，raw 已收窄成 legacy 记录的形状，不需要再断言。
+    const { sessionId, ...rest } = raw;
+    return { ...rest, agentId: sessionId };
   }
   return null;
 }

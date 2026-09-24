@@ -427,18 +427,25 @@ export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): vo
 
 /** `BinaryBridge.subscribeStatus` 的能力探测类型：AftProjectTransport 接口上未暴露。 */
 interface StatusSubscribableBridge {
-  subscribeStatus?(listener: (snapshot: StatusSnapshot) => void): () => void;
+  subscribeStatus(listener: (snapshot: StatusSnapshot) => void): () => void;
 }
 
-function subscribeBridgeStatus(
+/**
+ * 运行时能力探测：`AftProjectTransport` 接口没声明 subscribeStatus，但实际实现
+ * （BinaryBridge）有。用 in 收窄做真检查，而不是断言成「一定支持」。
+ */
+export function isStatusSubscribable(
+  bridge: AftProjectTransport,
+): bridge is AftProjectTransport & StatusSubscribableBridge {
+  return "subscribeStatus" in bridge && typeof bridge.subscribeStatus === "function";
+}
+
+export function subscribeBridgeStatus(
   bridge: AftProjectTransport,
   listener: (snapshot: StatusSnapshot) => void,
 ): (() => void) | undefined {
-  const subscribable = bridge as AftProjectTransport & StatusSubscribableBridge;
-  if (typeof subscribable.subscribeStatus !== "function") {
-    return undefined;
-  }
-  return subscribable.subscribeStatus(listener);
+  if (!isStatusSubscribable(bridge)) return undefined;
+  return bridge.subscribeStatus(listener);
 }
 
 /**

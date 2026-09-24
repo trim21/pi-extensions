@@ -32,10 +32,11 @@
  * the result so handlers can display it in chat instead of writing stdout.
  */
 
-import type { Static, TObject } from "typebox";
+import { IsKind, type Static, type TObject, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 
 import { shlexSplit } from "./cli-args.js";
+import { isRecord, isUnknownArray } from "./narrow.js";
 
 /** Per-flag CLI metadata on top of the typebox schema. */
 export interface FlagMeta {
@@ -69,16 +70,6 @@ export type CommandResult<TFlags extends TObject> =
   | { kind: "help"; text: string }
   | { kind: "error"; text: string };
 
-/** Runtime view of a flag schema (typebox's `TSchema` is empty at the type level). */
-interface FlagSchema {
-  "~kind"?: string;
-  "~optional"?: boolean;
-  type?: string;
-  default?: unknown;
-  description?: string;
-  anyOf?: { type?: string; const?: unknown }[];
-}
-
 type FlagKind = "boolean" | "string" | "number" | "enum";
 
 interface FlagInfo {
@@ -88,54 +79,67 @@ interface FlagInfo {
   required: boolean;
   placeholder: string;
   description: string;
-  schema: FlagSchema;
+  schema: TSchema;
 }
 
-function kindOf(key: string, schema: FlagSchema): FlagKind {
-  switch (schema["~kind"]) {
-    case "Boolean": {
-      return "boolean";
-    }
-    case "String": {
-      return "string";
-    }
-    case "Number":
-    case "Integer": {
-      return "number";
-    }
-    case "Union": {
-      return "enum";
-    }
-    default: {
-      throw new TypeError(
-        `Unsupported flag type for '${key}': ${schema["~kind"] ?? schema.type ?? "unknown"} ` +
-          "(use Type.Boolean/String/Number/Integer or a string literal union)",
-      );
-    }
-  }
+/** schema 的种类名，仅用于报错文案。 */
+function schemaKindLabel(schema: TSchema): string {
+  if ("~kind" in schema && typeof schema["~kind"] === "string") return schema["~kind"];
+  if ("type" in schema && typeof schema.type === "string") return schema.type;
+  return "unknown";
+}
+
+function kindOf(key: string, schema: TSchema): FlagKind {
+  if (IsKind(schema, "Boolean")) return "boolean";
+  if (IsKind(schema, "String")) return "string";
+  if (IsKind(schema, "Number") || IsKind(schema, "Integer")) return "number";
+  if (IsKind(schema, "Union")) return "enum";
+  throw new TypeError(
+    `Unsupported flag type for '${key}': ${schemaKindLabel(schema)} ` +
+      "(use Type.Boolean/String/Number/Integer or a string literal union)",
+  );
+}
+
+/** Type.Optional 的 `~optional` 标记：缺省即「不带该 flag 时不报错」。 */
+function isOptionalFlag(schema: TSchema): boolean {
+  return "~optional" in schema && schema["~optional"] === true;
+}
+
+/** schema 声明的 default：有 default 的 flag 缺省时由 typebox 补值，不算 required。 */
+function flagDefault(schema: TSchema): unknown {
+  return "default" in schema ? schema.default : undefined;
+}
+
+function flagDescription(schema: TSchema): string {
+  return "description" in schema && typeof schema.description === "string"
+    ? schema.description
+    : "";
 }
 
 /** Allowed values for a string-literal union flag, or undefined for mixed unions. */
-function enumValues(schema: FlagSchema): string[] | undefined {
-  const anyOf = schema.anyOf;
-  if (!anyOf) return undefined;
-  const values = anyOf.map((s) => s.const).filter((c) => typeof c === "string");
-  return values.length === anyOf.length ? values : undefined;
+function enumValues(schema: TSchema): string[] | undefined {
+  if (!("anyOf" in schema) || !isUnknownArray(schema.anyOf)) return undefined;
+  const values: string[] = [];
+  for (const variant of schema.anyOf) {
+    if (!isRecord(variant) || typeof variant.const !== "string") return undefined;
+    values.push(variant.const);
+  }
+  return values;
 }
 
 function buildFlagInfos<TFlags extends TObject>(spec: CommandSpec<TFlags>): FlagInfo[] {
+  // flagMeta 的键随 flags 泛型变化（映射类型），运行时按字符串键索引需在此收敛一次。
   const meta = spec.flagMeta as Record<string, FlagMeta> | undefined;
   const infos: FlagInfo[] = [];
-  for (const [key, rawSchema] of Object.entries(spec.flags.properties)) {
-    const schema = rawSchema as FlagSchema;
+  for (const [key, schema] of Object.entries(spec.flags.properties)) {
     const m = meta?.[key];
     infos.push({
       key,
       kind: kindOf(key, schema),
       short: m?.short,
-      required: schema["~optional"] !== true && schema.default === undefined,
+      required: !isOptionalFlag(schema) && flagDefault(schema) === undefined,
       placeholder: m?.valuePlaceholder ?? `<${key}>`,
-      description: m?.description ?? schema.description ?? "",
+      description: m?.description ?? flagDescription(schema),
       schema,
     });
   }
@@ -290,19 +294,20 @@ export function parseCommand<TFlags extends TObject>(
   }
 
   for (const f of flags) {
-    if (f.kind === "enum" && typeof rawFlags[f.key] === "string") {
+    const raw = rawFlags[f.key];
+    if (typeof raw === "string" && f.kind === "enum") {
       const values = enumValues(f.schema);
-      if (values && !values.includes(rawFlags[f.key] as string)) {
+      if (values && !values.includes(raw)) {
         return errorResult(
           spec,
-          `Invalid value for '--${f.key}': '${String(rawFlags[f.key])}' (expected one of: ${values.join(", ")})`,
+          `Invalid value for '--${f.key}': '${raw}' (expected one of: ${values.join(", ")})`,
         );
       }
     }
-    if (f.kind === "number" && typeof rawFlags[f.key] === "string") {
-      const n = Number(rawFlags[f.key]);
+    if (typeof raw === "string" && f.kind === "number") {
+      const n = Number(raw);
       if (Number.isNaN(n)) {
-        return errorResult(spec, `Invalid value for '--${f.key}': '${String(rawFlags[f.key])}'`);
+        return errorResult(spec, `Invalid value for '--${f.key}': '${raw}'`);
       }
       rawFlags[f.key] = n;
     }

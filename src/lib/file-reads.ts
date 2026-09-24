@@ -16,6 +16,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { isRecord } from "./narrow.js";
+
 const fileSnapshotSchema = Type.Object({
   digest: Type.String(),
   textEditable: Type.Boolean(),
@@ -39,8 +41,11 @@ export function snapshotOf(content: Uint8Array | string, textEditable = true): F
 /** 整文件指纹：流式读取，避免为记账把大文件整个读进内存。 */
 export async function fileDigest(filePath: string): Promise<string> {
   const hash = createHash("sha256");
-  for await (const chunk of createReadStream(filePath)) {
-    hash.update(chunk as Buffer);
+  // createReadStream 的 async iterator 在 @types/node 里是 any：显式声明成 Buffer 流，
+  // 而不是在 update 处断言。
+  const stream: AsyncIterable<Buffer> = createReadStream(filePath);
+  for await (const chunk of stream) {
+    hash.update(chunk);
   }
   return hash.digest("hex");
 }
@@ -150,8 +155,8 @@ export function restoreReads(
   for (const entry of sessionManager.getBranch()) {
     if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
     if (!toolNames.has(entry.message.toolName)) continue;
-    const details = entry.message.details as { reads?: unknown } | undefined;
-    if (!details?.reads) continue;
+    const details = entry.message.details;
+    if (!isRecord(details) || !details.reads) continue;
     for (const [filePath, snapshot] of deserializeReads(details.reads)) {
       state.reads.set(filePath, snapshot);
     }

@@ -31,6 +31,18 @@ export const NETWORK_MODES = ["block", "limited", "allow-all"] as const;
 
 export type NetworkMode = (typeof NETWORK_MODES)[number];
 
+// 模式集合按 string 装：外部输入（CLI 参数）是 string，用它收窄成字面量联合。
+const FS_MODE_SET: ReadonlySet<string> = new Set(FS_MODES);
+const NETWORK_MODE_SET: ReadonlySet<string> = new Set(NETWORK_MODES);
+
+export function isFsMode(value: unknown): value is FsMode {
+  return typeof value === "string" && FS_MODE_SET.has(value);
+}
+
+export function isNetworkMode(value: unknown): value is NetworkMode {
+  return typeof value === "string" && NETWORK_MODE_SET.has(value);
+}
+
 const fsConfigProperties = {
   mode: StringEnum(FS_MODES),
   writablePaths: Type.Array(Type.String()),
