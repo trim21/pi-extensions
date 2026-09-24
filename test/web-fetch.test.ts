@@ -17,6 +17,19 @@ import {
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
 vi.mock("node:dns/promises", () => ({ lookup }));
 
+// 请求一律走 undici 的 fetch（见 src/lib/proxy.ts），把它转发到当前的
+// globalThis.fetch，stubGlobal 的测试替身即可覆盖全部请求。
+vi.mock("undici", async (importOriginal) => {
+  const original = await importOriginal<typeof import("undici")>();
+  return {
+    ...original,
+    fetch: ((
+      input: Parameters<typeof globalThis.fetch>[0],
+      init?: Parameters<typeof globalThis.fetch>[1],
+    ) => globalThis.fetch(input, init)) as unknown as typeof original.fetch,
+  };
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
   lookup.mockReset();

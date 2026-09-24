@@ -16,6 +16,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createHttpProxy, parseProxyConfig, proxyEnvVars } from "../src/lib/proxy.js";
 
+// 透传 mock：把 undici 模块换成普通对象，测试里才能 spyOn 替换它的 fetch
+// （真实 ESM namespace 的属性不可改）。
+vi.mock("undici", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("undici")>()),
+}));
+
 interface ReceivedRequest {
   method: string;
   url: string;
@@ -270,7 +276,7 @@ describe("createHttpProxy fetch", () => {
     return createHttpProxy(path, {});
   }
 
-  it("uses the global fetch when no proxy is configured", async () => {
+  it("connects directly when no proxy is configured", async () => {
     const client = createHttpProxy(join(dir, "missing.json"), {});
     const response = await client.fetch(`${origin.url}/direct`);
     expect(response.status).toBe(201);
@@ -317,20 +323,26 @@ describe("createHttpProxy fetch", () => {
     }
   });
 
-  it("honours a global fetch replaced after the first request", async () => {
+  it("honours a fetch replaced after the first request", async () => {
     const client = createHttpProxy(join(dir, "missing.json"), {});
-    const first = vi.spyOn(globalThis, "fetch");
     await client.fetch(`${origin.url}/first`);
     expect(origin.requests.map((r) => r.url)).toEqual(["/first"]);
-    first.mockRestore();
 
-    // Regression: caching `globalThis.fetch` on the first call kept the
-    // replacement from taking effect (same module-level httpProxy instance is
+    // Regression: caching the fetch implementation on the first call kept the
+    // replacement from taking effect (the module-level httpProxy instance is
     // reused for the whole session).
-    const second = vi.spyOn(globalThis, "fetch");
-    await client.fetch(`${origin.url}/second`);
-    expect(second).toHaveBeenCalledTimes(1);
-    expect(origin.requests.map((r) => r.url)).toEqual(["/first", "/second"]);
-    second.mockRestore();
+    const undici = await import("undici");
+    const replacement = vi.spyOn(undici, "fetch");
+    replacement.mockImplementation(
+      (async () => new Response("replaced")) as unknown as typeof undici.fetch,
+    );
+    try {
+      const response = await client.fetch(`${origin.url}/second`);
+      await expect(response.text()).resolves.toBe("replaced");
+      expect(replacement).toHaveBeenCalledTimes(1);
+      expect(origin.requests.map((r) => r.url)).toEqual(["/first"]);
+    } finally {
+      replacement.mockRestore();
+    }
   });
 });
