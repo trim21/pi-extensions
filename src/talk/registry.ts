@@ -169,7 +169,8 @@ function pidAlive(pid: number, pidStart?: number): boolean {
   }
   if (pidStart === undefined) return true;
   const start = readStartTime(pid);
-  return start === undefined ? true : start === pidStart;
+  // 读不到启动时间时保守认为「pid 还活着」，只有两边都读到且不同才判定被复用
+  return start === undefined || start === pidStart;
 }
 
 export function presenceOf(record: AgentRecord): Presence {

@@ -68,11 +68,12 @@ export class OutboundPolicy {
     this.sentAt.push(this.now());
     this.recentBodies.set(`${body}\u0000${target ?? ""}`, this.now());
     // bound the dedupe map
-    if (this.recentBodies.size > 200) {
-      const cutoff = this.now() - DEDUPE_WINDOW_MS;
-      for (const [key, ts] of this.recentBodies) {
-        if (ts < cutoff) this.recentBodies.delete(key);
-      }
+    if (this.recentBodies.size <= 200) {
+      return;
+    }
+    const cutoff = this.now() - DEDUPE_WINDOW_MS;
+    for (const [key, ts] of this.recentBodies) {
+      if (ts < cutoff) this.recentBodies.delete(key);
     }
   }
 }

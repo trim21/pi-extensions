@@ -171,12 +171,10 @@ export function extractFirstUserPrompt(
   currentPrompt: string,
 ): string | undefined {
   const trimmed = currentPrompt.trim();
-  if (branch.length > 0) {
-    for (const entry of branch) {
-      if (entry.type !== "message") continue;
-      const text = messageText(entry.message?.content);
-      if (text) return text;
-    }
+  for (const entry of branch) {
+    if (entry.type !== "message") continue;
+    const text = messageText(entry.message?.content);
+    if (text) return text;
   }
   return trimmed || undefined;
 }

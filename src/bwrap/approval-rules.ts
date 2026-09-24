@@ -140,10 +140,15 @@ function collectCommand(node: Node, all: Node[]): BashCommand | undefined {
   // 自身且每次返回新 wrapper，`===` 比较失效会无限递归。
   const nested: BashCommand[] = [];
   for (const descendant of all) {
-    if (descendant === node) continue;
-    if (descendant.startIndex >= node.startIndex && descendant.endIndex <= node.endIndex) {
-      const inner = collectCommand(descendant, all);
-      if (inner) nested.push(inner);
+    if (descendant === node) {
+      continue;
+    }
+    if (descendant.startIndex < node.startIndex || descendant.endIndex > node.endIndex) {
+      continue;
+    }
+    const inner = collectCommand(descendant, all);
+    if (inner) {
+      nested.push(inner);
     }
   }
   return { name, args, raw: node.text, nested };

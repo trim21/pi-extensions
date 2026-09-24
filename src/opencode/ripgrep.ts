@@ -88,10 +88,12 @@ export function runRipgrep<R>(
       }
       if (item === undefined) return;
       items.push(item);
-      if (items.length > options.limit) {
-        state.truncated = true;
-        stop();
+      if (items.length <= options.limit) {
+        return;
       }
+
+      state.truncated = true;
+      stop();
     };
 
     child.stderr.setEncoding("utf8");

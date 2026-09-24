@@ -286,10 +286,12 @@ export function overrideExtensionPaths(tools: string[]): string[] {
   const paths: string[] = [];
   for (const tool of tools) {
     const ext = TOOL_EXTENSION_OVERRIDES[tool];
-    if (ext && !loaded.has(ext)) {
-      loaded.add(ext);
-      paths.push(extensionPath(ext));
+    if (!ext || loaded.has(ext)) {
+      continue;
     }
+
+    loaded.add(ext);
+    paths.push(extensionPath(ext));
   }
   return paths;
 }

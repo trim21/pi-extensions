@@ -44,14 +44,16 @@ function extractStepFromLog_current(
       if (depth > 0) depth--;
       continue;
     }
-    if (line.includes("##[group]")) {
-      if (depth === 0) {
-        const m = /##\[group\](.*)/.exec(line);
-        const name = m ? m[1].trim() : "";
-        if (name.startsWith("Run ")) runStarts.push(i);
-      }
-      depth++;
+    if (!line.includes("##[group]")) {
+      continue;
     }
+
+    if (depth === 0) {
+      const m = /##\[group\](.*)/.exec(line);
+      const name = m ? m[1].trim() : "";
+      if (name.startsWith("Run ")) runStarts.push(i);
+    }
+    depth++;
   }
 
   if (stepIdx === 0) {
@@ -198,15 +200,18 @@ describe("log structure analysis", () => {
         if (depth > 0) depth--;
         continue;
       }
-      if (line.includes("##[group]")) {
-        depth++;
-        if (depth === 1) {
-          const m = /##\[group\](.*)/.exec(line);
-          const name = m ? m[1].trim() : "";
-          if (name.startsWith("Run ") || name.startsWith("Post Run ")) {
-            runGroups.push({ line: i + 1, name });
-          }
-        }
+      if (!line.includes("##[group]")) {
+        continue;
+      }
+
+      depth++;
+      if (depth !== 1) {
+        continue;
+      }
+      const m = /##\[group\](.*)/.exec(line);
+      const name = m ? m[1].trim() : "";
+      if (name.startsWith("Run ") || name.startsWith("Post Run ")) {
+        runGroups.push({ line: i + 1, name });
       }
     }
 

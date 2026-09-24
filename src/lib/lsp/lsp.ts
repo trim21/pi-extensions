@@ -274,12 +274,13 @@ function validateConfig(config: ResolvedLspConfig, adapters?: LspServerAdapter[]
     adapters ? adapters.map((adapter) => adapter.id) : Object.keys(config.servers),
   );
   const unknown = config.enabled === undefined ? [] : [...config.enabled.difference(available)];
-  if (unknown.length > 0) {
-    const list = [...available].toSorted().join(", ") || "none";
-    throw new Error(
-      `lsp.json: unknown server id in enabled: ${unknown.join(", ")} (available: ${list})`,
-    );
+  if (unknown.length === 0) {
+    return;
   }
+  const list = [...available].toSorted().join(", ") || "none";
+  throw new Error(
+    `lsp.json: unknown server id in enabled: ${unknown.join(", ")} (available: ${list})`,
+  );
 }
 
 /** 合并 watch 段：全局为基底、本地逐字段覆盖；ignore 取并集去重（全局在前）。两边都未配置时返回 undefined，调用方据此省略 watch 键。 */
@@ -764,14 +765,17 @@ export function createLspService(
     updateStatusText();
     const reporter = sessionNotify ?? notify;
     const lastNotified = state.brokenNotifiedAt.get(key);
-    if (reporter && (lastNotified === undefined || now - lastNotified >= notifyIntervalMs)) {
-      state.brokenNotifiedAt.set(key, now);
-      reporter(
-        `LSP server "${serverID}" failed to start for ${root}: ${cause}. ` +
-          `Fix the issue or run /lsp-reload ${serverID} to retry now.`,
-        "error",
-      );
+    const due = lastNotified === undefined || now - lastNotified >= notifyIntervalMs;
+    if (!reporter || !due) {
+      return;
     }
+
+    state.brokenNotifiedAt.set(key, now);
+    reporter(
+      `LSP server "${serverID}" failed to start for ${root}: ${cause}. ` +
+        `Fix the issue or run /lsp-reload ${serverID} to retry now.`,
+      "error",
+    );
   }
 
   /**

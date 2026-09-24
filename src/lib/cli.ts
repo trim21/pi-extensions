@@ -304,13 +304,14 @@ export function parseCommand<TFlags extends TObject>(
         );
       }
     }
-    if (typeof raw === "string" && f.kind === "number") {
-      const n = Number(raw);
-      if (Number.isNaN(n)) {
-        return errorResult(spec, `Invalid value for '--${f.key}': '${raw}'`);
-      }
-      rawFlags[f.key] = n;
+    if (typeof raw !== "string" || f.kind !== "number") {
+      continue;
     }
+    const n = Number(raw);
+    if (Number.isNaN(n)) {
+      return errorResult(spec, `Invalid value for '--${f.key}': '${raw}'`);
+    }
+    rawFlags[f.key] = n;
   }
 
   const { min, max } = spec.arity ?? {};
