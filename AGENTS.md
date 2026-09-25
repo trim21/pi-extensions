@@ -2,6 +2,14 @@
 
 pi-extensions 是 pi coding-agent 的自定义扩展集合，TypeScript ESM 项目，包管理用 pnpm。
 
+## openspec 变更流程
+
+本项目由 openspec 管理：`openspec/specs/` 是各功能当前行为的规范文档，`openspec/changes/` 存放尚未落地的变更提案。
+
+- 任何代码改动（`src/`、`test/`）都必须先有对应的 openspec change：用 `openspec-propose` 在 `openspec/changes/` 下写出 proposal（必要时要补 design 与 spec delta），经用户认可后再实现，完成后用 `openspec-archive-change` 归档。不允许不经 openspec 直接修改代码。
+- 行为变更必须同步到 spec，不要只改代码、把 spec 留在旧行为上。
+- `openspec/specs/` 描述的是当前真实行为；发现 spec 与代码不符时，先查清哪边为准，再按上面的流程修正，不要单方面改。
+
 ## 开发约定
 
 - 包管理与脚本一律使用 `pnpm`（`pnpm install`、`pnpm test`、`pnpm lint`、`pnpm check`），不要使用 `npm` / `npx`。
