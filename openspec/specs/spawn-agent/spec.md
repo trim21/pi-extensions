@@ -88,7 +88,7 @@
 
 - **agent 清单**：`src/spawn-agent-agents.ts` 从 `~/.pi/agent/agents/*.md` 加载（仅用户级），YAML frontmatter（`name` / `description` / `tools` / `provider` / `model` / `thinkingLevel`）+ 正文作 system prompt；校验失败的 md 跳过；模型名列表启动时注入 `promptGuidelines`，改文件需 `/reload`。
 - **模型 / 工具解析**：frontmatter > `spawn-agent.json` > pi `settings.json` 默认。
-- **工具映射**：frontmatter 声明工具时映射到本仓库增强实现——`read/edit/write/bash` → opencode（bash 自动带 bwrap 沙箱），`Grep/Glob/Read/Edit/Write` → claude-code；每个扩展文件只加载一次；未声明 `tools` 时子 agent 只读。
+- **工具映射**：frontmatter 声明工具时映射到本仓库增强实现——`read`/`edit`/`write` → `opencode/files.ts`，`grep` / `glob` → opencode 的独立文件，`Grep`/`Glob`/`Read`/`Edit`/`Write` → claude-code；`bash` / `Bash` 刻意不在扩展文件映射表里，由内联扩展工厂（`subagentShellExtension`）注册，因为路径式 override 没有传递 per-agent 沙箱配置的通道；每个扩展文件只加载一次；未声明 `tools` 时子 agent 只读。
 - **子代理沙箱**：frontmatter `sandbox`（完整 bwrap 配置）作为固定沙箱注入 bash 的 runtime；未声明时用 `SUBAGENT_DEFAULT_SANDBOX`（`fs: readonly` + `network: block`）。两种情况下都不读用户 `sandbox.json`。
 - **输出**：结果截断 50KB（超出注明并保留全量消息在 details）；details 含 `messages`、`stderr`、`usage`、`model`、`stopReason`、`exitCode` 与折叠面板。
 - **中止**：父 signal → `session.abort()`，`stopReason ??= "aborted"`，exitCode 由 stopReason 推导。

@@ -55,7 +55,7 @@ Claude Code 风格工具集（大写 `Read` / `Edit` / `Write` / `Bash` / `Grep`
 #### Scenario: 完整替换
 
 - **WHEN** 传入完整 todo 列表
-- **THEN** 整体替换当前列表，支持状态（`pending` / `in_progress` / `completed`）与优先级
+- **THEN** 整体替换当前列表；每项含 `content` / `status`（`pending` / `in_progress` / `completed`）/ `activeForm`（无优先级字段）
 
 ### Requirement: AskUserQuestion 提问
 

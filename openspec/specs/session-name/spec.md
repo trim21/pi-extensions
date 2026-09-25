@@ -51,7 +51,7 @@
 
 入口 `src/session-name.ts`：监听会话初始化，首个 user prompt 到达后在后台异步命名（不阻塞首轮回复）。
 
-- 配置了 `sessionName.model` 时调用命名模型（OpenAI 兼容 API，复用 `~/.pi/agent/models.json` 的 provider 配置）把 prompt 概括成短名，输出截断到 `maxLength`。
+- 配置了 `sessionName.model` 时通过 pi 的模型注册表（`ctx.modelRegistry`）与 AI SDK 调用命名模型（复用 `~/.pi/agent/models.json` 的 provider 解析：baseUrl / apiKey / env / OAuth，不手写 HTTP）把 prompt 概括成短名，输出截断到 `maxLength`。模型与 `defaultProvider` 来自 `~/.pi/agent/settings.json` 的 `sessionName`（与 vision-agent 同一套配置体系）。
 - 命名结果写入会话元数据；中途切换会话不会把名字写到错误的 session（按会话作用域写入）。
 - 未配置 `sessionName`、provider 不可解析或模型调用失败时不设置名字，仅以 warning 通知。
 
