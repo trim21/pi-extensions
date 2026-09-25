@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`net-allowlist` 模式下，Bash 工具的命令运行在独立的 user/network namespace 中：仅 allowlist 内的网络目标可直连，其余流量在 DNS 层与连接层双重拒绝（deny-by-default）。网络栈的 namespace 生命周期与命令绑定，任何退出路径（正常结束、启动失败、宿主崩溃）下都能释放，不产生僵尸 namespace。
+`network: "limited"` 模式下，Bash 工具的命令运行在独立的 user/network namespace 中：仅 `network.allowlist` 内的网络目标可直连，其余流量在 DNS 层与连接层双重拒绝（deny-by-default）。网络栈的 namespace 生命周期与命令绑定，任何退出路径（正常结束、启动失败、宿主崩溃）下都能释放，不产生僵尸 namespace。
 
 ## Requirements
 

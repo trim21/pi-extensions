@@ -62,7 +62,7 @@ outline / zoom / callgraph / search 为纯只读查询，MUST NOT 经过写保�
 #### Scenario: 首次调用等待索引
 
 - **WHEN** `aft_search` 已注册且语义索引仍在构建
-- **THEN** 首次调用阻塞等待构建完成（至多 600 秒），避免返回部分结果
+- **THEN** 首次调用阻塞等待构建完成（至多 3600 秒，即 1 小时），避免返回部分结果
 
 ### Requirement: 语义搜索只使用外部 embedding 后端
 
@@ -152,7 +152,7 @@ AFT 工具基于常驻 Rust bridge 进程池（`src/aft/bridge.ts`）：每项�
 
 - **配置**（`src/aft/config.ts`）：用户级 `aft.jsonc`——`enabled`（默认 true）、`semantic_search`（默认 false，涉及外部 embedding 后端，仅用户级可开）。
 - **感知工具只读**：outline / zoom / callgraph / search 均为纯只读查询，不经过写保护审批；写类能力（符号重命名、跨文件引用更新）由 LSP 侧的 `lsp-rename` 承接。
-- **语义搜索**：`semantic_search: true` 时注册 `aft_search`，首次调用阻塞至多 600 秒等索引构建完成。
+- **语义搜索**：`semantic_search: true` 时注册 `aft_search`，首次调用阻塞至多 3600 秒（1 小时，`SEMANTIC_INDEX_WAIT_TIMEOUT_MS`，与 Rust 侧 `AFT_WAIT_FOR_SEMANTIC_READY_MS` 一致）等索引构建完成。
 - sessionId 传给 Rust 侧做 undo / checkpoint 作用域。
 
 涉及文件：`src/aft/`（tools.ts / bridge.ts / config.ts / index.ts）。

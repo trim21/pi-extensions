@@ -45,7 +45,7 @@ workspace 外部的写入需经确认对话框由用户审批，对话框展示�
 
 ## Implementation
 
-写保护在 `src/lib/write-guard.ts` 的 `guardWriteAccess` 实现，内置在各写工具（opencode `write`/`edit`、Claude Code `Write`/`Edit`、aft refactor/import）内部。
+写保护在 `src/lib/write-guard.ts` 的 `guardWriteAccess` 实现，内置在各写工具（opencode `write`/`edit`、Claude Code `Write`/`Edit`、`lsp-rename`、`web_fetch` 的 `output_path` 落盘）内部。
 
 - **边界判定**：workspace 内或 `/tmp` 下的路径自动放行；外部路径进入审批流程。
 - **审批交互**：外部写入弹确认对话框，用 diff 代码块展示变更预览——与 opencode-edit 共享匹配引擎（`src/opencode/edit-engine.ts`），能定位时显示带行号的真实 patch，否则退化为参数 diff。

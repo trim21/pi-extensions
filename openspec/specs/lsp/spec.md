@@ -114,7 +114,7 @@ LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，
 
 #### Scenario: 忽略规则
 
-- **WHEN** 事件路径命中内置忽略（`node_modules`、`.git`、`dist`、`build`、`.venv`、`target`、`coverage`）或配置追加的忽略 glob
+- **WHEN** 事件路径命中内置忽略（`node_modules`、`.git`、`dist`、`build`、`.venv`、`venv`、`target`、`coverage`）或配置追加的忽略 glob
 - **THEN** 不转发该路径
 
 #### Scenario: 监听器不可用时降级
@@ -277,4 +277,4 @@ LSP 配置 SHALL 在 `session_start` 时加载并校验（pi await 该事件）�
 - **文件监听**（`watcher.ts` / `lsp.ts`）：`@parcel/watcher` 递归监听**活跃 client 的项目根**（root 去重、不越 cwd，无活跃 client 不监听；内核层 ignore 使被忽略目录不建 watch），尾部去抖 + 最长 flush 批量回调；事件按各 client 的 root 前缀 / 注册 pattern / 扩展名过滤后以 `workspace/didChangeWatchedFiles` 投递（created=1 / changed=2 / deleted=3）；监听器失败降级提示（ENOSPC 等资源耗尽时停用该 root 直到 `/lsp-reload`），不影响诊断链路。
 - **驻留与退场**（`client.ts`）：read / edit / write 进入有界 LRU（`maxOpenDocuments`，缺省 32），淘汰时 `didClose`；驻留文档被外部改动时先 `didClose` 再发 changed 事件，内容一致的自身写入 echo 完全忽略。
 
-涉及文件：`src/lib/lsp/`（lsp.ts / server-config.ts / adapter.ts / client.ts / watcher.ts）。
+涉及文件：`src/lib/lsp/`（lsp.ts / server-config.ts / adapter.ts / client.ts / watcher.ts / launch.ts / bin.ts / language.ts / diagnostic.ts / rename.ts / rename-tool.ts / inspect-tool.ts）。

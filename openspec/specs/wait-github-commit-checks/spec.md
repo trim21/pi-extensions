@@ -42,6 +42,6 @@
 
 ## Implementation
 
-- 与 `wait-github-pr-checks` 共享 `waitChecksReport` 核心（`src/gh-readonly.ts`）：`pollPrChecks`（含 `event` 过滤）→ `renderChecksVerdict`；`event` 过滤在每轮合并判定后应用（严格匹配）。
+- 与 `wait-github-pr-checks` 共享 `waitChecksReport` 核心（`src/gh/base.ts`，工具入口 `src/gh/tools/wait-commit-checks.ts`）：`pollPrChecks`（含 `event` 过滤）→ `renderChecksVerdict`；`event` 过滤在每轮合并判定后应用（严格匹配）。
 - commit 解析：`src/lib/github.ts` 的 `GithubChecksClient.headSha()`（octokit `repos.getCommit`，接受 SHA / 分支 / tag）。
 - spec 中的共享语义在 `openspec/specs/wait-github-pr-checks/spec.md` 中描述，本文件只记录差异（commit 入口与事件过滤）。

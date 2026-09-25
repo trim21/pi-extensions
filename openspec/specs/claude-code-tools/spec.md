@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Claude Code 风格工具集（大写 `Read` / `Edit` / `Write` / `Bash` / `Grep` / `Glob` / `TodoWrite` / `AskUserQuestion`），聚合文件、搜索、shell 与 session 四组工具，与 opencode 风格工具集互斥（按预期只启用一套）。
+Claude Code 风格工具集（大写 `Read` / `Edit` / `Write` / `Bash` / `Grep` / `Glob` / `TodoWrite` / `AskUserQuestion`，外加 LSP 专属的 `lsp-rename` / `lsp-find-definition` / `lsp-find-reference` / `lsp-inspect`），聚合文件、搜索、shell 与 session 四组工具（LSP 工具族随文件组注册），与 opencode 风格工具集互斥（按预期只启用一套）。
 
 ## Requirements
 
@@ -68,12 +68,13 @@ Claude Code 风格工具集（大写 `Read` / `Edit` / `Write` / `Bash` / `Grep`
 
 ## Implementation
 
-入口 `src/claude-code/index.ts` 聚合四组工具：files（Read / Edit / Write）、search（Grep / Glob）、shell（Bash）、session（TodoWrite / AskUserQuestion）。
+入口 `src/claude-code/index.ts` 聚合四组工具：files（Read / Edit / Write）、search（Grep / Glob，`search.ts` 聚合 `grep.ts` / `glob.ts`）、shell（Bash）、session（TodoWrite / AskUserQuestion）。
 
 - **files**：与 opencode 风格共用匹配引擎（`src/opencode/edit-engine.ts`）与写保护（`src/lib/write-guard.ts`）；Read 状态创建与 session 恢复归 files 模块所有。
+- **LSP 工具族**：`lsp-rename` / `lsp-find-definition` / `lsp-find-reference` / `lsp-inspect` 由 files 模块的 LSP manager 在存在 enabled 服务器时注册（见 `openspec/specs/lsp/spec.md`），实现位于 `src/lib/lsp/`。
 - **Grep**：`src/claude-code/grep.ts`，支持 `files_with_matches` / `content` / `count` 输出模式与行号。
 - **Glob**：`src/claude-code/glob.ts`，文件模式匹配。
 - **Bash**：与 opencode 风格 `bash` 共用 bwrap 沙箱实现（`src/bwrap/`）。
 - **TodoWrite / AskUserQuestion**：`src/claude-code/session-tools.ts`，语义与 opencode 风格一致（完整替换 / 阻塞提问）。
 
-涉及文件：`src/claude-code/`（index.ts / files.ts / grep.ts / glob.ts / shell.ts / session-tools.ts）。
+涉及文件：`src/claude-code/`（index.ts / common.ts / files.ts / edit-utils.ts / search.ts / grep.ts / glob.ts / shell.ts / session-tools.ts）。

@@ -12,12 +12,12 @@ session 之间可发送消息并列出可见 session。
 
 #### Scenario: 发送消息到指定 session
 
-- **WHEN** 向某个 session id 发送纯文本消息（`talk-send`）
-- **THEN** 消息进入邮箱，对端 session 按投递方式接收；`to` 只接受明确的 session id，不支持广播
+- **WHEN** 向某个 agent 发送纯文本消息（`talk-send`）
+- **THEN** 消息进入邮箱，对端 session 按投递方式接收；`to` 只接受明确的 agent id（来自 `talk-list-agents`），不支持广播
 
 #### Scenario: 列出可见 session
 
-- **WHEN** 调用 `talk-list-sessions`
+- **WHEN** 调用 `talk-list-agents`
 - **THEN** 返回可见 session 的 JSON 列表（`status` / `work_dir` / `id` / `name`，自己带 `self: true`），只列出同组成员（未入组时只有自己）
 
 #### Scenario: 提问并等待
@@ -60,7 +60,7 @@ session 的在线状态由 `offline` 标志与进程存活判定，不依赖心�
 #### Scenario: 同毫秒碰撞兜底
 
 - **WHEN** 两个 ask 的 `ts` 相同
-- **THEN** 用 `session dir + session id` 字符串比较决定主导方，结论双方对称
+- **THEN** 用 `cwd + agent id` 字符串比较决定主导方，结论双方对称
 
 ### Requirement: 消息安全限制
 
@@ -115,19 +115,26 @@ session 的可见性完全由 group 决定。
 
 ```
 storage.ts   —— 存储层：TalkStorage 接口 + SqliteTalkStorage（node:sqlite，零 npm 依赖）
-core.ts      —— talk 核心：registry / mailbox / group / policy / format + TalkCore 协调器，
-               只依赖存储层，通过回调 yield 投递 / 通知
-index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周期事件 / 工具注册
+registry.ts  —— agent registry：地址（cwd + agent id 的哈希）、presence、sweep 回收
+mailbox.ts   —— 信件收发与投递可靠性（投递成功才消费）
+group.ts     —— 带 uuid 的私有房间与成员关系（单组不变量）
+policy.ts    —— 环破除与入站限流（去重 / 限速 / 积压上限）
+format.ts    —— 模型与用户读到的原文文案（由测试钉住）
+core.ts      —— TalkCore 协调器：组合上述模块，只依赖存储层，
+                通过事件回调 yield 投递 / 通知
+index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周期事件 / 工具注册 / 命令
 ```
+
+除 `index.ts` 外都是 pi-free 的 core 层：只依赖 `TalkStorage`，不碰 pi API。
 
 关键机制：
 
 - **投递可靠**：信件只在成功交给 `sendMessage` 后才从 inbox 删除，投递失败保留重试——不因 `sendMessage` 吞异常而静默丢信。
 - **presence 不靠心跳**：`offline` 标志 + 进程 pid 存活判定；pid 存活时校验 `/proc/<pid>/stat` 启动时间，排除 pid 回卷复用误判。
-- **双向 ask 仲裁**：按信件 `ts` 字段仲裁（先 ask 者主导继续等，后 ask 者让位先回复）；同毫秒碰撞用 `session dir + session id` 字符串比较兜底，双方读到同一对值结论对称。
+- **双向 ask 仲裁**：按信件 `ts` 字段仲裁（先 ask 者主导继续等，后 ask 者让位先回复）；同毫秒碰撞用 `cwd + agent id` 字符串比较兜底，双方读到同一对值结论对称。
 - **安全**：纯文本 ≤32KB、10s 去重、30s 限速 8 条、50 积压上限；投递标注来源。
 - **存储校验**：所有从存储读出的值经 typebox schema 校验，损坏 / 伪造数据被拒绝。
 - **定期清理**：进程存活永不回收；进程已死且最后活跃超 24h 且无未投递 mail 的记录 30 分钟 sweep 一次，有 mail 保留 30 天。
 - **group**：带 uuid 的私有房间，成员关系存共享 DB，实时生效；一个 session 只能属于一个 group。
 
-涉及文件：`src/talk/`（storage.ts / core.ts / index.ts）。
+涉及文件：`src/talk/`（index.ts / core.ts / storage.ts / registry.ts / mailbox.ts / group.ts / policy.ts / format.ts）。

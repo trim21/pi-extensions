@@ -51,12 +51,22 @@ LSP 符号重命名工具：基于 prepareRename / rename 请求，按文件 + �
 
 ### Requirement: 跨文件引用更新
 
-重命名 SHALL 基于 LSP `textDocument/rename` 返回的 WorkspaceEdit 更新全 workspace 的声明与引用。发起 rename 前 SHALL 先发送 `textDocument/references`（`includeDeclaration: true`）作为同步点——其响应到达即表示服务器完成项目加载；references 的结果不用于校验 rename 编辑（信任服务器，与编辑器行为一致）。
+重命名 SHALL 基于 LSP `textDocument/rename` 返回的 WorkspaceEdit 更新全 workspace 的声明与引用。LSP 没有标准化的"索引完成"信号，服务器可能在项目加载完成前就回答，因此发起 rename 前 SHALL 先发送 `textDocument/references`（`includeDeclaration: true`）并等待其**文件集合收敛**（连续多次采样一致，且持续一致超过稳定下限；就绪未证实时下限更长），再做双向一致校验：references 报告的文件必须都被 rename edit 覆盖（missing），rename 触及的文件也必须都在已收敛的 references 集合内（extra）。不一致时不得写盘——缺失说明索引落后，多余说明索引仍在增长、rename 结果本身不可信（回到 references 轮询重新收敛后复检，预算耗尽才放弃）。服务器完全不支持 references（MethodNotFound）时跳过整套校验，信任服务器，与编辑器行为一致。
 
 #### Scenario: 跨文件重命名
 
-- **WHEN** 符号在其他文件中被引用
+- **WHEN** 符号在其他文件中被引用，且 references 集合已收敛、与 rename edit 双向一致
 - **THEN** 所有受影响文件一并修改，工具结果列出每个文件的修改数
+
+#### Scenario: 残缺答案不算收敛
+
+- **WHEN** 服务器索引仍在加载，references 只覆盖已发现的部分文件
+- **THEN** 残缺血缘即使连续多次一致也不接受——文件集合须持续一致超过稳定下限才视为收敛；预算内未达标时报可重试的不完整错误，不写盘
+
+#### Scenario: 覆盖校验拦截漏改
+
+- **WHEN** references 报告的文件未被 rename edit 覆盖，或在预算耗尽时 rename 触及了 references 未报告的文件
+- **THEN** 报可定位的不完整错误（列出缺失 / 多余的文件），不修改任何文件，并提示服务器索引可能仍在加载、稍后重试
 
 #### Scenario: 服务器不支持 rename
 
