@@ -10,11 +10,7 @@
 
 - [x] 2.1 `test/bwrap-netstack-integration.test.ts` 增加断言：起栈后临时目录存在、`stop()` 后不存在；验证：先注释掉 1.1 的删除确认该断言失败，再恢复后 `RUN_NETSTACK_INTEGRATION=1 NETSTACK_DNS=223.5.5.5 pnpm exec vitest run test/bwrap-netstack-integration.test.ts -t "mihomo work dir"` 通过（需 unsandboxed 执行）
 
-## 3. 历史残留一次性清理
+## 3. 集成验证
 
-- [ ] 3.1（待确认）删除本机累积的历史 `mihomo-*` 目录（清理前 `ls -d ~/.pi/agent/tmp/mihomo-* | wc -l` 与 `du -sh --total` 留档，清理后为 0）
-
-## 4. 集成验证
-
-- [x] 4.1 `pnpm check`、`pnpm lint`、`pnpm test` 全绿
-- [x] 4.2 unsandboxed 连跑 3 次 `pnpm sandbox --fs=workspace-write --network=limited -- 'echo 1'`，确认耗时仍在 ~200ms 量级、无残留进程、`~/.pi/agent/tmp/` 下无新增 `mihomo-*` 目录
+- [x] 3.1 `pnpm check`、`pnpm lint`、`pnpm test` 全绿
+- [x] 3.2 unsandboxed 连跑 3 次 `pnpm sandbox --fs=workspace-write --network=limited -- 'echo 1'`，确认耗时仍在 ~200ms 量级、无残留进程、`~/.pi/agent/tmp/` 下无新增 `mihomo-*` 目录
