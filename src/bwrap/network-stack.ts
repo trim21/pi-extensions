@@ -94,6 +94,17 @@ function killProcess(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM"
   }
 }
 
+/**
+ * 终止 holder（unshare 包装进程）必须用 SIGKILL：util-linux 的 unshare 在 fork 前
+ * `sigprocmask(SIG_BLOCK, {SIGINT, SIGTERM})`，且只在子进程里恢复掩码——父进程永久
+ * 阻塞这两个信号，发给它的 SIGTERM 只会 pending 永不投递（实测 3s 后仍存活）。
+ * SIGKILL 不可阻塞，unshare 立即退出；其子进程（pid ns 的 init）经 --kill-child 的
+ * PDEATHSIG 收到 SIGTERM，走优雅退出并触发内核清理整个 pid ns。
+ */
+function killHolder(pid: number | undefined): void {
+  killProcess(pid, "SIGKILL");
+}
+
 /** 轮询等待进程退出（进程消失即返回）。 */
 async function waitForExit(pid: number, timeoutMs = 2000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -107,7 +118,7 @@ async function waitForExit(pid: number, timeoutMs = 2000): Promise<void> {
   }
 }
 
-/** 读取进程的直接子进程 pid：--kill-child 只转发信号给 fork 的子进程，兜底直接 SIGKILL 用。 */
+/** 读取 holder 的直接子进程 pid（pid ns 的 init）：PDEATHSIG 未生效时的 SIGKILL 兜底用。 */
 async function readChildPids(pid: number): Promise<number[]> {
   try {
     const content = await readFile(`/proc/${pid}/task/${pid}/children`, "utf8");
@@ -239,9 +250,9 @@ interface NetworkStackState {
 
 /** 兜底：调用方忘记 stop() 时，对象被 GC 回收后 kill 残留进程。 */
 const stackFinalizer = new FinalizationRegistry<NetworkStackState>((state) => {
-  // SIGTERM 经 unshare --kill-child 转发给 init，内核清理 pid ns 内全部进程；
+  // holder 退出触发内核清理 pid ns 内全部进程；
   // slirp4netns 在宿主侧持有 tap fd，单独终止
-  killProcess(state.holderPid);
+  killHolder(state.holderPid);
   killProcess(state.slirpPid);
 });
 
@@ -275,7 +286,8 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
   try {
     // unshare -p --fork：node 成为 pid namespace 的 init，任何方式退出（含 SIGKILL）
     // 内核都会清理 pid ns 内全部进程（mihomo），ns 引用随之归零；
-    // --kill-child=SIGTERM：宿主侧 SIGTERM unshare 时转发给 init 走优雅退出
+    // --kill-child=SIGTERM：init 拿到 PR_SET_PDEATHSIG，unshare 死亡时收到 SIGTERM
+    // 走优雅退出（注意 unshare 自身阻塞 SIGINT/SIGTERM，终止它只能靠 SIGKILL，见 killHolder）
     holder = spawn(
       "unshare",
       [
@@ -452,9 +464,9 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
         // slirp4netns 持有 tap fd（pin 住 netns），必须随 holder 一起显式终止；
         // 先杀它再杀 holder，避免 stop() 与 exit-fd HUP 的收尾时序竞争
         killProcess(state.slirpPid);
-        // SIGTERM unshare → --kill-child 转发 SIGTERM 给 init（pid ns 的 pid 1），
-        // init 优雅停 mihomo 后退出，内核清理 pid ns 内全部进程，ns 引用随之归零
-        killProcess(state.holderPid);
+        // SIGKILL holder → init 经 PDEATHSIG 收到 SIGTERM，优雅停 mihomo 后退出，
+        // 内核清理 pid ns 内全部进程，ns 引用随之归零（毫秒级，见 killHolder）
+        killHolder(state.holderPid);
         await waitForExit(state.holderPid);
         await waitForExit(state.slirpPid);
         // 兜底：init 未在超时内退出 → SIGKILL init → 内核清 pid ns
@@ -467,15 +479,15 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
     stackFinalizer.register(stack, state);
     return stack;
   } catch (error) {
-    // 失败清理：holder（unshare）的 SIGTERM 经 --kill-child 转发给 init，
-    // init 退出时内核清理 pid ns 内全部进程；slirp4netns 在宿主侧，需单独终止
+    // 失败清理：SIGKILL holder（unshare）→ init 经 PDEATHSIG 收到 SIGTERM 后退出，
+    // 内核清理 pid ns 内全部进程；slirp4netns 在宿主侧，需单独终止
     //（exit-fd 写端也会随 holder 死亡关闭，这里主动杀只是不等到 HUP 轮询）
     if (slirp?.pid) {
       killProcess(slirp.pid);
     }
     if (holder?.pid) {
       const children = await readChildPids(holder.pid);
-      killProcess(holder.pid);
+      killHolder(holder.pid);
       await waitForExit(holder.pid);
       for (const pid of children) {
         killProcess(pid, "SIGKILL");

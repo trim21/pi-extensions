@@ -117,7 +117,7 @@ export async function runInSandbox(
   const workspace = expandHome(options.workspace);
   const commandCwd = expandHome(options.commandCwd ?? workspace);
   const local = options.unsandboxed === true || !resolved.bwrapEnabled;
-  // 每次执行现建网络栈（启动约 140ms），作用域结束即停栈：allowlist 变更即时生效
+  // 每次执行现建现停网络栈（起栈 ~40ms、停栈 ~100ms），作用域结束即停栈：allowlist 变更即时生效
   const stack = local ? undefined : await createNetworkStack(resolved, options.log);
   try {
     if (stack) {

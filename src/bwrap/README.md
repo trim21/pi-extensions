@@ -6,7 +6,7 @@
 
 ## 进程模型
 
-`network: limited` 模式下，一个沙箱 session 的常驻进程树（宿主侧视角，共 4 个）：
+`network: limited` 模式下，每条命令的网络栈进程树（宿主侧视角，共 4 个）：
 
 ```
 pi 进程（network-stack.ts）
@@ -21,7 +21,7 @@ pi 进程（network-stack.ts）
      必须在宿主 netns 启动（原因见「设计约束」）；持 exit-fd 读端 + tapfd。
 ```
 
-每条命令的短命子树（命令结束即退，与常驻栈无关）：
+每条命令的短命子树（命令结束即退）：
 
 ```
 nsenter -U -n --preserve-credentials -t <①的pid> \
@@ -29,7 +29,8 @@ nsenter -U -n --preserve-credentials -t <①的pid> \
 ```
 
 nsenter 进入 holder 的 userns/netns，bwrap 在里面再嵌套创建自己的 user/pid
-ns 跑命令。一个 session 内 N 条命令复用同一套常驻栈。
+ns 跑命令。网络栈是每条命令现建现停（起栈 ~40ms、停栈 ~100ms），不跨命令复用：
+allowlist 变更因此即时生效，代价是每条命令重新启动一次 mihomo。
 
 ## 网络路径
 
@@ -54,14 +55,16 @@ exit-fd（socketpair）是 slirp4netns 与 holder 之间唯一的生命周期绑
 访问器（`stdio[3].fd` 恒为 undefined），只能经 `_handle.fd` 取原始 fd 再
 dup 给 slirp4netns，且仅在子进程存活期间有效。
 
-| 触发              | 清理链路                                                                                              |
-| ----------------- | ----------------------------------------------------------------------------------------------------- |
-| 正常 `stop()`     | SIGTERM ④（先杀，它 pin 着 netns）→ SIGTERM ① → `--kill-child` 转发给 ② → ② 杀 ③ 退出 → 内核清 pid ns |
-| pi 进程被 SIGKILL | stdin 写端关闭 → ② EOF 自杀 → pid ns 清理 → exit-fd 写端关闭 → ④ HUP 自杀 → tapfd 释放 → netns 销毁   |
-| 单独 kill ①       | PDEATHSIG → ② SIGTERM → 同上；① wait 结束退出 → 写端全关 → ④ 退                                       |
-| 单独 kill ②       | pid-ns init 死 → 内核清 ③；① 退出 → 写端全关 → ④ 退                                                   |
+| 触发                   | 清理链路                                                                                             |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| 正常 `stop()`          | SIGTERM ④（先杀，它 pin 着 netns）→ SIGKILL ① → PDEATHSIG 给 ② SIGTERM → ② 杀 ③ 退出 → 内核清 pid ns |
+| pi 进程被 SIGKILL      | stdin 写端关闭 → ② EOF 自杀 → pid ns 清理 → exit-fd 写端关闭 → ④ HUP 自杀 → tapfd 释放 → netns 销毁  |
+| 单独 kill ①（SIGKILL） | PDEATHSIG → ② SIGTERM → 同上；① wait 结束退出 → 写端全关 → ④ 退                                      |
+| 单独 kill ②            | pid-ns init 死 → 内核清 ③；① 退出 → 写端全关 → ④ 退                                                  |
 
-四条路径下常驻进程全部收敛、netns 引用归零。
+四条路径下网络栈全部进程收敛、netns 引用归零。注意 `--kill-child` 不是信号转发：
+它的实现是 unshare fork 出的子进程给自己设 PDEATHSIG（unshare 死亡时收到 SIGTERM），
+所以终止 ① 只能靠 SIGKILL（见「设计约束」第 5 条）。
 
 ## 设计约束与教训
 
@@ -81,6 +84,12 @@ dup 给 slirp4netns，且仅在子进程存活期间有效。
    日志；`nsenter -U -n --preserve-credentials -t <holderPid>` 可手动进入
    netns 用 AF_PACKET 抓 tap0 / 检查 `ip rule`（注意：沙盒里看不到宿主机
    进程，宿主机诊断必须在沙盒外做）。
+5. **终止 unshare 只能用 SIGKILL**。util-linux 的 unshare 在 fork 前
+   `sigprocmask(SIG_BLOCK, {SIGINT, SIGTERM})`，且只在子进程里恢复掩码：
+   父进程永久阻塞这两个信号且不装 handler，发给它的 SIGTERM 只会 pending
+   永不投递（实测 3s 后仍存活）。曾因此在 `stop()` 里白等 `waitForExit`
+   的 2000ms 默认超时，把每条命令的沙箱开销从 ~180ms 抬到 ~2.09s。SIGKILL
+   立即生效，PDEATHSIG 再把 SIGTERM 交给 ② 走优雅退出。
 
 ## 调试入口
 

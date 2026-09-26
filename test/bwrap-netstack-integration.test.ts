@@ -22,10 +22,50 @@ const env = {
   PATH: "/usr/local/bin:/usr/bin:/bin",
 };
 
+async function pidExists(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForPidGone(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await pidExists(pid))) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return false;
+}
+
 // 需要真实 mihomo/slirp4netns/unshare 与可出网的 DNS，常规 CI 不满足；
 // 手动用 RUN_NETSTACK_INTEGRATION=1 运行。某些环境的系统 DNS 走 slirp4netns
 // 出站不可达时，可用 NETSTACK_DNS 指定一个可通的 DNS（如 NETSTACK_DNS=223.5.5.5）。
 describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack integration", () => {
+  // 回归：holder（unshare）永久阻塞 SIGINT/SIGTERM，用 SIGTERM 停它会走满
+  // waitForExit 的 2000ms 固定超时（实测每条命令 ~2.09s）。停止必须是毫秒级。
+  it("stops within a second and leaves no holder process", async () => {
+    const dnsServers = process.env.NETSTACK_DNS
+      ? [process.env.NETSTACK_DNS]
+      : await resolveDnsServers();
+    const stack = await startNetworkStack({
+      allowlist: [],
+      dnsServers,
+      mihomoPath: findMihomo(),
+      slirp4netnsPath: findSlirp4netns(),
+    });
+    const holderPid = stack.holderPid;
+    const startedAt = Date.now();
+    await stack.stop();
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeLessThan(1000);
+    expect(await waitForPidGone(holderPid, 1000)).toBe(true);
+  }, 60000);
+
   it("allowlist domain resolves, non-allowlist is blocked", async () => {
     const dnsServers = process.env.NETSTACK_DNS
       ? [process.env.NETSTACK_DNS]
