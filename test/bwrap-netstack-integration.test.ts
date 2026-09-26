@@ -1,3 +1,7 @@
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
+
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
 import { findBwrap, findMihomo, findSlirp4netns } from "../src/bwrap/core.js";
@@ -42,10 +46,31 @@ async function waitForPidGone(pid: number, timeoutMs: number): Promise<boolean> 
   return false;
 }
 
+/** 网络栈在 agent tmp 目录下创建的 mihomo 工作目录（一次启动一个）。 */
+async function mihomoWorkDirs(): Promise<string[]> {
+  const entries = await readdir(join(getAgentDir(), "tmp"));
+  return entries.filter((name) => name.startsWith("mihomo-")).toSorted();
+}
+
 // 需要真实 mihomo/slirp4netns/unshare 与可出网的 DNS，常规 CI 不满足；
 // 手动用 RUN_NETSTACK_INTEGRATION=1 运行。某些环境的系统 DNS 走 slirp4netns
 // 出站不可达时，可用 NETSTACK_DNS 指定一个可通的 DNS（如 NETSTACK_DNS=223.5.5.5）。
 describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack integration", () => {
+  // 回归：每次启动的 mihomo 工作目录必须在停栈时删除（曾只 mkdir 从不删，
+  // 实测本机累积 10026 个目录 / 196MB）。
+  it("removes the mihomo work dir when the stack stops", async () => {
+    const before = await mihomoWorkDirs();
+    const stack = await startNetworkStack({
+      allowlist: [],
+      dnsServers: await resolveDnsServers(),
+      mihomoPath: findMihomo(),
+      slirp4netnsPath: findSlirp4netns(),
+    });
+    expect(await mihomoWorkDirs()).toHaveLength(before.length + 1);
+    await stack.stop();
+    expect(await mihomoWorkDirs()).toEqual(before);
+  }, 60000);
+
   // 回归：holder（unshare）永久阻塞 SIGINT/SIGTERM，用 SIGTERM 停它会走满
   // waitForExit 的 2000ms 固定超时（实测每条命令 ~2.09s）。停止必须是毫秒级。
   it("stops within a second and leaves no holder process", async () => {

@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -246,14 +246,19 @@ export interface NetworkStack {
 interface NetworkStackState {
   holderPid: number;
   slirpPid: number;
+  /** 过滤进程的工作目录：GC 兜底路径也要把它删掉。 */
+  mihomoHome: string;
 }
 
-/** 兜底：调用方忘记 stop() 时，对象被 GC 回收后 kill 残留进程。 */
+/** 兜底：调用方忘记 stop() 时，对象被 GC 回收后 kill 残留进程并清掉工作目录。 */
 const stackFinalizer = new FinalizationRegistry<NetworkStackState>((state) => {
   // holder 退出触发内核清理 pid ns 内全部进程；
   // slirp4netns 在宿主侧持有 tap fd，单独终止
   killHolder(state.holderPid);
   killProcess(state.slirpPid);
+  // FinalizationRegistry 回调不能 await：尽力而为，删不掉就留下（宿主崩溃时同样如此）
+  // eslint-disable-next-line unicorn/no-useless-undefined
+  void rm(state.mihomoHome, { recursive: true, force: true }).catch(() => undefined);
 });
 
 /**
@@ -275,7 +280,8 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
 
   // mihomo 工作目录（-d）：cache.db 等落在这里，而不是它默认的 ~/.config/mihomo/
   //（后者不存在时 mihomo 每次启动都告警且 fakeip 映射无持久化）。每次启动用独立
-  // uuid 目录，避免并发的多个 holder 争抢 bbolt 文件锁。
+  // uuid 目录，避免并发的多个 holder 争抢 bbolt 文件锁；正常停栈与 GC 兜底删除该
+  // 目录（见 stop / stackFinalizer），启动失败时保留作诊断材料（见 catch）。
   const mihomoHome = join(getAgentDir(), "tmp", `mihomo-${randomUUID()}`);
   await mkdir(mihomoHome, { recursive: true });
 
@@ -383,7 +389,7 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
       mihomoReady.catch(() => undefined);
     });
 
-    const state: NetworkStackState = { holderPid, slirpPid: slirp.pid };
+    const state: NetworkStackState = { holderPid, slirpPid: slirp.pid, mihomoHome };
     const stack: NetworkStack = {
       exec: async (execOptions: NetworkStackExecOptions) => {
         const child = spawn(
@@ -473,6 +479,10 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
         for (const pid of children) {
           killProcess(pid, "SIGKILL");
         }
+        // 工作目录只服务本次实例（mihomo 的 cache.db 等运行时缓存），随停栈删除；
+        // best-effort：删除失败不外抛，避免掩盖命令结果
+        // eslint-disable-next-line unicorn/no-useless-undefined
+        await rm(state.mihomoHome, { recursive: true, force: true }).catch(() => undefined);
       },
       holderPid,
     };
@@ -493,6 +503,9 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
         killProcess(pid, "SIGKILL");
       }
     }
+    // 这里刻意不删 mihomoHome：启动失败时它属于现场材料，与下面落盘的诊断日志
+    //（holder / slirp 输出 + 错误本身）配套保留，便于事后排查；失败路径罕见，
+    // 留一个目录不构成泄漏
     const logPath = await writeFailureLog(error, [holderLog.join(""), slirpLog.join("")]);
     if (logPath !== undefined && error instanceof Error) {
       throw new Error(`${error.message}\n(sandbox startup diagnostics: ${logPath})`, {
