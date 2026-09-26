@@ -12,6 +12,8 @@
 
 **双重拒绝**：未允许的域名在 **DNS 层**即被拒绝——DNS 查询直接失败（表现为 `Could not resolve host`），进程拿不到可连接的地址，效果等同于"该进程没有网络"；即使绕过 DNS（直连 IP），未允许的 IP/端口也会在连接层被拒绝。
 
+**拒绝语义**：未允许域名的解析 MUST 立即失败（不依赖上游超时，也不返回 fakeip 等占位地址）；allowlist 域名的解析 MUST 走配置的 DNS 服务器。连接层 MUST 保留兜底拒绝，覆盖裸 IP 连接与自行解析（如 DoH、内置解析器）的客户端。
+
 #### Scenario: allowlist 域名可直连
 
 - **WHEN** 沙箱内命令访问 allowlist 中的域名
@@ -21,6 +23,11 @@
 
 - **WHEN** 沙箱内命令解析不在 allowlist 中的域名
 - **THEN** 解析直接失败，不返回可连接的地址（而非连接阶段才报错）
+
+#### Scenario: 未允许域名解析立即失败
+
+- **WHEN** 沙箱内命令解析不在 allowlist 中的域名
+- **THEN** 解析在毫秒级失败，不等待上游 DNS 超时；失败原因是解析被拒（NXDOMAIN / 拒绝），不是不可达
 
 #### Scenario: 未允许目标在连接层被拒绝
 
@@ -125,7 +132,7 @@
 pi（Bash 工具进程，持有 stdin 写端）
  ├─ unshare -Urnp --fork --kill-child=SIGTERM          ← 包装进程，永久阻塞 SIGINT/SIGTERM
  │   └─ node holder.js <config-base64> <mihomo> <mtu> <mihomo-home>   ← pid ns 内的 init
- │       └─ mihomo -d <mihomo-home> -config <base64>   ← TUN + fakeip 过滤
+ │       └─ mihomo -d <mihomo-home> -config <base64>   ← TUN + 白名单 fakeip + DNS 层拒绝
  └─ slirp4netns -c --mtu=1500 --userns-path=/proc/<holderPid>/ns/user \
        --netns-type=pid <holderPid> tap0 -e 3          ← egress（宿主 netns），fd 3 是 exit-fd 读端
 ```
@@ -141,5 +148,8 @@ pi（Bash 工具进程，持有 stdin 写端）
 - **NSpid 取宿主 pid**：pid ns 内 `/proc` 挂载是宿主的（`-Urnp` 不含 `-m`，`/proc/1` 是宿主 init 而非本 pid ns 的 init），slirp4netns 的 setns 目标必须用 `/proc/self/status` 的 NSpid 第一项（宿主视角 pid）。
 - **配置 base64 直传**：mihomo 支持 `-config` 直接接收 base64 JSON，无临时文件；holder 内 `chdir("/")` 防止在宿主 cwd 意外落盘。
 - **就绪检测按行匹配**：`waitForMihomoStarted` 用 `src/lib/proc.ts` 的 `forEachLine` 按 `\n` 拼行后匹配 `"Tun adapter listening"`，正确处理跨 data chunk 的行。
+- **白名单 fakeip**：`fake-ip-filter-mode: whitelist` + `fake-ip-filter`（allowlist 的域名条目）——只有 allowlist 域名拿 fake IP，因此连接到达时能靠「fake IP ↔ 域名」一一对应的映射精确还原域名（不依赖嗅探、不受 DNS TTL 影响）；未命中白名单的域名落到 `nameserver`。
+- **DNS 层拒绝**：`nameserver` 设为伪服务器 `rcode://name_error`，未允许域名即时拿到 NXDOMAIN（客户端报 `Could not resolve host`），不查上游、不等超时。mihomo 的 fakeip 分支没有按域名拒绝的钩子，收窄白名单是把拒绝做到 DNS 层的唯一途径；`dns.rules` 不是 mihomo 的字段（会被静默忽略），不要用它表达 DNS 策略。
+- **DIRECT 出站解析**：`direct-nameserver` 指向配置的真实 DNS——连接由 fake IP 还原成域名后 DIRECT 要按域名重新解析，不指定会解析回 fake-ip 再进 TUN 成环。
 
 涉及文件：`src/bwrap/network-stack.ts`、`src/bwrap/holder.ts`（esbuild 编译为 `holder.js`）、`src/bwrap/mihomo-config.ts`、`src/lib/proc.ts`。

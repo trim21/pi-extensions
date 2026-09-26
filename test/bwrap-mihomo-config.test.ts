@@ -12,13 +12,25 @@ function config(options: MihomoConfigOptions): MihomoConfig {
 }
 
 describe("generateMihomoConfig", () => {
-  it("emits fakeip dns with the configured nameservers", () => {
+  it("emits whitelist fakeip dns", () => {
     const result = config({ allowlist: ["pypi.org"], dnsServers: ["192.168.2.1", "223.5.5.5"] });
 
     expect(result.mode).toBe("rule");
     expect(result.dns["enhanced-mode"]).toBe("fake-ip");
     expect(result.dns["fake-ip-range"]).toBe("198.18.0.1/16");
-    expect(result.dns.nameserver).toEqual(["192.168.2.1", "223.5.5.5"]);
+    // whitelist：只有白名单里的域名拿 fake IP
+    expect(result.dns["fake-ip-filter-mode"]).toBe("whitelist");
+    expect(result.dns["fake-ip-filter"]).toEqual(["+.pypi.org"]);
+  });
+
+  it("rejects non-allowlist domains at the DNS layer via a rejecting nameserver", () => {
+    const result = config({ allowlist: ["pypi.org"], dnsServers: ["192.168.2.1"] });
+
+    // 未命中 fake-ip 白名单的域名落到 nameserver；rcode:// 伪服务器即时回 NXDOMAIN
+    expect(result.dns.nameserver).toEqual(["rcode://name_error"]);
+    expect(result.dns["default-nameserver"]).toEqual(["192.168.2.1"]);
+    // DIRECT 出站要按域名重新解析，必须走真实 DNS，否则解析回 fake-ip 成环
+    expect(result.dns["direct-nameserver"]).toEqual(["192.168.2.1"]);
   });
 
   it("routes allowlist domains to direct via DOMAIN-SUFFIX and blocks everything else", () => {
@@ -32,38 +44,32 @@ describe("generateMihomoConfig", () => {
     expect(result.rules.at(-1)).toBe("MATCH,REJECT");
   });
 
-  it("rejects non-allowlist domains at the DNS layer instead of via fake-ip", () => {
-    const result = config({
-      allowlist: ["pypi.org", "192.168.2.18"],
-      dnsServers: ["192.168.2.1"],
-    });
-
-    // allowlist 域名正常解析；IP 条目不参与 DNS 规则（按域名匹配）
-    expect(result.dns.rules).toEqual(["DOMAIN-SUFFIX,pypi.org,DIRECT", "MATCH,REJECT"]);
-  });
-
-  it("matches allowlist domain:port entries at the DNS layer by domain only", () => {
+  it("puts domain:port entries into the fake-ip whitelist by domain only", () => {
     const result = config({ allowlist: ["example.com:443"], dnsServers: ["192.168.2.1"] });
 
-    expect(result.dns.rules).toEqual(["DOMAIN-SUFFIX,example.com,DIRECT", "MATCH,REJECT"]);
+    // 端口只约束连接层规则，DNS 层按域名处理
+    expect(result.dns["fake-ip-filter"]).toEqual(["+.example.com"]);
+    expect(result.rules).toContain(
+      "AND,(DOMAIN-SUFFIX,example.com,DIRECT),(DST-PORT,443,DIRECT),DIRECT",
+    );
   });
 
-  it("puts allowlist domains into fake-ip-filter for real resolution", () => {
+  it("keeps IP entries out of the fake-ip whitelist", () => {
     const result = config({
-      allowlist: ["pypi.org", "192.168.2.18:8848"],
+      allowlist: ["pypi.org", "192.168.2.18", "192.168.2.18:8848"],
       dnsServers: ["192.168.2.1"],
     });
 
     expect(result.dns["fake-ip-filter"]).toEqual(["+.pypi.org"]);
   });
 
-  it("omits fake-ip-filter and allowlist rules when the allowlist is empty", () => {
+  it("omits the fake-ip whitelist but keeps DNS-layer rejection when the allowlist is empty", () => {
     const result = config({ allowlist: [], dnsServers: ["192.168.2.1"] });
 
     expect(result.rules).toEqual(["MATCH,REJECT"]);
+    // whitelist 模式下没有白名单 = 没有域名拿 fake IP，一切域名都走默认拒绝
     expect(result.dns["fake-ip-filter"]).toBeUndefined();
-    // deny-by-default 同样作用于 DNS 层
-    expect(result.dns.rules).toEqual(["MATCH,REJECT"]);
+    expect(result.dns.nameserver).toEqual(["rcode://name_error"]);
   });
 
   it("routes plain IP and CIDR entries via IP-CIDR with no-resolve", () => {

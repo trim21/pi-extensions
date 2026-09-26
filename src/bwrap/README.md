@@ -34,11 +34,15 @@ allowlist 变更因此即时生效，代价是每条命令重新启动一次 mih
 
 ## 网络路径
 
-- **mihomo（③）**：TUN（`auto-route` + `strict-route`）+ fakeip +
-  deny-by-default。`network.allowlist` 域名进 `fake-ip-filter`（真实解析），DNS 层
-  `DOMAIN-SUFFIX,…,DIRECT`；连接层未命中 allowlist 的流量 `MATCH,REJECT`。
-  注意：fakeip 对不在 filter 里的域名**直接本地应答**，不会走到
-  `dns.rules` 的 REJECT——未允许域名是先拿 fakeip、连接层再被拒。
+- **mihomo（③）**：TUN（`auto-route` + `strict-route`）+ **白名单 fakeip** +
+  deny-by-default。`network.allowlist` 的域名进 `fake-ip-filter`，配合
+  `fake-ip-filter-mode: whitelist` 即「只有这些域名拿 fake IP」；`dns.nameserver`
+  是 `rcode://name_error` 伪服务器，未命中白名单的域名（即未允许域名）落到它上面
+  即时拿到 NXDOMAIN（客户端报 `Could not resolve host`）；连接层再用 `MATCH,REJECT`
+  兜底裸 IP 连接。`dns.direct-nameserver` 必须指向真实 DNS：连接由 fake IP 还原成
+  域名后，DIRECT 出站要按域名重新解析，否则会解析回 fake-ip 再进 TUN 成环。
+  这样两边都成立：未允许域名在 DNS 层就被拒，allowlist 域名的归属又由 fake IP
+  精确给出（不依赖嗅探、不受 DNS TTL 影响）。
 - **slirp4netns（④）**：egress NAT。它 fork helper 进 netns 创建 tap0 并把
   tapfd 传回主进程，真正的出站 socket 在宿主 netns。
 - **interface-name: tap0**：mihomo 出站静态绑定 slirp 接口。不能用
@@ -77,9 +81,13 @@ dup 给 slirp4netns，且仅在子进程存活期间有效。
    持 tapfd 泄漏 netns。
 2. **tap fd pin 住 netns**：slirp4netns 持有 tapfd 期间 netns 不会销毁，
    所以任何架构下 slirp4netns 的终止都必须显式保证（stop() / exit-fd）。
-3. **fakeip 短路**：`dns.rules` 的 REJECT 拦不住 fakeip 应答，deny-by-default
-   实际由连接层 `MATCH,REJECT` 兜底。诊断时不要把"未允许域名能解析出
-   198.18.x.x"当成 DNS 层放行。
+3. **DNS 层拒绝要靠收窄 fakeip，不能靠 DNS 规则**：mihomo 没有 `dns.rules`
+   这个字段（`config.RawDNS` 里不存在，写进配置会被静默忽略），`fake-ip` 分支
+   也没有按域名拒绝的钩子——命中 fakeip 就直接回合成 IP。要让未允许域名在 DNS
+   层失败，只能把它们排除在 fakeip 白名单之外（`fake-ip-filter-mode: whitelist`），
+   让查询落到 `nameserver`，再由 `rcode://name_error` 即时回 NXDOMAIN。
+   诊断时注意两点：allowlist 域名解析出 `198.18.x.x` 是**正常现象**（fakeip 生效），
+   未允许域名则应当**解析失败**而不是解析出 fakeip。
 4. **诊断手段**：`pnpm sandbox --verbose` 透传 holder（mihomo/slirp4netns）
    日志；`nsenter -U -n --preserve-credentials -t <holderPid>` 可手动进入
    netns 用 AF_PACKET 抓 tap0 / 检查 `ip rule`（注意：沙盒里看不到宿主机

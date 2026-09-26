@@ -128,7 +128,7 @@ describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack inte
           out += data.toString();
         },
       });
-      // 未允许域名在 DNS 层被拒（mihomo dns.rules MATCH,REJECT）：
+      // 未允许域名在 DNS 层被拒（不在 fake-ip 白名单里 → 落到 rcode://name_error）：
       // 报 Could not resolve host，而非 fake-ip 后连接层断（TLS decode error）
       expect(out).toMatch(/Could not resolve host|Temporary failure in name resolution/);
     } finally {

@@ -1,4 +1,6 @@
 const FAKEIP_RANGE = "198.18.0.1/16";
+/** mihomo 的拒绝伪 DNS 服务器：即时返回 NXDOMAIN，不查上游、不等超时。 */
+const REJECT_NAMESERVER = "rcode://name_error";
 /** TUN 与 slirp4netns tap0 共用；不对齐时大包会在 slirp NAT 后 PMTU blackhole。 */
 export const TUN_MTU = 1500;
 
@@ -27,11 +29,15 @@ export interface MihomoConfig {
     ipv6: false;
     "enhanced-mode": "fake-ip";
     "fake-ip-range": string;
+    /** whitelist：只有 fake-ip-filter 命中的域名才拿 fake IP，其余走 nameserver。 */
+    "fake-ip-filter-mode": "whitelist";
+    /** fake IP 白名单：allowlist 里的域名（带端口条目的域名也进）。 */
+    "fake-ip-filter"?: string[];
+    /** 默认解析服务器：拒绝伪服务器，未命中白名单的域名（即未允许域名）即时 NXDOMAIN。 */
     nameserver: string[];
     "default-nameserver": string[];
-    "fake-ip-filter"?: string[];
-    /** 域名级 DNS 规则（mihomo >= 1.18）：allowlist 域名 DIRECT，其余 REJECT。 */
-    rules: string[];
+    /** DIRECT 出站按域名解析用；不指定会解析回 fake-ip 再进 TUN 成环。 */
+    "direct-nameserver": string[];
   };
   tun: {
     enable: true;
@@ -129,31 +135,29 @@ function ipRule(host: string): string {
 
 interface BuiltRules {
   rules: string[];
-  fakeIpFilter: string[];
-  /** DNS 层规则：allowlist 域名正常解析，未允许域名直接拒绝（解析失败而非 fake-ip 后连接失败）。 */
-  dnsRules: string[];
+  /** 拿 fake IP 的域名：只有它们会进 fakeip 分支，其余域名落到默认解析（拒绝）。 */
+  fakeIpWhitelist: string[];
 }
 
 /**
  * allowlist 条目 → mihomo 规则：
- * - 域名（含 :port 条目里的域名）进 fake-ip-filter，真实解析避免 DIRECT 出站
- *   拿到 fakeip 再进 TUN 形成环（loopback detector 会拒绝）；
+ * - 域名（含 :port 条目里的域名）进 fake-ip-filter（配合 filter-mode: whitelist，
+ *   即「只有这些域名拿 fake IP」）：fake IP 与域名一一对应，连接到达时凭它精确还原
+ *   域名再匹配规则，不依赖嗅探、也不受 DNS TTL 影响；
  * - 无端口条目直接匹配；带端口条目用 AND 组合（域名/IP + DST-PORT）精确放行；
- * - 最后以 MATCH,REJECT 兜底实现 deny-by-default。
- * dns.rules 同步构建：allowlist 域名 DIRECT，其余 MATCH,REJECT——未允许域名
- * 在 DNS 层即被拒绝（curl 报 Could not resolve host），而不是先拿 fake-ip、
- * 到连接层才断（报 TLS decode error，容易误判为网络故障）。
+ * - 最后以 MATCH,REJECT 兜底实现 deny-by-default（裸 IP 连接、绕过 DNS 的客户端）。
+ *
+ * 未进白名单的域名（即未允许域名）不拿 fake IP，直接落到 nameserver，被
+ * rcode://name_error 即时拒绝（客户端报 Could not resolve host）——mihomo 的 fakeip
+ * 分支本身没有按域名拒绝的钩子，收窄白名单是唯一能让拒绝发生在 DNS 层的办法。
  */
 function buildRules(allowlist: readonly string[]): BuiltRules {
   const rules: string[] = [];
-  const fakeIpFilter: string[] = [];
-  const dnsRules: string[] = [];
+  const fakeIpWhitelist: string[] = [];
   for (const entry of allowlist) {
     const { host, port } = parseAllowlistEntry(entry);
     if (!isIp(host)) {
-      fakeIpFilter.push(`+.${host}`);
-      // DNS 层按域名放行（端口无关）；连接层规则保留端口语义
-      dnsRules.push(`DOMAIN-SUFFIX,${host},DIRECT`);
+      fakeIpWhitelist.push(`+.${host}`);
       if (port === undefined) {
         rules.push(`DOMAIN-SUFFIX,${host},DIRECT`);
       } else {
@@ -166,24 +170,26 @@ function buildRules(allowlist: readonly string[]): BuiltRules {
     }
   }
   rules.push("MATCH,REJECT");
-  dnsRules.push("MATCH,REJECT");
-  return { rules, fakeIpFilter, dnsRules };
+  return { rules, fakeIpWhitelist };
 }
 
 /**
- * 生成 mihomo（Clash Meta）配置对象：TUN + fakeip + deny-by-default allowlist。
+ * 生成 mihomo（Clash Meta）配置对象：TUN + 白名单 fakeip + deny-by-default allowlist。
  *
  * - auto-detect-interface 让 mihomo 出站绑定 slirp4netns 的 tap0，否则它自己的
  *   DNS 查询会被 auto_route 送回 TUN 形成环；
  * - TUN mtu 与 slirp4netns `--mtu` 共用 TUN_MTU，避免依赖各自默认值；
- * - allowlist 域名走 fake-ip-filter 真实解析（见 buildRules 注释）。
+ * - fakeip 只服务 allowlist 域名（filter-mode: whitelist，见 buildRules 注释）：
+ *   域名归属因此精确且不随 TTL 失效；
+ * - direct-nameserver 必须指向真实 DNS：连接由 fake IP 还原成域名后，DIRECT 出站要
+ *   按域名重新解析，不指定就会解析回 fake-ip 再进 TUN 成环。
  */
 export function generateMihomoConfig(options: MihomoConfigOptions): MihomoConfig {
   const { allowlist, dnsServers } = options;
   if (dnsServers.length === 0) {
     throw new Error("At least one DNS server is required");
   }
-  const { rules, fakeIpFilter, dnsRules } = buildRules(allowlist);
+  const { rules, fakeIpWhitelist } = buildRules(allowlist);
   return {
     "mixed-port": 0,
     mode: "rule",
@@ -199,10 +205,11 @@ export function generateMihomoConfig(options: MihomoConfigOptions): MihomoConfig
       ipv6: false,
       "enhanced-mode": "fake-ip",
       "fake-ip-range": FAKEIP_RANGE,
-      nameserver: [...dnsServers],
+      "fake-ip-filter-mode": "whitelist",
+      ...(fakeIpWhitelist.length > 0 && { "fake-ip-filter": fakeIpWhitelist }),
+      nameserver: [REJECT_NAMESERVER],
       "default-nameserver": [...dnsServers],
-      ...(fakeIpFilter.length > 0 && { "fake-ip-filter": fakeIpFilter }),
-      rules: dnsRules,
+      "direct-nameserver": [...dnsServers],
     },
     tun: {
       enable: true,
