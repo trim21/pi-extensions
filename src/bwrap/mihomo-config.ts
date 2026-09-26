@@ -14,6 +14,8 @@ export interface MihomoConfigOptions {
 interface AllowlistEntry {
   readonly host: string;
   readonly port?: number;
+  /** `*.host` 条目：匹配 host 的全部子域名（任意深度），不含 host 本身。 */
+  readonly subdomains: boolean;
 }
 
 /** mihomo 配置以 JSON 序列化输出（JSON 是 YAML 子集，-f 加载无差别）。 */
@@ -52,6 +54,8 @@ export interface MihomoConfig {
 }
 
 const IPV4_PATTERN = /^\d{1,3}(?:\.\d{1,3}){3}(?:\/\d{1,2})?$/;
+/** 子域名条目前缀：`*.example.com` 表示 example.com 的全部子域名（不含它本身）。 */
+const WILDCARD_PREFIX = "*.";
 /** 合法 DNS 主机名（标签 1-63 字符，字母数字加连字符，不得以连字符开头/结尾）。 */
 const DOMAIN_PATTERN =
   /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
@@ -79,14 +83,32 @@ function parsePort(value: string): number {
 }
 
 /**
- * 解析 allowlist 条目：域名 / IPv4 / CIDR，可带 :port；IPv6 必须用 [] 包裹
- * （如 `[::1]:80`），裸 IPv6 会报错提示补方括号。
+ * 解析 allowlist 条目：域名 / IPv4 / CIDR，可带 :port；域名可加 `*.` 前缀表示
+ * 「它的全部子域名（任意深度，不含它本身）」；IPv6 必须用 [] 包裹（如 `[::1]:80`），
+ * 裸 IPv6 会报错提示补方括号。
  */
 function parseAllowlistEntry(entry: string): AllowlistEntry {
+  if (entry === "*") {
+    throw new Error(
+      `Invalid allowlist entry "${entry}": "*" must be followed by a domain, e.g. "*.example.com"`,
+    );
+  }
+  if (entry.startsWith("*") && !entry.startsWith(WILDCARD_PREFIX)) {
+    throw new Error(
+      `Invalid allowlist entry "${entry}": "*" must occupy the whole leftmost label, e.g. "*.example.com"`,
+    );
+  }
+  const subdomains = entry.startsWith(WILDCARD_PREFIX);
+  const body = subdomains ? entry.slice(WILDCARD_PREFIX.length) : entry;
+  if (body.length === 0) {
+    throw new Error(
+      `Invalid allowlist entry "${entry}": "*" must be followed by a domain, e.g. "*.example.com"`,
+    );
+  }
   let host: string;
   let port: number | undefined;
-  if (entry.startsWith("[")) {
-    const match = /^\[(.+)\](?::(\d+))?$/.exec(entry);
+  if (body.startsWith("[")) {
+    const match = /^\[(.+)\](?::(\d+))?$/.exec(body);
     if (match?.[1] === undefined) {
       throw new Error(`Invalid allowlist entry "${entry}"`);
     }
@@ -95,18 +117,15 @@ function parseAllowlistEntry(entry: string): AllowlistEntry {
     const portPart = match.at(2);
     port = portPart === undefined ? undefined : parsePort(portPart);
   } else {
-    const colon = entry.lastIndexOf(":");
+    const colon = body.lastIndexOf(":");
     if (colon === -1) {
-      if (entry.length === 0) {
-        throw new Error(`Invalid allowlist entry ""`);
-      }
-      host = entry;
+      host = body;
     } else {
-      const portPart = entry.slice(colon + 1);
+      const portPart = body.slice(colon + 1);
       if (!/^\d+$/.test(portPart)) {
         throw new Error(`Invalid allowlist entry "${entry}"`);
       }
-      host = entry.slice(0, colon);
+      host = body.slice(0, colon);
       if (host.length === 0) {
         throw new Error(`Invalid allowlist entry "${entry}"`);
       }
@@ -116,14 +135,24 @@ function parseAllowlistEntry(entry: string): AllowlistEntry {
       port = parsePort(portPart);
     }
   }
+  if (host.includes("*")) {
+    throw new Error(
+      `Invalid allowlist entry "${entry}": "*" is only allowed as the leftmost label, e.g. "*.example.com"`,
+    );
+  }
   if (isIp(host)) {
+    if (subdomains) {
+      throw new Error(
+        `Invalid allowlist entry "${entry}": "*" applies to domains only, use a CIDR entry for IP ranges`,
+      );
+    }
     if (!IP_CHARS_PATTERN.test(host)) {
       throw new Error(`Invalid allowlist entry "${entry}"`);
     }
   } else if (!DOMAIN_PATTERN.test(host)) {
     throw new Error(`Invalid allowlist entry "${entry}"`);
   }
-  return { host, port };
+  return { host, port, subdomains };
 }
 
 /** IP 条目的 mihomo 规则（IPv6 用 IP-CIDR6；no-resolve 跳过反向解析）。 */
@@ -144,6 +173,8 @@ interface BuiltRules {
  * - 域名（含 :port 条目里的域名）进 fake-ip-filter（配合 filter-mode: whitelist，
  *   即「只有这些域名拿 fake IP」）：fake IP 与域名一一对应，连接到达时凭它精确还原
  *   域名再匹配规则，不依赖嗅探、也不受 DNS TTL 影响；
+ * - 匹配精度两档：裸域名只匹配该域名本身（DOMAIN / 白名单里的裸域名），
+ *   `*.` 前缀匹配它的全部子域名、不含它本身（DOMAIN-WILDCARD / dot-wildcard）；
  * - 无端口条目直接匹配；带端口条目用 AND 组合（域名/IP + DST-PORT）精确放行；
  * - 最后以 MATCH,REJECT 兜底实现 deny-by-default（裸 IP 连接、绕过 DNS 的客户端）。
  *
@@ -155,13 +186,16 @@ function buildRules(allowlist: readonly string[]): BuiltRules {
   const rules: string[] = [];
   const fakeIpWhitelist: string[] = [];
   for (const entry of allowlist) {
-    const { host, port } = parseAllowlistEntry(entry);
+    const { host, port, subdomains } = parseAllowlistEntry(entry);
     if (!isIp(host)) {
-      fakeIpWhitelist.push(`+.${host}`);
+      // DNS 侧与连接层必须表达同一集合：精确条目用裸域名 / DOMAIN，
+      // 子域名条目用 dot-wildcard（任意深度子域名，不含 apex）/ DOMAIN-WILDCARD
+      fakeIpWhitelist.push(subdomains ? `.${host}` : host);
+      const domainRule = subdomains ? `DOMAIN-WILDCARD,*.${host},DIRECT` : `DOMAIN,${host},DIRECT`;
       if (port === undefined) {
-        rules.push(`DOMAIN-SUFFIX,${host},DIRECT`);
+        rules.push(domainRule);
       } else {
-        rules.push(`AND,(DOMAIN-SUFFIX,${host},DIRECT),(DST-PORT,${port},DIRECT),DIRECT`);
+        rules.push(`AND,(${domainRule}),(DST-PORT,${port},DIRECT),DIRECT`);
       }
     } else if (port === undefined) {
       rules.push(ipRule(host));

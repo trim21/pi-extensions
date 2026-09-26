@@ -52,10 +52,67 @@ async function mihomoWorkDirs(): Promise<string[]> {
   return entries.filter((name) => name.startsWith("mihomo-")).toSorted();
 }
 
+/** 起一个栈跑一条命令并收集输出（栈随命令结束停止）。 */
+async function runInStack(
+  allowlist: string[],
+  command: string,
+  dnsServers: string[],
+): Promise<string> {
+  const stack = await startNetworkStack({
+    allowlist,
+    dnsServers,
+    mihomoPath: findMihomo(),
+    slirp4netnsPath: findSlirp4netns(),
+  });
+  try {
+    let out = "";
+    await stack.exec({
+      command,
+      cwd: "/tmp",
+      bwrapPath: findBwrap(),
+      bwrapArgs,
+      shell: "/bin/bash",
+      env,
+      onData: (data: Buffer) => {
+        out += data.toString();
+      },
+    });
+    return out.trim();
+  } finally {
+    await stack.stop();
+  }
+}
+
 // 需要真实 mihomo/slirp4netns/unshare 与可出网的 DNS，常规 CI 不满足；
 // 手动用 RUN_NETSTACK_INTEGRATION=1 运行。某些环境的系统 DNS 走 slirp4netns
 // 出站不可达时，可用 NETSTACK_DNS 指定一个可通的 DNS（如 NETSTACK_DNS=223.5.5.5）。
 describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack integration", () => {
+  // 回归：条目匹配精度两档——裸域名只匹配自己，`*.` 前缀匹配全部子域名（不含 apex）。
+  it("matches bare domains exactly and '*.domain' entries as subdomains only", async () => {
+    const dnsServers = process.env.NETSTACK_DNS
+      ? [process.env.NETSTACK_DNS]
+      : await resolveDnsServers();
+    const resolve = (allowlist: string[], host: string): Promise<string> =>
+      runInStack(allowlist, `getent ahostsv4 ${host} | head -1`, dnsServers);
+
+    // 精确条目：apex 拿到 fake IP，子域名被拒（解析失败）
+    expect(await resolve(["pypi.org"], "pypi.org")).toMatch(/^198\.18\./);
+    expect(await resolve(["pypi.org"], "a.b.pypi.org")).toBe("");
+
+    // 通配条目：任意深度子域名拿到 fake IP，apex 与同后缀域名被拒
+    expect(await resolve(["*.pypi.org"], "a.b.pypi.org")).toMatch(/^198\.18\./);
+    expect(await resolve(["*.pypi.org"], "pypi.org")).toBe("");
+    expect(await resolve(["*.pypi.org"], "notpypi.org")).toBe("");
+
+    // 连接层与 DNS 层一致：通配条目的子域名能真的连出去
+    const httpCode = await runInStack(
+      ["*.pythonhosted.org"],
+      'curl -sS -m 20 -o /dev/null -w "%{http_code}" https://files.pythonhosted.org/',
+      dnsServers,
+    );
+    expect(httpCode).toMatch(/^[1-5]\d\d$/);
+  }, 120000);
+
   // 回归：每次启动的 mihomo 工作目录必须在停栈时删除（曾只 mkdir 从不删，
   // 实测本机累积 10026 个目录 / 196MB）。
   it("removes the mihomo work dir when the stack stops", async () => {

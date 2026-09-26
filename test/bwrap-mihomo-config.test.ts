@@ -11,6 +11,12 @@ function config(options: MihomoConfigOptions): MihomoConfig {
   return generateMihomoConfig(options);
 }
 
+function expectEntryRejected(entry: string, pattern: RegExp): void {
+  expect(() => generateMihomoConfig({ allowlist: [entry], dnsServers: ["192.168.2.1"] })).toThrow(
+    pattern,
+  );
+}
+
 describe("generateMihomoConfig", () => {
   it("emits whitelist fakeip dns", () => {
     const result = config({ allowlist: ["pypi.org"], dnsServers: ["192.168.2.1", "223.5.5.5"] });
@@ -20,7 +26,7 @@ describe("generateMihomoConfig", () => {
     expect(result.dns["fake-ip-range"]).toBe("198.18.0.1/16");
     // whitelist：只有白名单里的域名拿 fake IP
     expect(result.dns["fake-ip-filter-mode"]).toBe("whitelist");
-    expect(result.dns["fake-ip-filter"]).toEqual(["+.pypi.org"]);
+    expect(result.dns["fake-ip-filter"]).toEqual(["pypi.org"]);
   });
 
   it("rejects non-allowlist domains at the DNS layer via a rejecting nameserver", () => {
@@ -33,24 +39,51 @@ describe("generateMihomoConfig", () => {
     expect(result.dns["direct-nameserver"]).toEqual(["192.168.2.1"]);
   });
 
-  it("routes allowlist domains to direct via DOMAIN-SUFFIX and blocks everything else", () => {
+  it("matches bare domains exactly and blocks everything else", () => {
     const result = config({
       allowlist: ["pypi.org", "files.pythonhosted.org"],
       dnsServers: ["192.168.2.1"],
     });
 
-    expect(result.rules).toContain("DOMAIN-SUFFIX,pypi.org,DIRECT");
-    expect(result.rules).toContain("DOMAIN-SUFFIX,files.pythonhosted.org,DIRECT");
+    expect(result.rules).toContain("DOMAIN,pypi.org,DIRECT");
+    expect(result.rules).toContain("DOMAIN,files.pythonhosted.org,DIRECT");
     expect(result.rules.at(-1)).toBe("MATCH,REJECT");
+  });
+
+  it("matches '*.domain' entries as subdomains only", () => {
+    const result = config({ allowlist: ["*.example.com"], dnsServers: ["192.168.2.1"] });
+
+    // DNS 侧 dot-wildcard（任意深度子域名，不含 apex）；连接层 glob 同语义
+    expect(result.dns["fake-ip-filter"]).toEqual([".example.com"]);
+    expect(result.rules).toContain("DOMAIN-WILDCARD,*.example.com,DIRECT");
+    expect(result.rules).not.toContain("DOMAIN,example.com,DIRECT");
+  });
+
+  it("keeps apex and subdomain entries independent", () => {
+    const result = config({
+      allowlist: ["example.com", "*.example.com"],
+      dnsServers: ["192.168.2.1"],
+    });
+
+    expect(result.dns["fake-ip-filter"]).toEqual(["example.com", ".example.com"]);
+    expect(result.rules).toContain("DOMAIN,example.com,DIRECT");
+    expect(result.rules).toContain("DOMAIN-WILDCARD,*.example.com,DIRECT");
   });
 
   it("puts domain:port entries into the fake-ip whitelist by domain only", () => {
     const result = config({ allowlist: ["example.com:443"], dnsServers: ["192.168.2.1"] });
 
     // 端口只约束连接层规则，DNS 层按域名处理
-    expect(result.dns["fake-ip-filter"]).toEqual(["+.example.com"]);
+    expect(result.dns["fake-ip-filter"]).toEqual(["example.com"]);
+    expect(result.rules).toContain("AND,(DOMAIN,example.com,DIRECT),(DST-PORT,443,DIRECT),DIRECT");
+  });
+
+  it("combines subdomain entries with ports", () => {
+    const result = config({ allowlist: ["*.example.com:443"], dnsServers: ["192.168.2.1"] });
+
+    expect(result.dns["fake-ip-filter"]).toEqual([".example.com"]);
     expect(result.rules).toContain(
-      "AND,(DOMAIN-SUFFIX,example.com,DIRECT),(DST-PORT,443,DIRECT),DIRECT",
+      "AND,(DOMAIN-WILDCARD,*.example.com,DIRECT),(DST-PORT,443,DIRECT),DIRECT",
     );
   });
 
@@ -60,7 +93,7 @@ describe("generateMihomoConfig", () => {
       dnsServers: ["192.168.2.1"],
     });
 
-    expect(result.dns["fake-ip-filter"]).toEqual(["+.pypi.org"]);
+    expect(result.dns["fake-ip-filter"]).toEqual(["pypi.org"]);
   });
 
   it("omits the fake-ip whitelist but keeps DNS-layer rejection when the allowlist is empty", () => {
@@ -87,14 +120,6 @@ describe("generateMihomoConfig", () => {
 
     expect(result.rules).toContain(
       "AND,(IP-CIDR,192.168.2.18/32,DIRECT,no-resolve),(DST-PORT,8848,DIRECT),DIRECT",
-    );
-  });
-
-  it("routes domain:port entries via AND of DOMAIN-SUFFIX and DST-PORT", () => {
-    const result = config({ allowlist: ["example.com:443"], dnsServers: ["192.168.2.1"] });
-
-    expect(result.rules).toContain(
-      "AND,(DOMAIN-SUFFIX,example.com,DIRECT),(DST-PORT,443,DIRECT),DIRECT",
     );
   });
 
@@ -145,6 +170,19 @@ describe("generateMihomoConfig", () => {
     expect(() =>
       generateMihomoConfig({ allowlist: ["evil.com),("], dnsServers: ["192.168.2.1"] }),
     ).toThrow(/Invalid allowlist entry/);
+  });
+
+  it("rejects wildcard entries that are ambiguous or too wide", () => {
+    // 单独的 "*" 等于放行一切
+    expectEntryRejected("*", /must be followed by a domain/);
+    expectEntryRejected("*.", /must be followed by a domain/);
+    // "*" 必须占据完整的最左标签
+    expectEntryRejected("*example.com", /must occupy the whole leftmost label/);
+    expectEntryRejected("a.*.example.com", /only allowed as the leftmost label/);
+    expectEntryRejected("*.*.example.com", /only allowed as the leftmost label/);
+    // 通配只对域名有效
+    expectEntryRejected("*.1.2.3.4", /applies to domains only/);
+    expectEntryRejected("*.1.2.3.*", /only allowed as the leftmost label/);
   });
 
   it("rejects an empty nameserver list", () => {

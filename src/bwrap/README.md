@@ -49,7 +49,28 @@ allowlist 变更因此即时生效，代价是每条命令重新启动一次 mih
   `auto-detect-interface` 顶替——启动瞬间 tap0 可能尚未就绪，monitor 事后
   纠正但 DNS 拨号已走错接口，上游查询进自己的 TUN 被 `dns-hijack` 自劫持。
 - **mihomo `-d <uuid 目录>`**：cache.db 等落盘位置，放
-  `<agentDir>/tmp/mihomo-<uuid>/`，每次启动独立目录避免并发争抢 bbolt 锁。
+  `<agentDir>/tmp/mihomo-<uuid>/`，每次启动独立目录避免并发争抢 bbolt 锁；
+  停栈时删除，启动失败时保留作诊断材料。
+
+## allowlist 条目
+
+条目形式为「域名 / IPv4 / CIDR（可带 `:port`）」，域名有两档匹配精度——两层
+（DNS 白名单与连接层规则）语义严格一致：
+
+| 条目                    | 匹配                                             | 不匹配                               |
+| ----------------------- | ------------------------------------------------ | ------------------------------------ |
+| `example.com`           | `example.com`                                    | `www.example.com`、`a.b.example.com` |
+| `*.example.com`         | `www.example.com`、`a.b.example.com`（任意深度） | `example.com`、`notexample.com`      |
+| `example.com:443`       | 精确域名 + 仅 443                                | 其它端口                             |
+| `*.example.com:443`     | 子域名 + 仅 443                                  | `example.com`、其它端口              |
+| `1.2.3.4`、`10.0.0.0/8` | 对应 IP / 网段                                   | —                                    |
+
+- 裸域名是**精确匹配**（不是子树），需要「域名本身 + 子域名」同时放行时写两条。
+- `*.` 必须占据完整的最左标签：`*`、`*example.com`、`a.*.example.com` 都是配置错误；
+  通配只对域名有效，IP 范围用 CIDR 表达。
+- 端口只约束连接层（DNS 无端口语义）：`example.com:443` 能解析，但只有 443 能连。
+- 映射到 mihomo：精确条目在 DNS 侧是裸域名、连接层是 `DOMAIN`；通配条目在 DNS 侧
+  是 `.example.com`（dot-wildcard）、连接层是 `DOMAIN-WILDCARD,*.example.com`。
 
 ## 生命周期与清理
 

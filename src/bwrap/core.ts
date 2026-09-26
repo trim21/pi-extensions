@@ -58,7 +58,10 @@ const fsConfigProperties = {
 const networkConfigProperties = {
   mode: StringEnum(NETWORK_MODES),
   allowlist: Type.Array(
-    Type.String({ description: "limited 模式允许直连的域名 / IP / CIDR，可带 :port" }),
+    Type.String({
+      description:
+        'limited 模式允许直连的域名 / IP / CIDR，可带 :port；域名默认精确匹配，加 "*." 前缀表示其全部子域名（任意深度，不含该域名本身），如 "*.example.com"',
+    }),
   ),
   mihomoPath: Type.Optional(Type.String()),
   slirp4netnsPath: Type.Optional(Type.String()),

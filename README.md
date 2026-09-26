@@ -52,7 +52,7 @@ fs（文件系统）与 network（网络）各自独立取值，可任意组合�
 | `network` | `limited`         | 仅白名单可达：deny-by-default 过滤，`network.allowlist` 之外全部拒绝    |
 | `network` | `allow-all`       | 网络不受限                                                              |
 
-默认 `fs: workspace-write` + `network: block`。两者都 `allow-all` 时完全不经 bwrap、直接执行；其余组合都在 bwrap 里执行：`block` 用 `--unshare-net` 断网，`limited` 叠一层 mihomo TUN（fakeip DNS）+ slirp4netns egress NAT，只有 allowlist 里的域名 / IP / CIDR 可达，未命中流量在连接层被拒（allowlist 为空 = 全部拒绝）。进程模型、生命周期与设计约束见 `src/bwrap/README.md`。
+默认 `fs: workspace-write` + `network: block`。两者都 `allow-all` 时完全不经 bwrap、直接执行；其余组合都在 bwrap 里执行：`block` 用 `--unshare-net` 断网，`limited` 叠一层 mihomo TUN（白名单 fakeip DNS）+ slirp4netns egress NAT，只有 allowlist 里的域名 / IP / CIDR 可达：未允许域名在 DNS 层即解析失败，裸 IP 连接在连接层被拒（allowlist 为空 = 全部拒绝）。条目匹配语义（精确 / `*.` 子域名）见 `src/bwrap/README.md`，进程模型与设计约束见同一文档。
 
 ### 提权机制
 
@@ -104,7 +104,8 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
   "network": {
     "mode": "block",
     // limited 模式允许直连的域名 / IP / CIDR，可带 :port；空 = 全部拒绝
-    "allowlist": ["github.com", "*.githubassets.com"],
+    // 域名精确匹配，需要子域名时加 "*." 前缀（"*.github.com" 不含 github.com 本身）
+    "allowlist": ["github.com", "*.github.com", "*.githubassets.com"],
     // mihomo / slirp4netns 可执行文件路径（可选，缺省走 PATH）
     "mihomoPath": "/usr/local/bin/mihomo",
     "slirp4netnsPath": "/usr/bin/slirp4netns",
