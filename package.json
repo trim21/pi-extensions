@@ -106,8 +106,8 @@
     "octokit": "^5.0.5",
     "turndown": "^7.2.0",
     "undici": "^8.0.0",
-    "vscode-jsonrpc": "^9.0.1",
-    "vscode-languageserver-types": "^3.18.0",
+    "vscode-languageserver-protocol": "^3.18.4",
+    "vscode-languageserver-types": "^3.18.4",
     "web-tree-sitter": "^0.27.0"
   },
   "optionalDependencies": {

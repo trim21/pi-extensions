@@ -15,57 +15,78 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   CancellationTokenSource,
-  createMessageConnection,
-  type MessageConnection,
+  ConfigurationRequest,
+  createProtocolConnection,
+  DefinitionRequest,
+  type Diagnostic as VSCodeDiagnostic,
+  DiagnosticRefreshRequest,
+  type DiagnosticRegistrationOptions,
+  DidChangeConfigurationNotification,
+  DidChangeTextDocumentNotification,
+  DidChangeWatchedFilesNotification,
+  type DidChangeWatchedFilesRegistrationOptions,
+  DidCloseTextDocumentNotification,
+  DidOpenTextDocumentNotification,
+  DocumentDiagnosticReportKind,
+  DocumentDiagnosticRequest,
+  ErrorCodes,
+  FileChangeType as LspFileChangeType,
+  type FileEvent,
+  type Hover,
+  HoverRequest,
+  InitializedNotification,
+  InitializeRequest,
+  type Location as LspLocation,
+  type LocationLink,
+  LSPErrorCodes,
+  PrepareRenameRequest,
+  type PrepareRenameResult,
+  type ProtocolConnection,
+  type ProtocolRequestType,
+  PublishDiagnosticsNotification,
+  type Range,
+  ReferencesRequest,
+  type Registration,
+  RegistrationRequest,
+  RenameRequest,
+  type RequestParam,
   ResponseError,
+  type ServerCapabilities,
   StreamMessageReader,
   StreamMessageWriter,
-} from "vscode-jsonrpc/node";
-import type {
-  Diagnostic as VSCodeDiagnostic,
-  Hover,
-  Location as LspLocation,
-  LocationLink,
-  Range,
-  WorkspaceEdit,
-} from "vscode-languageserver-types";
+  TextDocumentSyncKind,
+  UnregistrationRequest,
+  WatchKind,
+  WorkDoneProgressCreateRequest,
+  WorkspaceDiagnosticRequest,
+  type WorkspaceEdit,
+  WorkspaceFoldersRequest,
+} from "vscode-languageserver-protocol/node";
 
 import type { LspServerHandle } from "./adapter.js";
 import { LANGUAGE_EXTENSIONS } from "./language.js";
 import { editFilePaths, stabilityAcceptable, trackStability } from "./rename.js";
 import type { FileChange, FileChangeType } from "./watcher.js";
 
-// LSP spec 常量
-const FILE_CHANGE_CREATED = 1;
-const FILE_CHANGE_CHANGED = 2;
-const FILE_CHANGE_DELETED = 3;
-const TEXT_DOCUMENT_SYNC_INCREMENTAL = 2;
-
 /** LSP WatchKind 位掩码（FileSystemWatcher.kind，缺省 create|change|delete）。 */
-export const WATCH_KIND_CREATE = 1;
-export const WATCH_KIND_CHANGE = 2;
-export const WATCH_KIND_DELETE = 4;
-const WATCH_KIND_ALL = WATCH_KIND_CREATE | WATCH_KIND_CHANGE | WATCH_KIND_DELETE;
+export const WATCH_KIND_CREATE = WatchKind.Create;
+export const WATCH_KIND_CHANGE = WatchKind.Change;
+export const WATCH_KIND_DELETE = WatchKind.Delete;
+const WATCH_KIND_ALL = WatchKind.Create | WatchKind.Change | WatchKind.Delete;
 
 /** 服务器通过 client/registerCapability 注册的单个 watcher。 */
-interface WatcherGlob {
+export interface WatcherGlob {
   pattern: string;
   kind: number;
 }
 
-const FILE_CHANGE_TYPE: Record<FileChangeType, number> = {
-  created: FILE_CHANGE_CREATED,
-  changed: FILE_CHANGE_CHANGED,
-  deleted: FILE_CHANGE_DELETED,
+const FILE_CHANGE_TYPE: Record<FileChangeType, LspFileChangeType> = {
+  created: LspFileChangeType.Created,
+  changed: LspFileChangeType.Changed,
+  deleted: LspFileChangeType.Deleted,
 };
 
 export type Diagnostic = VSCodeDiagnostic;
-
-/** LSP MethodNotFound（-32601）：服务器未实现 prepareRename / rename 请求。 */
-const LSP_METHOD_NOT_FOUND = -32601;
-
-/** LSP ContentModified（-32801）：服务器处理请求期间内容被修改，重发请求即可。 */
-const LSP_CONTENT_MODIFIED = -32801;
 
 /**
  * 位置不可 rename 或服务器不具备 rename 能力；与传输失败等意外错误区分，
@@ -151,7 +172,7 @@ async function retryOnContentModified<T>(fn: () => Promise<T>): Promise<T> {
     try {
       return await fn();
     } catch (error) {
-      if (!(error instanceof ResponseError && error.code === LSP_CONTENT_MODIFIED)) {
+      if (!(error instanceof ResponseError && error.code === LSPErrorCodes.ContentModified)) {
         throw error;
       }
       if (attempt >= renameVerificationTiming.contentModifiedRetries) {
@@ -161,14 +182,8 @@ async function retryOnContentModified<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-interface PrepareRenameResponse {
-  range?: unknown;
-  placeholder?: string;
-  defaultBehavior?: boolean;
-}
-
 /** renameSymbol 的请求与结果（line / character 为 0-based LSP position）。 */
-interface RenameSymbolRequest {
+export interface RenameSymbolRequest {
   path: string;
   line: number;
   character: number;
@@ -177,14 +192,14 @@ interface RenameSymbolRequest {
   signal?: AbortSignal;
 }
 
-interface RenameSymbolResult {
+export interface RenameSymbolResult {
   edit: WorkspaceEdit;
   /** prepareRename 返回的符号当前名；服务器未提供 prepare 时缺省。 */
   placeholder?: string;
 }
 
 /** definition / references / hover 请求的输入（line / character 为 0-based LSP position）。 */
-interface InspectPositionRequest {
+export interface InspectPositionRequest {
   path: string;
   line: number;
   character: number;
@@ -272,21 +287,12 @@ function describeStartupFailure(
   return parts.join("; ");
 }
 
-class InitializeError extends Error {
+export class InitializeError extends Error {
   readonly serverID: string;
   constructor(serverID: string, cause: unknown, detail?: string) {
     super(`Failed to initialize LSP server ${serverID}${detail ? `: ${detail}` : ""}`, { cause });
     this.serverID = serverID;
   }
-}
-
-interface DocumentDiagnosticReport {
-  items?: Diagnostic[];
-  relatedDocuments?: Record<string, DocumentDiagnosticReport>;
-}
-
-interface WorkspaceDiagnosticReport {
-  items?: { uri?: string; items?: Diagnostic[] }[];
 }
 
 interface DiagnosticRequestResult {
@@ -302,27 +308,6 @@ interface PullResult {
   handled: boolean;
   matched: boolean;
   timedOut: boolean;
-}
-
-interface CapabilityRegistration {
-  id: string;
-  method: string;
-  registerOptions?: {
-    identifier?: string;
-    workspaceDiagnostics?: boolean;
-    watchers?: { globPattern?: string; kind?: number }[];
-  };
-}
-
-interface ServerCapabilities {
-  textDocumentSync?:
-    | number
-    | {
-        change?: number;
-      };
-  diagnosticProvider?: unknown;
-  renameProvider?: boolean | { prepareProvider?: boolean };
-  [key: string]: unknown;
 }
 
 /**
@@ -368,7 +353,7 @@ export interface CreateInput {
 export interface LspClient {
   readonly root: string;
   readonly serverID: string;
-  readonly connection: MessageConnection;
+  readonly connection: ProtocolConnection;
   readonly notify: {
     open(request: { path: string }): Promise<number>;
     /** 把工作区文件事件批量通知服务器；驻留文档不在此通道（走 didOpen/didChange/退场）。 */
@@ -589,7 +574,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
   const initializeTimeoutMs = input.initializeTimeoutMs ?? clientDefaults.initializeTimeoutMs;
   const maxOpenDocuments = input.maxOpenDocuments ?? clientDefaults.maxOpenDocuments;
 
-  const connection = createMessageConnection(
+  const connection = createProtocolConnection(
     new StreamMessageReader(input.server.process.stdout),
     new StreamMessageWriter(input.server.process.stdin),
   );
@@ -616,7 +601,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
   const pushDiagnostics = new Map<string, Diagnostic[]>();
   const pullDiagnostics = new Map<string, Diagnostic[]>();
   const published = new Map<string, { at: number; version?: number }>();
-  const diagnosticRegistrations = new Map<string, CapabilityRegistration>();
+  const diagnosticRegistrations = new Map<string, Registration>();
   /** registration id → workspace/didChangeWatchedFiles watchers（pattern + WatchKind 位）。 */
   const watcherRegistrations = new Map<string, WatcherGlob[]>();
   const registrationListeners = new Set<() => void>();
@@ -645,56 +630,54 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
   // ── LSP 连接处理器 ─────────────────────────────────────────────────────────
 
-  connection.onNotification(
-    "textDocument/publishDiagnostics",
-    (params: { uri: string; version?: number; diagnostics: Diagnostic[] }) => {
-      const filePath = getFilePath(params.uri);
-      if (!filePath) {
-        return;
-      }
-      // 服务器版本滞后于已发送版本时，该 push 对应的是旧内容（异步重算未完成
-      // 时的迟到结果）。忽略，避免与当前版本结果混淆。
-      const currentVersion = documentVersions.get(filePath);
-      const isStalePush =
-        typeof params.version === "number" &&
-        currentVersion !== undefined &&
-        params.version !== currentVersion;
-      if (isStalePush) {
-        return;
-      }
-      published.set(filePath, {
-        at: Date.now(),
-        version: typeof params.version === "number" ? params.version : undefined,
-      });
-      const document = files[filePath];
-      if (document !== undefined) {
-        document.lastPushEmpty = params.diagnostics.length === 0;
-      }
-      updatePushDiagnostics(filePath, params.diagnostics);
-    },
-  );
-  connection.onRequest("window/workDoneProgress/create", () => null);
-  connection.onRequest("workspace/configuration", (params) => {
-    const items = (params as { items?: { section?: string }[] }).items ?? [];
-    return items.map((item) =>
-      configurationValue(input.server.settings ?? input.server.initialization, item.section),
-    );
+  connection.onNotification(PublishDiagnosticsNotification.type, (params) => {
+    const filePath = getFilePath(params.uri);
+    if (!filePath) {
+      return;
+    }
+    // 服务器版本滞后于已发送版本时，该 push 对应的是旧内容（异步重算未完成
+    // 时的迟到结果）。忽略，避免与当前版本结果混淆。
+    const currentVersion = documentVersions.get(filePath);
+    const isStalePush =
+      typeof params.version === "number" &&
+      currentVersion !== undefined &&
+      params.version !== currentVersion;
+    if (isStalePush) {
+      return;
+    }
+    published.set(filePath, {
+      at: Date.now(),
+      version: typeof params.version === "number" ? params.version : undefined,
+    });
+    const document = files[filePath];
+    if (document !== undefined) {
+      document.lastPushEmpty = params.diagnostics.length === 0;
+    }
+    updatePushDiagnostics(filePath, params.diagnostics);
   });
-  connection.onRequest("client/registerCapability", (params) => {
-    const registrations =
-      (params as { registrations?: CapabilityRegistration[] }).registrations ?? [];
+  connection.onRequest(WorkDoneProgressCreateRequest.type, () => {
+    /* 不展示服务器进度：仍按协议接受进度条创建 */
+  });
+  connection.onRequest(ConfigurationRequest.type, (params) =>
+    params.items.map((item) =>
+      configurationValue(input.server.settings ?? input.server.initialization, item.section),
+    ),
+  );
+  connection.onRequest(RegistrationRequest.type, (params) => {
     let changed = false;
-    for (const registration of registrations) {
-      if (registration.method === "workspace/didChangeWatchedFiles") {
+    for (const registration of params.registrations) {
+      if (registration.method === DidChangeWatchedFilesNotification.method) {
+        const options = registration.registerOptions as
+          DidChangeWatchedFilesRegistrationOptions | undefined;
         const watchers =
-          registration.registerOptions?.watchers
-            ?.map((watcher) => ({
+          options?.watchers
+            .map((watcher) => ({
               pattern: watcher.globPattern,
               kind: watcher.kind ?? WATCH_KIND_ALL,
             }))
             .filter((watcher): watcher is WatcherGlob => typeof watcher.pattern === "string") ?? [];
         watcherRegistrations.set(registration.id, watchers);
-      } else if (registration.method === "textDocument/diagnostic") {
+      } else if (registration.method === DocumentDiagnosticRequest.method) {
         diagnosticRegistrations.set(registration.id, registration);
         changed = true;
       }
@@ -703,14 +686,12 @@ export async function create(input: CreateInput): Promise<LspClient> {
       emitRegistrationChange();
     }
   });
-  connection.onRequest("client/unregisterCapability", (params) => {
-    const registrations =
-      (params as { unregisterations?: { id: string; method: string }[] }).unregisterations ?? [];
+  connection.onRequest(UnregistrationRequest.type, (params) => {
     let changed = false;
-    for (const registration of registrations) {
-      if (registration.method === "workspace/didChangeWatchedFiles") {
+    for (const registration of params.unregisterations) {
+      if (registration.method === DidChangeWatchedFilesNotification.method) {
         watcherRegistrations.delete(registration.id);
-      } else if (registration.method === "textDocument/diagnostic") {
+      } else if (registration.method === DocumentDiagnosticRequest.method) {
         diagnosticRegistrations.delete(registration.id);
         changed = true;
       }
@@ -719,18 +700,20 @@ export async function create(input: CreateInput): Promise<LspClient> {
       emitRegistrationChange();
     }
   });
-  connection.onRequest("workspace/workspaceFolders", () => [
+  connection.onRequest(WorkspaceFoldersRequest.type, () => [
     { name: "workspace", uri: pathToFileURL(input.root).href },
   ]);
-  connection.onRequest("workspace/diagnostic/refresh", () => null);
+  connection.onRequest(DiagnosticRefreshRequest.type, () => {
+    /* 诊断由本客户端主动拉取，刷新请求无需额外动作 */
+  });
   connection.listen();
 
   // ── initialize 握手 ─────────────────────────────────────────────────────────
 
   const initialized = await withTimeout(
-    connection.sendRequest<{ capabilities?: ServerCapabilities }>("initialize", {
+    connection.sendRequest(InitializeRequest.type, {
       rootUri: pathToFileURL(input.root).href,
-      processId: input.server.process.pid,
+      processId: input.server.process.pid ?? null,
       workspaceFolders: [{ name: "workspace", uri: pathToFileURL(input.root).href }],
       initializationOptions: {
         ...input.server.initialization,
@@ -743,7 +726,6 @@ export async function create(input: CreateInput): Promise<LspClient> {
           diagnostics: { refreshSupport: false },
         },
         textDocument: {
-          synchronization: { didOpen: true, didChange: true },
           diagnostic: { dynamicRegistration: true, relatedDocumentSupport: true },
           publishDiagnostics: { versionSupport: false },
         },
@@ -763,18 +745,18 @@ export async function create(input: CreateInput): Promise<LspClient> {
   });
 
   const syncKind = getSyncKind(initialized.capabilities);
-  const hasStaticPullDiagnostics = Boolean(initialized.capabilities?.diagnosticProvider);
+  const hasStaticPullDiagnostics = Boolean(initialized.capabilities.diagnosticProvider);
   // prepareProvider 只在静态声明为对象且显式开启时使用；其余情况跳过 prepare
   // 直接 rename（能力可能经动态注册，静态声明缺失不代表服务器不支持）。
-  const renameProvider = initialized.capabilities?.renameProvider;
+  const renameProvider = initialized.capabilities.renameProvider;
   const hasPrepareProvider =
     typeof renameProvider === "object" && renameProvider.prepareProvider === true;
 
-  await connection.sendNotification("initialized", {});
+  await connection.sendNotification(InitializedNotification.type, {});
 
   const settings = input.server.settings ?? input.server.initialization;
   if (settings) {
-    await connection.sendNotification("workspace/didChangeConfiguration", { settings });
+    await connection.sendNotification(DidChangeConfigurationNotification.type, { settings });
   }
 
   /**
@@ -819,7 +801,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
     }
     for (const path of plan.evict) {
       lruOrder.delete(path);
-      await connection.sendNotification("textDocument/didClose", {
+      await connection.sendNotification(DidCloseTextDocumentNotification.type, {
         textDocument: { uri: pathToFileURL(path).href },
       });
       delete files[path];
@@ -864,7 +846,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
   ): Promise<DiagnosticRequestResult> {
     let timedOut = false;
     const report = await withTimeout(
-      connection.sendRequest<DocumentDiagnosticReport | null>("textDocument/diagnostic", {
+      connection.sendRequest(DocumentDiagnosticRequest.type, {
         ...(identifier && { identifier }),
         textDocument: { uri: pathToFileURL(filePath).href },
       }),
@@ -887,14 +869,14 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
     let handled = false;
     let matched = false;
-    if (Array.isArray(report.items)) {
+    if (report.kind === DocumentDiagnosticReportKind.Full) {
       push(filePath, report.items);
       handled = true;
       matched = true;
     }
     for (const [uri, related] of Object.entries(report.relatedDocuments ?? {})) {
       const relatedPath = getFilePath(uri);
-      if (!relatedPath || !Array.isArray(related.items)) {
+      if (!relatedPath || related.kind !== DocumentDiagnosticReportKind.Full) {
         continue;
       }
       push(relatedPath, related.items);
@@ -911,7 +893,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
   ): Promise<DiagnosticRequestResult> {
     let timedOut = false;
     const report = await withTimeout(
-      connection.sendRequest<WorkspaceDiagnosticReport | null>("workspace/diagnostic", {
+      connection.sendRequest(WorkspaceDiagnosticRequest.type, {
         ...(identifier && { identifier }),
         previousResultIds: [],
       }),
@@ -928,9 +910,9 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
     const byFile = new Map<string, Diagnostic[]>();
     let matched = false;
-    for (const item of report.items ?? []) {
-      const relatedPath = item.uri ? getFilePath(item.uri) : undefined;
-      if (!relatedPath || !Array.isArray(item.items)) {
+    for (const item of report.items) {
+      const relatedPath = getFilePath(item.uri);
+      if (!relatedPath || item.kind !== DocumentDiagnosticReportKind.Full) {
         continue;
       }
       const existing = byFile.get(relatedPath) ?? [];
@@ -941,13 +923,22 @@ export async function create(input: CreateInput): Promise<LspClient> {
     return { handled: true, matched, byFile, timedOut };
   }
 
+  /** 动态注册的 pull 诊断选项：Registration.registerOptions 是 any，按注册方法收窄。 */
+  function diagnosticRegistrationOptions(
+    registration: Registration,
+  ): DiagnosticRegistrationOptions | undefined {
+    return registration.registerOptions as DiagnosticRegistrationOptions | undefined;
+  }
+
   function documentPullState() {
     const documentRegistrations = [...diagnosticRegistrations.values()].filter(
-      (registration) => registration.registerOptions?.workspaceDiagnostics !== true,
+      (registration) => diagnosticRegistrationOptions(registration)?.workspaceDiagnostics !== true,
     );
     return {
       documentIdentifiers: [
-        ...new Set(documentRegistrations.flatMap((r) => r.registerOptions?.identifier ?? [])),
+        ...new Set(
+          documentRegistrations.flatMap((r) => diagnosticRegistrationOptions(r)?.identifier ?? []),
+        ),
       ],
       supported: hasStaticPullDiagnostics || documentRegistrations.length > 0,
     };
@@ -955,11 +946,13 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
   function workspacePullState() {
     const workspaceRegistrations = [...diagnosticRegistrations.values()].filter(
-      (registration) => registration.registerOptions?.workspaceDiagnostics === true,
+      (registration) => diagnosticRegistrationOptions(registration)?.workspaceDiagnostics === true,
     );
     return {
       workspaceIdentifiers: [
-        ...new Set(workspaceRegistrations.flatMap((r) => r.registerOptions?.identifier ?? [])),
+        ...new Set(
+          workspaceRegistrations.flatMap((r) => diagnosticRegistrationOptions(r)?.identifier ?? []),
+        ),
       ],
       supported: workspaceRegistrations.length > 0,
     };
@@ -1263,10 +1256,10 @@ export async function create(input: CreateInput): Promise<LspClient> {
       // 保留 lastPushEmpty：安静期判据看的是「变更前服务器最后一份结论是否为空」
       files[resolvedPath] = { ...document, version: next, text, syncedAt: Date.now() };
       documentVersions.set(resolvedPath, next);
-      await connection.sendNotification("textDocument/didChange", {
+      await connection.sendNotification(DidChangeTextDocumentNotification.type, {
         textDocument: { uri, version: next },
         contentChanges:
-          syncKind === TEXT_DOCUMENT_SYNC_INCREMENTAL
+          syncKind === TextDocumentSyncKind.Incremental
             ? [
                 {
                   range: { start: { line: 0, character: 0 }, end: endPosition(document.text) },
@@ -1282,7 +1275,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
     pushDiagnostics.delete(resolvedPath);
     pullDiagnostics.delete(resolvedPath);
-    await connection.sendNotification("textDocument/didOpen", {
+    await connection.sendNotification(DidOpenTextDocumentNotification.type, {
       textDocument: { uri, languageId, version: 0, text },
     });
     files[resolvedPath] = { version: 0, text, syncedAt: Date.now() };
@@ -1311,13 +1304,13 @@ export async function create(input: CreateInput): Promise<LspClient> {
    * （$/cancelRequest），也立刻以 signal.reason（默认 AbortError）拒绝本地
    * promise——服务器可能永远不回应，工具调用不能就这么挂着。
    */
-  async function sendAbortableRequest<T>(
-    method: string,
-    params: object,
+  async function sendAbortableRequest<P, R, PR, E, RO>(
+    type: ProtocolRequestType<P, R, PR, E, RO>,
+    params: RequestParam<P>,
     signal: AbortSignal | undefined,
-  ): Promise<T> {
+  ): Promise<R> {
     if (!signal) {
-      return await connection.sendRequest<T>(method, params);
+      return await connection.sendRequest(type, params);
     }
     if (signal.aborted) {
       throw abortReason(signal);
@@ -1337,7 +1330,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
     signal.addEventListener("abort", onAbort, { once: true });
     try {
       return await Promise.race([
-        connection.sendRequest<T>(method, params, source.token),
+        connection.sendRequest(type, params, source.token),
         aborted.promise,
       ]);
     } finally {
@@ -1346,16 +1339,16 @@ export async function create(input: CreateInput): Promise<LspClient> {
     }
   }
 
-  const sendInspectRequest = async <T>(
-    method: string,
-    message: object,
+  const sendInspectRequest = async <P, R, PR, E, RO>(
+    type: ProtocolRequestType<P, R, PR, E, RO>,
+    message: RequestParam<P>,
     signal?: AbortSignal,
-  ): Promise<T> => {
+  ): Promise<R> => {
     try {
-      return await retryOnContentModified(() => sendAbortableRequest<T>(method, message, signal));
+      return await retryOnContentModified(() => sendAbortableRequest(type, message, signal));
     } catch (error) {
-      if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
-        throw new LspMethodNotSupportedError(input.serverID, method);
+      if (error instanceof ResponseError && error.code === ErrorCodes.MethodNotFound) {
+        throw new LspMethodNotSupportedError(input.serverID, type.method);
       }
       throw error;
     }
@@ -1382,7 +1375,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
     notify: {
       open: openDocument,
       async watchedFiles(changes: FileChange[]): Promise<void> {
-        const notified: { uri: string; type: number }[] = [];
+        const notified: FileEvent[] = [];
         for (const change of changes) {
           const resolvedPath = normalize(
             isAbsolute(change.path) ? change.path : resolve(input.directory, change.path),
@@ -1406,7 +1399,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
                 continue;
               }
             }
-            await connection.sendNotification("textDocument/didClose", {
+            await connection.sendNotification(DidCloseTextDocumentNotification.type, {
               textDocument: { uri: pathToFileURL(resolvedPath).href },
             });
             delete files[resolvedPath];
@@ -1420,7 +1413,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
         if (notified.length === 0) {
           return;
         }
-        await connection.sendNotification("workspace/didChangeWatchedFiles", {
+        await connection.sendNotification(DidChangeWatchedFilesNotification.type, {
           changes: notified,
         });
       },
@@ -1469,8 +1462,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
       // 与编辑器行为一致。
       const referencesRequest = () =>
         retryOnContentModified(() =>
-          sendAbortableRequest<{ uri: string }[] | null>(
-            "textDocument/references",
+          sendAbortableRequest(
+            ReferencesRequest.type,
             {
               textDocument: { uri },
               position,
@@ -1490,8 +1483,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
       const sendRename = async (): Promise<WorkspaceEdit | null> => {
         try {
           return await retryOnContentModified(() =>
-            sendAbortableRequest<WorkspaceEdit | null>(
-              "textDocument/rename",
+            sendAbortableRequest(
+              RenameRequest.type,
               {
                 textDocument: { uri },
                 position,
@@ -1501,7 +1494,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
             ),
           );
         } catch (error) {
-          if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
+          if (error instanceof ResponseError && error.code === ErrorCodes.MethodNotFound) {
             throw notRenameable();
           }
           throw error;
@@ -1510,17 +1503,17 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
       let placeholder: string | undefined;
       if (hasPrepareProvider) {
-        let prepared: PrepareRenameResponse | null;
+        let prepared: PrepareRenameResult | null;
         try {
           prepared = await retryOnContentModified(() =>
-            sendAbortableRequest<PrepareRenameResponse | null>(
-              "textDocument/prepareRename",
+            sendAbortableRequest(
+              PrepareRenameRequest.type,
               { textDocument: { uri }, position },
               request.signal,
             ),
           );
         } catch (error) {
-          if (error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND) {
+          if (error instanceof ResponseError && error.code === ErrorCodes.MethodNotFound) {
             throw notRenameable();
           }
           throw error;
@@ -1528,7 +1521,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
         if (!prepared) {
           throw notRenameable();
         }
-        if (typeof prepared.placeholder === "string") {
+        if ("placeholder" in prepared && typeof prepared.placeholder === "string") {
           placeholder = prepared.placeholder;
         }
       }
@@ -1537,7 +1530,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
       try {
         locations = await referencesRequest();
       } catch (error) {
-        if (!(error instanceof ResponseError && error.code === LSP_METHOD_NOT_FOUND)) {
+        if (!(error instanceof ResponseError && error.code === ErrorCodes.MethodNotFound)) {
           throw error;
         }
         const edit = await sendRename();
@@ -1608,8 +1601,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
     async definition(request: InspectPositionRequest): Promise<InspectLocation[]> {
       const { uri, position } = await preparePositionRequest(request);
       return toInspectLocations(
-        await sendInspectRequest<DefinitionResult>(
-          "textDocument/definition",
+        await sendInspectRequest(
+          DefinitionRequest.type,
           { textDocument: { uri }, position },
           request.signal,
         ),
@@ -1617,8 +1610,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
     },
     async references(request: InspectPositionRequest): Promise<InspectLocation[]> {
       const { uri, position } = await preparePositionRequest(request);
-      const locations = await sendInspectRequest<LspLocation[] | null>(
-        "textDocument/references",
+      const locations = await sendInspectRequest(
+        ReferencesRequest.type,
         {
           textDocument: { uri },
           position,
@@ -1630,8 +1623,8 @@ export async function create(input: CreateInput): Promise<LspClient> {
     },
     async hover(request: InspectPositionRequest): Promise<Hover | null> {
       const { uri, position } = await preparePositionRequest(request);
-      return await sendInspectRequest<Hover | null>(
-        "textDocument/hover",
+      return await sendInspectRequest(
+        HoverRequest.type,
         { textDocument: { uri }, position },
         request.signal,
       );
