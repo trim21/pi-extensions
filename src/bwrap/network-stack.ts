@@ -31,7 +31,7 @@ export interface NetworkStackOptions {
   readonly onHolderOutput?: (chunk: string) => void;
 }
 
-export interface NetworkStackExecOptions {
+interface NetworkStackExecOptions {
   readonly command: string;
   readonly cwd: string;
   readonly bwrapPath: string;

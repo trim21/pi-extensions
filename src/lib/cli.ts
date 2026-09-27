@@ -39,7 +39,7 @@ import { shlexSplit } from "./cli-args.js";
 import { isRecord, isUnknownArray } from "./narrow.js";
 
 /** Per-flag CLI metadata on top of the typebox schema. */
-export interface FlagMeta {
+interface FlagMeta {
   /** Optional short alias (single character), e.g. "n" for `-n`. */
   short?: string;
   /** Help line for this flag; defaults to the schema `description`. */

@@ -254,7 +254,7 @@ function ghAuthToken(): Promise<string> {
  * Error thrown when the GitHub search API rejects the request. Carries the
  * original toolcall params so the model can see the exact input.
  */
-export class GithubSearchError extends Error {
+class GithubSearchError extends Error {
   readonly params: SearchParams;
   readonly status: number | undefined;
 
@@ -279,7 +279,7 @@ function describeHttpError(status: number | undefined): string {
   return `GitHub API error${status === undefined ? "" : ` (HTTP ${status})`}`;
 }
 
-export interface GithubApi {
+interface GithubApi {
   /** Run an octokit request; retries once with a fresh token on 401. */
   call<T>(fn: (octokit: Octokit) => Promise<T>): Promise<T>;
 }
@@ -299,7 +299,7 @@ export interface GithubClientOptions {
  * module-level state. A stale cached token can produce 401s; the cache is
  * dropped and the request retried once in that case.
  */
-export function createGithubApi(options: GithubClientOptions = {}): GithubApi {
+function createGithubApi(options: GithubClientOptions = {}): GithubApi {
   let client: Octokit | undefined;
 
   async function getClient(): Promise<Octokit> {
@@ -400,7 +400,7 @@ export interface ActionJob {
 }
 
 /** One step of a workflow run job, as the REST API reports it. */
-export interface RunJobStep {
+interface RunJobStep {
   readonly name: string;
   readonly number: number;
   readonly status: string;

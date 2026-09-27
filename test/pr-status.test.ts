@@ -55,7 +55,6 @@ afterEach(() => {
 
 const PULL_ROUTE = "pulls/137";
 const STATUS_ROUTE = "commits/";
-const CHECK_RUNS_ROUTE = "check-runs";
 const RUNS_ROUTE = "actions/runs?head_sha=";
 
 interface PullFixture {

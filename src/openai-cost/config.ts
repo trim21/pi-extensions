@@ -9,9 +9,9 @@ import { join } from "node:path";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
-export const DEFAULT_PROVIDER_ID = "openai-cost";
-export const DEFAULT_PROVIDER_NAME = "OpenAI Cost";
-export const DEFAULT_API_KEY_ENV = "OPENAI_COST_API_KEY";
+const DEFAULT_PROVIDER_ID = "openai-cost";
+const DEFAULT_PROVIDER_NAME = "OpenAI Cost";
+const DEFAULT_API_KEY_ENV = "OPENAI_COST_API_KEY";
 export const DEFAULT_CONTEXT_WINDOW = 128000;
 export const DEFAULT_MAX_TOKENS = 8192;
 export const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
@@ -54,7 +54,7 @@ export interface OpenaiCostConfig {
   models?: OpenaiCostModelConfig[];
 }
 
-export function openaiCostConfigPath(): string {
+function openaiCostConfigPath(): string {
   return join(homedir(), ".pi", "agent", "openai-cost.json");
 }
 

@@ -35,7 +35,7 @@ export function formatDelivery(letter: Letter, now: number = Date.now()): string
 /** One agent as the model sees it in a listing. `id` is the stable pi
  * agent uuid; `name` is the display name when one was set; `self` marks
  * the calling agent itself. */
-export interface AgentListItem {
+interface AgentListItem {
   status: string;
   work_dir: string;
   id: string;

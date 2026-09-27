@@ -22,7 +22,7 @@ import { isRecord } from "../lib/narrow.js";
 import { asksNs, assertAddress, inboxNs } from "./registry.js";
 import type { TalkStorage } from "./storage.js";
 
-export const LetterSchema = Type.Object({
+const LetterSchema = Type.Object({
   id: Type.String(),
   from: Type.Object({
     addr: Type.String(),
@@ -48,7 +48,7 @@ export type LetterKind = Letter["kind"];
  * sender's pi session id as `from.sessionId`. Current letters pass through
  * unchanged; anything else returns null.
  */
-export function normalizeLetter(value: unknown): Letter | null {
+function normalizeLetter(value: unknown): Letter | null {
   if (Value.Check(LetterSchema, value)) {
     return value;
   }
@@ -69,7 +69,7 @@ export function normalizeLetter(value: unknown): Letter | null {
   return Value.Check(LetterSchema, migrated) ? migrated : null;
 }
 
-export const OutAskSchema = Type.Object({
+const OutAskSchema = Type.Object({
   askId: Type.String(),
   toAddr: Type.String(),
   body: Type.String(),
@@ -77,7 +77,7 @@ export const OutAskSchema = Type.Object({
 });
 export type OutAsk = Static<typeof OutAskSchema>;
 
-export const AuditRecordSchema = Type.Object({
+const AuditRecordSchema = Type.Object({
   ts: Type.Number(),
   event: Type.Union([
     Type.Literal("deposit"),
@@ -112,7 +112,7 @@ function assertMessageId(id: string): void {
 }
 
 /** The storage key for a letter: `<ts>-<id>.json`, sorted oldest-first. */
-export function letterFileName(letter: Letter): string {
+function letterFileName(letter: Letter): string {
   assertMessageId(letter.id);
   if (!Number.isSafeInteger(letter.ts) || letter.ts < 0) {
     throw new TypeError(`Invalid talk letter timestamp: ${letter.ts}`);
@@ -121,7 +121,7 @@ export function letterFileName(letter: Letter): string {
 }
 
 /** Structural validation plus filename safety (id/timestamp shape). */
-export function isValidLetter(value: unknown): value is Letter {
+function isValidLetter(value: unknown): value is Letter {
   if (!Value.Check(LetterSchema, value)) {
     return false;
   }

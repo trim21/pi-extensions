@@ -61,7 +61,7 @@ export interface AftToolContext {
   getState(): AftState;
 }
 
-export function bridgeFor(ctx: AftToolContext): AftProjectTransport {
+function bridgeFor(ctx: AftToolContext): AftProjectTransport {
   return ctx.getState().pool.pool.getBridge(ctx.cwd);
 }
 
@@ -79,7 +79,7 @@ export function compactArgs(args: Record<string, unknown>): Record<string, unkno
 }
 
 /** 人类视角的调用记录：input params + 与 LLM 相同的输出结果。 */
-export function buildPendantMarkdown(params: {
+function buildPendantMarkdown(params: {
   title: string;
   input: unknown;
   output: string;
@@ -327,7 +327,7 @@ const CALLGRAPH_SOFT_CODES = new Set(["symbol_not_found", "callgraph_building"])
  * 以及冷构建本身超过内联窗口。这里在扩展侧重试，预算耗尽才把 building
  * 文本交给模型。
  */
-export const CALLGRAPH_BUILD_RETRY_BUDGET_MS = 90_000;
+const CALLGRAPH_BUILD_RETRY_BUDGET_MS = 90_000;
 const CALLGRAPH_BUILD_RETRY_INTERVAL_MS = 3_000;
 
 export async function callCallgraphWithBuildRetry(
@@ -434,7 +434,7 @@ interface StatusSubscribableBridge {
  * 运行时能力探测：`AftProjectTransport` 接口没声明 subscribeStatus，但实际实现
  * （BinaryBridge）有。用 in 收窄做真检查，而不是断言成「一定支持」。
  */
-export function isStatusSubscribable(
+function isStatusSubscribable(
   bridge: AftProjectTransport,
 ): bridge is AftProjectTransport & StatusSubscribableBridge {
   return "subscribeStatus" in bridge && typeof bridge.subscribeStatus === "function";

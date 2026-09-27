@@ -35,7 +35,7 @@ export const CUSTOM_LABEL = "Type your own answer.";
 export const DONE_LABEL = "✓ Done";
 
 /** 与 opencode question.txt 语义一致的描述 */
-export const QUESTION_DESCRIPTION = [
+const QUESTION_DESCRIPTION = [
   "Use this tool when you need to ask the user questions during execution. This allows you to:",
   "1. Gather user preferences or requirements",
   "2. Clarify ambiguous instructions",
@@ -67,8 +67,6 @@ export const questionParamsSchema = Type.Object({
 });
 
 // ── types ────────────────────────────────────────────────────────────────────
-
-export type QuestionOption = Static<typeof optionSchema>;
 
 /** 与 schema 对齐的输入形状（multiple 可选） */
 export type QuestionInput = Static<typeof questionSchema>;

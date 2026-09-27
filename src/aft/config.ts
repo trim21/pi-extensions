@@ -24,7 +24,7 @@ import { parseWithSchema } from "../lib/parse-with-schema.js";
 /** aft 侧走 HTTP embeddings 端点的后端；fastembed（本地 ONNX）有意排除在外。 */
 const REMOTE_SEMANTIC_BACKENDS = ["openai_compatible", "ollama"] as const;
 
-export type RemoteSemanticBackend = (typeof REMOTE_SEMANTIC_BACKENDS)[number];
+type RemoteSemanticBackend = (typeof REMOTE_SEMANTIC_BACKENDS)[number];
 
 /** 就绪的外部 embedding 后端：类型受支持且配了 base_url。 */
 export interface SemanticRemote {

@@ -34,7 +34,7 @@ const todoSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type ClaudeCodeTodo = Static<typeof todoItemSchema>;
+type ClaudeCodeTodo = Static<typeof todoItemSchema>;
 
 const optionSchema = Type.Object(
   {

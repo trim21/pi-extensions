@@ -130,7 +130,7 @@ export function renderGrepOutput(matches: readonly GrepMatch[], truncated: boole
 }
 
 /** 搜索根：绝对路径原样，相对路径按调用 cwd 解析。 */
-export function resolveSearchRoot(path: string | undefined, cwd: string): string {
+function resolveSearchRoot(path: string | undefined, cwd: string): string {
   if (path === undefined || path === "") {
     return cwd;
   }

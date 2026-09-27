@@ -32,7 +32,7 @@ const STATUS_SCHEMA = Type.Union([
   Type.Literal("waiting-talk-message"),
 ]);
 
-export const AgentRecordSchema = Type.Object({
+const AgentRecordSchema = Type.Object({
   addr: Type.String(),
   agentId: Type.String(),
   name: Type.String(),
@@ -69,9 +69,9 @@ const LegacyAgentRecordSchema = Type.Object({
 export type Presence = "live" | "offline";
 
 /** Sweep leaves a record alone until its last activity was this long ago. */
-export const SWEEP_OFFLINE_GRACE_MS = 24 * 60 * 60 * 1000;
+const SWEEP_OFFLINE_GRACE_MS = 24 * 60 * 60 * 1000;
 /** A mailbox holding undelivered mail is kept this long after last contact. */
-export const SWEEP_MAIL_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+const SWEEP_MAIL_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
 const ADDRESS_PATTERN = /^[a-f0-9]{12}$/;
 
@@ -88,7 +88,7 @@ export function assertAddress(addr: string): void {
 
 // ── Storage namespaces ───────────────────────────────────────────────────
 
-export const RECORDS_NS = "records";
+const RECORDS_NS = "records";
 
 export function inboxNs(addr: string): string {
   assertAddress(addr);
