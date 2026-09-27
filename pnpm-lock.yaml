@@ -41,12 +41,12 @@ importers:
       undici:
         specifier: ^8.0.0
         version: 8.11.2
-      vscode-jsonrpc:
-        specifier: ^9.0.1
-        version: 9.0.3
+      vscode-languageserver-protocol:
+        specifier: ^3.18.4
+        version: 3.18.4
       vscode-languageserver-types:
-        specifier: ^3.18.0
-        version: 3.18.3
+        specifier: ^3.18.4
+        version: 3.18.4
       web-tree-sitter:
         specifier: ^0.27.0
         version: 0.27.0
@@ -2361,8 +2361,11 @@ packages:
     resolution: {integrity: sha512-qETYf9PCl1lVfwR+oBmMfc4vP2nqLNA35ABxorw3j06+xlKRgDVxbLgKm4Y/xPL0YWdeDjLoI4ImICIT3nB0zQ==}
     engines: {node: '>=14.0.0'}
 
-  vscode-languageserver-types@3.18.3:
-    resolution: {integrity: sha512-XIlzJ7Qp/jzSI1ds7/FwPAWrPeTZA7pAtlW4hdJ1J6xXWJL6dR9QYnDhJOdLzdKhUQ5Mm6mvUMw+3DcOQQasPw==}
+  vscode-languageserver-protocol@3.18.4:
+    resolution: {integrity: sha512-CCXbyr99dafRJzJH/0Ryk7ly5T8XPmSR0//OuF2w4m+9JiOin7zcAT5iET8GRE7Z9taFBejb3GbM0a0mbjdbrg==}
+
+  vscode-languageserver-types@3.18.4:
+    resolution: {integrity: sha512-nQsacoiijvl0fRf2q28uFDrAVwRhdCa3QveiF7/CX0r18mLR5FU/1WskSsCKOjmEbtteKUnY8x8Yzxop+k0zwg==}
 
   web-streams-polyfill@3.3.3:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
@@ -4517,7 +4520,12 @@ snapshots:
 
   vscode-jsonrpc@9.0.3: {}
 
-  vscode-languageserver-types@3.18.3: {}
+  vscode-languageserver-protocol@3.18.4:
+    dependencies:
+      vscode-jsonrpc: 9.0.3
+      vscode-languageserver-types: 3.18.4
+
+  vscode-languageserver-types@3.18.4: {}
 
   web-streams-polyfill@3.3.3: {}
 
