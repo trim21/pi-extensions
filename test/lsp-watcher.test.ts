@@ -15,6 +15,23 @@ import { type FileChange, type WatchOptions, watchWorkspace } from "../src/lib/l
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/**
+ * 轮询等待条件成立。parcel 的 inotify 后端分块投递、CI 负载下块间隔可达数百毫秒，
+ * 固定 sleep 会让迟到的块落在 stop() 之后被丢掉（历史 flaky 来源）。
+ */
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 3_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) {
+      return;
+    }
+    await sleep(20);
+  }
+}
+
 const itLinux = process.platform === "linux" ? it : it.skip;
 
 /** 从 /proc/self/fdinfo 收集所有 inotify watch 的 inode（内核 fdinfo 以十六进制打印）。 */
@@ -111,17 +128,19 @@ describe("workspace watcher", () => {
 
   it("去抖合并成单批", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
-    const { watcher, batches } = await collect(dir, { debounceMs: 100, flushMs: 500 });
+    // 窗口要盖住分块投递的块间隔（本地实测 ~5ms / ~55ms，CI 上更慢）；写入也要并发，
+    // 否则串行 await 会把 5 次写入拖过窗口边界，同一批洪峰分裂成两批。
+    const { watcher, batches } = await collect(dir, { debounceMs: 500, flushMs: 2_000 });
     try {
-      for (let i = 0; i < 5; i++) {
-        await writeFile(join(dir, `f${i}.txt`), "x");
-      }
-      await sleep(300);
+      await Promise.all(
+        Array.from({ length: 5 }, (_, i) => writeFile(join(dir, `f${i}.txt`), "x")),
+      );
+      await waitFor(() => new Set(batches.flat().map((c) => c.path)).size === 5);
       await watcher.stop();
       // fs.watch 对一次写入可能产生重复事件，断言合并为单批且全部路径出现
-      expect(batches.length).toBe(1);
-      const paths = new Set(batches[0].map((c) => c.path));
+      const paths = new Set(batches.flat().map((c) => c.path));
       expect(paths.size).toBe(5);
+      expect(batches.length).toBe(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -239,13 +258,15 @@ describe("workspace watcher", () => {
       await writeFile(keepFile, "x");
       const { watcher, batches } = await collect(dir, { debounceMs: 50, flushMs: 200 });
       try {
-        await sleep(300);
-        const watched = await inotifyWatchedInodes();
         const inoOf = async (path: string) => (await lstat(path)).ino;
+        const keepIno = await inoOf(keepDir);
+        // 递归挂载 watch 是异步的：轮询等 keep 目录的 watch 就位（固定 sleep 在慢机器上不够）
+        await waitFor(async () => (await inotifyWatchedInodes()).has(keepIno));
+        const watched = await inotifyWatchedInodes();
         expect(watched.has(await inoOf(ignoredFile))).toBe(false);
         expect(watched.has(await inoOf(ignoredDir))).toBe(false);
         // sanity：非 ignored 子目录确有内核 watch，证明断言管道有效
-        expect(watched.has(await inoOf(keepDir))).toBe(true);
+        expect(watched.has(keepIno)).toBe(true);
         expect(batches.flat()).toHaveLength(0);
       } finally {
         await watcher.stop();
@@ -259,19 +280,20 @@ describe("workspace watcher", () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
     let truncated = 0;
     const { watcher, batches } = await collect(dir, {
-      // parcel inotify 后端按块投递（实测 ~5ms / ~55ms 两批），去抖窗口须覆盖块间隔
-      debounceMs: 100,
-      flushMs: 300,
+      // 同「去抖合并成单批」：窗口要盖住分块投递的块间隔、写入并发、等待而非
+      // 固定 sleep——否则同一批洪峰分裂成多个批次，截断次数也就不可预期。
+      debounceMs: 500,
+      flushMs: 2_000,
       maxBatch: 3,
       onTruncated: () => {
         truncated += 1;
       },
     });
     try {
-      for (let i = 0; i < 10; i++) {
-        await writeFile(join(dir, `f${i}.txt`), "x");
-      }
-      await sleep(300);
+      await Promise.all(
+        Array.from({ length: 10 }, (_, i) => writeFile(join(dir, `f${i}.txt`), "x")),
+      );
+      await waitFor(() => truncated > 0);
       await watcher.stop();
       expect(truncated).toBe(1);
       expect(batches.flat()).toHaveLength(3);
