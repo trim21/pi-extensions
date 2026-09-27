@@ -13,7 +13,7 @@ const webSearchSchema = Type.Object({
   search1apiApiKey: Type.Optional(Type.String()),
 });
 
-export function webSearchConfigPath(): string {
+function webSearchConfigPath(): string {
   return join(homedir(), ".pi", "web-search.json");
 }
 

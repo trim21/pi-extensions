@@ -86,7 +86,7 @@ export async function readStateKey(filePath: string): Promise<string> {
   }
 }
 
-export function snapshotsEqual(left: FileSnapshot, right: FileSnapshot): boolean {
+function snapshotsEqual(left: FileSnapshot, right: FileSnapshot): boolean {
   return left.digest === right.digest;
 }
 

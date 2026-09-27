@@ -20,7 +20,7 @@ export const REQUEST_POLICY_CHANNEL = "bwrap:request-policy";
 
 const requestPolicyMessageSchema = Type.Object({ denyRequests: Type.Boolean() });
 
-export type RequestPolicyMessage = Static<typeof requestPolicyMessageSchema>;
+type RequestPolicyMessage = Static<typeof requestPolicyMessageSchema>;
 
 export interface RequestPolicy {
   /** 是否拒绝一切非沙盒请求（不弹审批框，直接拒绝）。 */

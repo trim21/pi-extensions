@@ -48,7 +48,7 @@ export const WATCH_KIND_DELETE = 4;
 const WATCH_KIND_ALL = WATCH_KIND_CREATE | WATCH_KIND_CHANGE | WATCH_KIND_DELETE;
 
 /** 服务器通过 client/registerCapability 注册的单个 watcher。 */
-export interface WatcherGlob {
+interface WatcherGlob {
   pattern: string;
   kind: number;
 }
@@ -168,7 +168,7 @@ interface PrepareRenameResponse {
 }
 
 /** renameSymbol 的请求与结果（line / character 为 0-based LSP position）。 */
-export interface RenameSymbolRequest {
+interface RenameSymbolRequest {
   path: string;
   line: number;
   character: number;
@@ -177,14 +177,14 @@ export interface RenameSymbolRequest {
   signal?: AbortSignal;
 }
 
-export interface RenameSymbolResult {
+interface RenameSymbolResult {
   edit: WorkspaceEdit;
   /** prepareRename 返回的符号当前名；服务器未提供 prepare 时缺省。 */
   placeholder?: string;
 }
 
 /** definition / references / hover 请求的输入（line / character 为 0-based LSP position）。 */
-export interface InspectPositionRequest {
+interface InspectPositionRequest {
   path: string;
   line: number;
   character: number;
@@ -272,7 +272,7 @@ function describeStartupFailure(
   return parts.join("; ");
 }
 
-export class InitializeError extends Error {
+class InitializeError extends Error {
   readonly serverID: string;
   constructor(serverID: string, cause: unknown, detail?: string) {
     super(`Failed to initialize LSP server ${serverID}${detail ? `: ${detail}` : ""}`, { cause });

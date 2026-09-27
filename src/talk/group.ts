@@ -20,7 +20,7 @@ import { Value } from "typebox/value";
 
 import type { TalkStorage } from "./storage.js";
 
-export const GroupSchema = Type.Object({
+const GroupSchema = Type.Object({
   id: Type.String(),
   /** pi agent uuids of the members. */
   members: Type.Array(Type.String()),
@@ -29,7 +29,7 @@ export const GroupSchema = Type.Object({
 });
 export type Group = Static<typeof GroupSchema>;
 
-export const GROUPS_NS = "groups";
+const GROUPS_NS = "groups";
 
 /**
  * Group names are user-facing and become storage keys, so they are
@@ -38,7 +38,7 @@ export const GROUPS_NS = "groups";
  */
 const GROUP_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
-export function assertGroupId(id: string): void {
+function assertGroupId(id: string): void {
   if (!GROUP_ID_PATTERN.test(id)) {
     throw new TypeError(`Invalid group name: ${id}`);
   }

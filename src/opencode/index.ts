@@ -2,9 +2,7 @@
  * opencode —— 统一注册 opencode 风格工具扩展。
  *
  * 聚合 files（read / edit / write 统一构建，共享 LSP service）、grep /
- * glob（ripgrep 搜索）、todo / question / bash，一次加载全部注册；各工具的
- * 公开 API（匹配引擎、纯函数等）也从这里重新导出，方便测试与其他模块
- * （如 lib/write-guard）引用。
+ * glob（ripgrep 搜索）、todo / question / bash，一次加载全部注册。
  *
  * Usage:
  *   pi -e ./opencode/index.ts
@@ -23,28 +21,6 @@ import opencodeGlob from "./glob.js";
 import opencodeGrep from "./grep.js";
 import opencodeQuestion from "./question.js";
 import opencodeTodo from "./todo.js";
-
-export { default as opencodeBash } from "./bash.js";
-export {
-  applyEdit,
-  convertToLineEnding,
-  detectLineEnding,
-  normalizeForEdit,
-  normalizeToLF,
-  replace,
-  restoreLineEndings,
-  stripBom,
-} from "./edit-engine.js";
-export {
-  default as opencodeFileTools,
-  readLines,
-  resolveBom,
-  type TruncationResult,
-} from "./files.js";
-export { default as opencodeGlob } from "./glob.js";
-export { default as opencodeGrep } from "./grep.js";
-export { default as opencodeQuestion } from "./question.js";
-export { default as opencodeTodo } from "./todo.js";
 
 export default function opencode(pi: ExtensionAPI) {
   // 非沙盒请求策略由本入口创建，注入文件工具与 bash runtime 共享同一份；

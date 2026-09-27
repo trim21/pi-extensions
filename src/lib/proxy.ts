@@ -37,7 +37,7 @@ export interface HttpProxySettings {
   noProxy?: string;
 }
 
-export function proxyConfigPath(): string {
+function proxyConfigPath(): string {
   return join(homedir(), ".pi", "agent", "proxy.json");
 }
 
@@ -89,7 +89,7 @@ function normalizeProxy(value: string): string {
  * 这里是仓库里允许的同步例外）。文件不存在 = 未配置；文件读不了、JSON 非法或
  * 字段不符都直接抛。
  */
-export function readProxySettings(
+function readProxySettings(
   configPath: string = proxyConfigPath(),
   env: NodeJS.ProcessEnv = process.env,
 ): HttpProxySettings {

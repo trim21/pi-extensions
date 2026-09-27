@@ -72,7 +72,7 @@ function appendTruncationNotice(
  * 截断时追加 `[Showing lines X-Y of N. Full output: path]` 提示。
  * opencode 套件的 bash 工具复用同一逻辑。
  */
-export function formatBashSuccess(result: Awaited<ReturnType<BwrapRuntime["execute"]>>): {
+function formatBashSuccess(result: Awaited<ReturnType<BwrapRuntime["execute"]>>): {
   content: { type: "text"; text: string }[];
   details: BashToolDetails | undefined;
 } {

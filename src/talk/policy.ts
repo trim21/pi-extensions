@@ -8,9 +8,9 @@
 
 import { MAX_BODY_CHARS } from "./mailbox.js";
 
-export const DEDUPE_WINDOW_MS = 10_000;
-export const RATE_LIMIT_MAX = 8;
-export const RATE_LIMIT_WINDOW_MS = 30_000;
+const DEDUPE_WINDOW_MS = 10_000;
+const RATE_LIMIT_MAX = 8;
+const RATE_LIMIT_WINDOW_MS = 30_000;
 export const BACKLOG_CAP = 50;
 
 export type OutboundVerdict = { ok: true } | { ok: false; reason: string };

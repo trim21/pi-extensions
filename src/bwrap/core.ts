@@ -85,7 +85,7 @@ const bwrapConfigProperties = {
 
 // 配置文件容忍未知字段：schema 之外的字段（如新版本扩展新增的配置）会被忽略，
 // 避免整个 bwrap 配置因单个未知字段失效；已声明字段仍做类型/取值校验。
-export const bwrapConfigSchema = Type.Object(bwrapConfigProperties, {
+const bwrapConfigSchema = Type.Object(bwrapConfigProperties, {
   additionalProperties: true,
 });
 

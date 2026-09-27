@@ -71,7 +71,7 @@ const IMAGE_MIMES = new Map<string, string>([
   [".webp", "image/webp"],
 ]);
 
-export interface FileToolDetails {
+interface FileToolDetails {
   diff?: string;
   patch?: string;
   firstChangedLine?: number;

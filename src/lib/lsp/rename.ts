@@ -196,7 +196,7 @@ export function canonicalizeEdit(edit: WorkspaceEdit): string {
 const WORD_PATTERN = /[\p{L}\p{N}_$]+/gu;
 
 /** 两个路径集合是否一致（用于判断 references 结果是否收敛）。 */
-export function samePathSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+function samePathSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   if (a.size !== b.size) {
     return false;
   }

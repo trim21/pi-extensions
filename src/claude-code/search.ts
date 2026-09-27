@@ -16,7 +16,6 @@ export function registerSearchTools(pi: ExtensionAPI): void {
   registerGrepTool(pi);
 }
 
-// Re-exported for tests and other modules that import pure functions from
-// "./search.js"; the implementations live in the split files above.
-export { globFiles } from "./glob.js";
+// Re-exported for tests that import pure functions from "./search.js"; the
+// implementations live in the split files above.
 export { buildGrepArguments, pageGrepOutput } from "./grep.js";

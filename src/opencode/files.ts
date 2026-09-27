@@ -200,7 +200,7 @@ function isBinaryFileBySample(sample: Uint8Array): boolean {
   return nonPrintableCount / sample.length > 0.3;
 }
 
-export interface TruncationResult {
+interface TruncationResult {
   content: string;
   truncated: boolean;
   truncatedBy: "lines" | "bytes" | null;
@@ -872,7 +872,7 @@ function registerWriteTool(
 
 // ── 入口 ─────────────────────────────────────────────────────────────────────
 
-export function registerFileTools(
+function registerFileTools(
   pi: ExtensionAPI,
   getService: () => LspService,
   policy: RequestPolicy,

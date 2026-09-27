@@ -98,7 +98,7 @@ export function costFromSseLine(line: string): number | undefined {
   }
 }
 
-export async function scanSseCost(body: ReadableStream<Uint8Array>): Promise<number | undefined> {
+async function scanSseCost(body: ReadableStream<Uint8Array>): Promise<number | undefined> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -196,7 +196,7 @@ function messageOf(event: AssistantMessageEvent): AssistantMessage {
   return event.partial;
 }
 
-export function applyCostToEvent(
+function applyCostToEvent(
   event: AssistantMessageEvent,
   reported: number | undefined,
 ): AssistantMessageEvent {

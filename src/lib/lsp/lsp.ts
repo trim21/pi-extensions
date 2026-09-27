@@ -103,7 +103,7 @@ export type LspConfig = Static<typeof lspConfigSchema>;
  * 解析期缺省（单一来源）。超时/LRU 与 client.create 共用 clientDefaults；
  * watch 无 client 对应项，数值在此集中。
  */
-export const configDefaults = {
+const configDefaults = {
   watch: {
     enabled: true,
     debounceMs: 300,
@@ -119,7 +119,7 @@ const RETRY_COOLDOWN_MS = 60_000;
 const NOTIFY_INTERVAL_MS = 5 * 60_000;
 
 /** 生效的工作区监听配置（缺省值已应用）。 */
-export interface EffectiveWatchConfig {
+interface EffectiveWatchConfig {
   enabled: boolean;
   debounceMs: number;
   flushMs: number;
@@ -388,21 +388,21 @@ interface LspState {
 }
 
 /** 渲染 LSP status 文本的回调（传入 undefined 表示清除）。 */
-export type StatusRenderer = (text: string | undefined) => void;
+type StatusRenderer = (text: string | undefined) => void;
 
-export type LspInspectQuery = "definition" | "references" | "hover";
+type LspInspectQuery = "definition" | "references" | "hover";
 
 /**
  * 返回类型与 query 关联：query 为 "hover" 时返回 hover 内容，否则返回位置列表。
  * 关联由 `inspect` 的重载签名建立（泛型参数下 TS 无法验证分支与返回体的对应关系，
  * 所以接口按 query 分重载，实现体只需返回这个联合）。
  */
-export type LspInspectResult<Q extends LspInspectQuery = LspInspectQuery> = Q extends "hover"
+type LspInspectResult<Q extends LspInspectQuery = LspInspectQuery> = Q extends "hover"
   ? { serverID: string; query: "hover"; hover: Hover | null }
   : { serverID: string; query: "definition" | "references"; locations: InspectLocation[] };
 
 /** 只读符号查询的入参：query 决定返回体（见 LspInspectResult）。line / character 为 0-based。 */
-export interface LspInspectRequest<Q extends LspInspectQuery = LspInspectQuery> {
+interface LspInspectRequest<Q extends LspInspectQuery = LspInspectQuery> {
   file: string;
   cwd: string;
   line: number;
@@ -411,7 +411,7 @@ export interface LspInspectRequest<Q extends LspInspectQuery = LspInspectQuery> 
   options?: LspRequestOptions;
 }
 
-export interface LspRequestOptions {
+interface LspRequestOptions {
   notify?: ExtensionUIContext["notify"];
   /** 中止时提前结束诊断等待（已中止时直接跳过诊断）。 */
   signal?: AbortSignal;

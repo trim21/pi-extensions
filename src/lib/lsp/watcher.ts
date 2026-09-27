@@ -36,7 +36,7 @@ export interface FileChange {
   isDirectory: boolean;
 }
 
-export const DEFAULT_IGNORE = [
+const DEFAULT_IGNORE = [
   "**/node_modules/**",
   "**/.git/**",
   "**/dist/**",

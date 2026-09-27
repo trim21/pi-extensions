@@ -368,7 +368,7 @@ export function describeSandbox(
  * 状态块不再附——提权请求刚被用户拒绝，再提示 dangerouslyDisableSandbox 只会
  * 诱导重复请求，作用域描述由本提醒承担。
  */
-export function describeSandboxChoice(resolved: ResolvedBwrap): string {
+function describeSandboxChoice(resolved: ResolvedBwrap): string {
   return [
     "<system-reminder>",
     `The user ran this command in the sandbox instead of approving unsandboxed execution: ${describeLimits(resolved)}.`,

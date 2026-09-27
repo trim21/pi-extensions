@@ -32,14 +32,13 @@ import { type ToolPendant } from "../lib/pendant.js";
 
 export const TOOL_NAME = "todowrite";
 
-export const TODO_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
-export const TODO_PRIORITIES = ["high", "medium", "low"] as const;
+const TODO_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
+const TODO_PRIORITIES = ["high", "medium", "low"] as const;
 
-export type TodoStatus = (typeof TODO_STATUSES)[number];
-export type TodoPriority = (typeof TODO_PRIORITIES)[number];
+type TodoStatus = (typeof TODO_STATUSES)[number];
 
 /** opencode 的 todowrite 描述（语义等价），补上「整体替换」这一关键规则 */
-export const TODOWRITE_DESCRIPTION = [
+const TODOWRITE_DESCRIPTION = [
   "Create and maintain a structured task list for the current coding session. Tracks progress, organizes multi-step work, and surfaces status to the user.",
   "",
   "This tool REPLACES the entire todo list: pass the full updated list of todos on every call.",
