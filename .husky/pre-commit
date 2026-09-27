@@ -1,2 +1,3 @@
+pnpm run build:holder
 pnpm exec tsc
 pnpm exec lint-staged

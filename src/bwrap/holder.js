@@ -18,7 +18,9 @@ function tap0Exists() {
 }
 async function waitFor(attempts, delayMs, predicate) {
   for (let i = 0; i < attempts; i++) {
-    if (await predicate()) return true;
+    if (await predicate()) {
+      return true;
+    }
     await sleep(delayMs);
   }
   return false;
