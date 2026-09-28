@@ -14,17 +14,24 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { throttle } from "lodash-es";
 import { type TObject, Type } from "typebox";
+import { Value } from "typebox/value";
 
 import { type CommandSpec, parseCommand } from "../lib/cli.js";
 import { fenceCodeBlock } from "../lib/markdown.js";
 import { isUnknownArray } from "../lib/narrow.js";
+import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { formatDisplayPath } from "../lib/path.js";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
 import { type SelectAction, selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
-import { type ApprovalRule, evaluateBashApproval, matchRule } from "./approval-rules.js";
+import {
+  type ApprovalRule,
+  type ApprovalRuleSet,
+  createApprovalRuleSet,
+} from "./approval-rules.js";
 import { commandPatternsFor } from "./approval-suggest.js";
 import {
   type BwrapConfig,
+  bwrapConfigFileSchema,
   findBwrap,
   findMihomo,
   type FsMode,
@@ -381,6 +388,20 @@ export function sandboxHintBlock(hint: string | undefined): { type: "text"; text
   return hint === undefined ? [] : [{ type: "text", text: hint }];
 }
 
+/**
+ * 项目配置文件形状非法时的错误：消息带文件路径与字段位置，cause 保留校验错误
+ * （Value.Check 只回答是否合法，详情用同一 schema 解析一次取到）。
+ */
+function invalidConfigError(path: string, raw: unknown): Error {
+  try {
+    parseWithSchema(bwrapConfigFileSchema, raw);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return new Error(`Invalid bwrap configuration at ${path}: ${detail}`, { cause: error });
+  }
+  return new Error(`Invalid bwrap configuration at ${path}: schema validation failed`);
+}
+
 export class BwrapRuntime {
   private resolved: ResolvedBwrap | undefined;
   private bwrapUnavailable = false;
@@ -539,8 +560,14 @@ export class BwrapRuntime {
       ) {
         throw new Error(UNSANDBOXED_DENIED);
       }
-      // 先按 approvalRules 自动判定：allow 直接放行，deny 直接拒绝，未命中才弹框
-      const decision = await evaluateBashApproval(request.command, runtime.approvalRules);
+      // 先按 approvalRules 自动判定：allow 直接放行，deny 直接拒绝，未命中才弹框。
+      // 规则集跟随 this.resolved，reload 或追加规则后无需重建
+      const ruleSet = createApprovalRuleSet({
+        rules: () => this.resolve(request.ctx).approvalRules,
+        suggestPatterns: commandPatternsFor,
+        persist: (rules) => this.persistAllowRules(request.ctx, rules),
+      });
+      const decision = await ruleSet.evaluate(request.command);
       if (decision === "deny") {
         throw new Error(`Command denied by bwrap approval rule: ${request.command}`);
       }
@@ -551,6 +578,7 @@ export class BwrapRuntime {
             request.command,
             request.description,
             execCwd,
+            ruleSet,
           )) === "sandbox";
       }
     }
@@ -686,12 +714,13 @@ export class BwrapRuntime {
     command: string,
     reason: string | undefined,
     execCwd: string,
+    ruleSet: ApprovalRuleSet,
   ): Promise<FullAccessGrant> {
     // hasUI 判定推迟到审批时刻：无 UI 会话弹不了审批框，按用户点 Deny 的标准文案拒绝
     if (!ctx.hasUI) {
       throw new Error(UNSANDBOXED_DENIED);
     }
-    const decision = await this.approveFullAccessUI(ctx, command, reason, execCwd);
+    const decision = await this.approveFullAccessUI(ctx, command, reason, execCwd, ruleSet);
     // 关闭对话框 = 中断并拒绝，不循环重问
     if (decision === undefined) {
       ctx.abort();
@@ -706,13 +735,13 @@ export class BwrapRuntime {
       }
       case DENY: {
         if (foreverApprovedPattern.length > 0) {
-          await this.persistAllowRule(ctx, command, foreverApprovedPattern);
+          await ruleSet.addAllowRules(foreverApprovedPattern);
         }
         throw new Error(UNSANDBOXED_DENIED);
       }
       case DENY_WITH_REASON: {
         if (foreverApprovedPattern.length > 0) {
-          await this.persistAllowRule(ctx, command, foreverApprovedPattern);
+          await ruleSet.addAllowRules(foreverApprovedPattern);
         }
         const feedback = decision.reason?.trim() ?? "";
         throw new Error(
@@ -723,7 +752,7 @@ export class BwrapRuntime {
       }
       case ALLOW_ONCE: {
         if (foreverApprovedPattern.length > 0) {
-          await this.persistAllowRule(ctx, command, foreverApprovedPattern);
+          await ruleSet.addAllowRules(foreverApprovedPattern);
         }
         return "full-access";
       }
@@ -744,22 +773,14 @@ export class BwrapRuntime {
     command: string,
     reason: string | undefined,
     execCwd: string,
+    ruleSet: ApprovalRuleSet,
   ): Promise<FullAccessUIDecision | undefined> {
     // 弹框前解析命令的持久化规则：`echo 1 | head` → `echo *`、`head *`。
     // 持久化规则的勾选折叠进 EDIT_RULES 子菜单，主决策列表只保留放行/拒绝，
     // 避免一屏 checkbox 淹没决策项。
-    const patterns = await commandPatternsFor(command);
     // 子菜单只列出未命中 allow 规则的 pattern：已提前允许的部分自动放行，
     // 无需再展示或重复勾选持久化（deny 命中的命令在 evaluate 阶段已被拒绝）。
-    const rules = this.resolve(ctx).approvalRules;
-    const unallowedPatterns = [
-      ...new Set(
-        patterns.filter((pattern) => {
-          const rule = rules.findLast((r) => matchRule(pattern, r.pattern));
-          return rule?.action !== "allow";
-        }),
-      ),
-    ];
+    const unallowedPatterns = await ruleSet.pendingPatterns(command);
     // dcg 扫描建议是可选的参考文本：未安装时静默跳过；已安装但扫描失败
     // 时 notify 提示，弹窗本身与无 dcg 时一致
     const outcome = await dcgSuggestion(command);
@@ -837,23 +858,27 @@ export class BwrapRuntime {
     }
   }
 
-  /** 把命令的权限模式写入项目 sandbox.json 的 approvalRules（allow forever）。 */
-  private async persistAllowRule(
+  /**
+   * 规则集的持久化实现：把勾选的 allow 规则追加进项目 sandbox.json 的
+   * approvalRules，并刷新缓存的规则使其立即生效。
+   */
+  private async persistAllowRules(
     ctx: ExtensionContext,
-    command: string,
-    patterns?: string[],
+    newRules: readonly ApprovalRule[],
   ): Promise<void> {
-    const rulePatterns = patterns ?? (await commandPatternsFor(command));
-    if (rulePatterns.length === 0) {
-      return; // 解析失败：本次处理，不写规则
-    }
-    const newRules: ApprovalRule[] = rulePatterns.map((pattern) => ({ action: "allow", pattern }));
     const { project } = getBwrapConfigPaths(ctx.cwd);
     let config: Record<string, unknown> = {};
     if (existsSync(project)) {
-      config = JSON.parse(readFileSync(project, "utf8")) as Record<string, unknown>;
+      const raw: unknown = JSON.parse(readFileSync(project, "utf8"));
+      // 会话开始时已校验过配置文件：这里再查一次形状（Value.Check 同时收窄类型），
+      // 避免把新规则追加进一个后续加载必然失败的文件（只在配置文件被中途改坏时可达）
+      if (!Value.Check(bwrapConfigFileSchema, raw)) {
+        throw invalidConfigError(project, raw);
+      }
+      config = raw;
     }
-    // 既有规则按不透明值原样保留（形状不认识也不丢），只追加本次允许的规则。
+    // 既有规则按不透明值原样保留（形状不认识也不丢），只追加本次允许的规则；
+    // 与规则无关的字段（含不认识的）同样原样写回，不经过 schema 往返
     const existing = isUnknownArray(config.approvalRules) ? config.approvalRules : [];
     config.approvalRules = [...existing, ...newRules];
     await mkdir(dirname(project), { recursive: true });

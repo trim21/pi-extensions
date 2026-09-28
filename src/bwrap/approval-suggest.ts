@@ -8,7 +8,7 @@
  */
 import { readFileSync } from "node:fs";
 
-import { type BashCommand, parseBashCommands } from "./approval-rules.js";
+import { type BashCommand, flattenCommands, parseBashCommands } from "./approval-rules.js";
 
 /**
  * 命令前缀 → 定义该命令的 token 数。`git checkout main` → `git` 的 arity 2，
@@ -41,21 +41,7 @@ export function commandPattern(command: BashCommand): string {
 }
 
 /** 命令（含所有嵌套命令）的 BashArity 建议模式列表（命令替换里的命令也展开）。 */
-function patternsFromCommands(commands: BashCommand[]): string[] {
-  const flat: string[] = [];
-  const visit = (cmd: BashCommand) => {
-    flat.push(commandPattern(cmd));
-    for (const nested of cmd.nested) {
-      visit(nested);
-    }
-  };
-  for (const cmd of commands) {
-    visit(cmd);
-  }
-  return flat;
-}
-
 export async function commandPatternsFor(command: string): Promise<string[]> {
   const parsed = await parseBashCommands(command);
-  return patternsFromCommands(parsed.commands);
+  return flattenCommands(parsed).map((cmd) => commandPattern(cmd));
 }

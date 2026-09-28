@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -897,6 +897,71 @@ describe("BwrapRuntime", () => {
         approvalRules: { action: string; pattern: string }[];
       };
       expect(config.approvalRules).toEqual([{ action: "allow", pattern: "printf *" }]);
+    });
+  });
+
+  describe("persisting approval rules", () => {
+    it("preserves unrelated and unknown config fields when appending rules", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-keep-fields-"));
+      const configPath = join(directory, ".pi", "sandbox.json");
+      mkdirSync(join(directory, ".pi"), { recursive: true });
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          fs: { mode: "workspace-write" },
+          futureField: { nested: true },
+          approvalRules: [{ action: "allow", pattern: "echo *" }],
+        }),
+      );
+      const { runtime } = setupRuntime();
+      runtime.setMode(directory, { fs: "workspace-write" });
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
+        .mockResolvedValueOnce("☐ printf *")
+        .mockResolvedValueOnce(BACK)
+        .mockResolvedValueOnce(ALLOW_ONCE);
+      const result = await runtime.execute({
+        toolCallId: "test",
+        command: "printf keep",
+        requestFullAccess: true,
+        ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
+      });
+      expect(result).toMatchObject({ exitCode: 0, output: "keep" });
+      const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+      expect(config.futureField).toEqual({ nested: true });
+      expect(config.fs).toEqual({ mode: "workspace-write" });
+      expect(config.approvalRules).toEqual([
+        { action: "allow", pattern: "echo *" },
+        { action: "allow", pattern: "printf *" },
+      ]);
+    });
+
+    it("refuses to append rules to a config file whose shape became invalid", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "cc-bwrap-invalid-config-"));
+      const configPath = join(directory, ".pi", "sandbox.json");
+      mkdirSync(join(directory, ".pi"), { recursive: true });
+      // 会话开始时配置合法（setMode 会加载它），中途被改坏：形状非法时拒绝追加
+      writeFileSync(configPath, JSON.stringify({ fs: { mode: "workspace-write" } }));
+      const { runtime } = setupRuntime();
+      runtime.setMode(directory, { fs: "workspace-write" });
+      const broken = '{\n  "approvalRules": { "action": "allow" }\n}\n';
+      writeFileSync(configPath, broken);
+      const select = vi
+        .fn()
+        .mockResolvedValueOnce(EDIT_RULES)
+        .mockResolvedValueOnce("☐ printf *")
+        .mockResolvedValueOnce(BACK)
+        .mockResolvedValueOnce(ALLOW_ONCE);
+      await expect(
+        runtime.execute({
+          toolCallId: "test",
+          command: "printf broken",
+          requestFullAccess: true,
+          ctx: fullAccessContext({ select, input: vi.fn() }, undefined, directory),
+        }),
+      ).rejects.toThrow(/Invalid bwrap configuration at .*sandbox\.json/);
+      expect(readFileSync(configPath, "utf8")).toBe(broken);
     });
   });
 
