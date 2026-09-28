@@ -1,19 +1,13 @@
 /**
  * `gh` subprocess adapter: start a `gh` process, collect its output, apply the
- * shared timeout / kill semantics, and expose the proxy layer the subprocess
- * inherits. It lives in `lib/` so both the gh tool layer (`src/gh/`) and the
- * octokit clients (`lib/github.ts`) can depend on it without a cycle.
+ * shared timeout / kill semantics, and hand it the proxy env from the shared
+ * egress layer. It lives in `lib/` so both the gh tool layer (`src/gh/`) and
+ * the octokit clients (`lib/github.ts`) can depend on it without a cycle.
  */
 
 import { spawn } from "node:child_process";
 
-import { createHttpProxy } from "./proxy.js";
-
-/**
- * 代理配置（~/.pi/agent/proxy.json，回退到 HTTP(S)_PROXY 环境变量）在本模块内共享：
- * `gh` 子进程与 octokit 请求都从这里取，配置只在首次使用时读一次。
- */
-export const httpProxy = createHttpProxy();
+import { egress } from "./egress.js";
 
 export interface GhResult {
   stdout: string;
@@ -42,7 +36,7 @@ export function runGh(args: string[], ctx: GhRunContext): Promise<GhResult> {
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       // gh 是 Go 程序，只认环境变量形式的代理配置；ctx.env 最后合并，调用方可覆盖。
-      env: { ...process.env, ...httpProxy.env, ...ctx.env, GH_PAGER: "cat" },
+      env: { ...process.env, ...egress.env, ...ctx.env, GH_PAGER: "cat" },
     });
 
     let stdout = "";

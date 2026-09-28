@@ -75,12 +75,17 @@ HTML 页面提取正文并转 markdown。
 
 ### Requirement: 出网代理
 
-`web_fetch` 的请求从共享代理层发出，而不是全局 `fetch`。
+所有出网请求（`web_fetch` 抓取与 `web_search` 搜索）MUST 从共享出网层 `src/lib/egress.ts` 发出，而不是全局 `fetch`。该层读一次代理配置（`~/.pi/agent/proxy.json`，回退 `HTTPS_PROXY` 等环境变量）并同时提供请求用的 `fetch` 与给子进程注入的代理环境变量；未配置代理时就是直连。`web_search` 走全局 `fetch` 时配置了代理也直连，因为 Node 的全局 `fetch` 不认代理环境变量——GitHub 用户附件、Search1API 这类 host 在受限网络下只有经代理才可达。
 
 #### Scenario: 走配置的代理
 
 - **WHEN** `~/.pi/agent/proxy.json` 配了 `proxy`（或环境里有 `HTTPS_PROXY` 等等价值）
 - **THEN** 抓取经该代理发出；未配置时就是直连。Node 的全局 `fetch` 不认代理环境变量，GitHub 用户附件这类 host 在受限网络下只有经代理才可达
+
+#### Scenario: web_search 也走配置的代理
+
+- **WHEN** `~/.pi/agent/proxy.json` 配了 `proxy`（或环境里有 `HTTPS_PROXY` 等等价值）
+- **THEN** Search1API 请求经该代理发出，而不是全局 `fetch` 直连；未配置时就是直连
 
 ### Requirement: web_search 搜索
 
@@ -109,8 +114,8 @@ HTML 页面提取正文并转 markdown。
 ## Implementation
 
 - **web_fetch**（`src/web/fetch.ts`）：SSRF 防护在发起请求前对 hostname 做 DNS 预解析，任一地址落入私有 / 保留地址黑名单即拒绝（IPv4 含 0/8、10/8、127/8、169.254/16、172.16/12、192.168/16、100.64/10、198.18/15、192.0.0/24、组播；IPv6 含 `::`、`::1`、`fc00::/7`、`fe80::/10`、`::ffff:` 映射，非 IP 一律拒绝）；重定向手动跟随、逐跳重新校验，上限 5 跳、只许 http/https。HTML 用 Readability 提取主内容（含 React 19 流式 SSR 的 `<div hidden id="S:N">` 解除）→ Turndown 转 markdown；30 秒超时、5MB 响应上限、markdown 100KB 截断；失败统一 `isError` + `抓取失败: ...`。
-- **两种模式的分工**：`openResponse` 负责「URL 合法 → 逐跳重定向 → 2xx」，正文模式（`fetchPage`）在其上加 content-type 白名单（`text/*` / JSON / XML / HTML，其余报「不支持的内容类型」）与 UTF-8 解码；落盘模式（`saveUrlToFile`）不加任何白名单，直接把响应流写进 `output_path`，上限 200MB，任何一步失败删掉半成品。最终地址由重定向循环自己给出（手动重定向下不依赖 `response.url`）。落盘位置的审批复用 `src/lib/write-guard.ts`（工作区与 `/tmp` 放行，其余问用户，无 UI 拒绝），审批放在 try 之外——用户拒绝不是「抓取失败」。请求经 `src/lib/proxy.ts` 的 `createHttpProxy().fetch` 发出。
+- **两种模式的分工**：`openResponse` 负责「URL 合法 → 逐跳重定向 → 2xx」，正文模式（`fetchPage`）在其上加 content-type 白名单（`text/*` / JSON / XML / HTML，其余报「不支持的内容类型」）与 UTF-8 解码；落盘模式（`saveUrlToFile`）不加任何白名单，直接把响应流写进 `output_path`，上限 200MB，任何一步失败删掉半成品。最终地址由重定向循环自己给出（手动重定向下不依赖 `response.url`）。落盘位置的审批复用 `src/lib/write-guard.ts`（工作区与 `/tmp` 放行，其余问用户，无 UI 拒绝），审批放在 try 之外——用户拒绝不是「抓取失败」。请求经共享出网层 `src/lib/egress.ts` 的 `fetch` 发出。
 - **web_search**（`src/web/search.ts`）：POST `https://api.search1api.com/search`（Bearer 认证），key 从 `SEARCH1API_KEY` 或 `~/.pi/web-search.json` 的 `search1apiApiKey` 读取；`queries` 最多 4 个并行搜索后按 URL 去重合并；`includeContent` 内联抓取前几条正文（`crawl_results` 上限 5）；响应经 typebox schema 校验，无 AI 预消化。
-- 配置：`src/web/config.ts`；出网代理 `~/.pi/agent/proxy.json`（`src/lib/proxy.ts`，与 gh-readonly 共用）。
+- 配置：`src/web/config.ts`；出网代理 `~/.pi/agent/proxy.json`（`src/lib/proxy.ts` 解析，经共享出网层 `src/lib/egress.ts` 提供给 `web_fetch` / `web_search`，与 gh-readonly 共用）。
 
-涉及文件：`src/web/fetch.ts`、`src/web/search.ts`、`src/web/config.ts`、`src/lib/proxy.ts`。
+涉及文件：`src/web/fetch.ts`、`src/web/search.ts`、`src/web/config.ts`、`src/lib/egress.ts`、`src/lib/proxy.ts`。

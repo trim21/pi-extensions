@@ -4,9 +4,9 @@
  * SSRF 防护：DNS 预解析 + 拒绝私有/保留地址 + 每跳重定向重新校验，
  * 防止把 agent 变成内网探测口。正文提取用 readability 主内容算法。
  *
- * 出网走 `src/lib/proxy.ts` 的代理层（~/.pi/agent/proxy.json，回退 HTTPS_PROXY 等环境
- * 变量）：Node 的全局 fetch 不认代理环境变量，GitHub 的用户附件、release 资产这类只在
- * 代理可达的 host 上，必须从这里挂出去，否则沙箱内一律 fetch failed。
+ * 出网走共享出网层 `src/lib/egress.ts`（代理配置 ~/.pi/agent/proxy.json，回退 HTTPS_PROXY
+ * 等环境变量）：Node 的全局 fetch 不认代理环境变量，GitHub 的用户附件、release 资产这类
+ * 只在代理可达的 host 上，必须从这里挂出去，否则沙箱内一律 fetch failed。
  *
  * 本文件是独立扩展入口（见 package.json 的 pi.extensions），可在配置里单独禁用。
  */
@@ -21,12 +21,10 @@ import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 import { Type } from "typebox";
 
+import { egress } from "../lib/egress.js";
 import { resolvePathArg } from "../lib/path.js";
-import { createHttpProxy } from "../lib/proxy.js";
 import { createRequestPolicy } from "../lib/request-policy.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
-
-const httpProxy = createHttpProxy();
 
 const MAX_REDIRECTS = 5;
 const TIMEOUT_MS = 30_000;
@@ -143,7 +141,7 @@ interface SavedFile {
 async function fetchWithRedirects(
   url: URL,
   signal: AbortSignal | undefined,
-  fetchFn: typeof fetch = httpProxy.fetch,
+  fetchFn: typeof fetch = egress.fetch,
 ): Promise<{ response: Response; url: URL }> {
   let current = url;
   for (let redirects = 0; ; redirects++) {

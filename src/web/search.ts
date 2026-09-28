@@ -11,6 +11,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { egress } from "../lib/egress.js";
 import { loadSearch1ApiKey } from "./config.js";
 
 const SEARCH_URL = "https://api.search1api.com/search";
@@ -150,7 +151,7 @@ export async function searchWeb(
   apiKey: string,
   options: SearchOptions = {},
 ): Promise<SearchResult> {
-  const response = await fetch(SEARCH_URL, {
+  const response = await egress.fetch(SEARCH_URL, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,

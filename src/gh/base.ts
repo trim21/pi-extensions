@@ -12,7 +12,8 @@ import { delimiter, join } from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
-import { type GhResult, httpProxy, runGh } from "../lib/gh-process.js";
+import { egress } from "../lib/egress.js";
+import { type GhResult, runGh } from "../lib/gh-process.js";
 import {
   type ActionJob,
   type CheckRun,
@@ -344,7 +345,7 @@ export class GhClient {
   readonly checks: GithubChecksClient;
 
   constructor(
-    fetchImpl: typeof globalThis.fetch = httpProxy.fetch,
+    fetchImpl: typeof globalThis.fetch = egress.fetch,
     options: Pick<GithubClientOptions, "token"> = {},
   ) {
     this.fetch = fetchImpl;

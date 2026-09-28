@@ -9,10 +9,17 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// 出网替身：请求必须从共享出网层（src/lib/egress.ts）发出，而不是全局 fetch。
+const { egressFetch } = vi.hoisted(() => ({ egressFetch: vi.fn() }));
+vi.mock("../src/lib/egress.js", () => ({
+  egress: { settings: {}, env: {}, fetch: egressFetch },
+}));
+
 import { loadSearch1ApiKey } from "../src/web/config.js";
 import { buildSearchBody, searchWeb } from "../src/web/search.js";
 
 afterEach(() => {
+  egressFetch.mockReset();
   vi.unstubAllGlobals();
 });
 
@@ -93,7 +100,7 @@ describe("buildSearchBody", () => {
 
 describe("searchWeb", () => {
   it("posts to Search1API and maps results", async () => {
-    const fetchMock = vi.fn(async () =>
+    egressFetch.mockImplementation(async () =>
       Response.json({
         searchParameters: { query: "q" },
         results: [
@@ -104,7 +111,6 @@ describe("searchWeb", () => {
         ],
       }),
     );
-    vi.stubGlobal("fetch", fetchMock);
 
     const result = await searchWeb("q", "key", { numResults: 3 });
     expect(result.hits).toEqual([
@@ -112,7 +118,7 @@ describe("searchWeb", () => {
       { title: "T2", url: "https://a.example/2", snippet: "S2" },
     ]);
 
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const [url, init] = egressFetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://api.search1api.com/search");
     expect(init.method).toBe("POST");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer key");
@@ -120,10 +126,23 @@ describe("searchWeb", () => {
   });
 
   it("throws on non-OK response", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("nope", { status: 500 })),
-    );
+    egressFetch.mockImplementation(async () => new Response("nope", { status: 500 }));
     await expect(searchWeb("q", "key")).rejects.toThrow("Search1API error 500");
+  });
+
+  it("never falls back to the global fetch", async () => {
+    egressFetch.mockImplementation(async () =>
+      Response.json({ results: [{ title: "T", link: "https://a.example/1", snippet: "S" }] }),
+    );
+    const globalFetch = vi.fn(() => {
+      throw new Error("global fetch must not be used");
+    });
+    vi.stubGlobal("fetch", globalFetch);
+
+    const result = await searchWeb("q", "key");
+
+    expect(result.hits).toEqual([{ title: "T", url: "https://a.example/1", snippet: "S" }]);
+    expect(egressFetch).toHaveBeenCalledTimes(1);
+    expect(globalFetch).not.toHaveBeenCalled();
   });
 });
