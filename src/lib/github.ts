@@ -8,11 +8,10 @@
  * rendered state is derived from `pull_request.merged_at`.
  */
 
-import { spawn } from "node:child_process";
-
 import { Octokit } from "octokit";
 import { type Static, Type } from "typebox";
 
+import { ghAuthToken } from "./gh-process.js";
 import { parseWithSchema } from "./parse-with-schema.js";
 
 export type SearchKind = "issue" | "pr";
@@ -218,38 +217,6 @@ function normalize(raw: SearchItem): SearchHit {
   };
 }
 
-function ghAuthToken(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("gh", ["auth", "token"], { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => proc.kill("SIGTERM"), 10_000);
-    proc.stdout.on("data", (d: Buffer) => {
-      stdout += String(d);
-    });
-    proc.stderr.on("data", (d: Buffer) => {
-      stderr += String(d);
-    });
-    proc.on("error", (err) => {
-      clearTimeout(timer);
-      reject(new Error(`failed to start gh: ${err.message}`));
-    });
-    proc.on("close", (code) => {
-      clearTimeout(timer);
-      const token = stdout.trim();
-      if (code === 0 && token) {
-        resolve(token);
-      } else {
-        reject(
-          new Error(
-            stderr.trim() || `gh auth token exited with code ${code} — run "gh auth login" first`,
-          ),
-        );
-      }
-    });
-  });
-}
-
 /**
  * Error thrown when the GitHub search API rejects the request. Carries the
  * original toolcall params so the model can see the exact input.
@@ -291,6 +258,8 @@ export interface GithubClientOptions {
    * proxy dispatcher attached. Defaults to the global fetch.
    */
   fetch?: typeof globalThis.fetch;
+  /** gh token provider；缺省读系统 `gh auth token`（见 lib/gh-process.ts）。 */
+  token?: () => Promise<string>;
 }
 
 /**
@@ -304,7 +273,7 @@ function createGithubApi(options: GithubClientOptions = {}): GithubApi {
 
   async function getClient(): Promise<Octokit> {
     client ??= new Octokit({
-      auth: await ghAuthToken(),
+      auth: await (options.token ?? ghAuthToken)(),
       ...(options.fetch && { request: { fetch: options.fetch } }),
     });
     return client;

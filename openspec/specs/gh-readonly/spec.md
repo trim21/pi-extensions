@@ -179,7 +179,7 @@ GitHub 只读工具集：issue / PR / release / 仓库信息查询与 CI 日志�
 
 ## Implementation
 
-所有工具经 `src/gh/base.ts` 的 `runGh` 封装：`spawn("gh", args, { shell: false })`，env 注入 `GH_PAGER=cat` 与代理变量，默认超时 10 分钟，超时 / 中止先 SIGTERM、5 秒后 SIGKILL。
+所有工具经 `src/lib/gh-process.ts` 的 `runGh` 封装：`spawn("gh", args, { shell: false })`，env 注入 `GH_PAGER=cat` 与代理变量，默认超时 10 分钟，超时 / 中止先 SIGTERM、5 秒后 SIGKILL。
 
 - **注册门控**：Windows 或 PATH 无 `gh` 时不注册工具（notify warning / error）。
 - **输出截断**：`gh` stdout 统一截断为 2000 行 / 50KB，details 带 `truncated` 标志（`read-github-ci-logs` 不再产出长文本，只返回 JSON 索引）。

@@ -6,52 +6,15 @@
  *
  * Responses come from recorded fixtures (see test/github-fixtures.ts), injected
  * into the client: these tests never touch the network nor `globalThis.fetch`.
- * Only `gh auth token` crosses a process boundary, and that spawn is stubbed.
+ * The auth token is injected too, so no `gh` process is spawned either.
  *
  * Run: npx vitest run test/pr-status.test.ts
  * Re-record: RECORD_GITHUB=1 pnpm exec vitest run --testTimeout=60000 test/pr-status.test.ts
  */
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
-
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
-
-// Partial mock: only the `gh auth token` spawn is stubbed; the cassette's own
-// `execFileSync` (which reads the developer's token while recording) stays real.
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
+import { describe, expect, it } from "vitest";
 
 import { GhClient, prStatus } from "../src/gh-readonly.js";
 import { type FixtureRoutes, type GithubCassette, githubCassette } from "./github-fixtures.js";
-
-/** Fake `gh auth token` process. */
-class FakeChildProcess extends EventEmitter {
-  stdout = new PassThrough();
-  stderr = new PassThrough();
-
-  kill(): boolean {
-    return true;
-  }
-}
-
-beforeEach(() => {
-  spawnMock.mockImplementation(() => {
-    const proc = new FakeChildProcess();
-    setImmediate(() => {
-      proc.stdout.write("test-token\n");
-      proc.emit("close", 0);
-    });
-    return proc;
-  });
-});
-
-afterEach(() => {
-  spawnMock.mockReset();
-});
 
 const PULL_ROUTE = "pulls/137";
 const STATUS_ROUTE = "commits/";
@@ -91,7 +54,10 @@ function routes(): FixtureRoutes {
 
 /** Run one toolcall through a client wired to the recorded responses. */
 function callPrStatus(api: GithubCassette, params: { number: number | string; repo?: string }) {
-  return prStatus(new GhClient(api.fetch), { params, ctx: {} });
+  return prStatus(new GhClient(api.fetch, { token: async () => "test-token" }), {
+    params,
+    ctx: {},
+  });
 }
 
 describe("read-github-pr-status", () => {

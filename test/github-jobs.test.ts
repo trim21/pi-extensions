@@ -5,52 +5,16 @@
  * the rest from the CI-log tools — and `job` must return one job by id.
  *
  * Responses come from recorded fixtures (see test/github-fixtures.ts), injected
- * into the client: these tests never touch the network. Only `gh auth token`
- * crosses a process boundary, and that spawn is stubbed.
+ * into the client: these tests never touch the network. The auth token is
+ * injected too, so no `gh` process is spawned either.
  *
  * Run: npx vitest run test/github-jobs.test.ts
  * Re-record: RECORD_GITHUB=1 pnpm exec vitest run --testTimeout=60000 test/github-jobs.test.ts
  */
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
-
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
-
-// Partial mock: only the `gh auth token` spawn is stubbed; the cassette's own
-// `execFileSync` (which reads the developer's token while recording) stays real.
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
+import { describe, expect, it } from "vitest";
 
 import { createGithubChecks } from "../src/lib/github.js";
 import { githubCassette } from "./github-fixtures.js";
-
-class FakeChildProcess extends EventEmitter {
-  stdout = new PassThrough();
-  stderr = new PassThrough();
-
-  kill(): boolean {
-    return true;
-  }
-}
-
-beforeEach(() => {
-  spawnMock.mockImplementation(() => {
-    const proc = new FakeChildProcess();
-    setImmediate(() => {
-      proc.stdout.write("test-token\n");
-      proc.emit("close", 0);
-    });
-    return proc;
-  });
-});
-
-afterEach(() => {
-  spawnMock.mockReset();
-});
 
 const RUN_ID = 34773404718;
 const JOB_ID = 103767009687;
@@ -98,12 +62,10 @@ describe("createGithubChecks runJobs", () => {
       },
     });
 
-    const jobs = await createGithubChecks({ fetch: api.fetch }).runJobs(
-      "trim21",
-      "pi-extensions",
-      RUN_ID,
-      undefined,
-    );
+    const jobs = await createGithubChecks({
+      fetch: api.fetch,
+      token: async () => "test-token",
+    }).runJobs("trim21", "pi-extensions", RUN_ID, undefined);
 
     expect(api.calls).toHaveLength(2);
     expect(api.calls[0]).toContain("per_page=100");
@@ -120,12 +82,10 @@ describe("createGithubChecks job", () => {
   it("returns one job by id, steps included", async () => {
     const api = githubCassette({ [JOB_ROUTE]: "job.json" });
 
-    const job = await createGithubChecks({ fetch: api.fetch }).job(
-      "trim21",
-      "pi-extensions",
-      JOB_ID,
-      undefined,
-    );
+    const job = await createGithubChecks({
+      fetch: api.fetch,
+      token: async () => "test-token",
+    }).job("trim21", "pi-extensions", JOB_ID, undefined);
 
     expect(api.calls).toHaveLength(1);
     expect(api.calls[0]).toContain(`/repos/trim21/pi-extensions/actions/jobs/${String(JOB_ID)}`);

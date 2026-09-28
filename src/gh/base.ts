@@ -1,17 +1,18 @@
 /**
- * Shared infrastructure of the GitHub read-only tools: the `gh` subprocess
- * layer, result shaping, the octokit-backed client, and the checks-wait
- * pipeline. Each tool lives in `tools/<tool-name>.ts`; anything used by more
- * than one tool belongs here.
+ * Shared infrastructure of the GitHub read-only tools: result shaping, the
+ * octokit-backed client, and the checks-wait pipeline (running a `gh` process
+ * itself lives in `lib/gh-process.ts`, which also owns the proxy env shared by
+ * the subprocess and octokit). Each tool lives in `tools/<tool-name>.ts`;
+ * anything used by more than one tool belongs here.
  */
 
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { type GhResult, httpProxy, runGh } from "../lib/gh-process.js";
 import {
   type ActionJob,
   type CheckRun,
@@ -19,17 +20,11 @@ import {
   createGithubChecks,
   createGithubSearch,
   type GithubChecksClient,
+  type GithubClientOptions,
   type GithubSearch,
   renderHits,
 } from "../lib/github.js";
 import { type ToolPendant } from "../lib/pendant.js";
-import { createHttpProxy } from "../lib/proxy.js";
-
-/**
- * 代理配置（~/.pi/agent/proxy.json，回退到 HTTP(S)_PROXY 环境变量）在本模块内共享：
- * `gh` 子进程与 octokit 请求都从这里取，配置只在首次使用时读一次。
- */
-export const httpProxy = createHttpProxy();
 
 /** A tool result: what the model sees plus the structured details payload. */
 export interface ToolResult {
@@ -44,18 +39,6 @@ export interface ToolCall<Params> {
   signal?: AbortSignal;
   /** Streaming progress updates, passed through as-is. */
   onUpdate?: (update: ToolResult) => void;
-}
-
-export interface GhResult {
-  stdout: string;
-  stderr: string;
-  code: number;
-  killed: boolean;
-  combined: string;
-  /** Why the process was killed, when `killed` is true. */
-  reason?: "timeout" | "abort";
-  /** When the process could not be started at all (e.g. `gh` not found in PATH). */
-  spawnError?: string;
 }
 
 /**
@@ -76,120 +59,6 @@ export function isGhAvailable(): boolean {
     }
   }
   return false;
-}
-
-export function runGh(
-  args: string[],
-  ctx: {
-    cwd?: string;
-    signal?: AbortSignal;
-    timeout?: number;
-    /** 追加到子进程环境变量（覆盖进程环境与代理配置），供测试或调用方定制。 */
-    env?: NodeJS.ProcessEnv;
-  },
-): Promise<GhResult> {
-  return new Promise((resolve) => {
-    const proc = spawn("gh", args, {
-      cwd: ctx.cwd,
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-      // gh 是 Go 程序，只认环境变量形式的代理配置；ctx.env 最后合并，调用方可覆盖。
-      env: { ...process.env, ...httpProxy.env, ...ctx.env, GH_PAGER: "cat" },
-    });
-
-    let stdout = "";
-    let stderr = "";
-    const combined: string[] = [];
-    let killed = false;
-    let killReason: "timeout" | "abort" | undefined;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    let onAbort: (() => void) | undefined;
-
-    const killProcess = (reason: "timeout" | "abort") => {
-      if (killed) {
-        return;
-      }
-
-      killed = true;
-      killReason = reason;
-      proc.kill("SIGTERM");
-      setTimeout(() => {
-        if (!proc.killed) {
-          proc.kill("SIGKILL");
-        }
-      }, 5000);
-    };
-
-    if (ctx.signal) {
-      onAbort = () => killProcess("abort");
-      if (ctx.signal.aborted) {
-        killProcess("abort");
-      } else {
-        ctx.signal.addEventListener("abort", onAbort, { once: true });
-      }
-    }
-
-    // Default timeout: 10 minutes. Long operations like downloading a CI job's
-    // full log routinely take well over 30s, so a short default would kill them
-    // mid-transfer; combined with `code ?? 0` that would silently cache a
-    // truncated log as success. A killed process must never look successful.
-    const timeout = ctx.timeout ?? 600_000;
-    if (timeout > 0) {
-      timeoutId = setTimeout(() => killProcess("timeout"), timeout);
-    }
-
-    proc.stdout.on("data", (data: Buffer) => {
-      const text = data.toString();
-      stdout += text;
-      combined.push(text);
-    });
-    proc.stderr.on("data", (data: Buffer) => {
-      const text = data.toString();
-      stderr += text;
-      combined.push(text);
-    });
-
-    proc.on("close", (code) => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      if (onAbort && ctx.signal) {
-        ctx.signal.removeEventListener("abort", onAbort);
-      }
-      resolve({
-        stdout,
-        stderr,
-        // When killed by a signal the close event's code is null — including
-        // kills we did not initiate. Report failure instead of pretending it
-        // succeeded. -1 is a sentinel for "did not exit normally" — distinct
-        // from a real gh failure exit code (1), which is always in 0-255.
-        code: code ?? -1,
-        killed,
-        combined: combined.join(""),
-        reason: killReason,
-      });
-    });
-
-    proc.on("error", (err: Error) => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      if (onAbort && ctx.signal) {
-        ctx.signal.removeEventListener("abort", onAbort);
-      }
-      // spawn 失败（如 gh 不在 PATH → ENOENT、cwd 不存在）时进程从未启动，
-      // 没有任何 stdout/stderr；把底层错误带上，否则会退化成无信息的 "exit code 1"。
-      resolve({
-        stdout,
-        stderr,
-        code: 1,
-        killed,
-        combined: combined.join(""),
-        reason: killReason,
-        spawnError: err.message,
-      });
-    });
-  });
 }
 
 /**
@@ -474,10 +343,13 @@ export class GhClient {
   readonly search: GithubSearch;
   readonly checks: GithubChecksClient;
 
-  constructor(fetchImpl: typeof globalThis.fetch = httpProxy.fetch) {
+  constructor(
+    fetchImpl: typeof globalThis.fetch = httpProxy.fetch,
+    options: Pick<GithubClientOptions, "token"> = {},
+  ) {
     this.fetch = fetchImpl;
-    this.search = createGithubSearch({ fetch: fetchImpl });
-    this.checks = createGithubChecks({ fetch: fetchImpl });
+    this.search = createGithubSearch({ fetch: fetchImpl, ...options });
+    this.checks = createGithubChecks({ fetch: fetchImpl, ...options });
   }
 }
 

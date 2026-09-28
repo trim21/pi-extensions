@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { type GhClient, repoArgs, runGh, subtitlePendant } from "../base.js";
+import { runGh } from "../../lib/gh-process.js";
+import { type GhClient, repoArgs, subtitlePendant } from "../base.js";
 
 export function addWatchRunTool(_gh: GhClient, pi: ExtensionAPI) {
   pi.registerTool({

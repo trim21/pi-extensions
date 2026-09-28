@@ -5,39 +5,9 @@
  * injected fetch is the one performing the request (and that the default path
  * still uses the global fetch) without touching the network.
  */
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
-
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
-
 import { createGithubSearch } from "../src/lib/github.js";
-
-class FakeChildProcess extends EventEmitter {
-  stdout = new PassThrough();
-  stderr = new PassThrough();
-
-  kill(): boolean {
-    return true;
-  }
-}
-
-/** Make `gh auth token` resolve with a token so the octokit client can be built. */
-function stubAuthToken(): void {
-  spawnMock.mockImplementation(() => {
-    const proc = new FakeChildProcess();
-    setImmediate(() => {
-      proc.stdout.write("test-token\n");
-      proc.emit("close", 0);
-    });
-    return proc;
-  });
-}
 
 type FetchInput = Parameters<typeof globalThis.fetch>[0];
 
@@ -73,13 +43,11 @@ const RAW_ITEM = {
 };
 
 afterEach(() => {
-  spawnMock.mockReset();
   vi.restoreAllMocks();
 });
 
 describe("createGithubSearch fetch injection", () => {
   it("performs octokit requests through the injected fetch", async () => {
-    stubAuthToken();
     type FetchInit = NonNullable<Parameters<typeof globalThis.fetch>[1]>;
     const calls: { url: string; headers: FetchInit["headers"] }[] = [];
     const fetchImpl: typeof globalThis.fetch = (input, init) => {
@@ -87,7 +55,10 @@ describe("createGithubSearch fetch injection", () => {
       return Promise.resolve(jsonResponse({ items: [RAW_ITEM] }));
     };
 
-    const hits = await createGithubSearch({ fetch: fetchImpl }).search("pr", {
+    const hits = await createGithubSearch({
+      fetch: fetchImpl,
+      token: async () => "test-token",
+    }).search("pr", {
       repo: "a/b",
       keywords: "proxy",
     });
@@ -102,10 +73,9 @@ describe("createGithubSearch fetch injection", () => {
   });
 
   it("falls back to the global fetch when no fetch is injected", async () => {
-    stubAuthToken();
     const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ items: [] }));
 
-    await createGithubSearch().search("issue", { repo: "a/b" });
+    await createGithubSearch({ token: async () => "test-token" }).search("issue", { repo: "a/b" });
 
     expect(spy).toHaveBeenCalledTimes(1);
     const [firstCall] = spy.mock.calls;

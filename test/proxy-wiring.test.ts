@@ -23,7 +23,7 @@ vi.mock("../src/lib/proxy.js", () => ({
   }),
 }));
 
-import { runGh } from "../src/gh-readonly.js";
+import { runGh } from "../src/lib/gh-process.js";
 
 /** Fake gh child process that exits on demand (see run-gh-timeout.test.ts). */
 class FakeChildProcess extends EventEmitter {
