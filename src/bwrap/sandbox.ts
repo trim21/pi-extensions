@@ -16,10 +16,7 @@ import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 
 import { expandHome } from "../lib/path.js";
 import {
-  buildBwrapInvocation,
-  bwrapArgv,
   type BwrapConfig,
-  createBwrapBashOperations,
   createNetworkStack,
   type FsMode,
   getBwrapConfigPaths,
@@ -30,6 +27,7 @@ import {
   resolveBwrapPath,
   type ResolvedBwrap,
 } from "./core.js";
+import { buildBwrapInvocation, createBwrapBashOperations, invocationArgv } from "./exec.js";
 import type { NetworkStack } from "./network-stack.js";
 
 export interface SandboxConfigInput {
@@ -161,7 +159,7 @@ export interface SandboxPreview {
 }
 
 /**
- * 打印将要执行的命令行（`--print-args`）。与 runInSandbox 共用同一段组装逻辑，
+ * 打印将要执行的命令行（`--print-args`）。与 `execInvocation` 共用同一段组装，
  * 不存在「打印的是一回事、跑的是另一回事」的漂移。
  */
 export async function previewSandboxCommand(
@@ -171,23 +169,13 @@ export async function previewSandboxCommand(
   },
 ): Promise<SandboxPreview> {
   const workspace = expandHome(options.workspace);
-  const commandCwd = expandHome(options.commandCwd ?? workspace);
-  const invocation = await buildBwrapInvocation(resolved, workspace, options.command, commandCwd);
+  const invocation = await buildBwrapInvocation(resolved, workspace, options.command);
   if (!invocation.needsNetworkStack || options.unsandboxed === true) {
-    return { argv: bwrapArgv(invocation), env: invocation.env, needsNetworkStack: false };
+    return { argv: invocationArgv(invocation), env: invocation.env, needsNetworkStack: false };
   }
   return {
-    // 与 network-stack.ts 的实际 spawn 一致；holder 未启动时用占位符标出 pid 的位置
-    argv: [
-      "nsenter",
-      "-U",
-      "-n",
-      "--preserve-credentials",
-      "-t",
-      options.holderPid === undefined ? HOLDER_PID_PLACEHOLDER : String(options.holderPid),
-      "--",
-      ...bwrapArgv(invocation),
-    ],
+    // holder 未启动时用占位符标出 pid 的位置
+    argv: invocationArgv(invocation, options.holderPid ?? HOLDER_PID_PLACEHOLDER),
     env: invocation.env,
     needsNetworkStack: true,
   };

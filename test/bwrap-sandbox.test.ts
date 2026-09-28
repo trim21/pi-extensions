@@ -15,7 +15,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { type BwrapConfigFile, findBwrap } from "../src/bwrap/core.js";
+import { type BwrapInvocation, invocationArgv } from "../src/bwrap/exec.js";
 import {
+  HOLDER_PID_PLACEHOLDER,
   loadSandboxConfig,
   previewSandboxCommand,
   runInSandbox,
@@ -327,4 +329,111 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
     expect(result.exitCode).toBe(0);
     expect(readFileSync(join(target, "note.txt"), "utf8")).toBe("ok");
   }, 60000);
+});
+
+describe("invocationArgv", () => {
+  const invocation: BwrapInvocation = {
+    file: "/usr/bin/bwrap",
+    args: ["--ro-bind", "/", "/", "--unshare-net"],
+    shell: "/bin/bash",
+    command: "echo 1",
+    env: {},
+    needsNetworkStack: false,
+  };
+  const bwrapArgvOnly = [
+    "/usr/bin/bwrap",
+    "--ro-bind",
+    "/",
+    "/",
+    "--unshare-net",
+    "--",
+    "/bin/bash",
+    "-lc",
+    "echo 1",
+  ];
+
+  it("不传 holder pid：纯 bwrap 命令行", () => {
+    expect(invocationArgv(invocation)).toEqual(bwrapArgvOnly);
+  });
+
+  it("传 holder pid：前置 nsenter 前缀", () => {
+    expect(invocationArgv(invocation, 4242)).toEqual([
+      "nsenter",
+      "-U",
+      "-n",
+      "--preserve-credentials",
+      "-t",
+      "4242",
+      "--",
+      ...bwrapArgvOnly,
+    ]);
+  });
+
+  it("传占位符字符串：原样嵌入（预览 holder 未启动时用）", () => {
+    expect(invocationArgv(invocation, HOLDER_PID_PLACEHOLDER)[5]).toBe("<HOLDER_PID>");
+  });
+});
+
+/** 假 bwrap：只回显收到的 argv（$0 与全部参数），因此「真正跑的那条命令行」可见。 */
+function fakeBwrap(directory: string): string {
+  const path = join(directory, "fake-bwrap");
+  writeFileSync(path, '#!/bin/sh\nprintf "%s\\n" "$0" "$@"\n', { mode: 0o755 });
+  return path;
+}
+
+describe("命令行预览与实际执行一致", () => {
+  it("直接执行路径：spawn 的 argv 与预览逐项相同", async () => {
+    const directory = workspace();
+    const strategy = loadSandboxConfig({
+      workspace: directory,
+      configPath: config(directory, {
+        fs: { mode: "workspace-write", writablePaths: ["."] },
+        bwrapPath: fakeBwrap(directory),
+      }),
+    });
+
+    const preview = await previewSandboxCommand(strategy, {
+      workspace: directory,
+      command: "echo 1",
+    });
+    let output = "";
+    const result = await runInSandbox(strategy, {
+      workspace: directory,
+      command: "echo 1",
+      onData: (data) => {
+        output += data.toString();
+      },
+    });
+
+    expect(preview.needsNetworkStack).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(output.trim().split("\n")).toEqual(preview.argv);
+  }, 30000);
+
+  it("启动失败立即结束，不残留超时定时器", async () => {
+    const directory = workspace();
+    const notExecutable = join(directory, "not-executable");
+    writeFileSync(notExecutable, "not a program");
+    const strategy = loadSandboxConfig({
+      workspace: directory,
+      configPath: config(directory, {
+        fs: { mode: "workspace-write", writablePaths: ["."] },
+        bwrapPath: notExecutable,
+      }),
+    });
+
+    const timersBefore = process.getActiveResourcesInfo().filter((name) => name === "Timeout");
+    await expect(
+      runInSandbox(strategy, {
+        workspace: directory,
+        command: "echo 1",
+        timeout: 60,
+        onData: () => {},
+      }),
+    ).rejects.toThrow(/EACCES|permission denied/u);
+    // 已排定的超时定时器必须在结束路径上清掉：挂着的会白占事件循环到超时那一刻
+    expect(process.getActiveResourcesInfo().filter((name) => name === "Timeout")).toHaveLength(
+      timersBefore.length,
+    );
+  }, 30000);
 });

@@ -1,30 +1,31 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
-import { findBwrap, findMihomo, findSlirp4netns } from "../src/bwrap/core.js";
-import { resolveDnsServers, startNetworkStack } from "../src/bwrap/network-stack.js";
+import {
+  completeBwrapConfig,
+  findMihomo,
+  findSlirp4netns,
+  resolveBwrap,
+} from "../src/bwrap/core.js";
+import { buildBwrapInvocation, execInvocation, invocationArgv } from "../src/bwrap/exec.js";
+import {
+  type NetworkStack,
+  resolveDnsServers,
+  startNetworkStack,
+} from "../src/bwrap/network-stack.js";
 
-const bwrapArgs = [
-  "--ro-bind",
-  "/",
-  "/",
-  "--unshare-user",
-  "--unshare-pid",
-  "--dev",
-  "/dev",
-  "--proc",
-  "/proc",
-];
-const env = {
-  HOME: process.env.HOME ?? "",
-  SHELL: "/bin/bash",
-  TERM: "dumb",
-  LANG: "C.UTF-8",
-  PATH: "/usr/local/bin:/usr/bin:/bin",
-};
+/** 命令的执行目录：也是 invocation 里 "." 可写路径的解析基准。 */
+const WORKSPACE = "/tmp";
+
+// 调用用生产路径组装（argv 与干净环境由 buildBwrapInvocation 给出），不再手抄 bwrap argv。
+const strategy = resolveBwrap(
+  completeBwrapConfig({ fs: { mode: "workspace-write" }, network: { mode: "limited" } }),
+);
 
 async function pidExists(pid: number): Promise<boolean> {
   try {
@@ -52,6 +53,20 @@ async function mihomoWorkDirs(): Promise<string[]> {
   return entries.filter((name) => name.startsWith("mihomo-")).toSorted();
 }
 
+/** 在既有栈里跑一条命令并收集输出（栈由调用方启动与停止）。 */
+async function execInStack(stack: NetworkStack, command: string): Promise<string> {
+  let out = "";
+  const invocation = await buildBwrapInvocation(strategy, WORKSPACE, command);
+  await execInvocation(invocation, {
+    cwd: WORKSPACE,
+    holderPid: stack.holderPid,
+    onData: (data: Buffer) => {
+      out += data.toString();
+    },
+  });
+  return out;
+}
+
 /** 起一个栈跑一条命令并收集输出（栈随命令结束停止）。 */
 async function runInStack(
   allowlist: string[],
@@ -65,19 +80,7 @@ async function runInStack(
     slirp4netnsPath: findSlirp4netns(),
   });
   try {
-    let out = "";
-    await stack.exec({
-      command,
-      cwd: "/tmp",
-      bwrapPath: findBwrap(),
-      bwrapArgs,
-      shell: "/bin/bash",
-      env,
-      onData: (data: Buffer) => {
-        out += data.toString();
-      },
-    });
-    return out.trim();
+    return (await execInStack(stack, command)).trim();
   } finally {
     await stack.stop();
   }
@@ -159,32 +162,17 @@ describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack inte
       slirp4netnsPath: findSlirp4netns(),
     });
     try {
-      let out = "";
-      await stack.exec({
-        command: "curl -sS -m 20 -o /dev/null -w '%{http_code}' https://pypi.org/simple/",
-        cwd: "/tmp",
-        bwrapPath: findBwrap(),
-        bwrapArgs,
-        shell: "/bin/bash",
-        env,
-        onData: (data: Buffer) => {
-          out += data.toString();
-        },
-      });
-      expect(out).toContain("200");
+      expect(
+        await execInStack(
+          stack,
+          "curl -sS -m 20 -o /dev/null -w '%{http_code}' https://pypi.org/simple/",
+        ),
+      ).toContain("200");
 
-      out = "";
-      await stack.exec({
-        command: "curl -sS -m 10 -o /dev/null -w '%{http_code}' https://example.com",
-        cwd: "/tmp",
-        bwrapPath: findBwrap(),
-        bwrapArgs,
-        shell: "/bin/bash",
-        env,
-        onData: (data: Buffer) => {
-          out += data.toString();
-        },
-      });
+      const out = await execInStack(
+        stack,
+        "curl -sS -m 10 -o /dev/null -w '%{http_code}' https://example.com",
+      );
       // 未允许域名在 DNS 层被拒（不在 fake-ip 白名单里 → 落到 rcode://name_error）：
       // 报 Could not resolve host，而非 fake-ip 后连接层断（TLS decode error）
       expect(out).toMatch(/Could not resolve host|Temporary failure in name resolution/);
@@ -192,4 +180,54 @@ describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack inte
       await stack.stop();
     }
   }, 90000);
+
+  // 回归：预览（--print-args）与实际执行的命令行必须逐项一致，含 nsenter 前缀。
+  // 用打印自身 argv 的假 bwrap 替换执行体：nsenter 进 netns 后它只回显收到的参数，
+  // 因此「真正跑的那条命令行」在测试里可见。
+  it("executes exactly the argv the preview prints", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bwrap-argv-"));
+    const fakeBwrap = join(dir, "fake-bwrap");
+    writeFileSync(fakeBwrap, '#!/bin/sh\nprintf "%s\\n" "$0" "$@"\n', { mode: 0o755 });
+    const fakeStrategy = resolveBwrap(
+      completeBwrapConfig({
+        fs: { mode: "workspace-write" },
+        network: { mode: "limited" },
+        bwrapPath: fakeBwrap,
+      }),
+    );
+    const stack = await startNetworkStack({
+      allowlist: [],
+      dnsServers: process.env.NETSTACK_DNS ? [process.env.NETSTACK_DNS] : await resolveDnsServers(),
+      mihomoPath: findMihomo(),
+      slirp4netnsPath: findSlirp4netns(),
+    });
+    try {
+      const invocation = await buildBwrapInvocation(fakeStrategy, dir, "echo 1");
+      const previewArgv = invocationArgv(invocation, stack.holderPid);
+      let out = "";
+      await execInvocation(invocation, {
+        cwd: dir,
+        holderPid: stack.holderPid,
+        onData: (data: Buffer) => {
+          out += data.toString();
+        },
+      });
+      const invoked = out.trim().split("\n");
+      // nsenter 消费掉自己的前缀后 exec 目标程序：目标程序看到的 argv 就是 bwrap 命令行
+      // 本身，预览在它前面多出「进入该 holder netns」的前缀。
+      expect(invoked).toEqual(invocationArgv(invocation));
+      expect(previewArgv).toEqual([
+        "nsenter",
+        "-U",
+        "-n",
+        "--preserve-credentials",
+        "-t",
+        String(stack.holderPid),
+        "--",
+        ...invoked,
+      ]);
+    } finally {
+      await stack.stop();
+    }
+  }, 60000);
 });

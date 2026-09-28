@@ -159,7 +159,7 @@ pi（Bash 工具进程，持有 stdin 写端）
        --netns-type=pid <holderPid> tap0 -e 3          ← egress（宿主 netns），fd 3 是 exit-fd 读端
 ```
 
-命令通过 `nsenter -U -n --preserve-credentials -t <holderPid> -- bwrap ...` 进入 holder 的 userns + netns，再叠一层 bwrap 文件沙箱。
+命令通过 `nsenter -U -n --preserve-credentials -t <holderPid> -- bwrap ...` 进入 holder 的 userns + netns，再叠一层 bwrap 文件沙箱。这条命令行由执行层（`src/bwrap/exec.ts`）组装：网络栈对外只提供 holder pid 与停止，不参与 bwrap 参数怎么拼。
 
 关键机制：
 
@@ -175,4 +175,4 @@ pi（Bash 工具进程，持有 stdin 写端）
 - **DIRECT 出站解析**：`direct-nameserver` 指向配置的真实 DNS——连接由 fake IP 还原成域名后 DIRECT 要按域名重新解析，不指定会解析回 fake-ip 再进 TUN 成环。
 - **条目匹配两档**：裸域名条目在 DNS 侧写裸域名、连接层写 `DOMAIN,<host>`（只匹配该域名）；`*.` 条目在 DNS 侧写 `.example.com`（trie 的 dot-wildcard）、连接层写 `DOMAIN-WILDCARD,*.example.com`（glob 的 `*` 跨点），两者都是「任意深度子域名、不含 apex」。两层由同一个条目生成，保证 DNS 白名单与连接层规则表达同一集合；带端口条目在连接层用 `AND,(<域名规则>),(DST-PORT,<port>,DIRECT),DIRECT` 组合。
 
-涉及文件：`src/bwrap/network-stack.ts`、`src/bwrap/holder.ts`（esbuild 编译为 `holder.js`）、`src/bwrap/mihomo-config.ts`、`src/lib/proc.ts`。
+涉及文件：`src/bwrap/network-stack.ts`、`src/bwrap/holder.ts`（esbuild 编译为 `holder.js`）、`src/bwrap/mihomo-config.ts`、`src/lib/proc.ts`；命令经 netns 执行的前缀由 `src/bwrap/exec.ts` 组装。

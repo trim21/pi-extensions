@@ -9,14 +9,6 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { forEachLine } from "../lib/proc.js";
 import { generateMihomoConfig, TUN_MTU } from "./mihomo-config.js";
 
-/** 命令超时错误：name=TimeoutError（对齐标准错误分类），message 保留 timeout:N 格式。 */
-export class TimeoutError extends Error {
-  constructor(timeout: number | undefined) {
-    super(`timeout:${timeout}`);
-    this.name = "TimeoutError";
-  }
-}
-
 export interface NetworkStackOptions {
   /** 允许直连的域名 / IP:port 列表（每次命令从配置重新读取）。 */
   readonly allowlist: readonly string[];
@@ -29,19 +21,6 @@ export interface NetworkStackOptions {
    * 失败时落盘到 agent-dir/tmp 并把路径附进错误信息，没有它也能拿到死因。
    */
   readonly onHolderOutput?: (chunk: string) => void;
-}
-
-interface NetworkStackExecOptions {
-  readonly command: string;
-  readonly cwd: string;
-  readonly bwrapPath: string;
-  /** bwrap 的完整参数（不含 -- 后的 shell 与命令），由 core.ts 组装。 */
-  readonly bwrapArgs: readonly string[];
-  readonly shell: string;
-  readonly env: Readonly<Record<string, string>>;
-  readonly onData: (data: Buffer) => void;
-  readonly signal?: AbortSignal;
-  readonly timeout?: number;
 }
 
 const NAMESERVER_PATTERN = /^\s*nameserver\s+(\S+)/;
@@ -198,21 +177,6 @@ function waitForMihomoStarted(holder: ChildProcess, timeoutMs = 20000): Promise<
   });
 }
 
-function killChild(pid: number | undefined): void {
-  if (!pid) {
-    return;
-  }
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // 已退出
-    }
-  }
-}
-
 /**
  * 额外转发子进程输出给诊断回调（就绪探测的监听器不受影响），并把全部输出
  * 收进 collect：启动失败时落盘，否则没有别的渠道能看到 holder 的真实死因。
@@ -237,7 +201,6 @@ function forwardOutput(
 }
 
 export interface NetworkStack {
-  exec(options: NetworkStackExecOptions): Promise<{ exitCode: number | null }>;
   stop(): Promise<void>;
   /** holder pid：可 `nsenter -U -n --preserve-credentials -t <pid>` 手动进入该 netns 排查。 */
   readonly holderPid: number;
@@ -391,80 +354,6 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
 
     const state: NetworkStackState = { holderPid, slirpPid: slirp.pid, mihomoHome };
     const stack: NetworkStack = {
-      exec: async (execOptions: NetworkStackExecOptions) => {
-        const child = spawn(
-          "nsenter",
-          [
-            "-U",
-            "-n",
-            "--preserve-credentials",
-            "-t",
-            String(holderPid),
-            "--",
-            execOptions.bwrapPath,
-            ...execOptions.bwrapArgs,
-            "--",
-            execOptions.shell,
-            "-lc",
-            execOptions.command,
-          ],
-          {
-            cwd: execOptions.cwd,
-            detached: true,
-            stdio: ["ignore", "pipe", "pipe"],
-            env: execOptions.env,
-          },
-        );
-
-        return new Promise<{ exitCode: number | null }>((resolve, reject) => {
-          let timedOut = false;
-          let settled = false;
-          const timeoutHandle = execOptions.timeout
-            ? setTimeout(() => {
-                timedOut = true;
-                killChild(child.pid);
-              }, execOptions.timeout * 1000)
-            : undefined;
-          const onAbort = (): void => {
-            killChild(child.pid);
-          };
-
-          child.stdout.on("data", execOptions.onData);
-          child.stderr.on("data", execOptions.onData);
-          execOptions.signal?.addEventListener("abort", onAbort, { once: true });
-
-          child.once("error", (error) => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            reject(error);
-          });
-          child.once("close", (exitCode) => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            if (timeoutHandle) {
-              clearTimeout(timeoutHandle);
-            }
-            execOptions.signal?.removeEventListener("abort", onAbort);
-            // 中断：reject signal.reason（默认是 name=AbortError 的 DOMException）
-            if (execOptions.signal?.aborted) {
-              reject(
-                execOptions.signal.reason instanceof Error
-                  ? execOptions.signal.reason
-                  : new Error("The operation was aborted"),
-              );
-            } else if (timedOut) {
-              // 超时：name=TimeoutError（对齐标准错误分类）
-              reject(new TimeoutError(execOptions.timeout));
-            } else {
-              resolve({ exitCode });
-            }
-          });
-        });
-      },
       stop: async () => {
         const children = await readChildPids(state.holderPid);
         // slirp4netns 持有 tap fd（pin 住 netns），必须随 holder 一起显式终止；

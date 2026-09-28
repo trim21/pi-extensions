@@ -1,23 +1,17 @@
-import { type ChildProcess, spawn } from "node:child_process";
-import { constants, type Dirent, existsSync, readFileSync } from "node:fs";
-import { access as fsAccess, readdir, realpath, stat } from "node:fs/promises";
+import { type Dirent, existsSync, readFileSync } from "node:fs";
+import { readdir, realpath, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import process from "node:process";
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import { type BashOperations, getAgentDir, getShellConfig } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { expandHome } from "../lib/path.js";
 import { type ApprovalRule } from "./approval-rules.js";
-import {
-  type NetworkStack,
-  resolveDnsServers,
-  startNetworkStack,
-  TimeoutError,
-} from "./network-stack.js";
+import { type NetworkStack, resolveDnsServers, startNetworkStack } from "./network-stack.js";
 
 const PROTECTED_DIRS = [".pi", ".agent"];
 
@@ -452,17 +446,6 @@ export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Prom
   return args;
 }
 
-function killChild(child: ChildProcess): void {
-  if (!child.pid) {
-    return;
-  }
-  try {
-    process.kill(-child.pid, "SIGKILL");
-  } catch {
-    child.kill("SIGKILL");
-  }
-}
-
 /** 网络栈子进程输出转发通道，仅用于诊断（默认丢弃）。 */
 export interface NetworkStackLog {
   holder?: (chunk: string) => void;
@@ -483,151 +466,4 @@ export async function createNetworkStack(
     slirp4netnsPath: findSlirp4netns(resolved.slirp4netnsPath),
     ...(log?.holder && { onHolderOutput: log.holder }),
   });
-}
-
-/** 一次 bwrap 调用的完整组装结果：argv 与干净环境。 */
-export interface BwrapInvocation {
-  /** bwrap 可执行文件路径 */
-  file: string;
-  /** bwrap 参数（不含结尾的 `-- shell -lc command`） */
-  args: string[];
-  /** 沙箱内 shell 的绝对路径 */
-  shell: string;
-  /** 交给 shell 的命令 */
-  command: string;
-  /** 命令执行目录 */
-  cwd: string;
-  /** 沙箱内环境（不继承父进程） */
-  env: Record<string, string>;
-  /** network limited 模式：命令需先经 nsenter 进入 holder 的 netns。 */
-  needsNetworkStack: boolean;
-}
-
-/**
- * 组装一次 bwrap 调用。实际执行（createBwrapBashOperations）与调试打印共用这里，
- * 保证 `--print-args` 输出的命令行与真正跑的那条完全一致。
- */
-export async function buildBwrapInvocation(
-  resolved: ResolvedBwrap,
-  workspace: string,
-  command: string,
-  cwd: string,
-): Promise<BwrapInvocation> {
-  // 干净环境：不继承父进程 env/PATH，由 bash -lc 从 /etc/profile 与用户 profile 重建
-  const home = process.env.HOME;
-  if (home === undefined) {
-    throw new Error("HOME is not set; refusing to run bash in a clean environment");
-  }
-  return {
-    // 沙箱内不透传 PATH，execvp 的默认路径可能找不到 bash（如 NixOS），故在父进程解析绝对路径
-    shell: getShellConfig().shell,
-    file: findBwrap(resolved.bwrapPath),
-    args: [
-      "--ro-bind",
-      "/",
-      "/",
-      ...(await buildBwrapArgs(resolved, workspace)),
-      "--dev",
-      "/dev",
-      "--proc",
-      "/proc",
-    ],
-    command,
-    cwd,
-    env: {
-      HOME: home,
-      SHELL: "/bin/bash",
-      TERM: "dumb",
-      LANG: "C.UTF-8",
-      // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
-      PATH: "/usr/local/bin:/usr/bin:/bin",
-    },
-    needsNetworkStack: resolved.network === "limited",
-  };
-}
-
-/** 完整 argv（`[bwrap, ...args, "--", shell, "-lc", command]`），spawn 与打印共用。 */
-export function bwrapArgv(invocation: BwrapInvocation): string[] {
-  return [invocation.file, ...invocation.args, "--", invocation.shell, "-lc", invocation.command];
-}
-
-/**
- * @param workspace session 工作区：writablePaths 的 "." 与 PROTECTED_DIRS 都基于它解析，
- *   与当次命令的 cwd（仅作为进程执行目录）解耦，避免 workdir 参数漂移可写边界。
- */
-export function createBwrapBashOperations(
-  resolved: ResolvedBwrap,
-  workspace: string,
-  networkStack?: NetworkStack,
-): BashOperations {
-  return {
-    async exec(command, cwd, { onData, signal, timeout }) {
-      await fsAccess(cwd, constants.F_OK).catch(() => {
-        throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
-      });
-      // 已中断（signal.reason 是 name=AbortError 的 DOMException）：直接抛，不再执行
-      signal?.throwIfAborted();
-
-      const invocation = await buildBwrapInvocation(resolved, workspace, command, cwd);
-
-      if (invocation.needsNetworkStack) {
-        if (!networkStack) {
-          throw new Error("Network stack is not initialized for network limited mode");
-        }
-        return networkStack.exec({
-          command,
-          cwd,
-          bwrapPath: invocation.file,
-          bwrapArgs: invocation.args,
-          shell: invocation.shell,
-          env: invocation.env,
-          onData,
-          signal,
-          timeout,
-        });
-      }
-
-      const argv = bwrapArgv(invocation);
-      const child = spawn(argv[0], argv.slice(1), {
-        cwd,
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: invocation.env,
-      });
-
-      return new Promise<{ exitCode: number | null }>((resolve, reject) => {
-        let timedOut = false;
-        const timeoutHandle = timeout
-          ? setTimeout(() => {
-              timedOut = true;
-              killChild(child);
-            }, timeout * 1000)
-          : undefined;
-        const onAbort = () => killChild(child);
-        child.stdout.on("data", onData);
-        child.stderr.on("data", onData);
-        signal?.addEventListener("abort", onAbort, { once: true });
-        child.once("error", reject);
-        child.once("close", (exitCode) => {
-          if (timeoutHandle) {
-            clearTimeout(timeoutHandle);
-          }
-          signal?.removeEventListener("abort", onAbort);
-          // 中断：reject signal.reason（默认是 name=AbortError 的 DOMException）
-          if (signal?.aborted) {
-            reject(
-              signal.reason instanceof Error
-                ? signal.reason
-                : new Error("The operation was aborted"),
-            );
-          } else if (timedOut) {
-            // 超时：name=TimeoutError（对齐标准错误分类）
-            reject(new TimeoutError(timeout));
-          } else {
-            resolve({ exitCode });
-          }
-        });
-      });
-    },
-  };
 }

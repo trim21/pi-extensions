@@ -12,8 +12,15 @@ vi.mock("../src/bwrap/core.js", async (importOriginal) => {
     findBwrap: () => {
       throw new Error("bwrap (bubblewrap) not found in PATH");
     },
-    // 本文件只验证审批流与结果拼装：沙箱执行路径降级为本地执行（真实 bwrap 行为由
-    // bwrap-sandbox.test.ts 覆盖），bwrapOpsCreateMock 记录调用供「走了沙箱路径」断言
+  };
+});
+
+// 本文件只验证审批流与结果拼装：沙箱执行路径降级为本地执行（真实 bwrap 行为由
+// bwrap-sandbox.test.ts 覆盖），bwrapOpsCreateMock 记录调用供「走了沙箱路径」断言
+vi.mock("../src/bwrap/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/bwrap/exec.js")>();
+  return {
+    ...actual,
     createBwrapBashOperations: (...args: unknown[]) => {
       bwrapOpsCreateMock(...args);
       return createLocalBashOperations();

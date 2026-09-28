@@ -1,7 +1,8 @@
 # bwrap 沙箱与网络栈架构
 
 本文档描述 `network: limited` 模式下的进程模型、网络路径与生命周期管理。
-基础沙箱（bwrap 文件系统隔离）见 `core.ts` / `sandbox.ts`；本文聚焦网络栈
+基础沙箱（bwrap 文件系统隔离）见 `core.ts`（配置与 argv 内容）/ `exec.ts`
+（命令行组装与进程生命周期）/ `sandbox.ts`（加载配置并运行）；本文聚焦网络栈
 （`network-stack.ts` / `holder.ts` / `mihomo-config.ts`）。
 
 ## 进程模型
@@ -21,7 +22,7 @@ pi 进程（network-stack.ts）
      必须在宿主 netns 启动（原因见「设计约束」）；持 exit-fd 读端 + tapfd。
 ```
 
-每条命令的短命子树（命令结束即退）：
+每条命令的短命子树（命令结束即退），由 `exec.ts` 组装并 spawn：
 
 ```
 nsenter -U -n --preserve-credentials -t <①的pid> \
@@ -29,7 +30,9 @@ nsenter -U -n --preserve-credentials -t <①的pid> \
 ```
 
 nsenter 进入 holder 的 userns/netns，bwrap 在里面再嵌套创建自己的 user/pid
-ns 跑命令。网络栈是每条命令现建现停（起栈 ~40ms、停栈 ~100ms），不跨命令复用：
+ns 跑命令。网络栈对外只提供 holder pid（`NetworkStack.holderPid`）与停止，
+命令行怎么拼属于执行层——`--print-args` 预览与真正执行共用同一段组装。
+网络栈是每条命令现建现停（起栈 ~40ms、停栈 ~100ms），不跨命令复用：
 allowlist 变更因此即时生效，代价是每条命令重新启动一次 mihomo。
 
 ## 网络路径
