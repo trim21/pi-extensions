@@ -194,18 +194,14 @@ export function registerLspRenameTool(
       if (applied.length === 0) {
         throw new Error("LSP rename returned no edits");
       }
+      // 先逐个文件审批、再逐个写盘：用户在第二个文件上拒绝时不该留下半个 rename。
+      // 变更前后内容已由 expandWorkspaceEdit 在内存里算好，审批框展示的就是要写入的
+      // 内容；对话框停留期间的外部改动由写保护的指纹校验兜住。
       for (const fileEdit of applied) {
         await guardWriteAccess(ctx, {
           toolName: "lsp-rename",
           absolutePath: fileEdit.path,
-          change: {
-            kind: "edit",
-            oldText: fileEdit.oldText,
-            newText: fileEdit.newText,
-            // LSP 编辑已在内存里展开成整文件的 old/new，落盘是覆盖写：预览直接用
-            // 这一对文本，不必再把整份旧内容交给匹配引擎去找
-            apply: () => ({ contentOld: fileEdit.oldText, contentNew: fileEdit.newText }),
-          },
+          mutation: { contentOld: fileEdit.oldText, contentNew: fileEdit.newText },
           policy: options.policy,
           signal,
         });

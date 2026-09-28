@@ -1,11 +1,11 @@
 /**
  * Tests for the embedded workspace write guard (lib/write-guard.ts).
  *
- * - buildDiffPreview: whole-file writes, matched edits, fallback parameter
- *   diffs, and truncation. Asserted with inline snapshots so the exact rendered
- *   diff is visible in this file for review.
+ * - renderMutationPreview: the diff shown in the approval dialog, rendered from
+ *   the content the caller is about to write. Asserted with inline snapshots so
+ *   the exact rendered diff is visible in this file for review.
  * - guardWriteAccess: path gating (workspace /tmp auto-allow, approval dialog,
- *   headless rejection).
+ *   headless rejection) and the post-approval staleness check.
  *
  * Paths are fixed (not mkdtemp) so the `--- a/...` patch headers stay stable
  * across runs and the snapshots remain reproducible.
@@ -18,10 +18,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createRequestPolicy, type RequestPolicy } from "../src/lib/request-policy.js";
 import {
-  buildDiffPreview,
+  type FileMutation,
   guardWriteAccess,
-  type PendingChange,
-  type PendingChangeApply,
+  renderMutationPreview,
 } from "../src/lib/write-guard.js";
 
 const SNAPSHOT_DIR = join(tmpdir(), "write-guard-inline-snapshot");
@@ -55,36 +54,14 @@ afterAll(async () => {
   await rm(TMP_FILE, { force: true });
 });
 
-/**
- * 测试用的匹配实现：写保护模块自己不内置匹配引擎，定位由调用方给出。只做精确
- * 命中，命不中时抛错（契约：抛错 → 退化为参数 diff）。
- */
-function replaceOnce(oldText: string, newText: string): PendingChangeApply {
-  return (content) => {
-    if (!content.includes(oldText)) {
-      throw new Error("oldText not found");
-    }
-    return { contentOld: content, contentNew: content.replace(oldText, () => newText) };
-  };
+/** 待审批的写入：读写盘与匹配都由调用方完成，写保护只拿这两份内容。 */
+function mutation(contentOld: string, contentNew: string): FileMutation {
+  return { contentOld, contentNew };
 }
 
-function replaceEvery(oldText: string, newText: string): PendingChangeApply {
-  return (content) => {
-    if (!content.includes(oldText)) {
-      throw new Error("oldText not found");
-    }
-    return { contentOld: content, contentNew: content.split(oldText).join(newText) };
-  };
-}
-
-/** 一个带匹配实现的替换改动。 */
-function edit(oldText: string, newText: string, apply: PendingChangeApply): PendingChange {
-  return { kind: "edit", oldText, newText, apply };
-}
-
-describe("buildDiffPreview", () => {
-  it("write to a new file shows a full-addition patch", async () => {
-    const preview = await buildDiffPreview(TARGET, { kind: "write", newText: "one\ntwo\n" });
+describe("renderMutationPreview", () => {
+  it("write to a new file shows a full-addition patch", () => {
+    const preview = renderMutationPreview(TARGET, mutation("", "one\ntwo\n"));
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
@@ -98,10 +75,8 @@ describe("buildDiffPreview", () => {
     `);
   });
 
-  it("write over an existing file shows a replacement patch", async () => {
-    await writeFile(TARGET, "old\n", "utf8");
-
-    const preview = await buildDiffPreview(TARGET, { kind: "write", newText: "new\n" });
+  it("write over an existing file shows a replacement patch", () => {
+    const preview = renderMutationPreview(TARGET, mutation("old\n", "new\n"));
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
@@ -115,10 +90,11 @@ describe("buildDiffPreview", () => {
     `);
   });
 
-  it("matched edit produces a line-numbered patch", async () => {
-    await writeFile(TARGET, "one\ntwo\nthree\n", "utf8");
-
-    const preview = await buildDiffPreview(TARGET, edit("two", "TWO", replaceOnce("two", "TWO")));
+  it("matched edit produces a line-numbered patch", () => {
+    const preview = renderMutationPreview(
+      TARGET,
+      mutation("one\ntwo\nthree\n", "one\nTWO\nthree\n"),
+    );
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
@@ -134,12 +110,10 @@ describe("buildDiffPreview", () => {
     `);
   });
 
-  it("replaceAll shows every occurrence changed", async () => {
-    await writeFile(TARGET, "alpha\nbeta\nalpha\n", "utf8");
-
-    const preview = await buildDiffPreview(
+  it("replaceAll shows every occurrence changed", () => {
+    const preview = renderMutationPreview(
       TARGET,
-      edit("alpha", "gamma", replaceEvery("alpha", "gamma")),
+      mutation("alpha\nbeta\nalpha\n", "gamma\nbeta\ngamma\n"),
     );
 
     expect(preview).toMatchInlineSnapshot(`
@@ -157,56 +131,11 @@ describe("buildDiffPreview", () => {
     `);
   });
 
-  it("falls back to a parameter diff when oldText is not matched", async () => {
-    await writeFile(TARGET, "one\ntwo\n", "utf8");
+  // 渲染只看调用方给的这两份内容：磁盘上有什么、工具参数叫什么，都与预览无关。
+  it("renders the patch from the given content, not from the disk", async () => {
+    await writeFile(TARGET, "on disk\n", "utf8");
 
-    const preview = await buildDiffPreview(
-      TARGET,
-      edit("missing", "x", replaceOnce("missing", "x")),
-    );
-
-    expect(preview).toMatchInlineSnapshot(`
-      "\`\`\`diff
-      -missing
-      +x
-      \`\`\`"
-    `);
-  });
-
-  // 模块自己不持有匹配引擎：调用方说定位不了，就退化为参数 diff，哪怕文件里
-  // 明明存在这段文本（这条断言挡住将来有人再把某个引擎 import 回来）。
-  it("does not locate the text with a built-in matcher of its own", async () => {
-    await writeFile(TARGET, "one\ntwo\nthree\n", "utf8");
-
-    const preview = await buildDiffPreview(TARGET, {
-      kind: "edit",
-      oldText: "two",
-      newText: "TWO",
-      apply: () => {
-        throw new Error("cannot locate");
-      },
-    });
-
-    expect(preview).toMatchInlineSnapshot(`
-      "\`\`\`diff
-      -two
-      +TWO
-      \`\`\`"
-    `);
-  });
-
-  // 展示的 patch 由 apply 报告的前后文本决定，与 oldText / newText 无关：
-  // 匹配实现才是「这次改动长什么样」的唯一来源。
-  it("renders the patch from what the caller's apply reports", async () => {
-    await writeFile(TARGET, "unused\n", "utf8");
-
-    const preview = await buildDiffPreview(
-      TARGET,
-      edit("not in the file", "neither is this", () => ({
-        contentOld: "before\n",
-        contentNew: "after\n",
-      })),
-    );
+    const preview = renderMutationPreview(TARGET, mutation("before\n", "after\n"));
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
@@ -220,58 +149,56 @@ describe("buildDiffPreview", () => {
     `);
   });
 
-  it("edit preview does not require the file to exist", async () => {
-    const preview = await buildDiffPreview(
-      MISSING,
-      edit("a\nb", "c", () => {
-        throw new Error("no file");
-      }),
-    );
+  it("renders a full-addition patch when the old content is empty", () => {
+    const preview = renderMutationPreview(MISSING, mutation("", "a\nb\n"));
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
-      -a
-      -b
-      +c
+      --- missing.txt
+      +++ missing.txt
+      @@ -0,0 +1,2 @@
+      +a
+      +b
+
       \`\`\`"
     `);
   });
 
-  it("multiline edit parameters become a multiline diff", async () => {
-    await writeFile(TARGET, "unused\n", "utf8");
-
-    const preview = await buildDiffPreview(
-      TARGET,
-      edit("one\ntwo", "1\n2\n3", replaceOnce("one\ntwo", "1\n2\n3")),
-    );
+  it("multiline content becomes a multiline diff", () => {
+    const preview = renderMutationPreview(TARGET, mutation("one\ntwo\n", "1\n2\n3\n"));
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
+      --- target.txt
+      +++ target.txt
+      @@ -1,2 +1,3 @@
       -one
       -two
       +1
       +2
       +3
+
       \`\`\`"
     `);
   });
 
-  it("truncates very large diffs", async () => {
+  it("truncates very large diffs", () => {
     const content = Array.from({ length: 300 }, (_, i) => `line ${i}`).join("\n") + "\n";
 
-    const preview = await buildDiffPreview(TARGET, { kind: "write", newText: content });
+    const preview = renderMutationPreview(TARGET, mutation("", content));
 
     expect(preview).toContain("preview truncated to 100 lines");
-    const lines = preview!.split("\n");
+    const lines = preview.split("\n");
     expect(lines.length).toBe(103); // 100 diff lines + truncation note + ``` fences
   });
 
   // 内容含 ``` 时三反引号围栏会被提前闭合，渲染错乱（上下文行前只有
   // 一个空格缩进，仍在 CommonMark 闭合围栏允许的缩进范围内）。
-  it("uses a longer fence when the patch contains ``` lines", async () => {
-    await writeFile(TARGET, "```js\nold\n```\n", "utf8");
-
-    const preview = await buildDiffPreview(TARGET, edit("old", "new", replaceOnce("old", "new")));
+  it("uses a longer fence when the patch contains ``` lines", () => {
+    const preview = renderMutationPreview(
+      TARGET,
+      mutation("```js\nold\n```\n", "```js\nnew\n```\n"),
+    );
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`\`diff
@@ -283,26 +210,6 @@ describe("buildDiffPreview", () => {
       +new
        \`\`\`
 
-      \`\`\`\`"
-    `);
-  });
-
-  it("fallback parameter diff also escapes ``` content", async () => {
-    await writeFile(TARGET, "unused\n", "utf8");
-
-    const preview = await buildDiffPreview(
-      TARGET,
-      edit("missing", "```js\nx\n```", () => {
-        throw new Error("cannot locate");
-      }),
-    );
-
-    expect(preview).toMatchInlineSnapshot(`
-      "\`\`\`\`diff
-      -missing
-      +\`\`\`js
-      +x
-      +\`\`\`
       \`\`\`\`"
     `);
   });
@@ -339,7 +246,7 @@ function writeOptions(absolutePath: string, over: WriteOptionsOverrides = {}) {
   return {
     toolName: "write",
     absolutePath,
-    change: { kind: "write", newText: "x" } satisfies PendingChange,
+    mutation: { contentOld: "", contentNew: "x" } satisfies FileMutation,
     policy,
     ...over,
   };
@@ -495,11 +402,45 @@ describe("guardWriteAccess", () => {
       guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), {
         toolName: "edit",
         absolutePath: OUTSIDE,
-        change: edit("two", "TWO", replaceOnce("two", "TWO")),
+        mutation: mutation("", "TWO\n"),
         policy,
       }),
     ).resolves.toBeUndefined();
   });
+
+  // 用户在对话框上停留期间文件被外部改动：批准的那份内容已经不是磁盘上的内容，
+  // 再按它算出的结果写下去就是覆盖别人的改动。OUTSIDE 不存在等价于空内容，因此
+  // 用一份非空 contentOld 就能构造出这个场景。
+  it.skipIf(process.platform === "win32")(
+    "refuses the write when the approved content is no longer on disk",
+    async () => {
+      const select = vi.fn(async () => "Approve once");
+      await expect(
+        guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), {
+          toolName: "edit",
+          absolutePath: OUTSIDE,
+          mutation: mutation("what the user saw\n", "changed\n"),
+          policy,
+        }),
+      ).rejects.toThrow(/modified since read/);
+    },
+  );
+
+  // 反向保证：新建文件（批准时与批准后都不存在）不该被这次校验误杀。
+  it.skipIf(process.platform === "win32")(
+    "allows a new file that still does not exist",
+    async () => {
+      const select = vi.fn(async () => "Approve once");
+      await expect(
+        guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), {
+          toolName: "edit",
+          absolutePath: OUTSIDE,
+          mutation: mutation("", "created\n"),
+          policy,
+        }),
+      ).resolves.toBeUndefined();
+    },
+  );
 });
 
 describe("Windows: writes are restricted to the workspace", () => {

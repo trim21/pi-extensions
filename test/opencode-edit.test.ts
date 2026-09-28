@@ -6,6 +6,7 @@
  * - unique match, replaceAll, multiple-match error
  * - BOM and CRLF preservation
  * - abort handling
+ * - 审批拿到的前后内容就是落盘的那份（预览即写入内容）
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,6 +16,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deserializeReads } from "../src/lib/file-reads.js";
 import opencodeFileTools from "../src/opencode/files.js";
+
+// 包一层只是为了观察写保护拿到的内容；行为仍走真实实现。
+vi.mock("../src/lib/write-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/write-guard.js")>();
+  return { ...actual, guardWriteAccess: vi.fn(actual.guardWriteAccess) };
+});
 
 interface ToolDetails {
   diff?: string;
@@ -285,6 +292,29 @@ describe("opencode edit execute", () => {
       ),
     ).rejects.toThrow(/aborted/i);
     expect(await readFile(target, "utf8")).toBe("content\n");
+  });
+
+  // 审批拿到的两份内容必须就是读写盘的那两份：预览即写入内容。
+  it("hands the guard the exact content it writes", async () => {
+    await writeFile(target, "before\n", "utf8");
+    const { tool, readFirst } = loadTool();
+    await readFirst(target);
+    const { guardWriteAccess } = await import("../src/lib/write-guard.js");
+    vi.mocked(guardWriteAccess).mockClear();
+
+    await tool.execute(
+      "id",
+      { filePath: target, oldString: "before", newString: "after" },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(vi.mocked(guardWriteAccess).mock.calls[0]?.[1].mutation).toEqual({
+      contentOld: "before\n",
+      contentNew: "after\n",
+    });
+    expect(await readFile(target, "utf8")).toBe("after\n");
   });
 });
 

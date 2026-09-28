@@ -632,27 +632,6 @@ function registerEditTool(
 
       const absolutePath = isAbsolute(filePath) ? filePath : resolvePath(ctx.cwd, filePath);
 
-      await guardWriteAccess(ctx, {
-        toolName: "edit",
-        absolutePath,
-        // 审批预览必须与落盘同语义：注入本工具自己的模糊匹配引擎（空 oldString
-        // 是创建新文件，按整文件写入预览）
-        change:
-          oldString === ""
-            ? { kind: "write", newText: newString }
-            : {
-                kind: "edit",
-                oldText: oldString,
-                newText: newString,
-                apply: (content) => {
-                  const applied = applyEdit(content, oldString, newString, replaceAll);
-                  return { contentOld: applied.contentOld, contentNew: applied.contentNew };
-                },
-              },
-        policy,
-        signal,
-      });
-
       const [message, details, diagnostics] = await withFileMutationQueue(
         absolutePath,
         async () => {
@@ -677,6 +656,14 @@ function registerEditTool(
               );
             }
             // opencode: writeWithDirs 自动创建父目录；newString 开头的 BOM 原样保留
+            // 审批在算完内容之后、产生副作用（建目录 / 写盘）之前：预览就是将要写入的内容
+            await guardWriteAccess(ctx, {
+              toolName: "edit",
+              absolutePath,
+              mutation: { contentOld: "", contentNew: newString },
+              policy,
+              signal,
+            });
             await mkdir(dirname(absolutePath), { recursive: true });
             signal?.throwIfAborted();
             await writeFile(absolutePath, newString, "utf8");
@@ -720,6 +707,13 @@ function registerEditTool(
 
           const applied = applyEdit(rawContent, oldString, newString, replaceAll);
           signal?.throwIfAborted();
+          await guardWriteAccess(ctx, {
+            toolName: "edit",
+            absolutePath,
+            mutation: { contentOld: rawContent, contentNew: applied.finalContent },
+            policy,
+            signal,
+          });
           await writeFile(absolutePath, applied.finalContent, "utf8");
           const snapshot = snapshotOf(applied.finalContent);
           state.reads.set(key, snapshot);
@@ -810,13 +804,6 @@ function registerWriteTool(
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const { filePath: rawPath, content } = params;
       const absolutePath = resolvePath(ctx.cwd, rawPath);
-      await guardWriteAccess(ctx, {
-        toolName: "write",
-        absolutePath,
-        change: { kind: "write", newText: content },
-        policy,
-        signal,
-      });
       const dir = dirname(absolutePath);
 
       const [message, details, diagnostics] = await withFileMutationQueue(
@@ -832,29 +819,31 @@ function registerWriteTool(
           }
 
           // opencode: desiredBom = source.bom || next.bom —— 保留原文件 BOM，
-          // 否则用新内容自带的 BOM
+          // 否则用新内容自带的 BOM。旧内容整读一次，既是 BOM 的来源，也是审批预览
+          // 的「变更前内容」。
           let existing: Buffer | undefined;
           try {
-            const fh = await open(absolutePath, "r");
-            try {
-              existing = Buffer.alloc(3);
-              const { bytesRead } = await fh.read(existing, 0, 3, 0);
-              if (bytesRead < 3) {
-                existing = undefined;
-              }
-            } finally {
-              await fh.close();
-            }
+            existing = await readFile(absolutePath);
           } catch {
-            // 文件不存在：无旧 BOM
+            // 文件不存在：无旧文件
           }
           const { bom: desiredBom, text: nextText } = resolveBom(existing, content);
+          const finalContent = desiredBom + nextText;
+
+          // 审批在算完内容之后、产生副作用（建目录 / 写盘）之前：预览就是将要写入的内容
+          await guardWriteAccess(ctx, {
+            toolName: "write",
+            absolutePath,
+            mutation: { contentOld: existing?.toString("utf8") ?? "", contentNew: finalContent },
+            policy,
+            signal,
+          });
 
           await mkdir(dir, { recursive: true });
           signal?.throwIfAborted();
-          await writeFile(absolutePath, desiredBom + nextText, "utf8");
+          await writeFile(absolutePath, finalContent, "utf8");
           // 写后记账（key 在写入前已算过）：紧接着的 edit 不该再要求重新 read
-          const snapshot = snapshotOf(desiredBom + nextText);
+          const snapshot = snapshotOf(finalContent);
           state.reads.set(key, snapshot);
           const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
             signal,

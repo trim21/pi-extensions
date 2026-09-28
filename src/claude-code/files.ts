@@ -345,31 +345,6 @@ export function registerFileTools(
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const filePath = resolveToolFilePath(params.file_path, ctx.cwd);
-      await guardWriteAccess(ctx, {
-        toolName: "Edit",
-        absolutePath: filePath,
-        // 审批预览必须与落盘同语义：这里注入本工具自己的精确匹配（空 old_string
-        // 是创建/填充文件，按整文件写入预览）
-        change:
-          params.old_string === ""
-            ? { kind: "write", newText: params.new_string }
-            : {
-                kind: "edit",
-                oldText: params.old_string,
-                newText: params.new_string,
-                apply: (content) => ({
-                  contentOld: content,
-                  contentNew: applyExactEdit(
-                    content,
-                    params.old_string,
-                    params.new_string,
-                    params.replace_all ?? false,
-                  ),
-                }),
-              },
-        policy,
-        signal,
-      });
       const [message, details, diagnostics] = await withFileMutationQueue<
         [string, FileToolDetails, DiagnosticReport]
       >(filePath, async () => {
@@ -381,11 +356,12 @@ export function registerFileTools(
         // 空 old_string：创建新文件或填充空文件（不需要先 Read，对齐 Claude Code）
         if (oldString === "") {
           let exists = true;
+          let contentOld = "";
           try {
             const value = await stat(filePath);
             if (value.isFile()) {
-              const content = await readFile(filePath, "utf8");
-              if (content.trim() !== "") {
+              contentOld = await readFile(filePath, "utf8");
+              if (contentOld.trim() !== "") {
                 throw new Error("Cannot create new file - file already exists.");
               }
             }
@@ -396,6 +372,14 @@ export function registerFileTools(
               throw error;
             }
           }
+          // 审批在算完内容之后、产生副作用（建目录 / 写盘）之前：预览就是将要写入的内容
+          await guardWriteAccess(ctx, {
+            toolName: "Edit",
+            absolutePath: filePath,
+            mutation: { contentOld, contentNew: newString },
+            policy,
+            signal,
+          });
           if (!exists) {
             await mkdir(dirname(filePath), { recursive: true });
           }
@@ -458,6 +442,13 @@ export function registerFileTools(
         signal?.throwIfAborted();
         const original = content.toString("utf8");
         const restored = applyExactEdit(original, oldString, newString, replaceAll);
+        await guardWriteAccess(ctx, {
+          toolName: "Edit",
+          absolutePath: filePath,
+          mutation: { contentOld: original, contentNew: restored },
+          policy,
+          signal,
+        });
         await writeFile(filePath, restored, "utf8");
         const snapshot = snapshotOf(restored);
         state.reads.set(key, snapshot);
@@ -532,13 +523,6 @@ export function registerFileTools(
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const filePath = resolveToolFilePath(params.file_path, ctx.cwd);
-      await guardWriteAccess(ctx, {
-        toolName: "Write",
-        absolutePath: filePath,
-        change: { kind: "write", newText: params.content },
-        policy,
-        signal,
-      });
       const [message, details, diagnostics] = await withFileMutationQueue<
         [string, FileToolDetails, DiagnosticReport]
       >(filePath, async () => {
@@ -558,6 +542,14 @@ export function registerFileTools(
           }
         }
         signal?.throwIfAborted();
+        // 审批在算完内容之后、产生副作用（建目录 / 写盘）之前：预览就是将要写入的内容
+        await guardWriteAccess(ctx, {
+          toolName: "Write",
+          absolutePath: filePath,
+          mutation: { contentOld: original ?? "", contentNew: params.content },
+          policy,
+          signal,
+        });
         await mkdir(dirname(filePath), { recursive: true });
         await writeFile(filePath, params.content, "utf8");
         const snapshot = snapshotOf(params.content);

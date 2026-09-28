@@ -70,7 +70,7 @@ Claude Code 风格工具集（大写 `Read` / `Edit` / `Write` / `Bash` / `Grep`
 
 入口 `src/claude-code/index.ts` 聚合四组工具：files（Read / Edit / Write）、search（Grep / Glob，`search.ts` 聚合 `grep.ts` / `glob.ts`）、shell（Bash）、session（TodoWrite / AskUserQuestion）。
 
-- **files**：Edit 的匹配在 `src/claude-code/edit-match.ts`（精确匹配，Claude Code 语义）；写保护经 `src/lib/write-guard.ts` 与 opencode 侧共享，审批预览用的匹配实现由各工具自己注入（Claude Code 注入 `applyExactEdit`）；Read 状态创建与 session 恢复归 files 模块所有。
+- **files**：Edit 的匹配在 `src/claude-code/edit-match.ts`（精确匹配，Claude Code 语义）；写保护经 `src/lib/write-guard.ts` 与 opencode 侧共享，审批展示的 diff 由本工具算好的「变更前后完整内容」直接渲染（见 `openspec/specs/write-guard/spec.md`）；Read 状态创建与 session 恢复归 files 模块所有。
 - **LSP 工具族**：`lsp-rename` / `lsp-find-definition` / `lsp-find-reference` / `lsp-inspect` 由 files 模块的 LSP manager 在存在 enabled 服务器时注册（见 `openspec/specs/lsp/spec.md`），实现位于 `src/lib/lsp/`。
 - **Grep**：`src/claude-code/grep.ts`，支持 `files_with_matches` / `content` / `count` 输出模式与行号。
 - **Glob**：`src/claude-code/glob.ts`，文件模式匹配。

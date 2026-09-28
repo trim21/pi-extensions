@@ -137,7 +137,7 @@ bwrap 已集成进 bash 工具实现（opencode 风格 `bash` 位于 `src/openco
 写保护直接内置在各写工具（opencode 风格 `write`/`edit`、Claude Code 风格 `Write`/`Edit`）内部，通过 `src/lib/write-guard.ts` 的 `guardWriteAccess` 实现。读取工具（`read`、`ls`、`find`、`grep`）不受限制。
 
 - workspace 内或 `/tmp` 下的路径自动放行
-- 外部路径需通过确认对话框由用户审批（**Approve once** / **Block** / **Block with reason**），对话框内以 ```diff 代码块展示将要发生的变更预览（定位由各写工具注入自己的匹配实现，能定位时显示带行号的真实 patch，否则退化为参数 diff）
+- 外部路径需通过确认对话框由用户审批（**Approve once** / **Block** / **Block with reason**），对话框内以 ```diff 代码块展示将要发生的变更；预览由「将要写入的内容」直接算出，批准后写的就是这份内容（批准前若文件被外部改动则拒绝写入）
 - headless（无 UI）会话直接拒绝外部写入；Windows 上不提供审批路径，工作区外写入一律拒绝
 - `/bwrap-deny-request` 生效期间外部写入按无理由拒绝处理（`user deny <tool>: blocked`）
 - 无需配置，随各写工具自动生效
@@ -253,7 +253,7 @@ opencode 风格工具集，随 `src/opencode/index.ts` 一次加载：`read` / `
 
 ### edit
 
-`edit` 使用 [opencode](https://github.com/anomalyco/opencode) 的 schema 和模糊匹配引擎。核心 replacer 和 `replace()` 函数复制自 opencode，匹配引擎位于 `src/opencode/edit-engine.ts`；写保护审批弹窗（`src/lib/write-guard.ts`）的 diff 预览由调用方注入这套引擎，因此预览与落盘同语义。唯一的有意差异是去掉了原版的转义规范化（EscapeNormalizedReplacer）：它会把源码里合法的 `\n`、`\t` 等转义序列当成模型多转义的产物做启发式反转义，可能改坏内容。
+`edit` 使用 [opencode](https://github.com/anomalyco/opencode) 的 schema 和模糊匹配引擎。核心 replacer 和 `replace()` 函数复制自 opencode，匹配引擎位于 `src/opencode/edit-engine.ts`。唯一的有意差异是去掉了原版的转义规范化（EscapeNormalizedReplacer）：它会把源码里合法的 `\n`、`\t` 等转义序列当成模型多转义的产物做启发式反转义，可能改坏内容。
 
 支持的匹配策略：
 

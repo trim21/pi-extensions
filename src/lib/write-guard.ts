@@ -11,17 +11,17 @@
  * - `/bwrap-deny-request` (non-sandbox request policy) refuses outside writes
  *   outright, with the same error as the user picking "Block".
  *
- * Callers have already parsed their tool arguments, so the guard only takes the
- * resolved pieces: the raw target path and the pending change. An edit carries
- * the caller's own matching implementation, so the previewed diff comes from the
- * same semantics that will write the file.
+ * Callers have already parsed their tool arguments and computed the result, so the
+ * guard takes the resolved pieces: the raw target path and the mutation (the file's
+ * content before and after). The preview is rendered from those two strings, so the
+ * approved diff is the change that gets written.
  */
 
-import { readFile } from "node:fs/promises";
 import { basename, isAbsolute, relative, sep } from "node:path";
 
 import { generateUnifiedPatch } from "@earendil-works/pi-coding-agent";
 
+import { digestIfExists, snapshotOf } from "./file-reads.js";
 import { fenceCodeBlock } from "./markdown.js";
 import type { RequestPolicy } from "./request-policy.js";
 
@@ -59,80 +59,52 @@ function wrapDiff(patch: string): string {
 }
 
 /**
- * 审批预览用的应用函数：把这次改动套到文件内容上，返回 diff 用的前后文本。
- * 必须是该工具落盘时使用的同一套匹配实现——否则对话框展示的 diff 与实际写入
- * 可能不一致。
+ * 待审批的写入：内容由调用方先读盘并算好，批准后按 `contentNew` 落盘。
+ *
+ * 两份内容都是文件原始内容（保留 BOM 与行尾），不是匹配引擎的中间产物——这样
+ * 预览就是磁盘前后的真实对照，批准后的指纹校验也能与磁盘字节逐字节对上。
  */
-export type PendingChangeApply = (fileContent: string) => {
+export interface FileMutation {
+  /** 变更前的完整文件内容（文件不存在时为 ""）。 */
   readonly contentOld: string;
+  /** 变更后的完整内容——即批准后写进磁盘的字节。 */
   readonly contentNew: string;
-};
-
-/** 整文件写入：预览是完整的增删 patch，不需要匹配实现。 */
-export interface FileWriteChange {
-  readonly kind: "write";
-  readonly newText: string;
 }
-
-/**
- * 替换：`apply` 是调用方自己的匹配实现（精确匹配、模糊匹配，或已展开好的整文件
- * 编辑）。匹配不上时抛错即可，写保护会退化为参数 diff。
- */
-export interface FileEditChange {
-  readonly kind: "edit";
-  readonly oldText: string;
-  readonly newText: string;
-  readonly apply: PendingChangeApply;
-}
-
-/** The pending file change, described by the caller from already-parsed args. */
-export type PendingChange = FileWriteChange | FileEditChange;
 
 /** 预览统一按 LF 渲染：CRLF 文件的 diff 每行都带 \r，在对话框里显示成乱码。 */
 function normalizeToLF(text: string): string {
   return text.replaceAll("\r\n", "\n");
 }
 
-/** 参数 diff：调用方的匹配实现报告不出结果时的兜底形式。 */
-function parameterDiff(oldText: string, newText: string): string {
-  const removed = oldText.split("\n").map((line) => `-${line}`);
-  const added = newText.split("\n").map((line) => `+${line}`);
-  return [...removed, ...added].join("\n");
+/** 待审批写入的 diff 代码块：由将落盘的内容直接算出，不做第二次匹配。 */
+export function renderMutationPreview(resolvedPath: string, mutation: FileMutation): string {
+  return wrapDiff(
+    generateUnifiedPatch(
+      basename(resolvedPath),
+      normalizeToLF(mutation.contentOld),
+      normalizeToLF(mutation.contentNew),
+      2,
+    ),
+  );
 }
 
+/** 空内容的指纹：文件不存在与空文件在审批视角下等价。 */
+const EMPTY_DIGEST = snapshotOf("").digest;
+
 /**
- * Build a `diff` code block preview of the pending change.
- * Returns undefined when the diff cannot be computed.
+ * 批准后重新取一次磁盘指纹：用户停留在对话框上的这段时间文件可能被外部改动，
+ * 此时按审批所用的旧内容算出的 `contentNew` 会覆盖别人的改动。
  */
-export async function buildDiffPreview(
-  resolvedPath: string,
-  change: PendingChange,
-): Promise<string | undefined> {
-  let fileContent = "";
-  try {
-    fileContent = await readFile(resolvedPath, "utf8");
-  } catch {
-    // Unreadable or missing file: treat as empty so writes show as full additions.
+async function requireApprovedContentStillCurrent(opts: WriteGuardOptions): Promise<void> {
+  const { mutation } = opts;
+  if (mutation === undefined) {
+    return;
   }
-
-  if (change.kind === "write") {
-    // Whole-file write: show the full addition/replacement patch.
-    return wrapDiff(generateUnifiedPatch(basename(resolvedPath), fileContent, change.newText, 2));
-  }
-
-  // 定位由调用方的匹配实现负责（与其落盘同语义）；匹配不上时退回参数 diff。
-  try {
-    const { contentOld, contentNew } = change.apply(fileContent);
-    return wrapDiff(
-      generateUnifiedPatch(
-        basename(resolvedPath),
-        normalizeToLF(contentOld),
-        normalizeToLF(contentNew),
-        2,
-      ),
+  const current = (await digestIfExists(opts.absolutePath)) ?? EMPTY_DIGEST;
+  if (current !== snapshotOf(mutation.contentOld).digest) {
+    throw new Error(
+      "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.",
     );
-  } catch {
-    return wrapDiff(parameterDiff(change.oldText, change.newText));
   }
 }
 
@@ -159,9 +131,10 @@ export interface WriteGuardOptions {
   /** The resolved absolute target path (caller has already parsed its args). */
   absolutePath: string;
   /**
-   * 待审批的变更内容；缺省时审批对话框不展示 diff 预览，仅按路径审批。
+   * 待审批的写入（变更前后的完整内容）；缺省时审批对话框不展示 diff 预览，
+   * 仅按路径审批（流式落盘的工具用不上它）。
    */
-  change?: PendingChange;
+  mutation?: FileMutation;
   /** 调用方所在扩展入口持有的非沙盒请求策略（跨入口一致时绑同一个 pi.events）。 */
   policy: RequestPolicy;
   /** 工具调用的中止信号：透传给审批对话框，工具被取消时对话框一起关掉。 */
@@ -204,7 +177,8 @@ export async function guardWriteAccess(
   }
 
   for (;;) {
-    const diffPreview = opts.change ? await buildDiffPreview(absolutePath, opts.change) : undefined;
+    const diffPreview =
+      opts.mutation === undefined ? undefined : renderMutationPreview(absolutePath, opts.mutation);
     const title =
       `Model requests write access outside workspace:\n\n` +
       `  Tool:  ${opts.toolName}\n` +
@@ -220,6 +194,7 @@ export async function guardWriteAccess(
       throw new Error(`user deny ${opts.toolName}: cancelled`);
     }
     if (choice === "Approve once") {
+      await requireApprovedContentStillCurrent(opts);
       return;
     }
     if (choice === "Block") {
