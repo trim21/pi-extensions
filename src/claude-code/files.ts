@@ -31,6 +31,7 @@ import type { ToolPendant } from "../lib/pendant.ts";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { didYouMean, resolveToolFilePath } from "./common.js";
+import { applyExactEdit } from "./edit-match.js";
 import { convertLeadingTabsToSpaces } from "./edit-utils.js";
 
 const SAMPLE_BYTES = 4096;
@@ -168,47 +169,6 @@ export function formatReadOutput(
   const selected = lines.slice(startIndex, endIndex);
   const text = selected.map((line, index) => `${firstLine + index}: ${line}`).join("\n");
   return { text, totalLines };
-}
-
-function countMatches(content: string, needle: string): number {
-  if (needle === "") {
-    return 0;
-  }
-  let count = 0;
-  let index = 0;
-  while ((index = content.indexOf(needle, index)) !== -1) {
-    count++;
-    index += needle.length;
-  }
-  return count;
-}
-
-export function exactReplace(
-  content: string,
-  oldString: string,
-  newString: string,
-  replaceAll = false,
-): string {
-  if (oldString === newString) {
-    throw new Error("No changes to apply: old_string and new_string are identical.");
-  }
-  if (oldString === "") {
-    throw new Error("old_string must not be empty.");
-  }
-  const matches = countMatches(content, oldString);
-  if (matches === 0) {
-    throw new Error("String to replace not found in file.");
-  }
-  if (!replaceAll && matches > 1) {
-    throw new Error(
-      `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, provide more context to make old_string unique.`,
-    );
-  }
-  if (replaceAll) {
-    return content.split(oldString).join(newString);
-  }
-  const index = content.indexOf(oldString);
-  return content.slice(0, index) + newString + content.slice(index + oldString.length);
 }
 
 export function registerFileTools(
@@ -483,37 +443,7 @@ export function registerFileTools(
         await access(filePath, constants.R_OK | constants.W_OK);
         signal?.throwIfAborted();
         const original = content.toString("utf8");
-
-        // CRLF 规范化后匹配（old_string 不需要带 \r），写回时恢复原行尾
-        const crlfCount = (original.match(/\r\n/g) ?? []).length;
-        const lfCount = (original.match(/(?<!\r)\n/g) ?? []).length;
-        const lineEnding = crlfCount > lfCount ? "\r\n" : "\n";
-        const normalized = original.replaceAll("\r\n", "\n");
-        const matches = normalized.split(oldString).length - 1;
-        if (matches === 0) {
-          throw new Error(`String to replace not found in file.\nString: ${oldString}`);
-        }
-        if (!replaceAll && matches > 1) {
-          throw new Error(
-            `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${oldString}`,
-          );
-        }
-        // 删除场景（new_string 为空）：old_string 不以换行结尾且文件里是
-        // "old_string\n" 时连换行一起删，避免留下空行（对齐 Claude Code
-        // applyEditToFile 的 stripTrailingNewline 语义）
-        let searchString = oldString;
-        if (
-          newString === "" &&
-          !oldString.endsWith("\n") &&
-          normalized.includes(oldString + "\n")
-        ) {
-          searchString = oldString + "\n";
-        }
-        // split/join 与函数替换：replacement 含 $ 时不会触发 $& 等特殊语义
-        const updated = replaceAll
-          ? normalized.split(searchString).join(newString)
-          : normalized.replace(searchString, () => newString);
-        const restored = lineEnding === "\r\n" ? updated.replaceAll("\n", "\r\n") : updated;
+        const restored = applyExactEdit(original, oldString, newString, replaceAll);
         await writeFile(filePath, restored, "utf8");
         const snapshot = snapshotOf(restored);
         state.reads.set(key, snapshot);

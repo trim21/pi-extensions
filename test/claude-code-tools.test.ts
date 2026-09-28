@@ -19,7 +19,8 @@ import {
   createBwrapRuntime,
 } from "../src/bwrap/runtime.js";
 import { didYouMean, findSimilarFile, suggestPathUnderCwd } from "../src/claude-code/common.js";
-import claudeCodeFileTools, { exactReplace, formatReadOutput } from "../src/claude-code/files.js";
+import { applyExactEdit } from "../src/claude-code/edit-match.js";
+import claudeCodeFileTools, { formatReadOutput } from "../src/claude-code/files.js";
 import claudeCodeGlobTool, { globFiles } from "../src/claude-code/glob.js";
 import claudeCodeGrepTool, {
   sortFilesByMtime,
@@ -368,10 +369,24 @@ describe("Read, Edit, and Write", () => {
   });
 
   it("performs only exact replacements and enforces uniqueness", () => {
-    expect(exactReplace("a b a", "b", "B")).toBe("a B a");
-    expect(() => exactReplace("a b a", "a", "A")).toThrow(/2 matches/);
-    expect(exactReplace("a b a", "a", "A", true)).toBe("A b A");
-    expect(() => exactReplace("hello", " hello", "x")).toThrow(/not found/);
+    expect(applyExactEdit("a b a", "b", "B", false)).toBe("a B a");
+    expect(() => applyExactEdit("a b a", "a", "A", false)).toThrow(/2 matches/);
+    expect(applyExactEdit("a b a", "a", "A", true)).toBe("A b A");
+    expect(() => applyExactEdit("hello", " hello", "x", false)).toThrow(
+      /String to replace not found in file\.\nString: {2}hello/,
+    );
+  });
+
+  it("restores the original CRLF line endings after matching on LF", () => {
+    expect(applyExactEdit("a\r\nb\r\n", "b", "B", false)).toBe("a\r\nB\r\n");
+  });
+
+  it("deletes the following newline together with the removed line", () => {
+    expect(applyExactEdit("keep\ndrop\nkeep2\n", "drop", "", false)).toBe("keep\nkeep2\n");
+  });
+
+  it("matches an LF old_string inside a CRLF file", () => {
+    expect(applyExactEdit("a\r\nb\r\n", "a\nb", "x", false)).toBe("x\r\n");
   });
 
   it("requires a complete Read before Edit", async () => {
