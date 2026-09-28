@@ -24,7 +24,10 @@
  * so one log entry is always exactly one rendered line. The final line is
  * always the subagent name as a code span (`` `scout` ``), followed by the
  * live usage stats when there are any; it rides outside the rolling window so
- * it is never trimmed. While the model is thinking, a transient
+ * it is never trimmed. The model name on that line is the model the session
+ * actually uses, which differs from the frontmatter string when the declared
+ * model resolved to nothing and the SDK fell back to a default. While the
+ * model is thinking, a transient
  * `thinking ( N chars )` line sits between the log and the footer showing the
  * live character count of the streamed thinking; it disappears when the
  * thinking block ends.
@@ -177,6 +180,7 @@ interface SubagentResult {
   messages: AgentMessage[];
   stderr: string;
   usage: UsageStats;
+  /** 实际生效的模型 id（fallback 之后），不是 frontmatter 里写的名字。 */
   model?: string;
   stopReason?: string;
   errorMessage?: string;
@@ -378,6 +382,11 @@ function toolSegment(name: string, count: number): string {
 /** The subset of AgentSession runAgent relies on (injectable for tests). */
 export interface SubagentSession {
   agent: { state: { messages: AgentMessage[] } };
+  /**
+   * Model the session actually runs (after any SDK fallback), shown in the
+   * progress footer. Optional: injected test sessions need not expose it.
+   */
+  model?: { id: string };
   subscribe(listener: AgentSessionEventListener): () => void;
   prompt(text: string, options?: PromptOptions): Promise<void>;
   abort(): Promise<void>;
@@ -453,7 +462,6 @@ export async function runAgent(
       contextTokens: 0,
       turns: 0,
     },
-    model: agent.model,
   };
 
   let session: SubagentSession;
@@ -465,6 +473,10 @@ export async function runAgent(
     result.exitCode = 1;
     return result;
   }
+
+  // 面板显示实际生效的模型：frontmatter 里的模型名解析不到时，SDK 会静默
+  // fallback 到默认模型，回显配置原文会掩盖这次 fallback。
+  result.model = session.model?.id;
 
   let logLines: string[] = [];
   // 工具调用行合并:连续的 tool_execution_start 事件合并在同一 `tool:` 行

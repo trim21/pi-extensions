@@ -65,6 +65,7 @@
 - **AND** 同一 run 内连续的（含跨 thinking 与跨轮次）工具调用合并进同一行：工具名按调用顺序罗列，同名连续出现折叠为 `name x N`；thinking 不打断合并，只有文本块另起一行
 - **AND** thinking 期间在日志与末尾固定行之间插一行瞬态 `thinking ( N chars )` 显示实时字符数，thinking 结束即消失、不占日志行
 - **AND** 过长的日志行内容折叠为「前 9 字符 + 空格 + `…` + 空格 + 后 9 字符」，被省去的中段不再显示
+- **AND** 末尾固定行显示的模型名是本次运行实际生效的模型（frontmatter 的模型解析不到时即 SDK fallback 后的模型），而不是 frontmatter 里声明的名字
 
 ### Requirement: 错误与中止
 

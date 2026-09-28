@@ -620,7 +620,7 @@ const BASE_AGENT = {
 };
 
 /** Fake session harness: runAgent drives this instead of the real SDK. */
-function fakeSessionHarness() {
+function fakeSessionHarness(model?: { id: string }) {
   const listeners: ((event: never) => void)[] = [];
   let resolvePrompt: (() => void) | undefined;
   // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- lib 是 ES2023
@@ -642,6 +642,7 @@ function fakeSessionHarness() {
   const dispose = vi.fn();
   const session = {
     agent: { state: { messages: [] as AgentMessage[] } },
+    model,
     subscribe,
     prompt,
     abort,
@@ -819,6 +820,33 @@ describe("subagent session", () => {
     expect(result.model).toBe("claude-haiku-4-5");
     expect(result.stopReason).toBe("end_turn");
     expect(result.messages).toHaveLength(1);
+  });
+
+  it("reports the model the session runs rather than the declared frontmatter model", async () => {
+    const h = fakeSessionHarness({ id: "actual-model" });
+    const running = runAgent(
+      { ...BASE_AGENT, model: "no-such-model" },
+      "task",
+      "/cwd",
+      undefined,
+      undefined,
+      undefined,
+      h.factory,
+    );
+    await vi.waitFor(() => expect(h.subscribe).toHaveBeenCalled());
+    h.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: { cost: { total: 0 }, totalTokens: 1 },
+        model: "fallback-model",
+        stopReason: "end_turn",
+      },
+    });
+    h.settle();
+    const result = await running;
+    expect(result.model).toBe("actual-model");
   });
 
   it("ignores non-assistant message_end events for usage", async () => {
