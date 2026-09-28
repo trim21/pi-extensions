@@ -1123,6 +1123,56 @@ export async function create(input: CreateInput): Promise<LspClient> {
     });
   }
 
+  /** 轮询的归宿：谁先让等待收敛，以及没有收敛时是哪一种耗尽。 */
+  type PollOutcome = "pulled" | "pushed" | "pullTimedOut" | "budgetExhausted";
+
+  /**
+   * 等「当前文档版本」的诊断就绪，两种等待模式的唯一一份轮询实现。
+   * pull 与 push 语义相同（都是等当前文档版本的诊断结果）：先 pull，拿到就绪结论
+   * 即返回；pull 超时说明服务器未响应，不再重试 pull，把「是否退回等 push」交给
+   * 调用方；否则进入三路竞速——版本匹配的 push / 服务器注册表变化 / pull 重试间隔，
+   * 除 push 命中外都再来一轮，直到预算耗尽、连接关闭或等待被中断。
+   */
+  async function pollUntilSettled(request: {
+    path: string;
+    /** 本次等待的预算（毫秒）。 */
+    budgetMs: number;
+    /** 预算起点（调用方传 request.after ?? Date.now()）。 */
+    startedAt: number;
+    /** 版本匹配的 push 兜底，由调用方按自己的预算创建。 */
+    pushWait: Promise<boolean>;
+    /** pull 入口（两种模式各自的那一个）。 */
+    pull: (path: string) => Promise<PullResult>;
+    /** 该模式的就绪判据。 */
+    isSettled: (result: PullResult) => boolean;
+    signal?: AbortSignal;
+  }): Promise<PollOutcome> {
+    while (!connectionClosed && !request.signal?.aborted) {
+      const remaining = request.budgetMs - (Date.now() - request.startedAt);
+      if (remaining <= 0) {
+        return "budgetExhausted";
+      }
+      const result = await request.pull(request.path);
+      if (request.isSettled(result)) {
+        return "pulled";
+      }
+      if (result.timedOut) {
+        return "pullTimedOut";
+      }
+      const next = await Promise.race([
+        request.pushWait.then((ready) => (ready ? ("push" as const) : ("timeout" as const))),
+        waitForRegistrationChange(remaining).then((changed) =>
+          changed ? ("registration" as const) : ("timeout" as const),
+        ),
+        sleep(Math.min(remaining, PULL_RETRY_INTERVAL_MS)).then(() => "interval" as const),
+      ]);
+      if (next === "push") {
+        return "pushed";
+      }
+    }
+    return "budgetExhausted";
+  }
+
   /**
    * 等待「当前文档版本」的诊断结论。返回值表示就绪是否被证实：true = 拿到了
    * 当前版本的诊断结果（push / pull / 已有结论）；false = 等满预算或连接关闭
@@ -1150,9 +1200,6 @@ export async function create(input: CreateInput): Promise<LspClient> {
       files[request.path]?.lastPushEmpty === true
         ? Math.min(diagnosticsDocumentWaitTimeoutMs, diagnosticsSilentWaitTimeoutMs)
         : diagnosticsDocumentWaitTimeoutMs;
-    // pull 与 push 语义相同：都是等「当前文档版本」的诊断结果，统一一个循环。
-    // 先 pull（拿到即返回）；pull 超时说明服务器未响应，不再重试 pull，只等
-    // 版本匹配的 push 兜底；版本不匹配的 push 一律忽略（防迟到旧结果）。
     const pushWait = waitForFreshPush({
       path: request.path,
       version: request.version,
@@ -1160,30 +1207,24 @@ export async function create(input: CreateInput): Promise<LspClient> {
       timeout: budget,
     });
 
-    while (!connectionClosed && !request.signal?.aborted) {
-      const remaining = budget - (Date.now() - startedAt);
-      if (remaining <= 0) {
-        return false;
-      }
-      const result = await requestDocumentDiagnostics(request.path);
-      if (result.matched) {
-        return true;
-      }
-      if (result.timedOut) {
-        return await pushWait;
-      }
-      const next = await Promise.race([
-        pushWait.then((ready) => (ready ? ("push" as const) : ("timeout" as const))),
-        waitForRegistrationChange(remaining).then((changed) =>
-          changed ? ("registration" as const) : ("timeout" as const),
-        ),
-        sleep(Math.min(remaining, PULL_RETRY_INTERVAL_MS)).then(() => "interval" as const),
-      ]);
-      if (next === "push") {
-        return true;
-      }
-    }
-    return false;
+    const outcome = await pollUntilSettled({
+      path: request.path,
+      budgetMs: budget,
+      startedAt,
+      pushWait,
+      pull: requestDocumentDiagnostics,
+      isSettled: (result) => result.matched,
+      signal: request.signal,
+    });
+    // 对应重构前的返回路径：pulled / pushed → `return true`（pull 命中或等到
+    // 版本匹配的 push）；pullTimedOut → `return await pushWait`（pull 挂起不重试，
+    // 但继续等 push 到预算结束，返回是否等到）；budgetExhausted（含连接关闭 /
+    // 中断）→ 循环尾 `return false`。
+    return (
+      outcome === "pulled" ||
+      outcome === "pushed" ||
+      (outcome === "pullTimedOut" && (await pushWait))
+    );
   }
 
   async function waitForFullDiagnostics(request: {
@@ -1200,29 +1241,20 @@ export async function create(input: CreateInput): Promise<LspClient> {
       timeout: diagnosticsFullWaitTimeoutMs,
     });
 
-    while (!connectionClosed && !request.signal?.aborted) {
-      const remaining = diagnosticsFullWaitTimeoutMs - (Date.now() - startedAt);
-      if (remaining <= 0) {
-        return;
-      }
-      const result = await requestFullDiagnostics(request.path);
-      if (result.handled || result.matched) {
-        return;
-      }
-      if (result.timedOut) {
-        await pushWait;
-        return;
-      }
-      const next = await Promise.race([
-        pushWait.then((ready) => (ready ? ("push" as const) : ("timeout" as const))),
-        waitForRegistrationChange(remaining).then((changed) =>
-          changed ? ("registration" as const) : ("timeout" as const),
-        ),
-        sleep(Math.min(remaining, PULL_RETRY_INTERVAL_MS)).then(() => "interval" as const),
-      ]);
-      if (next === "push") {
-        return;
-      }
+    const outcome = await pollUntilSettled({
+      path: request.path,
+      budgetMs: diagnosticsFullWaitTimeoutMs,
+      startedAt,
+      pushWait,
+      pull: requestFullDiagnostics,
+      isSettled: (result) => result.handled || result.matched,
+      signal: request.signal,
+    });
+    // 对应重构前的返回路径：pulled / pushed / budgetExhausted 都对应 `return`
+    // （就绪、等到 push 或耗尽预算）；pullTimedOut → `await pushWait; return`，
+    // 即 pull 挂起后仍等 push 兜底到预算结束，结果丢弃（本函数返回 void）。
+    if (outcome === "pullTimedOut") {
+      await pushWait;
     }
   }
 
