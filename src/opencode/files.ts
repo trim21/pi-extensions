@@ -635,7 +635,20 @@ function registerEditTool(
       await guardWriteAccess(ctx, {
         toolName: "edit",
         absolutePath,
-        change: { oldText: oldString, newText: newString, replaceAll },
+        // 审批预览必须与落盘同语义：注入本工具自己的模糊匹配引擎（空 oldString
+        // 是创建新文件，按整文件写入预览）
+        change:
+          oldString === ""
+            ? { kind: "write", newText: newString }
+            : {
+                kind: "edit",
+                oldText: oldString,
+                newText: newString,
+                apply: (content) => {
+                  const applied = applyEdit(content, oldString, newString, replaceAll);
+                  return { contentOld: applied.contentOld, contentNew: applied.contentNew };
+                },
+              },
         policy,
         signal,
       });
@@ -800,7 +813,7 @@ function registerWriteTool(
       await guardWriteAccess(ctx, {
         toolName: "write",
         absolutePath,
-        change: { oldText: "", newText: content },
+        change: { kind: "write", newText: content },
         policy,
         signal,
       });

@@ -348,11 +348,25 @@ export function registerFileTools(
       await guardWriteAccess(ctx, {
         toolName: "Edit",
         absolutePath: filePath,
-        change: {
-          oldText: params.old_string,
-          newText: params.new_string,
-          replaceAll: params.replace_all,
-        },
+        // 审批预览必须与落盘同语义：这里注入本工具自己的精确匹配（空 old_string
+        // 是创建/填充文件，按整文件写入预览）
+        change:
+          params.old_string === ""
+            ? { kind: "write", newText: params.new_string }
+            : {
+                kind: "edit",
+                oldText: params.old_string,
+                newText: params.new_string,
+                apply: (content) => ({
+                  contentOld: content,
+                  contentNew: applyExactEdit(
+                    content,
+                    params.old_string,
+                    params.new_string,
+                    params.replace_all ?? false,
+                  ),
+                }),
+              },
         policy,
         signal,
       });
@@ -521,7 +535,7 @@ export function registerFileTools(
       await guardWriteAccess(ctx, {
         toolName: "Write",
         absolutePath: filePath,
-        change: { oldText: "", newText: params.content },
+        change: { kind: "write", newText: params.content },
         policy,
         signal,
       });

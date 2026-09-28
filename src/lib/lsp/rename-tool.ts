@@ -198,7 +198,14 @@ export function registerLspRenameTool(
         await guardWriteAccess(ctx, {
           toolName: "lsp-rename",
           absolutePath: fileEdit.path,
-          change: { oldText: fileEdit.oldText, newText: fileEdit.newText },
+          change: {
+            kind: "edit",
+            oldText: fileEdit.oldText,
+            newText: fileEdit.newText,
+            // LSP 编辑已在内存里展开成整文件的 old/new，落盘是覆盖写：预览直接用
+            // 这一对文本，不必再把整份旧内容交给匹配引擎去找
+            apply: () => ({ contentOld: fileEdit.oldText, contentNew: fileEdit.newText }),
+          },
           policy: options.policy,
           signal,
         });

@@ -17,7 +17,12 @@ import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createRequestPolicy, type RequestPolicy } from "../src/lib/request-policy.js";
-import { buildDiffPreview, guardWriteAccess } from "../src/lib/write-guard.js";
+import {
+  buildDiffPreview,
+  guardWriteAccess,
+  type PendingChange,
+  type PendingChangeApply,
+} from "../src/lib/write-guard.js";
 
 const SNAPSHOT_DIR = join(tmpdir(), "write-guard-inline-snapshot");
 const TARGET = join(SNAPSHOT_DIR, "target.txt");
@@ -50,9 +55,36 @@ afterAll(async () => {
   await rm(TMP_FILE, { force: true });
 });
 
+/**
+ * 测试用的匹配实现：写保护模块自己不内置匹配引擎，定位由调用方给出。只做精确
+ * 命中，命不中时抛错（契约：抛错 → 退化为参数 diff）。
+ */
+function replaceOnce(oldText: string, newText: string): PendingChangeApply {
+  return (content) => {
+    if (!content.includes(oldText)) {
+      throw new Error("oldText not found");
+    }
+    return { contentOld: content, contentNew: content.replace(oldText, () => newText) };
+  };
+}
+
+function replaceEvery(oldText: string, newText: string): PendingChangeApply {
+  return (content) => {
+    if (!content.includes(oldText)) {
+      throw new Error("oldText not found");
+    }
+    return { contentOld: content, contentNew: content.split(oldText).join(newText) };
+  };
+}
+
+/** 一个带匹配实现的替换改动。 */
+function edit(oldText: string, newText: string, apply: PendingChangeApply): PendingChange {
+  return { kind: "edit", oldText, newText, apply };
+}
+
 describe("buildDiffPreview", () => {
   it("write to a new file shows a full-addition patch", async () => {
-    const preview = await buildDiffPreview(TARGET, { oldText: "", newText: "one\ntwo\n" });
+    const preview = await buildDiffPreview(TARGET, { kind: "write", newText: "one\ntwo\n" });
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
@@ -69,7 +101,7 @@ describe("buildDiffPreview", () => {
   it("write over an existing file shows a replacement patch", async () => {
     await writeFile(TARGET, "old\n", "utf8");
 
-    const preview = await buildDiffPreview(TARGET, { oldText: "", newText: "new\n" });
+    const preview = await buildDiffPreview(TARGET, { kind: "write", newText: "new\n" });
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
@@ -86,7 +118,7 @@ describe("buildDiffPreview", () => {
   it("matched edit produces a line-numbered patch", async () => {
     await writeFile(TARGET, "one\ntwo\nthree\n", "utf8");
 
-    const preview = await buildDiffPreview(TARGET, { oldText: "two", newText: "TWO" });
+    const preview = await buildDiffPreview(TARGET, edit("two", "TWO", replaceOnce("two", "TWO")));
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
@@ -105,11 +137,10 @@ describe("buildDiffPreview", () => {
   it("replaceAll shows every occurrence changed", async () => {
     await writeFile(TARGET, "alpha\nbeta\nalpha\n", "utf8");
 
-    const preview = await buildDiffPreview(TARGET, {
-      oldText: "alpha",
-      newText: "gamma",
-      replaceAll: true,
-    });
+    const preview = await buildDiffPreview(
+      TARGET,
+      edit("alpha", "gamma", replaceEvery("alpha", "gamma")),
+    );
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
@@ -129,7 +160,10 @@ describe("buildDiffPreview", () => {
   it("falls back to a parameter diff when oldText is not matched", async () => {
     await writeFile(TARGET, "one\ntwo\n", "utf8");
 
-    const preview = await buildDiffPreview(TARGET, { oldText: "missing", newText: "x" });
+    const preview = await buildDiffPreview(
+      TARGET,
+      edit("missing", "x", replaceOnce("missing", "x")),
+    );
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
@@ -139,8 +173,60 @@ describe("buildDiffPreview", () => {
     `);
   });
 
+  // 模块自己不持有匹配引擎：调用方说定位不了，就退化为参数 diff，哪怕文件里
+  // 明明存在这段文本（这条断言挡住将来有人再把某个引擎 import 回来）。
+  it("does not locate the text with a built-in matcher of its own", async () => {
+    await writeFile(TARGET, "one\ntwo\nthree\n", "utf8");
+
+    const preview = await buildDiffPreview(TARGET, {
+      kind: "edit",
+      oldText: "two",
+      newText: "TWO",
+      apply: () => {
+        throw new Error("cannot locate");
+      },
+    });
+
+    expect(preview).toMatchInlineSnapshot(`
+      "\`\`\`diff
+      -two
+      +TWO
+      \`\`\`"
+    `);
+  });
+
+  // 展示的 patch 由 apply 报告的前后文本决定，与 oldText / newText 无关：
+  // 匹配实现才是「这次改动长什么样」的唯一来源。
+  it("renders the patch from what the caller's apply reports", async () => {
+    await writeFile(TARGET, "unused\n", "utf8");
+
+    const preview = await buildDiffPreview(
+      TARGET,
+      edit("not in the file", "neither is this", () => ({
+        contentOld: "before\n",
+        contentNew: "after\n",
+      })),
+    );
+
+    expect(preview).toMatchInlineSnapshot(`
+      "\`\`\`diff
+      --- target.txt
+      +++ target.txt
+      @@ -1,1 +1,1 @@
+      -before
+      +after
+
+      \`\`\`"
+    `);
+  });
+
   it("edit preview does not require the file to exist", async () => {
-    const preview = await buildDiffPreview(MISSING, { oldText: "a\nb", newText: "c" });
+    const preview = await buildDiffPreview(
+      MISSING,
+      edit("a\nb", "c", () => {
+        throw new Error("no file");
+      }),
+    );
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
@@ -154,7 +240,10 @@ describe("buildDiffPreview", () => {
   it("multiline edit parameters become a multiline diff", async () => {
     await writeFile(TARGET, "unused\n", "utf8");
 
-    const preview = await buildDiffPreview(TARGET, { oldText: "one\ntwo", newText: "1\n2\n3" });
+    const preview = await buildDiffPreview(
+      TARGET,
+      edit("one\ntwo", "1\n2\n3", replaceOnce("one\ntwo", "1\n2\n3")),
+    );
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`diff
@@ -170,7 +259,7 @@ describe("buildDiffPreview", () => {
   it("truncates very large diffs", async () => {
     const content = Array.from({ length: 300 }, (_, i) => `line ${i}`).join("\n") + "\n";
 
-    const preview = await buildDiffPreview(TARGET, { oldText: "", newText: content });
+    const preview = await buildDiffPreview(TARGET, { kind: "write", newText: content });
 
     expect(preview).toContain("preview truncated to 100 lines");
     const lines = preview!.split("\n");
@@ -182,7 +271,7 @@ describe("buildDiffPreview", () => {
   it("uses a longer fence when the patch contains ``` lines", async () => {
     await writeFile(TARGET, "```js\nold\n```\n", "utf8");
 
-    const preview = await buildDiffPreview(TARGET, { oldText: "old", newText: "new" });
+    const preview = await buildDiffPreview(TARGET, edit("old", "new", replaceOnce("old", "new")));
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`\`diff
@@ -201,10 +290,12 @@ describe("buildDiffPreview", () => {
   it("fallback parameter diff also escapes ``` content", async () => {
     await writeFile(TARGET, "unused\n", "utf8");
 
-    const preview = await buildDiffPreview(TARGET, {
-      oldText: "missing",
-      newText: "```js\nx\n```",
-    });
+    const preview = await buildDiffPreview(
+      TARGET,
+      edit("missing", "```js\nx\n```", () => {
+        throw new Error("cannot locate");
+      }),
+    );
 
     expect(preview).toMatchInlineSnapshot(`
       "\`\`\`\`diff
@@ -248,7 +339,7 @@ function writeOptions(absolutePath: string, over: WriteOptionsOverrides = {}) {
   return {
     toolName: "write",
     absolutePath,
-    change: { oldText: "", newText: "x" },
+    change: { kind: "write", newText: "x" } satisfies PendingChange,
     policy,
     ...over,
   };
@@ -404,7 +495,7 @@ describe("guardWriteAccess", () => {
       guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), {
         toolName: "edit",
         absolutePath: OUTSIDE,
-        change: { oldText: "two", newText: "TWO" },
+        change: edit("two", "TWO", replaceOnce("two", "TWO")),
         policy,
       }),
     ).resolves.toBeUndefined();

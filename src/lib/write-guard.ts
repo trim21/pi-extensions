@@ -12,7 +12,9 @@
  *   outright, with the same error as the user picking "Block".
  *
  * Callers have already parsed their tool arguments, so the guard only takes the
- * resolved pieces: the raw target path and the pending change (oldText/newText).
+ * resolved pieces: the raw target path and the pending change. An edit carries
+ * the caller's own matching implementation, so the previewed diff comes from the
+ * same semantics that will write the file.
  */
 
 import { readFile } from "node:fs/promises";
@@ -20,7 +22,6 @@ import { basename, isAbsolute, relative, sep } from "node:path";
 
 import { generateUnifiedPatch } from "@earendil-works/pi-coding-agent";
 
-import { applyEdit, normalizeToLF } from "../opencode/edit-engine.js";
 import { fenceCodeBlock } from "./markdown.js";
 import type { RequestPolicy } from "./request-policy.js";
 
@@ -57,14 +58,46 @@ function wrapDiff(patch: string): string {
   return fenceCodeBlock(body, "diff");
 }
 
+/**
+ * 审批预览用的应用函数：把这次改动套到文件内容上，返回 diff 用的前后文本。
+ * 必须是该工具落盘时使用的同一套匹配实现——否则对话框展示的 diff 与实际写入
+ * 可能不一致。
+ */
+export type PendingChangeApply = (fileContent: string) => {
+  readonly contentOld: string;
+  readonly contentNew: string;
+};
+
+/** 整文件写入：预览是完整的增删 patch，不需要匹配实现。 */
+export interface FileWriteChange {
+  readonly kind: "write";
+  readonly newText: string;
+}
+
+/**
+ * 替换：`apply` 是调用方自己的匹配实现（精确匹配、模糊匹配，或已展开好的整文件
+ * 编辑）。匹配不上时抛错即可，写保护会退化为参数 diff。
+ */
+export interface FileEditChange {
+  readonly kind: "edit";
+  readonly oldText: string;
+  readonly newText: string;
+  readonly apply: PendingChangeApply;
+}
+
 /** The pending file change, described by the caller from already-parsed args. */
-export interface PendingChange {
-  /** Text to replace; empty for whole-file writes. */
-  oldText: string;
-  /** Replacement text. */
-  newText: string;
-  /** Replace all occurrences of oldText (edits only). */
-  replaceAll?: boolean;
+export type PendingChange = FileWriteChange | FileEditChange;
+
+/** 预览统一按 LF 渲染：CRLF 文件的 diff 每行都带 \r，在对话框里显示成乱码。 */
+function normalizeToLF(text: string): string {
+  return text.replaceAll("\r\n", "\n");
+}
+
+/** 参数 diff：调用方的匹配实现报告不出结果时的兜底形式。 */
+function parameterDiff(oldText: string, newText: string): string {
+  const removed = oldText.split("\n").map((line) => `-${line}`);
+  const added = newText.split("\n").map((line) => `+${line}`);
+  return [...removed, ...added].join("\n");
 }
 
 /**
@@ -75,35 +108,31 @@ export async function buildDiffPreview(
   resolvedPath: string,
   change: PendingChange,
 ): Promise<string | undefined> {
-  let oldContent = "";
+  let fileContent = "";
   try {
-    oldContent = await readFile(resolvedPath, "utf8");
+    fileContent = await readFile(resolvedPath, "utf8");
   } catch {
     // Unreadable or missing file: treat as empty so writes show as full additions.
   }
 
-  if (change.oldText === "") {
+  if (change.kind === "write") {
     // Whole-file write: show the full addition/replacement patch.
-    return wrapDiff(generateUnifiedPatch(basename(resolvedPath), oldContent, change.newText, 2));
+    return wrapDiff(generateUnifiedPatch(basename(resolvedPath), fileContent, change.newText, 2));
   }
 
-  // Edit: reuse the real matching engine to locate oldText, giving a
-  // line-numbered patch when it matches. Fall back to a parameter diff when the
-  // edit cannot be applied (oldText not found, ambiguous, or no file).
+  // 定位由调用方的匹配实现负责（与其落盘同语义）；匹配不上时退回参数 diff。
   try {
-    const applied = applyEdit(oldContent, change.oldText, change.newText, change.replaceAll);
+    const { contentOld, contentNew } = change.apply(fileContent);
     return wrapDiff(
       generateUnifiedPatch(
         basename(resolvedPath),
-        normalizeToLF(applied.contentOld),
-        normalizeToLF(applied.contentNew),
+        normalizeToLF(contentOld),
+        normalizeToLF(contentNew),
         2,
       ),
     );
   } catch {
-    const removed = change.oldText.split("\n").map((line) => `-${line}`);
-    const added = change.newText.split("\n").map((line) => `+${line}`);
-    return wrapDiff([...removed, ...added].join("\n"));
+    return wrapDiff(parameterDiff(change.oldText, change.newText));
   }
 }
 
