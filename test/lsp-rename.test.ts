@@ -5,6 +5,7 @@
  * - canonicalizeEdit：URI 归一化后比较两次 rename 结果
  * - symbolCandidates：符号名 + 可选 character 的候选定位
  * - trackStability / stabilityAcceptable：references 稳定窗口（防残缺答案假稳定）
+ * - verifyRenameCoverage：注入收敛序列 / 预算 / 就绪状态后的判定与归宿
  */
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,10 +14,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   canonicalizeEdit,
+  DEFAULT_RENAME_VERIFICATION_TIMING,
   expandWorkspaceEdit,
+  RenameIncompleteError,
+  type RenameVerificationTiming,
   stabilityAcceptable,
   symbolCandidates,
   trackStability,
+  verifyRenameCoverage,
 } from "../src/lib/lsp/rename.js";
 
 const readFrom = (texts: Record<string, string>) => (path: string) => {
@@ -257,5 +262,151 @@ describe("symbolCandidates", () => {
 
   it(String.raw`CRLF 行的列号不含 \r`, () => {
     expect(symbolCandidates("const a = 1;\r\n", 0, "a")).toEqual([{ line: 0, character: 6 }]);
+  });
+});
+
+/** 只带 changes 的最小 WorkspaceEdit：每个路径一个 edit。 */
+function editCovering(...paths: string[]) {
+  return {
+    changes: Object.fromEntries(
+      paths.map((path) => [pathToFileURL(path).href, [edit(0, 0, 0, 1, "y")]]),
+    ),
+  };
+}
+
+/** 覆盖默认节奏；用例只声明自己关心的字段。 */
+function timing(overrides: Partial<RenameVerificationTiming>): RenameVerificationTiming {
+  return { ...DEFAULT_RENAME_VERIFICATION_TIMING, ...overrides };
+}
+
+/** 假时间轴：now 从 0 开始，sleep 直接推进时钟（不真的等待）。 */
+function fakeClock() {
+  let current = 0;
+  return {
+    now: () => current,
+    sleep: async (ms: number) => {
+      current += ms;
+    },
+  };
+}
+
+describe("verifyRenameCoverage", () => {
+  it("references 收敛且 rename 覆盖一致：返回 edit", async () => {
+    const clock = fakeClock();
+    const refetchedAt: number[] = [];
+    let renames = 0;
+    const expected = editCovering("/proj/a.ts");
+    const result = await verifyRenameCoverage({
+      indexReady: true,
+      timing: timing({ settleSamples: 2, pollMs: 10, budgetMs: 1_000, stableFloorReadyMs: 0 }),
+      initialPaths: pathSet("/proj/a.ts"),
+      refetchPaths: async () => {
+        refetchedAt.push(clock.now());
+        return pathSet("/proj/a.ts");
+      },
+      sendRename: async () => {
+        renames += 1;
+        return expected;
+      },
+      sleep: clock.sleep,
+      now: clock.now,
+      notRenameable: () => new Error("not renameable"),
+    });
+    expect(result).toEqual(expected);
+    // 首次采样由调用方完成：这里只多采一次，就在第二次采样后收敛
+    expect(refetchedAt).toEqual([10]);
+    expect(renames).toBe(1);
+  });
+
+  it("只有 extra 时继续轮询，references 追上后成功", async () => {
+    const clock = fakeClock();
+    // rename 一次触及 a + b，而 references 起初只报 a（extra 分支）：恢复到
+    // 一致需要 references 也采样到 a + b（集合变化重启稳定窗口）。
+    const refetchedAt: number[] = [];
+    let renames = 0;
+    const expected = editCovering("/proj/a.ts", "/proj/b.ts");
+    const result = await verifyRenameCoverage({
+      indexReady: true,
+      timing: timing({ settleSamples: 2, pollMs: 10, budgetMs: 1_000, stableFloorReadyMs: 0 }),
+      initialPaths: pathSet("/proj/a.ts"),
+      refetchPaths: async () => {
+        refetchedAt.push(clock.now());
+        return refetchedAt.length >= 2
+          ? pathSet("/proj/a.ts", "/proj/b.ts")
+          : pathSet("/proj/a.ts");
+      },
+      sendRename: async () => {
+        renames += 1;
+        return expected;
+      },
+      sleep: clock.sleep,
+      now: clock.now,
+      notRenameable: () => new Error("not renameable"),
+    });
+    expect(result).toEqual(expected);
+    expect(refetchedAt).toEqual([10, 20, 30]);
+    // 第一次 rename 只有 extra（继续轮询），第二次复检才一致
+    expect(renames).toBe(2);
+  });
+
+  it("预算耗尽且 rename 漏文件：抛 RenameIncompleteError(missing, extra)", async () => {
+    const clock = fakeClock();
+    // 稳定窗口下限大于预算：永远走不到"稳定"，只能靠预算耗尽触发校验
+    const error = await verifyRenameCoverage({
+      indexReady: true,
+      timing: timing({ settleSamples: 5, pollMs: 10, budgetMs: 15, stableFloorReadyMs: 1_000 }),
+      initialPaths: pathSet("/proj/a.ts", "/proj/b.ts"),
+      refetchPaths: async () => pathSet("/proj/a.ts", "/proj/b.ts"),
+      sendRename: async () => editCovering("/proj/a.ts", "/proj/c.ts"),
+      sleep: clock.sleep,
+      now: clock.now,
+      notRenameable: () => new Error("not renameable"),
+    }).catch((error_: unknown) => error_);
+    expect(error).toBeInstanceOf(RenameIncompleteError);
+    expect((error as RenameIncompleteError).missing).toEqual(["/proj/b.ts"]);
+    expect((error as RenameIncompleteError).extra).toEqual(["/proj/c.ts"]);
+    expect((error as RenameIncompleteError).message).toContain("/proj/b.ts");
+    expect((error as RenameIncompleteError).message).toContain("/proj/c.ts");
+  });
+
+  it("双向一致但未达稳定窗口：抛 RenameIncompleteError([], [])", async () => {
+    const clock = fakeClock();
+    // 就绪未证实 + 稳定窗口下限大于预算：rename 与 references 双向一致，但这份
+    // 一致性从未被稳定窗口证明（残缺答案假稳定），归宿是空 missing / extra 的不完整错误。
+    const error = await verifyRenameCoverage({
+      indexReady: false,
+      timing: timing({ pollMs: 10, budgetMs: 15, stableFloorUnreadyMs: 1_000 }),
+      initialPaths: pathSet("/proj/a.ts"),
+      refetchPaths: async () => pathSet("/proj/a.ts"),
+      sendRename: async () => editCovering("/proj/a.ts"),
+      sleep: clock.sleep,
+      now: clock.now,
+      notRenameable: () => new Error("not renameable"),
+    }).catch((error_: unknown) => error_);
+    expect(error).toBeInstanceOf(RenameIncompleteError);
+    expect((error as RenameIncompleteError).missing).toEqual([]);
+    expect((error as RenameIncompleteError).extra).toEqual([]);
+    expect((error as RenameIncompleteError).message).toContain("not been stable long enough");
+  });
+
+  it("sendRename 返回 null：抛 notRenameable() 的错误", async () => {
+    const clock = fakeClock();
+    const refusal = new Error('LSP server "mock" cannot rename at /proj/a.ts:1:1');
+    let refetches = 0;
+    const error = await verifyRenameCoverage({
+      indexReady: true,
+      timing: timing({ settleSamples: 1, stableFloorReadyMs: 0 }),
+      initialPaths: pathSet("/proj/a.ts"),
+      refetchPaths: async () => {
+        refetches += 1;
+        return pathSet("/proj/a.ts");
+      },
+      sendRename: async () => null,
+      sleep: clock.sleep,
+      now: clock.now,
+      notRenameable: () => refusal,
+    }).catch((error_: unknown) => error_);
+    expect(error).toBe(refusal);
+    expect(refetches).toBe(0);
   });
 });

@@ -11,13 +11,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  create,
-  evictionPlan,
-  RenameIncompleteError,
-  RenameNotPossibleError,
-  renameVerificationTiming,
-} from "../src/lib/lsp/client.js";
+import { create, evictionPlan, RenameNotPossibleError } from "../src/lib/lsp/client.js";
+import { RenameIncompleteError } from "../src/lib/lsp/rename.js";
 
 const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
 
@@ -582,8 +577,6 @@ describe.concurrent("驻留淘汰：容量上限与等待诊断的文档", () =>
   }, 30_000);
 });
 
-// 该组保持串行：多个用例临时改写共享的 renameVerificationTiming（轮询间隔 / 预算 /
-// 稳定窗口），并发执行时保存与恢复会互相覆盖，把改后的预算泄漏给组内其他用例。
 describe("lsp client renameSymbol", () => {
   it("prepare + rename 成功：返回 WorkspaceEdit 与 placeholder，并先同步磁盘内容", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-client-rename-"));
@@ -794,13 +787,14 @@ describe("lsp client renameSymbol", () => {
       directory: dir,
       diagnosticsDocumentWaitTimeoutMs: 100,
       diagnosticsSilentWaitTimeoutMs: 100,
+      renameVerificationTiming: {
+        pollMs: 20,
+        budgetMs: 2_000,
+        settleSamples: 3,
+        stableFloorReadyMs: 0,
+        stableFloorUnreadyMs: 150,
+      },
     });
-    const savedTiming = { ...renameVerificationTiming };
-    renameVerificationTiming.pollMs = 20;
-    renameVerificationTiming.budgetMs = 2_000;
-    renameVerificationTiming.settleSamples = 3;
-    renameVerificationTiming.stableFloorReadyMs = 0;
-    renameVerificationTiming.stableFloorUnreadyMs = 150;
     try {
       const result = await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
       const uris = Object.keys(result.edit.changes ?? {});
@@ -808,7 +802,6 @@ describe("lsp client renameSymbol", () => {
       expect(uris).toContain(pathToFileURL(file).href);
       expect(uris).toContain(pathToFileURL(join(dir, "extra-a.py")).href);
     } finally {
-      Object.assign(renameVerificationTiming, savedTiming);
       await client.shutdown();
       await rm(dir, { recursive: true, force: true });
     }
@@ -830,13 +823,14 @@ describe("lsp client renameSymbol", () => {
       server: { process: proc },
       root: dir,
       directory: dir,
+      renameVerificationTiming: {
+        pollMs: 20,
+        budgetMs: 200,
+        settleSamples: 2,
+        stableFloorReadyMs: 0,
+        stableFloorUnreadyMs: 0,
+      },
     });
-    const savedTiming = { ...renameVerificationTiming };
-    renameVerificationTiming.pollMs = 20;
-    renameVerificationTiming.budgetMs = 200;
-    renameVerificationTiming.settleSamples = 2;
-    renameVerificationTiming.stableFloorReadyMs = 0;
-    renameVerificationTiming.stableFloorUnreadyMs = 0;
     try {
       try {
         await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
@@ -847,7 +841,6 @@ describe("lsp client renameSymbol", () => {
         expect((error as RenameIncompleteError).missing).toEqual([join(dir, "extra-a.py")]);
       }
     } finally {
-      Object.assign(renameVerificationTiming, savedTiming);
       await client.shutdown();
       await rm(dir, { recursive: true, force: true });
     }
@@ -869,13 +862,14 @@ describe("lsp client renameSymbol", () => {
       server: { process: proc },
       root: dir,
       directory: dir,
+      renameVerificationTiming: {
+        pollMs: 20,
+        budgetMs: 200,
+        settleSamples: 2,
+        stableFloorReadyMs: 0,
+        stableFloorUnreadyMs: 0,
+      },
     });
-    const savedTiming = { ...renameVerificationTiming };
-    renameVerificationTiming.pollMs = 20;
-    renameVerificationTiming.budgetMs = 200;
-    renameVerificationTiming.settleSamples = 2;
-    renameVerificationTiming.stableFloorReadyMs = 0;
-    renameVerificationTiming.stableFloorUnreadyMs = 0;
     try {
       const result = await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
       const uris = Object.keys(result.edit.changes ?? {});
@@ -883,7 +877,6 @@ describe("lsp client renameSymbol", () => {
       expect(uris).toContain(pathToFileURL(file).href);
       expect(uris).toContain(pathToFileURL(join(dir, "extra-a.py")).href);
     } finally {
-      Object.assign(renameVerificationTiming, savedTiming);
       await client.shutdown();
       await rm(dir, { recursive: true, force: true });
     }
@@ -905,13 +898,14 @@ describe("lsp client renameSymbol", () => {
       server: { process: proc },
       root: dir,
       directory: dir,
+      renameVerificationTiming: {
+        pollMs: 20,
+        budgetMs: 200,
+        settleSamples: 2,
+        stableFloorReadyMs: 0,
+        stableFloorUnreadyMs: 0,
+      },
     });
-    const savedTiming = { ...renameVerificationTiming };
-    renameVerificationTiming.pollMs = 20;
-    renameVerificationTiming.budgetMs = 200;
-    renameVerificationTiming.settleSamples = 2;
-    renameVerificationTiming.stableFloorReadyMs = 0;
-    renameVerificationTiming.stableFloorUnreadyMs = 0;
     try {
       try {
         await client.renameSymbol({ path: file, line: 0, character: 0, newName: "y" });
@@ -923,7 +917,6 @@ describe("lsp client renameSymbol", () => {
         expect((error as RenameIncompleteError).extra).toEqual([join(dir, "extra-a.py")]);
       }
     } finally {
-      Object.assign(renameVerificationTiming, savedTiming);
       await client.shutdown();
       await rm(dir, { recursive: true, force: true });
     }

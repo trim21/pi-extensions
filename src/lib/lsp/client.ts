@@ -65,7 +65,11 @@ import {
 
 import type { LspServerHandle } from "./adapter.js";
 import { LANGUAGE_EXTENSIONS } from "./language.js";
-import { editFilePaths, stabilityAcceptable, trackStability } from "./rename.js";
+import {
+  DEFAULT_RENAME_VERIFICATION_TIMING,
+  type RenameVerificationTiming,
+  verifyRenameCoverage,
+} from "./rename.js";
 import type { FileChange, FileChangeType } from "./watcher.js";
 
 /** LSP WatchKind 位掩码（FileSystemWatcher.kind，缺省 create|change|delete）。 */
@@ -109,65 +113,10 @@ export class LspMethodNotSupportedError extends Error {
 }
 
 /**
- * rename edit 未覆盖 references 看到的全部文件：服务器索引可能仍在后台加载。
- * 抛出时发生在写盘之前，整个 rename 无副作用，可稍后重试。
- */
-export class RenameIncompleteError extends Error {
-  readonly missing: readonly string[];
-  readonly extra: readonly string[];
-  constructor(missing: readonly string[], extra: readonly string[] = []) {
-    const parts: string[] = [];
-    if (missing.length > 0) {
-      parts.push(
-        `textDocument/references found the symbol in ${missing.length} file(s) ` +
-          `that the rename edit does not cover (${missing.join(", ")})`,
-      );
-    }
-    if (extra.length > 0) {
-      parts.push(
-        `the rename edit touches ${extra.length} file(s) ` +
-          `that textDocument/references did not report (${extra.join(", ")})`,
-      );
-    }
-    if (parts.length === 0) {
-      parts.push("the references result has not been stable long enough to trust");
-    }
-    super(
-      `LSP rename incomplete: ${parts.join("; ")}. ` +
-        `The server index may still be loading; nothing was modified, retry shortly.`,
-    );
-    this.missing = missing;
-    this.extra = extra;
-  }
-}
-
-/**
- * rename 覆盖校验的轮询节奏。budgetMs 是 references 收敛 + 重试的总预算；
- * 测试可临时缩小以缩短等待。
- */
-export const renameVerificationTiming = {
-  pollMs: 400,
-  budgetMs: 15_000,
-  /** ContentModified(-32801) 重试上限：服务器处理期间文档被修改，重发请求即可。 */
-  contentModifiedRetries: 3,
-  /** 接受结果所需的最少连续一致采样次数。 */
-  settleSamples: 3,
-  /** 就绪已证实（拿到过当前版本的诊断结论）时的稳定窗口下限（ms）。 */
-  stableFloorReadyMs: 400,
-  /**
-   * 就绪未证实（栅栏只是等满预算放行）时的稳定窗口下限（ms）。服务器加载
-   * 项目期间 references 只覆盖已发现的文件，残缺答案能连续多次一致（假稳定），
-   * 短窗口会把它误判成最终结果——CI 实测漏改跨文件引用，故要求 references
-   * 文件集合至少持续一致这么久才接受。
-   */
-  stableFloorUnreadyMs: 4_000,
-};
-
-/**
  * ContentModified 语义：请求处理期间 salsa 数据库被文件变更修改，服务器请
  * 客户端重发请求。重发无副作用，直接重试；仅连续超限才向上抛，避免无限循环。
  */
-async function retryOnContentModified<T>(fn: () => Promise<T>): Promise<T> {
+async function retryOnContentModified<T>(fn: () => Promise<T>, retries: number): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await fn();
@@ -175,7 +124,7 @@ async function retryOnContentModified<T>(fn: () => Promise<T>): Promise<T> {
       if (!(error instanceof ResponseError && error.code === LSPErrorCodes.ContentModified)) {
         throw error;
       }
-      if (attempt >= renameVerificationTiming.contentModifiedRetries) {
+      if (attempt >= retries) {
         throw error;
       }
     }
@@ -348,6 +297,8 @@ export interface CreateInput {
   initializeTimeoutMs?: number;
   /** 驻留文档上限（LRU 容量，缺省 32）；超过时淘汰最久未使用并 didClose。 */
   maxOpenDocuments?: number;
+  /** 覆盖 rename 覆盖校验的轮询节奏（缺省见 DEFAULT_RENAME_VERIFICATION_TIMING）。 */
+  renameVerificationTiming?: Partial<RenameVerificationTiming>;
 }
 
 export interface LspClient {
@@ -573,6 +524,10 @@ export async function create(input: CreateInput): Promise<LspClient> {
     input.diagnosticsRequestTimeoutMs ?? clientDefaults.diagnosticsRequestTimeoutMs;
   const initializeTimeoutMs = input.initializeTimeoutMs ?? clientDefaults.initializeTimeoutMs;
   const maxOpenDocuments = input.maxOpenDocuments ?? clientDefaults.maxOpenDocuments;
+  const timing: RenameVerificationTiming = {
+    ...DEFAULT_RENAME_VERIFICATION_TIMING,
+    ...input.renameVerificationTiming,
+  };
 
   const connection = createProtocolConnection(
     new StreamMessageReader(input.server.process.stdout),
@@ -1377,7 +1332,10 @@ export async function create(input: CreateInput): Promise<LspClient> {
     signal?: AbortSignal,
   ): Promise<R> => {
     try {
-      return await retryOnContentModified(() => sendAbortableRequest(type, message, signal));
+      return await retryOnContentModified(
+        () => sendAbortableRequest(type, message, signal),
+        timing.contentModifiedRetries,
+      );
     } catch (error) {
       if (error instanceof ResponseError && error.code === ErrorCodes.MethodNotFound) {
         throw new LspMethodNotSupportedError(input.serverID, type.method);
@@ -1477,32 +1435,20 @@ export async function create(input: CreateInput): Promise<LspClient> {
       const notRenameable = () =>
         new RenameNotPossibleError(`LSP server "${input.serverID}" cannot rename at ${at}`);
 
-      // references 前置 + rename 双向校验：LSP 没有标准化的"索引完成"信号，
-      // 服务器（如 tsserver）可能在项目加载完成前回答，导致 rename 漏掉
-      // 尚未入索引的文件。对策分三层：
-      // 1. 稳定窗口：references 文件集合连续 settleSamples 次一致、且持续
-      //    一致超过稳定下限（就绪未证实用长窗口）才认为收敛，防止"服务器
-      //    根本还没发现某文件"时残缺答案的假稳定被误判为最终结果；
-      // 2. 覆盖校验（missing）：references 报告的文件必须都被 rename edit
-      //    覆盖，缺失说明服务器索引落后，抛 RenameIncompleteError；
-      // 3. 一致性校验（extra）：rename 触及的文件超出已收敛的 references
-      //    集合，说明两次请求之间项目覆盖在增长（rename 晚于 references，
-      //    索引仍在加载），此时 rename 的结果本身不可信——回到 references
-      //    轮询等重新收敛，再重发 rename 复检；预算耗尽仍不一致时抛
-      //    RenameIncompleteError——调用方尚未写盘，整个操作无副作用。
-      // 服务器不支持 references（MethodNotFound）时跳过校验，信任服务器，
-      // 与编辑器行为一致。
+      // references 前置 + rename 双向校验见 verifyRenameCoverage（三层策略的说明在那边）。
       const referencesRequest = () =>
-        retryOnContentModified(() =>
-          sendAbortableRequest(
-            ReferencesRequest.type,
-            {
-              textDocument: { uri },
-              position,
-              context: { includeDeclaration: true },
-            },
-            request.signal,
-          ),
+        retryOnContentModified(
+          () =>
+            sendAbortableRequest(
+              ReferencesRequest.type,
+              {
+                textDocument: { uri },
+                position,
+                context: { includeDeclaration: true },
+              },
+              request.signal,
+            ),
+          timing.contentModifiedRetries,
         );
 
       const toPaths = (locations: { uri: string }[] | null): Set<string> =>
@@ -1514,16 +1460,18 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
       const sendRename = async (): Promise<WorkspaceEdit | null> => {
         try {
-          return await retryOnContentModified(() =>
-            sendAbortableRequest(
-              RenameRequest.type,
-              {
-                textDocument: { uri },
-                position,
-                newName: request.newName,
-              },
-              request.signal,
-            ),
+          return await retryOnContentModified(
+            () =>
+              sendAbortableRequest(
+                RenameRequest.type,
+                {
+                  textDocument: { uri },
+                  position,
+                  newName: request.newName,
+                },
+                request.signal,
+              ),
+            timing.contentModifiedRetries,
           );
         } catch (error) {
           if (error instanceof ResponseError && error.code === ErrorCodes.MethodNotFound) {
@@ -1537,12 +1485,14 @@ export async function create(input: CreateInput): Promise<LspClient> {
       if (hasPrepareProvider) {
         let prepared: PrepareRenameResult | null;
         try {
-          prepared = await retryOnContentModified(() =>
-            sendAbortableRequest(
-              PrepareRenameRequest.type,
-              { textDocument: { uri }, position },
-              request.signal,
-            ),
+          prepared = await retryOnContentModified(
+            () =>
+              sendAbortableRequest(
+                PrepareRenameRequest.type,
+                { textDocument: { uri }, position },
+                request.signal,
+              ),
+            timing.contentModifiedRetries,
           );
         } catch (error) {
           if (error instanceof ResponseError && error.code === ErrorCodes.MethodNotFound) {
@@ -1572,63 +1522,18 @@ export async function create(input: CreateInput): Promise<LspClient> {
         return placeholder === undefined ? { edit } : { edit, placeholder };
       }
 
-      const minStableMs = indexReady
-        ? renameVerificationTiming.stableFloorReadyMs
-        : renameVerificationTiming.stableFloorUnreadyMs;
-      const deadline = Date.now() + renameVerificationTiming.budgetMs;
-      let stability = trackStability({
-        previous: undefined,
-        paths: toPaths(locations),
-        now: Date.now(),
+      const edit = await verifyRenameCoverage({
+        indexReady,
+        timing,
+        initialPaths: toPaths(locations),
+        refetchPaths: async () => toPaths(await referencesRequest()),
+        sendRename: async () => (await sendRename()) ?? null,
+        sleep: sleepWithSignal,
+        now: () => Date.now(),
+        notRenameable,
+        signal: request.signal,
       });
-      for (;;) {
-        request.signal?.throwIfAborted();
-        const now = Date.now();
-        const stable = stabilityAcceptable(stability, {
-          now,
-          minSamples: renameVerificationTiming.settleSamples,
-          minStableMs,
-        });
-        const expired = now >= deadline;
-        if (stable || expired) {
-          const edit = await sendRename();
-          if (!edit) {
-            throw notRenameable();
-          }
-          const editPaths = editFilePaths(edit);
-          const missing: string[] = [];
-          const extra: string[] = [];
-          for (const path of stability.paths) {
-            if (!editPaths.has(path)) {
-              missing.push(path);
-            }
-          }
-          for (const path of editPaths) {
-            if (!stability.paths.has(path)) {
-              extra.push(path);
-            }
-          }
-          if (missing.length === 0 && extra.length === 0) {
-            if (stable) {
-              return placeholder === undefined ? { edit } : { edit, placeholder };
-            }
-            // 双向一致但稳定窗口未达标：索引可能仍在加载、残缺答案假稳定，
-            // 宁可报可重试的不完整错误，也不把残缺结果当成功写盘。
-            throw new RenameIncompleteError([], []);
-          }
-          if (expired || missing.length > 0) {
-            throw new RenameIncompleteError(missing, extra);
-          }
-          // rename 报出 references 没有的文件：references 快照已过时，
-          // 继续轮询到重新收敛后再重发 rename 复检（预算耗尽则向上抛）。
-        }
-        await sleepWithSignal(renameVerificationTiming.pollMs, request.signal);
-        stability = trackStability({
-          previous: stability,
-          paths: toPaths(await referencesRequest()),
-          now: Date.now(),
-        });
-      }
+      return placeholder === undefined ? { edit } : { edit, placeholder };
     },
     async definition(request: InspectPositionRequest): Promise<InspectLocation[]> {
       const { uri, position } = await preparePositionRequest(request);

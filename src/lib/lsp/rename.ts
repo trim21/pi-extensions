@@ -6,7 +6,9 @@
  * - lineCandidates：character 缺省时在一行内按词边界枚举候选位置，
  *   供逐候选探测消歧；
  * - canonicalizeEdit：把两次 rename 的结果归一化成稳定字符串，
- *   比较它们是否指向同一个符号（同名歧义消解）。
+ *   比较它们是否指向同一个符号（同名歧义消解）；
+ * - verifyRenameCoverage：等 references 的稳定窗口收敛，再双向校验 rename edit
+ *   的覆盖（missing / extra），不满足时抛 RenameIncompleteError。
  *
  * 位置语义按 LSP 规范：0-based 行列，character 为 UTF-16 code unit，
  * 行内容不含行结束符（CRLF 的 \r 不计入列号）。
@@ -241,6 +243,177 @@ export function stabilityAcceptable(
   input: { now: number; minSamples: number; minStableMs: number },
 ): boolean {
   return run.samples >= input.minSamples && input.now - run.since >= input.minStableMs;
+}
+
+/**
+ * rename edit 未覆盖 references 看到的全部文件：服务器索引可能仍在后台加载。
+ * 抛出时发生在写盘之前，整个 rename 无副作用，可稍后重试。
+ */
+export class RenameIncompleteError extends Error {
+  readonly missing: readonly string[];
+  readonly extra: readonly string[];
+  constructor(missing: readonly string[], extra: readonly string[] = []) {
+    const parts: string[] = [];
+    if (missing.length > 0) {
+      parts.push(
+        `textDocument/references found the symbol in ${missing.length} file(s) ` +
+          `that the rename edit does not cover (${missing.join(", ")})`,
+      );
+    }
+    if (extra.length > 0) {
+      parts.push(
+        `the rename edit touches ${extra.length} file(s) ` +
+          `that textDocument/references did not report (${extra.join(", ")})`,
+      );
+    }
+    if (parts.length === 0) {
+      parts.push("the references result has not been stable long enough to trust");
+    }
+    super(
+      `LSP rename incomplete: ${parts.join("; ")}. ` +
+        `The server index may still be loading; nothing was modified, retry shortly.`,
+    );
+    this.missing = missing;
+    this.extra = extra;
+  }
+}
+
+/**
+ * rename 覆盖校验的轮询节奏。budgetMs 是 references 收敛 + 重试的总预算；
+ * 缺省见 DEFAULT_RENAME_VERIFICATION_TIMING，client 与测试按需覆盖。
+ */
+export interface RenameVerificationTiming {
+  pollMs: number;
+  budgetMs: number;
+  /** ContentModified(-32801) 重试上限：服务器处理期间文档被修改，重发请求即可。 */
+  contentModifiedRetries: number;
+  /** 接受结果所需的最少连续一致采样次数。 */
+  settleSamples: number;
+  /** 就绪已证实（拿到过当前版本的诊断结论）时的稳定窗口下限（ms）。 */
+  stableFloorReadyMs: number;
+  /**
+   * 就绪未证实（栅栏只是等满预算放行）时的稳定窗口下限（ms）。服务器加载
+   * 项目期间 references 只覆盖已发现的文件，残缺答案能连续多次一致（假稳定），
+   * 短窗口会把它误判成最终结果——CI 实测漏改跨文件引用，故要求 references
+   * 文件集合至少持续一致这么久才接受。
+   */
+  stableFloorUnreadyMs: number;
+}
+
+/** rename 覆盖校验的缺省节奏（每个 client 可用创建参数局部覆盖）。 */
+export const DEFAULT_RENAME_VERIFICATION_TIMING: RenameVerificationTiming = {
+  pollMs: 400,
+  budgetMs: 15_000,
+  contentModifiedRetries: 3,
+  settleSamples: 3,
+  stableFloorReadyMs: 400,
+  stableFloorUnreadyMs: 4_000,
+};
+
+/** verifyRenameCoverage 的输入：依赖全部注入，收敛序列与预算可直接构造。 */
+export interface RenameCoverageOptions {
+  /** 就绪栅栏：是否已证实拿到当前版本的诊断结论（决定稳定窗口下限）。 */
+  indexReady: boolean;
+  timing: RenameVerificationTiming;
+  /** 进入校验前已采到的那一份 references 文件集合。 */
+  initialPaths: ReadonlySet<string>;
+  /** 后续采样：再请求一次 references 并给出文件集合。 */
+  refetchPaths: () => Promise<ReadonlySet<string>>;
+  /** 发一次 rename；返回 null 表示服务器拒绝重命名。 */
+  sendRename: () => Promise<WorkspaceEdit | null>;
+  /** 等待一次轮询间隔。 */
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** 当前时间戳（ms）。 */
+  now: () => number;
+  /** 构造「该位置不可重命名」错误：消息含 serverID 与位置，由调用方提供。 */
+  notRenameable: () => Error;
+  signal?: AbortSignal;
+}
+
+/**
+ * 等 references 收敛并双向校验 rename 覆盖，返回 edit；不满足覆盖要求时抛
+ * RenameIncompleteError。
+ *
+ * references 前置 + rename 双向校验：LSP 没有标准化的"索引完成"信号，
+ * 服务器（如 tsserver）可能在项目加载完成前回答，导致 rename 漏掉
+ * 尚未入索引的文件。对策分三层：
+ * 1. 稳定窗口：references 文件集合连续 settleSamples 次一致、且持续
+ *    一致超过稳定下限（就绪未证实用长窗口）才认为收敛，防止"服务器
+ *    根本还没发现某文件"时残缺答案的假稳定被误判为最终结果；
+ * 2. 覆盖校验（missing）：references 报告的文件必须都被 rename edit
+ *    覆盖，缺失说明服务器索引落后，抛 RenameIncompleteError；
+ * 3. 一致性校验（extra）：rename 触及的文件超出已收敛的 references
+ *    集合，说明两次请求之间项目覆盖在增长（rename 晚于 references，
+ *    索引仍在加载），此时 rename 的结果本身不可信——回到 references
+ *    轮询等重新收敛，再重发 rename 复检；预算耗尽仍不一致时抛
+ *    RenameIncompleteError——调用方尚未写盘，整个操作无副作用。
+ *
+ * 首次采样由调用方发起（initialPaths），本函数只负责后续的 refetchPaths
+ * 采样，所以请求次数与调用方内联轮询时逐次一致；服务器不支持
+ * references（MethodNotFound）时由调用方跳过本校验，信任服务器。
+ *
+ * 判定顺序是行为的一部分：双向一致但稳定窗口未达标时抛的是
+ * RenameIncompleteError([], [])（残缺答案假稳定），而非带上 missing 的错误。
+ */
+export async function verifyRenameCoverage(options: RenameCoverageOptions): Promise<WorkspaceEdit> {
+  const {
+    indexReady,
+    timing,
+    initialPaths,
+    refetchPaths,
+    sendRename,
+    sleep,
+    now,
+    notRenameable,
+    signal,
+  } = options;
+  const minStableMs = indexReady ? timing.stableFloorReadyMs : timing.stableFloorUnreadyMs;
+  const deadline = now() + timing.budgetMs;
+  let stability = trackStability({ previous: undefined, paths: initialPaths, now: now() });
+  for (;;) {
+    signal?.throwIfAborted();
+    const at = now();
+    const stable = stabilityAcceptable(stability, {
+      now: at,
+      minSamples: timing.settleSamples,
+      minStableMs,
+    });
+    const expired = at >= deadline;
+    if (stable || expired) {
+      const edit = await sendRename();
+      if (!edit) {
+        throw notRenameable();
+      }
+      const editPaths = editFilePaths(edit);
+      const missing: string[] = [];
+      const extra: string[] = [];
+      for (const path of stability.paths) {
+        if (!editPaths.has(path)) {
+          missing.push(path);
+        }
+      }
+      for (const path of editPaths) {
+        if (!stability.paths.has(path)) {
+          extra.push(path);
+        }
+      }
+      if (missing.length === 0 && extra.length === 0) {
+        if (stable) {
+          return edit;
+        }
+        // 双向一致但稳定窗口未达标：索引可能仍在加载、残缺答案假稳定，
+        // 宁可报可重试的不完整错误，也不把残缺结果当成功写盘。
+        throw new RenameIncompleteError([], []);
+      }
+      if (expired || missing.length > 0) {
+        throw new RenameIncompleteError(missing, extra);
+      }
+      // rename 报出 references 没有的文件：references 快照已过时，
+      // 继续轮询到重新收敛后再重发 rename 复检（预算耗尽则向上抛）。
+    }
+    await sleep(timing.pollMs, signal);
+    stability = trackStability({ previous: stability, paths: await refetchPaths(), now: now() });
+  }
 }
 
 /**
