@@ -915,6 +915,32 @@ describe("subagent progress log", () => {
     expect(lines[2]).toBe("tool: read");
   });
 
+  it("keeps merging tool calls across a thinking block", async () => {
+    // thinking 是瞬态状态行、不产生日志行，因此它横跨轮次边界时也不打断合并。
+    const updates = await runWithEvents([
+      { type: "tool_execution_start", toolCallId: "1", toolName: "read", args: {} },
+      { type: "tool_execution_start", toolCallId: "2", toolName: "read", args: {} },
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+      },
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "hmm" },
+      },
+      {
+        type: "message_update",
+        message: {},
+        assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "hmm" },
+      },
+      { type: "tool_execution_start", toolCallId: "3", toolName: "grep", args: {} },
+    ]);
+    const lines = updates.at(-1)!.split("\n");
+    expect(lines).toEqual(["tool: read x 2, grep", "`scout`"]);
+  });
+
   it("folds long text block content to first/last 9 chars", async () => {
     const long = "a".repeat(120);
     const updates = await runWithEvents([
@@ -991,9 +1017,9 @@ describe("subagent progress log", () => {
     expect(updates.at(-1)).toContain("tool: WeirdTool");
   });
 
-  it("keeps only the most recent 5 log lines, below the agent footer", async () => {
+  it("keeps only the most recent 4 log lines, below the agent footer", async () => {
     // 3 组「4 个连续工具调用 + 一个文本块」共产生 6 行;合并后的工具行按
-    // 单行参与滚动窗口,最后只保留 5 行,第 1 行(组 0 的工具行)被挤掉。
+    // 单行参与滚动窗口,最后只保留 4 行,组 0 的工具行与文本块都被挤掉。
     const events: unknown[] = [];
     for (let g = 0; g < 3; g++) {
       for (let i = 0; i < 4; i++) {
@@ -1012,13 +1038,12 @@ describe("subagent progress log", () => {
     }
     const updates = await runWithEvents(events);
     const lines = updates.at(-1)!.split("\n");
-    expect(lines).toHaveLength(6);
-    expect(lines[0]).toBe("text: done0");
-    expect(lines[1]).toBe("tool: tool4, to … l6, tool7");
-    expect(lines[2]).toBe("text: done1");
-    expect(lines[3]).toBe("tool: tool8, to … 0, tool11");
-    expect(lines[4]).toBe("text: done2");
-    expect(lines[5]).toBe("`scout`");
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toBe("tool: tool4, to … l6, tool7");
+    expect(lines[1]).toBe("text: done1");
+    expect(lines[2]).toBe("tool: tool8, to … 0, tool11");
+    expect(lines[3]).toBe("text: done2");
+    expect(lines[4]).toBe("`scout`");
   });
 
   it("appends the subagent name as a code span on the last line", async () => {

@@ -16,9 +16,11 @@
  * `MAX_PROGRESS_LINES` lines. Consecutive tool calls are merged into a
  * single `tool:` line (`read x 2, glob`) and over-long line content is
  * folded to the first/last 9 chars joined by `…`, so a burst of tool calls
- * or a long text block does not flood the window; any text block starts a
- * new line. Line content is sanitized first: markdown marker characters are
- * stripped and whitespace (including newlines) is collapsed to single spaces,
+ * or a long text block does not flood the window; only a text block starts
+ * a new line — thinking is a transient status line, so it does not break the
+ * merge across turn boundaries. Line content is sanitized first: markdown
+ * marker characters are stripped and whitespace (including newlines) is
+ * collapsed to single spaces,
  * so one log entry is always exactly one rendered line. The final line is
  * always the subagent name as a code span (`` `scout` ``), followed by the
  * live usage stats when there are any; it rides outside the rolling window so
@@ -91,8 +93,11 @@ export const SUBAGENT_DEFAULT_SANDBOX: BwrapConfig = completeBwrapConfig({
   fs: { mode: "readonly" },
   network: { mode: "block" },
 });
-/** Progress log keeps only the most recent lines (rolling window). */
-const MAX_PROGRESS_LINES = 5;
+/**
+ * Progress log keeps only the most recent lines (rolling window).
+ * 展开后面板最多 6 行内容：4 行日志 + 可能的一行瞬态 thinking + 固定的 metadata 行。
+ */
+const MAX_PROGRESS_LINES = 4;
 /** Progress line content (without the `tool:` / `text:` prefix) is capped at 21 chars; longer text is folded to the first/last 9 chars joined by ` … `. */
 const MAX_PROGRESS_CHARS_PER_LINE = 21;
 /**
@@ -464,7 +469,8 @@ export async function runAgent(
   let logLines: string[] = [];
   // 工具调用行合并:连续的 tool_execution_start 事件合并在同一 `tool:` 行
   // (如 `tool: read x 2, glob`),相同工具名连续出现时计为 `name x N`,
-  // 不同名按调用顺序罗列;任何非工具行都会打断合并。
+  // 不同名按调用顺序罗列;只有写入日志行的事件(text 块)打断合并,thinking
+  // 不写日志行、也不打断合并。
   let toolLineSegments: string[] = [];
   let toolLine: { name: string; count: number } | undefined;
   // 思考中状态：thinking_start 打开、thinking_delta 累计字符数、thinking_end
@@ -476,7 +482,7 @@ export async function runAgent(
     if (logLines.length > MAX_PROGRESS_LINES) {
       logLines = logLines.slice(-MAX_PROGRESS_LINES);
     }
-    // 任何非工具行都会打断工具调用合并,下一批调用另起一行。
+    // 写进日志的新行都会打断工具调用合并,下一批调用另起一行。
     toolLine = undefined;
   };
 
@@ -537,8 +543,8 @@ export async function runAgent(
             break;
           }
           case "thinking_start": {
-            // 思考横跨轮次边界：打断工具行合并，下一批工具调用另起一行。
-            toolLine = undefined;
+            // thinking 不产生日志行，因此不打断工具行合并：跨轮次的连续工具调用
+            // 仍累加到同一 `tool:` 行。
             thinkingChars = 0;
             emitUpdate();
             break;
