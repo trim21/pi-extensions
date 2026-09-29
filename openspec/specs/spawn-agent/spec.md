@@ -44,6 +44,33 @@
 - **WHEN** frontmatter 声明 `sandbox`
 - **THEN** 该配置整体作为固定沙箱注入 bash 的 runtime，非沙盒请求直接拒绝、`/bwrap-*` 命令不注册
 
+### Requirement: 委托提示词
+
+`spawn-agent` 向模型暴露的描述 MUST 给出委托判据、返回契约与并发语义，而不只是工具的能力说明，使模型能判断何时委托调研任务。
+
+#### Scenario: 工具描述给出返回契约与并发语义
+
+- **WHEN** 读取 `spawn-agent` 的工具描述
+- **THEN** 描述说明子 agent 看不到当前对话、只返回其最终回答（中间工具调用不可见）
+- **AND** 描述说明同一条消息中的多个 `spawn-agent` 调用会并发执行
+
+#### Scenario: task 参数要求自包含
+
+- **WHEN** 读取 `task` 参数的描述
+- **THEN** 描述要求任务自包含，写明仓库路径、确切问题与期望返回内容（文件路径 + 行号）
+
+#### Scenario: guideline 给出委托判据
+
+- **WHEN** 读取注入的 guideline
+- **THEN** 其中列出该委托的情形（位置未知或多文件才能回答的只读调研、答案只需摘要、多个互相独立的调研点并发发起）与不该委托的情形（即将自己编辑的单文件、需要逐字原文作为证据、任何写操作）
+- **AND** 说明子 agent 的结论只作为定位线索，动手改动前须自行核对其指出的位置
+- **AND** 随后才列出可用子 agent 类型及其描述
+
+#### Scenario: 工具出现在工具清单中
+
+- **WHEN** 拼装 system prompt 的 "Available tools" 清单
+- **THEN** `spawn-agent` 因带有 prompt snippet 而出现在该清单里
+
 ### Requirement: 执行与返回
 
 子 agent 以任务 prompt 启动，MUST 阻塞到本轮完成后再返回结果。
@@ -98,6 +125,7 @@
 
 - **agent 清单**：`src/spawn-agent-agents.ts` 从 `~/.pi/agent/agents/*.md` 加载（仅用户级），YAML frontmatter（`name` / `description` / `tools` / `provider` / `model` / `thinkingLevel`）+ 正文作 system prompt；校验失败的 md 跳过；模型名列表启动时注入 `promptGuidelines`，改文件需 `/reload`。
 - **模型 / 工具解析**：frontmatter > `spawn-agent.json` > pi `settings.json` 默认。
+- **面向模型的提示面**：工具带 `promptSnippet`（进入 system prompt 的 "Available tools" 清单）；工具描述写明「子 agent 看不到当前对话、只返回最终回答、同一条消息里的多个调用并发执行」；`task` 参数描述要求任务自包含（仓库路径、确切问题、期望返回的文件路径 + 行号）；`formatAgentListSection` 生成单条 guideline，先给委托判据（该委托 / 不该委托、并发发起、结论只作定位线索）再列可用子 agent 清单。
 - **工具映射**：frontmatter 声明的工具名经 `src/lib/tool-units.ts` 的 `TOOL_UNITS` 表挑出覆盖到的工具单元再由单个 inline 扩展工厂（`subagentToolsExtension`）注册：`read`/`edit`/`write` 与 `Read`/`Edit`/`Write` 分别落到两套文件工具集，`grep`/`glob`/`Grep`/`Glob` 落到搜索单元，`bash`/`Bash` 落到各自的 shell 单元；同一工具名不会重复注册；未声明 `tools` 时子 agent 只读。不再使用 `-e` 路径式加载（每个模块一份模块图，子代理里看不到完整工具集，且没有 per-agent 沙箱配置通道）。
 - **子代理的工具可用性**：`personalExtensions.disabledTools` / `enabledTools` 同样在子代理的总线里求值（子代理有自己的 `session_start` 与模型），被禁用的工具不会注册。
 - **子代理沙箱**：frontmatter `sandbox`（完整 bwrap 配置）作为固定沙箱注入 bash 的 runtime；未声明时用 `SUBAGENT_DEFAULT_SANDBOX`（`fs: readonly` + `network: block`）。两种情况下都不读用户 `sandbox.json`。

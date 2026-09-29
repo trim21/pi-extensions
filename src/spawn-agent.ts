@@ -131,7 +131,10 @@ const spawnAgentSchema = Type.Object({
     description:
       "Name of the subagent type to invoke. Choose one of the available subagent types listed in your system prompt.",
   }),
-  task: Type.String({ description: "Task to delegate to the subagent" }),
+  task: Type.String({
+    description:
+      "Self-contained task for the subagent, which sees none of this conversation: state the repository path, the exact question, and what the answer must contain (file paths with line numbers).",
+  }),
 });
 
 // ── result types ─────────────────────────────────────────────────────────────
@@ -499,9 +502,19 @@ export async function runAgent(
 export function formatAgentListSection(agents: AgentConfig[]): string {
   const lines = agents.map((a) => `- \`${a.name}\`: ${a.description}`);
   return [
+    "### Delegating to subagents",
+    "",
+    "Delegate a focused, read-only research task when the answer is a summary rather than source you must quote or edit:",
+    "",
+    "- locating code whose position is unknown, or answering a question that spans several files;",
+    "- several independent lookups at once — issue one `spawn-agent` call per lookup in the same message and they run concurrently;",
+    "- keeping the searching and reading out of your own context window.",
+    "",
+    "Do not delegate work you are about to do yourself — a single file you will edit, a change whose evidence must be the exact source text, or anything that writes. A subagent sees none of this conversation, so its task must be self-contained. Treat its answer as a pointer and read the location it names before acting on it.",
+    "",
     "### Available subagents",
     "",
-    "You can delegate tasks to the following subagent types by calling the `spawn-agent` tool with their name in the `agent` parameter:",
+    "Pass one of these names as the `agent` parameter:",
     "",
     ...lines,
   ].join("\n");
@@ -526,9 +539,11 @@ export function createSpawnAgentTool(): { register(bus: ToolBus): void } {
       bus.register<typeof spawnAgentSchema, SubagentDetails>({
         name: "spawn-agent",
         label: "spawn-agent",
+        promptSnippet: "Delegate focused research to a subagent with its own context window",
         description: [
-          "Delegate a task to a subagent that runs in an isolated session with its own context window, inside this pi process rather than a separate one.",
-          "The call blocks until the subagent finishes its turn; its final output comes back as the tool result.",
+          "Delegate a self-contained research task to a subagent that runs in an isolated session with its own context window, inside this pi process rather than a separate one.",
+          "The call blocks until the subagent finishes its turn and returns only its final answer: its intermediate tool calls are not visible to you.",
+          "Several `spawn-agent` calls issued in the same message run concurrently.",
           "The `agent` parameter must be one of the available subagent types listed in the system prompt.",
           `Subagents run read-only (${DEFAULT_TOOLS.join(", ")}) unless the agent declares an explicit toolset.`,
         ].join(" "),

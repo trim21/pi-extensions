@@ -514,6 +514,23 @@ describe("formatAgentListSection", () => {
     expect(section).toContain("`reviewer`: Code review");
     expect(section).toContain("spawn-agent");
   });
+
+  it("states the delegation criteria ahead of the agent list", () => {
+    const section = formatAgentListSection([
+      { name: "scout", description: "Fast codebase recon", systemPrompt: "", filePath: "" },
+    ]);
+    const criteria = section.indexOf("### Delegating to subagents");
+    const list = section.indexOf("### Available subagents");
+    expect(criteria).toBeGreaterThanOrEqual(0);
+    expect(list).toBeGreaterThan(criteria);
+    // 该委托：跨文件/位置未知、并发多个、省上下文
+    expect(section).toContain("question that spans several files");
+    expect(section).toContain("run concurrently");
+    // 不该委托：即将自己编辑的单文件、需要逐字原文、写操作
+    expect(section).toContain("Do not delegate work you are about to do yourself");
+    // 结论只作定位线索
+    expect(section).toContain("Treat its answer as a pointer");
+  });
 });
 
 describe("tool registration", () => {
@@ -534,6 +551,39 @@ describe("tool registration", () => {
 
       expect(tool?.name).toBe("spawn-agent");
       expect(tool?.parameters).toBeDefined();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "states the return contract, concurrency and a prompt snippet in the tool description",
+    async () => {
+      const { default: spawnAgent } = await import("../src/spawn-agent.js");
+      let tool:
+        | {
+            promptSnippet?: string;
+            description?: string;
+            parameters?: { properties?: Record<string, { description?: string }> };
+          }
+        | undefined;
+      spawnAgent(
+        loadPi({
+          registerTool: (def: never) => {
+            tool = def;
+          },
+        }),
+      );
+
+      // 返回契约：子 agent 看不到本对话、中间工具调用不可见
+      expect(tool?.description).toContain("not visible to you");
+      expect(tool?.description).toContain("isolated session with its own context window");
+      // 并发语义
+      expect(tool?.description).toContain("run concurrently");
+      // 进入 Available tools 清单
+      expect(tool?.promptSnippet).toBeTruthy();
+      // task 必须自包含，并说明期望返回内容
+      const task = tool?.parameters?.properties?.task?.description;
+      expect(task).toContain("Self-contained");
+      expect(task).toContain("line numbers");
     },
   );
 
@@ -562,6 +612,7 @@ describe("tool registration", () => {
       );
 
       expect(guidelines).toBeDefined();
+      expect(guidelines?.[0]).toContain("### Delegating to subagents");
       expect(guidelines?.[0]).toContain("### Available subagents");
       expect(guidelines?.[0]).toContain("`scout`: Fast recon");
       vi.resetModules();

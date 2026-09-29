@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { formatAgentListSection } from "../src/spawn-agent.js";
 import {
   buildPrompt,
   buildSystemPromptText,
@@ -63,6 +64,17 @@ describe("formatGuidelines", () => {
     expect(formatGuidelines(undefined)).toBe("");
     expect(formatGuidelines([])).toBe("");
     expect(formatGuidelines([" ".repeat(3)])).toBe("");
+  });
+
+  it("keeps multi-line markdown guidelines verbatim, without bullet prefixes", () => {
+    const section = formatAgentListSection([
+      { name: "scout", description: "Fast recon", systemPrompt: "", filePath: "" },
+    ]);
+    const rendered = formatGuidelines([section]);
+    expect(rendered).toBe(`## Guidelines\n\n${section.trim()}`);
+    expect(rendered).toContain("\n### Delegating to subagents\n");
+    expect(rendered).toContain("\n### Available subagents\n");
+    expect(rendered).not.toContain("- ### ");
   });
 });
 
