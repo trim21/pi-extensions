@@ -3,8 +3,9 @@
  * 的能力是调用 `tools.*`——每个嵌套调用都由主线程经本仓库的工具总线执行，因此工具实现
  * 内部的审批（工作区外写入、Bash 沙箱提权等）照常生效；codemode 不再加自己的确认层。
  *
- * 可调用集合：总线上实际注册的工具减去 codemode 自身，执行时再与 active 列表求交——
- * pi 自己的 `defaultTools` / `--tools` / 子代理白名单的排除因此同样生效。
+ * 可调用集合：总线上实际注册的工具减去 codemode 自身与 spawn-agent，执行时再与 active
+ * 列表求交——pi 自己的 `defaultTools` / `--tools` / 子代理白名单的排除因此同样生效。
+ * spawn-agent 被排除是因为它启动一个新的隔离会话、成本与运行时长都不适合放进脚本编排。
  *
  * wasm 在注册这个工具时编译一次（`createCodemodeSandbox`），worker 复用编译结果。
  */
@@ -25,6 +26,9 @@ import { type CodemodeSandbox, createCodemodeSandbox, type ScriptCall } from "./
 import { CODEMODE_SOURCE_GRAMMAR, DEFAULT_OUTPUT_TOKENS, parseCodemodeSource } from "./source.js";
 
 export const CODEMODE_TOOL_NAME = "codemode";
+
+/** 不暴露给脚本的工具：codemode 自身（防递归）与 spawn-agent（见文件头注释）。 */
+const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set([CODEMODE_TOOL_NAME, "spawn-agent"]);
 
 /** 估计 token 用的字符数（与 pi 一致）。 */
 const CHARS_PER_TOKEN = 4;
@@ -56,7 +60,7 @@ function allowedToolNames(pi: ExtensionAPI): Set<string> | undefined {
 function collectTools(bus: ToolBus, allowed: Set<string> | undefined): CallableTool[] {
   return bus
     .list()
-    .filter((definition) => definition.name !== CODEMODE_TOOL_NAME)
+    .filter((definition) => !EXCLUDED_TOOL_NAMES.has(definition.name))
     .filter((definition) => allowed === undefined || allowed.has(definition.name))
     .map((definition) => ({
       name: definition.name,

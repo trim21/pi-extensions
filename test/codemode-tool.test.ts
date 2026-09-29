@@ -16,6 +16,7 @@ interface Harness {
   appended: { customType: string; data: unknown }[];
   readTool: ReturnType<typeof vi.fn>;
   editTool: ReturnType<typeof vi.fn>;
+  spawnAgentTool: ReturnType<typeof vi.fn>;
 }
 
 /** 缺省的审批回答（本测试用来断言 codemode 不调用它）。 */
@@ -53,6 +54,11 @@ async function harness(options: { active?: string[] } = {}): Promise<Harness> {
     details: {},
   }));
 
+  const spawnAgentTool = vi.fn(async () => ({
+    content: [{ type: "text" as const, text: "subagent output" }],
+    details: {},
+  }));
+
   const bus = createToolBus(pi);
   bus.register({
     name: "Read",
@@ -72,13 +78,20 @@ async function harness(options: { active?: string[] } = {}): Promise<Harness> {
     }),
     execute: editTool,
   });
+  bus.register({
+    name: "spawn-agent",
+    label: "spawn-agent",
+    description: "delegate to a subagent",
+    parameters: Type.Object({ agent: Type.String(), task: Type.String() }),
+    execute: spawnAgentTool,
+  });
 
   await createCodemodeTools(pi).register(bus);
   const codemode = registered.get("codemode");
   if (!codemode) {
     throw new Error("codemode tool was not registered");
   }
-  return { bus, codemode, select, appended, readTool, editTool };
+  return { bus, codemode, select, appended, readTool, editTool, spawnAgentTool };
 }
 
 function context(select: ReturnType<typeof vi.fn>, branch: unknown[] = []): ExtensionContext {
@@ -160,6 +173,29 @@ describe("codemode 工具", () => {
     expect(h.codemode.description).toContain("Read(args:");
     expect(h.codemode.description).toContain("Edit(args:");
     expect(h.codemode.description).not.toContain("codemode(args:");
+  });
+
+  it("描述里不列出 spawn-agent", async () => {
+    const h = await harness({ active: ["Read", "Edit", "spawn-agent"] });
+
+    expect(h.codemode.description).not.toContain("spawn-agent");
+  });
+
+  it("脚本不可调用 spawn-agent", async () => {
+    const h = await harness({ active: ["Read", "Edit", "spawn-agent"] });
+    const result = await runScript(
+      h,
+      `try {
+  await tools["spawn-agent"]({ agent: "explorer", task: "look around" });
+  return "called";
+} catch (error) {
+  return "failed: " + error.message;
+}`,
+    );
+
+    expect(h.spawnAgentTool).not.toHaveBeenCalled();
+    expect(textOf(result)).toContain("failed:");
+    expect(textOf(result)).not.toContain("called");
   });
 
   it("描述里给出 store 的三个方法", async () => {
