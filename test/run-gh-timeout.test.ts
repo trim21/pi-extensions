@@ -25,7 +25,7 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import { GhError, ghExec } from "../src/gh-readonly.js";
+import { GhError, ghExec } from "../src/gh/index.js";
 import { runGh } from "../src/lib/gh-process.js";
 
 /** A fake gh child process that never produces output and only exits when told. */

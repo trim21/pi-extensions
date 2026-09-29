@@ -20,7 +20,7 @@ import {
   pollPrChecks,
   renderChecksVerdict,
   renderPrChecksList,
-} from "../src/gh-readonly.js";
+} from "../src/gh/index.js";
 import type { ActionJob, CheckRun, CommitStatus } from "../src/lib/github.js";
 
 function status(overrides: Partial<CommitStatus> & { context?: string }): CommitStatus {

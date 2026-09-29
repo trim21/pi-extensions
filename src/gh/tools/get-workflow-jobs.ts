@@ -1,6 +1,6 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   resolveRepo,
@@ -30,8 +30,8 @@ async function workflowJobs(gh: GhClient, call: ToolCall<RunIdParams>): Promise<
   return result;
 }
 
-export function addGetWorkflowJobsTool(gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addGetWorkflowJobsTool(gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "get-github-workflow-jobs",
     label: "GitHub Workflow Jobs",
     description:

@@ -8,12 +8,13 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import type { ToolBus } from "../lib/tool-bus.js";
 import { registerGlobTool } from "./glob.js";
 import { registerGrepTool } from "./grep.js";
 
-export function registerSearchTools(pi: ExtensionAPI): void {
-  registerGlobTool(pi);
-  registerGrepTool(pi);
+export function registerSearchTools(bus: ToolBus, pi: ExtensionAPI): void {
+  registerGlobTool(bus);
+  registerGrepTool(bus, pi);
 }
 
 // Re-exported for tests that import pure functions from "./search.js"; the

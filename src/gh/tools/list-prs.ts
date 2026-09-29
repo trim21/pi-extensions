@@ -1,6 +1,6 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   type ListFilters,
@@ -24,8 +24,8 @@ async function listPrs(gh: GhClient, call: ToolCall<ListFilters>): Promise<ToolR
   return result;
 }
 
-export function addListPrsTool(gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addListPrsTool(gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "list-github-prs",
     label: "GitHub PRs List",
     description:

@@ -1,10 +1,10 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, ghExec, repoArgs, subtitlePendant, toToolResult } from "../base.js";
 
-export function addReadReleaseTool(_gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addReadReleaseTool(_gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "read-github-release",
     label: "GitHub Release",
     description: "Get details of a specific GitHub release by tag.",

@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import type { ToolBus } from "../lib/tool-bus.js";
 import { selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
 
 const TODO_STATUSES = ["pending", "in_progress", "completed"] as const;
@@ -121,7 +122,7 @@ async function askMultiple(
   return selected.length > 0 ? selected.join(", ") : "Unanswered";
 }
 
-export function registerSessionTools(pi: ExtensionAPI): void {
+export function registerSessionTools(bus: ToolBus, pi: ExtensionAPI): void {
   // TodoWrite 的列表随工具结果 details 持久化（跟随会话分支），但 widget 是
   // 纯 TUI 状态，进程重启后丢失。session 恢复时从当前分支取最后一个 TodoWrite
   // 的列表重新渲染（完整列表替换语义，后出现的覆盖前面的）。
@@ -139,7 +140,7 @@ export function registerSessionTools(pi: ExtensionAPI): void {
     }
   });
 
-  pi.registerTool({
+  bus.register({
     name: "TodoWrite",
     label: "Todo Write",
     description: [
@@ -177,7 +178,7 @@ export function registerSessionTools(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerTool({
+  bus.register({
     name: "AskUserQuestion",
     label: "Ask User Question",
     description: [

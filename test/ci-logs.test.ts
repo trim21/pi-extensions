@@ -24,7 +24,7 @@ import {
   jobLogPath,
   repoFromRunUrl,
   stepLineSpans,
-} from "../src/gh-readonly.js";
+} from "../src/gh/index.js";
 import { type RunJob } from "../src/lib/github.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

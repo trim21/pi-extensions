@@ -3,16 +3,15 @@
  * each executed step's block inside it, so the model can read the exact line
  * range of the step it needs.
  */
-
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import type { RunJob } from "../../lib/github.js";
 import { createSeqState } from "../../lib/seq-state.js";
+import type { ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   ghExec,
@@ -422,8 +421,8 @@ async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<ToolRe
   };
 }
 
-export function addReadCiLogsTool(gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addReadCiLogsTool(gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "read-github-ci-logs",
     label: "GitHub CI Logs",
     description:

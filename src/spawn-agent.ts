@@ -47,9 +47,7 @@
  * inherit the user's sandbox.json, whose modes may be relaxed for interactive use.
  */
 
-import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
@@ -59,9 +57,9 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   type ExtensionAPI,
+  type ExtensionFactory,
   type ExtensionUIContext,
   getAgentDir,
-  type InlineExtension,
   ModelRuntime,
   type PromptOptions,
   SessionManager,
@@ -72,11 +70,13 @@ import { throttle } from "lodash-es";
 import { Type } from "typebox";
 
 import { type BwrapConfig, completeBwrapConfig } from "./bwrap/core.js";
-import { type BwrapRuntime, createBwrapRuntime } from "./bwrap/runtime.js";
-import { registerShellTools } from "./claude-code/shell.js";
+import { createClaudeCodeFileTools } from "./claude-code/files.js";
 import { type ToolPendant } from "./lib/pendant.js";
-import { createRequestPolicy } from "./lib/request-policy.js";
-import opencodeBash from "./opencode/bash.js";
+import type { ToolBus } from "./lib/tool-bus.js";
+import { createToolRegistration, registerToolsOnSessionStart } from "./lib/tool-registration.js";
+import { createToolServices } from "./lib/tool-services.js";
+import { toolsetsForToolNames, unitsForToolNames } from "./lib/tool-units.js";
+import { createOpencodeFileTools } from "./opencode/files.js";
 import {
   type AgentConfig,
   applyAgentDefaults,
@@ -114,45 +114,16 @@ const SPAWN_AGENT_CONFIG_PATH = join(getAgentDir(), "spawn-agent.json");
 const SETTINGS_PATH = join(getAgentDir(), "settings.json");
 
 /**
- * Tool → extension override map: when a subagent's frontmatter enables a
- * built-in tool, the matching opencode extension is loaded via the SDK's
- * `additionalExtensionPaths` so the subagent uses the enhanced implementation
- * instead of the built-in one.
+ * 子代理的工具由 `subagentToolsExtension` 的 inline 工厂注册：它按 frontmatter
+ * 声明的工具名从 `TOOL_UNITS` 里挑出覆盖到的单元（见 src/lib/tool-units.ts），
+ * 与主入口共用同一张表，因此实现、审批与参数完全一致。
  *
- * `bash` (opencode) and `Bash` (claude-code) are deliberately not in this map:
- * they are injected via an inline extension factory (subagentShellExtension)
- * instead, because their bwrap runtime carries the agent's declared sandbox
- * config — a path-based override has no channel to pass per-agent config
- * (see createSubagentSession).
- * (Workspace write protection is embedded in the opencode write/edit tools.)
+ * 不用 `-e` 路径加载的原因：路径加载是「一个模块一份模块图」，子代理里没有
+ * 任何东西能看到完整工具集（工具之间互相看不见），而且 per-agent 的沙箱配置
+ * 没有注入通道——inline 工厂的闭包是 SDK 提供的唯一注入点。
  *
- * Claude Code style tools (capitalized names) map to their claude-code
- * files, so a subagent can enable exactly the tools it declares — e.g. `Grep`
- * without `Glob`. The stateful file tools (`Read`/`Edit`/`Write`) share one
- * implementation file (they share a read-snapshot state); the `tools`
- * allowlist still exposes only the declared subset. The opencode file tools
- * (read/edit/write) likewise share opencode/files.ts (they share the LSP
- * service instance); that file also registers the shared `lsp-rename` and
- * LSP inspect tools, which stay hidden unless a subagent declares them.
- *
- * The lowercase search tools map to the opencode implementations: `grep`
- * overrides pi's built-in grep, and `glob` adds a tool pi has no built-in for
- * (its `find` stays available). Each is a self-contained file registering one
- * tool, so they load independently — `grep` without `glob`.
+ * 未声明 `tools` 时子 agent 用 DEFAULT_TOOLS（只读）。
  */
-const TOOL_EXTENSION_OVERRIDES: Record<string, string> = {
-  read: "opencode/files.ts",
-  edit: "opencode/files.ts",
-  write: "opencode/files.ts",
-  grep: "opencode/grep.ts",
-  glob: "opencode/glob.ts",
-  Grep: "claude-code/grep.ts",
-  Glob: "claude-code/glob.ts",
-  Read: "claude-code/files.ts",
-  Edit: "claude-code/files.ts",
-  Write: "claude-code/files.ts",
-};
-
 // ── schema ───────────────────────────────────────────────────────────────────
 
 const spawnAgentSchema = Type.Object({
@@ -236,59 +207,58 @@ function formatPendantMarkdown(task: string, response: string): string {
 }
 
 /**
- * Resolve a sibling extension file (relative to this module) to an absolute
- * path, so `additionalExtensionPaths` works both when running from the source
- * tree and from an installed pi package (node_modules). A missing extension is
- * fatal: silently skipping a guard (e.g. bwrap) would leave the subagent
- * unprotected.
+ * 子代理的工具扩展：一个 inline 工厂里建一份注册上下文与共享服务，只注册被
+ * 声明工具覆盖到的单元。
+ *
+ * 为什么不用 `-e` 路径加载：路径加载是「一个模块一份模块图」，子代理里没有
+ * 任何东西能看到完整工具集（工具之间、脚本工具与工具之间互相看不见），而且
+ * per-agent 的沙箱配置没有注入通道。inline 工厂是 pi SDK 提供的唯一注入点。
+ *
+ * 沙箱配置随闭包携带该 agent 的完整配置（frontmatter `sandbox`，已在
+ * discoverAgents 补全成 BwrapConfig），未声明时用 SUBAGENT_DEFAULT_SANDBOX。
  */
-function extensionPath(fileName: string): string {
-  const abs = fileURLToPath(new URL(fileName, import.meta.url));
-  if (!existsSync(abs)) {
-    throw new Error(`Extension file not found: ${abs}`);
-  }
-  return abs;
-}
-
-/**
- * Load the override extension for each declared tool (read/edit/write → opencode
- * files.ts, bash → opencode bash.ts, ...), so the subagent uses the enhanced
- * implementation instead of the built-in one. Several tool names can map to
- * the same implementation file (e.g. cc Read/Edit/Write → claude-code/files.ts);
- * loading a file twice would run its extension factory twice and create
- * separate closure states, so each file is loaded at most once.
- */
-export function overrideExtensionPaths(tools: string[]): string[] {
-  const loaded = new Set<string>();
-  const paths: string[] = [];
-  for (const tool of tools) {
-    const ext = TOOL_EXTENSION_OVERRIDES[tool];
-    if (!ext || loaded.has(ext)) {
-      continue;
+export function subagentToolsExtension(
+  agent: AgentConfig,
+  tools: readonly string[],
+): ExtensionFactory {
+  return (pi) => {
+    const registration = createToolRegistration(pi);
+    const services = createToolServices(pi, { sandbox: agent.sandbox ?? SUBAGENT_DEFAULT_SANDBOX });
+    const kind = toolsetsForToolNames(tools);
+    if (!kind) {
+      return;
     }
 
-    loaded.add(ext);
-    paths.push(extensionPath(ext));
-  }
-  return paths;
-}
+    const fileToolset =
+      kind === "claude-code"
+        ? createClaudeCodeFileTools(pi, {
+            policy: services.policy,
+            bus: registration.bus,
+            manager: services.manager,
+          })
+        : createOpencodeFileTools(pi, {
+            policy: services.policy,
+            bus: registration.bus,
+            manager: services.manager,
+          });
+    services.setLspEnabledHandler((service) => fileToolset.onLspEnabled(registration.bus, service));
 
-/**
- * bash 类工具（opencode `bash` / cc `Bash`）的内联扩展工厂：bwrap runtime 随闭包
- * 携带该 agent 的完整沙箱配置（frontmatter `sandbox`，已在 discoverAgents 补全成
- * BwrapConfig），未声明时用 SUBAGENT_DEFAULT_SANDBOX。路径式 override
- * （additionalExtensionPaths）没有 per-agent 配置通道，extensionFactories 的工厂
- * 闭包是 SDK 提供的唯一注入点。
- */
-export function subagentShellExtension(
-  agent: AgentConfig,
-  register: (pi: ExtensionAPI, runtime: BwrapRuntime) => void,
-): InlineExtension {
-  return (pi) =>
-    register(
-      pi,
-      createBwrapRuntime(createRequestPolicy(pi.events), agent.sandbox ?? SUBAGENT_DEFAULT_SANDBOX),
-    );
+    const units = unitsForToolNames(kind, tools);
+    // 工具在 session_start 里注册：禁用规则可以带 models，而子代理的模型在扩展
+    // 加载期还读不到。
+    registration.onSessionStart((bus, ctx) => {
+      fileToolset.restoreReads(ctx);
+      for (const unit of units) {
+        unit.register({
+          pi,
+          bus,
+          policy: services.policy,
+          runtime: services.runtime,
+          fileToolset,
+        });
+      }
+    });
+  };
 }
 
 /**
@@ -344,8 +314,8 @@ export type SessionFactory = (
 /**
  * Create the subagent session via the pi SDK: an in-memory session (no disk
  * session recovery or persistence, same as the old --no-session child), a
- * resource loader that discovers only the per-tool override extensions
- * (equivalent to --no-extensions + -e), and the parent UI bound directly so
+ * resource loader with no extensions except our own inline tool factory
+ * (equivalent to --no-extensions), and the parent UI bound directly so
  * subagent extensions show their dialogs in the parent without RPC.
  */
 export async function createSubagentSession(
@@ -360,11 +330,7 @@ export async function createSubagentSession(
     agentDir: getAgentDir(),
     settingsManager,
     noExtensions: true,
-    additionalExtensionPaths: overrideExtensionPaths(tools),
-    extensionFactories: [
-      ...(tools.includes("bash") ? [subagentShellExtension(agent, opencodeBash)] : []),
-      ...(tools.includes("Bash") ? [subagentShellExtension(agent, registerShellTools)] : []),
-    ],
+    extensionFactories: [subagentToolsExtension(agent, tools)],
     appendSystemPrompt: agent.systemPrompt ? [agent.systemPrompt] : undefined,
   });
   await loader.reload();
@@ -543,16 +509,8 @@ export function formatAgentListSection(agents: AgentConfig[]): string {
 
 // ── extension ────────────────────────────────────────────────────────────────
 
-export default function spawnAgent(pi: ExtensionAPI) {
-  // Windows 上禁用：子代理的工具集依赖 POSIX 设施（opencode bash 的
-  // bwrap 沙箱、信号处理），不做 Windows 适配。
-  if (process.platform === "win32") {
-    pi.on("session_start", (_event, ctx) => {
-      ctx.ui.notify("spawn-agent is disabled on Windows.", "warning");
-    });
-    return;
-  }
-
+/** spawn-agent 工具集：入口从它取注册函数。 */
+export function createSpawnAgentTool(): { register(bus: ToolBus): void } {
   // Discover the available subagent types once at extension startup. The
   // extension owns this discovery: the model never has to guess agent names
   // or read the agent directory itself. Editing ~/.pi/agent/agents/*.md or
@@ -563,74 +521,101 @@ export default function spawnAgent(pi: ExtensionAPI) {
   );
   const agentListSection = agents.length > 0 ? formatAgentListSection(agents) : null;
 
-  pi.registerTool<typeof spawnAgentSchema, SubagentDetails>({
-    name: "spawn-agent",
-    label: "spawn-agent",
-    description: [
-      "Delegate a task to a subagent that runs in an isolated session with its own context window, inside this pi process rather than a separate one.",
-      "The call blocks until the subagent finishes its turn; its final output comes back as the tool result.",
-      "The `agent` parameter must be one of the available subagent types listed in the system prompt.",
-      `Subagents run read-only (${DEFAULT_TOOLS.join(", ")}) unless the agent declares an explicit toolset.`,
-    ].join(" "),
-    promptGuidelines: agentListSection ? [agentListSection] : undefined,
-    parameters: spawnAgentSchema,
+  return {
+    register(bus) {
+      bus.register<typeof spawnAgentSchema, SubagentDetails>({
+        name: "spawn-agent",
+        label: "spawn-agent",
+        description: [
+          "Delegate a task to a subagent that runs in an isolated session with its own context window, inside this pi process rather than a separate one.",
+          "The call blocks until the subagent finishes its turn; its final output comes back as the tool result.",
+          "The `agent` parameter must be one of the available subagent types listed in the system prompt.",
+          `Subagents run read-only (${DEFAULT_TOOLS.join(", ")}) unless the agent declares an explicit toolset.`,
+        ].join(" "),
+        promptGuidelines: agentListSection ? [agentListSection] : undefined,
+        parameters: spawnAgentSchema,
 
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const agent = agents.find((a) => a.name === params.agent);
-      if (!agent) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Unknown agent "${params.agent}". Available agents: ${formatAgentList(agents)}`,
+        async execute(_toolCallId, params, signal, onUpdate, ctx) {
+          const agent = agents.find((a) => a.name === params.agent);
+          if (!agent) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Unknown agent "${params.agent}". Available agents: ${formatAgentList(agents)}`,
+                },
+              ],
+              details: {},
+              isError: true,
+            };
+          }
+
+          const result = await runAgent(
+            agent,
+            params.task,
+            ctx.cwd,
+            signal,
+            onUpdate,
+            ctx.hasUI ? ctx.ui : undefined,
+          );
+
+          const isError =
+            result.exitCode !== 0 ||
+            result.stopReason === "error" ||
+            result.stopReason === "aborted";
+          if (isError) {
+            const { reason, message } = formatSubagentError(result);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Subagent "${result.agent}" failed (${reason}):\n${message}`,
+                },
+              ],
+              details: {
+                pendant: {
+                  subtitle: result.agent,
+                  markdown: formatPendantMarkdown(params.task, message),
+                } satisfies ToolPendant,
+              },
+              isError: true,
+            };
+          }
+
+          const output = getFinalOutput(result.messages) || "(no output)";
+          const truncation = truncateTail(output, { maxBytes: MAX_OUTPUT_BYTES });
+          const text = truncation.truncated
+            ? `${truncation.content}\n\n[Output truncated to ${formatTokens(truncation.content.length)} bytes.]`
+            : output;
+          return {
+            content: [{ type: "text", text }],
+            details: {
+              pendant: {
+                subtitle: result.agent,
+                markdown: formatPendantMarkdown(params.task, text),
+              } satisfies ToolPendant,
             },
-          ],
-          details: {},
-          isError: true,
-        };
-      }
-
-      const result = await runAgent(
-        agent,
-        params.task,
-        ctx.cwd,
-        signal,
-        onUpdate,
-        ctx.hasUI ? ctx.ui : undefined,
-      );
-
-      const isError =
-        result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-      if (isError) {
-        const { reason, message } = formatSubagentError(result);
-        return {
-          content: [
-            { type: "text", text: `Subagent "${result.agent}" failed (${reason}):\n${message}` },
-          ],
-          details: {
-            pendant: {
-              subtitle: result.agent,
-              markdown: formatPendantMarkdown(params.task, message),
-            } satisfies ToolPendant,
-          },
-          isError: true,
-        };
-      }
-
-      const output = getFinalOutput(result.messages) || "(no output)";
-      const truncation = truncateTail(output, { maxBytes: MAX_OUTPUT_BYTES });
-      const text = truncation.truncated
-        ? `${truncation.content}\n\n[Output truncated to ${formatTokens(truncation.content.length)} bytes.]`
-        : output;
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          pendant: {
-            subtitle: result.agent,
-            markdown: formatPendantMarkdown(params.task, text),
-          } satisfies ToolPendant,
+          };
         },
-      };
+      });
     },
+  };
+}
+
+export default function spawnAgent(pi: ExtensionAPI): void {
+  // Windows 上禁用：子代理的工具集依赖 POSIX 设施（opencode bash 的
+  // bwrap 沙箱、信号处理），不做 Windows 适配。
+  if (process.platform === "win32") {
+    pi.on("session_start", (_event, ctx) => {
+      ctx.ui.notify("spawn-agent is disabled on Windows.", "warning");
+    });
+    return;
+  }
+
+  const tools = createSpawnAgentTool();
+  // 工具在 session_start 里注册：禁用规则可以带 models，只有那时才知道本会话
+  // 的模型。
+  registerToolsOnSessionStart(pi, (bus) => {
+    tools.register(bus);
   });
 }

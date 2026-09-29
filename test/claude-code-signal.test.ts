@@ -14,6 +14,7 @@ import { createReadsState } from "../src/lib/file-reads.js";
 import { EMPTY_DIAGNOSTIC_REPORT } from "../src/lib/lsp/diagnostic.js";
 import type { LspService } from "../src/lib/lsp/lsp.js";
 import { createRequestPolicy } from "../src/lib/request-policy.js";
+import { createToolBus } from "../src/lib/tool-bus.js";
 
 const dirs: string[] = [];
 
@@ -29,16 +30,12 @@ interface RegisteredTool {
 /** 注册文件工具（共享一份 reads state），service 是只记录诊断调用的双桩。 */
 function loadFileTools(service: LspService): Map<string, RegisteredTool> {
   const tools = new Map<string, RegisteredTool>();
-  registerFileTools(
-    {
-      registerTool(tool: RegisteredTool) {
-        tools.set(tool.name, tool);
-      },
-    } as never,
-    createReadsState(),
-    () => service,
-    createRequestPolicy(),
-  );
+  const pi = {
+    registerTool(tool: RegisteredTool) {
+      tools.set(tool.name, tool);
+    },
+  } as never;
+  registerFileTools(createToolBus(pi), createReadsState(), () => service, createRequestPolicy());
   return tools;
 }
 

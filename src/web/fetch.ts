@@ -24,6 +24,8 @@ import { Type } from "typebox";
 import { egress } from "../lib/egress.js";
 import { resolvePathArg } from "../lib/path.js";
 import { createRequestPolicy } from "../lib/request-policy.js";
+import type { ToolBus } from "../lib/tool-bus.js";
+import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 
 const MAX_REDIRECTS = 5;
@@ -358,83 +360,98 @@ function truncateMarkdown(text: string): { text: string; truncated: boolean } {
   return { text: (cut > 0 ? sliced.slice(0, cut) : sliced) + "\n…(已截断)", truncated: true };
 }
 
-export default function webFetchTool(pi: ExtensionAPI): void {
-  // 本工具是独立扩展入口（pi 给每个入口单独建 jiti 实例），自建一份非沙盒请求
-  // 策略并订阅 pi.events：/bwrap-deny-request 在 bash 入口切换时会同步过来。
+export function createWebFetchTool(pi: ExtensionAPI): (bus: ToolBus) => void {
+  // 自己建一份非沙盒请求策略并订阅 pi.events：/bwrap-deny-request 在 bash 入口
+  // 切换时会同步过来。
   const policy = createRequestPolicy(pi.events);
-  pi.registerTool({
-    name: "web_fetch",
-    label: "Web Fetch",
-    description:
-      "Fetch a URL and return its content as markdown (HTML pages) or raw text " +
-      "(JSON/XML/plain-text API responses). With output_path the body is saved to that " +
-      "file verbatim instead — any content type, no extraction, no truncation — and the " +
-      "result is the JSON summary {url, file_path, content_type, bytes} rather than the " +
-      "content; use it for images, logs and other attachments (GitHub user-attachments " +
-      "links from issue bodies, release assets, raw files). Give the file the extension " +
-      "matching the response's content_type: the Read tool decides image support by " +
-      "extension. Requests honour the proxy in ~/.pi/agent/proxy.json, so they reach hosts " +
-      "the shell sandbox blocks. SSRF-protected: refuses private/internal addresses.",
-    promptSnippet: "Fetch a web page, API response, or download a file",
-    parameters: Type.Object({
-      url: Type.String({ description: "The URL to fetch" }),
-      output_path: Type.Optional(
-        Type.String({
-          description:
-            "Save the response body to this path verbatim instead of returning it (absolute, or relative to the session cwd; ~ is expanded). Parent directories are created and an existing file is overwritten.",
-        }),
-      ),
-    }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      const destination =
-        params.output_path === undefined ? undefined : resolvePathArg(ctx.cwd, params.output_path);
-      // 落盘位置的审批与写文件工具同一套：工作区与 /tmp 自动放行，其余问用户。
-      // 放在 try 外面，拒绝的原因（user deny）不该被改写成「抓取失败」。
-      if (destination !== undefined) {
-        await guardWriteAccess(ctx, {
-          toolName: "web_fetch",
-          absolutePath: destination,
-          policy,
-          signal,
-        });
-      }
-
-      try {
+  return (bus) => {
+    bus.register({
+      name: "web_fetch",
+      label: "Web Fetch",
+      description:
+        "Fetch a URL and return its content as markdown (HTML pages) or raw text " +
+        "(JSON/XML/plain-text API responses). With output_path the body is saved to that " +
+        "file verbatim instead — any content type, no extraction, no truncation — and the " +
+        "result is the JSON summary {url, file_path, content_type, bytes} rather than the " +
+        "content; use it for images, logs and other attachments (GitHub user-attachments " +
+        "links from issue bodies, release assets, raw files). Give the file the extension " +
+        "matching the response's content_type: the Read tool decides image support by " +
+        "extension. Requests honour the proxy in ~/.pi/agent/proxy.json, so they reach hosts " +
+        "the shell sandbox blocks. SSRF-protected: refuses private/internal addresses.",
+      promptSnippet: "Fetch a web page, API response, or download a file",
+      parameters: Type.Object({
+        url: Type.String({ description: "The URL to fetch" }),
+        output_path: Type.Optional(
+          Type.String({
+            description:
+              "Save the response body to this path verbatim instead of returning it (absolute, or relative to the session cwd; ~ is expanded). Parent directories are created and an existing file is overwritten.",
+          }),
+        ),
+      }),
+      async execute(_id, params, signal, _onUpdate, ctx) {
+        const destination =
+          params.output_path === undefined
+            ? undefined
+            : resolvePathArg(ctx.cwd, params.output_path);
+        // 落盘位置的审批与写文件工具同一套：工作区与 /tmp 自动放行，其余问用户。
+        // 放在 try 外面，拒绝的原因（user deny）不该被改写成「抓取失败」。
         if (destination !== undefined) {
-          const file = await saveUrlToFile(params.url, destination, signal);
-          const payload = {
-            url: file.url,
-            file_path: file.filePath,
-            content_type: file.contentType,
-            bytes: file.bytes,
-          };
-          return {
-            content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-            details: payload,
-          };
+          await guardWriteAccess(ctx, {
+            toolName: "web_fetch",
+            absolutePath: destination,
+            policy,
+            signal,
+          });
         }
 
-        const page = await fetchPage(params.url, signal);
-        const { text, truncated } = truncateMarkdown(page.markdown);
-        const details: Record<string, unknown> = {
-          url: page.url,
-          title: page.title,
-          bytes: Buffer.byteLength(page.markdown, "utf8"),
-          truncated,
-        };
-        return {
-          content: [{ type: "text", text }],
-          details,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const details: Record<string, unknown> = { error: message, url: params.url };
-        return {
-          isError: true,
-          content: [{ type: "text", text: `抓取失败: ${message}` }],
-          details,
-        };
-      }
-    },
-  });
+        try {
+          if (destination !== undefined) {
+            const file = await saveUrlToFile(params.url, destination, signal);
+            const payload = {
+              url: file.url,
+              file_path: file.filePath,
+              content_type: file.contentType,
+              bytes: file.bytes,
+            };
+            return {
+              content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+              details: payload,
+            };
+          }
+
+          const page = await fetchPage(params.url, signal);
+          const { text, truncated } = truncateMarkdown(page.markdown);
+          const details: Record<string, unknown> = {
+            url: page.url,
+            title: page.title,
+            bytes: Buffer.byteLength(page.markdown, "utf8"),
+            truncated,
+          };
+          return {
+            content: [{ type: "text", text }],
+            details,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const details: Record<string, unknown> = { error: message, url: params.url };
+          return {
+            isError: true,
+            content: [{ type: "text", text: `抓取失败: ${message}` }],
+            details,
+          };
+        }
+      },
+    });
+  };
+}
+
+/** 工具集入口形态：入口用它取注册函数。 */
+export function createWebFetch(pi: ExtensionAPI): { register(bus: ToolBus): void } {
+  const registerTool = createWebFetchTool(pi);
+  return { register: registerTool };
+}
+
+/** 独立扩展入口：在 session_start 里按本会话模型注册。 */
+export default function webFetchTool(pi: ExtensionAPI): void {
+  registerToolsOnSessionStart(pi, createWebFetchTool(pi));
 }

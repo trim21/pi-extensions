@@ -14,16 +14,13 @@ import { readFileSync } from "node:fs";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import {
-  type ExtensionAPI,
-  generateDiffString,
-  withFileMutationQueue,
-} from "@earendil-works/pi-coding-agent";
+import { generateDiffString, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { resolvePathArg } from "../path.js";
 import type { ToolPendant } from "../pendant.ts";
 import type { RequestPolicy } from "../request-policy.js";
+import type { ToolBus } from "../tool-bus.js";
 import { guardWriteAccess } from "../write-guard.js";
 import { RenameNotPossibleError } from "./client.js";
 import type { LspService } from "./lsp.js";
@@ -51,11 +48,11 @@ const LSP_RENAME_PROMPT = readFileSync(
 ).trim();
 
 export function registerLspRenameTool(
-  pi: ExtensionAPI,
+  bus: ToolBus,
   service: LspService,
   options: LspRenameOptions,
 ): void {
-  pi.registerTool({
+  bus.register({
     name: "lsp-rename",
     label: "Lsp Rename",
     description: "Rename a code symbol and update all references across the workspace via LSP",

@@ -1,11 +1,11 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { runGh } from "../../lib/gh-process.js";
+import type { ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, repoArgs, subtitlePendant } from "../base.js";
 
-export function addWatchRunTool(_gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addWatchRunTool(_gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "watch-github-run",
     label: "Watch GitHub Workflow Run",
     description:

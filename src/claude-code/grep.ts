@@ -17,6 +17,8 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
+import type { ToolBus } from "../lib/tool-bus.js";
+import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { searchRoot, suggestPathUnderCwd, toRelativePath } from "./common.js";
 
 const GREP_OUTPUT_MODES = ["content", "files_with_matches", "count"] as const;
@@ -258,8 +260,8 @@ function relativizeCountLine(line: string, cwd: string): string {
   return line;
 }
 
-export function registerGrepTool(pi: ExtensionAPI): void {
-  pi.registerTool({
+export function registerGrepTool(bus: ToolBus, pi: ExtensionAPI): void {
+  bus.register({
     name: "Grep",
     label: "Grep",
     description: [
@@ -374,6 +376,7 @@ export function registerGrepTool(pi: ExtensionAPI): void {
 }
 
 // 独立扩展入口：spawn-agent 子代理声明 `Grep` 工具时按本文件 `-e` 加载，
-// 无需经 index.ts / search.ts 聚合。registerGrepTool 本身就是 (pi) => void，
-// 可直接作为扩展 factory。
-export default registerGrepTool;
+// 无需经 index.ts / search.ts 聚合。
+export default function claudeCodeGrepTool(pi: ExtensionAPI): void {
+  registerToolsOnSessionStart(pi, (bus) => registerGrepTool(bus, pi));
+}

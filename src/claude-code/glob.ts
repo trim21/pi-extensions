@@ -15,6 +15,8 @@ import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../lib/tool-bus.js";
+import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { searchRoot, suggestPathUnderCwd, toRelativePath } from "./common.js";
 
 const GLOB_RESULT_LIMIT = 100;
@@ -110,8 +112,8 @@ export async function globFiles(
   };
 }
 
-export function registerGlobTool(pi: ExtensionAPI): void {
-  pi.registerTool({
+export function registerGlobTool(bus: ToolBus): void {
+  bus.register({
     name: "Glob",
     label: "Glob",
     description: [
@@ -167,6 +169,7 @@ export function registerGlobTool(pi: ExtensionAPI): void {
 }
 
 // 独立扩展入口：spawn-agent 子代理声明 `Glob` 工具时按本文件 `-e` 加载，
-// 无需经 index.ts / search.ts 聚合。registerGlobTool 本身就是 (pi) => void，
-// 可直接作为扩展 factory。
-export default registerGlobTool;
+// 无需经 index.ts / search.ts 聚合。
+export default function claudeCodeGlobTool(pi: ExtensionAPI): void {
+  registerToolsOnSessionStart(pi, registerGlobTool);
+}

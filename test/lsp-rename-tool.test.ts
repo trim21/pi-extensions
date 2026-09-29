@@ -15,6 +15,7 @@ import { EMPTY_DIAGNOSTIC_REPORT } from "../src/lib/lsp/diagnostic.js";
 import type { LspService } from "../src/lib/lsp/lsp.js";
 import { registerLspRenameTool } from "../src/lib/lsp/rename-tool.js";
 import { createRequestPolicy } from "../src/lib/request-policy.js";
+import { createToolBus } from "../src/lib/tool-bus.js";
 
 const dirs: string[] = [];
 
@@ -30,15 +31,12 @@ interface RegisteredTool {
 /** 注册 lsp-rename 并取回工具对象；service 是双桩，不需要真实语言服务器。 */
 function loadRenameTool(service: LspService): RegisteredTool {
   const tools = new Map<string, RegisteredTool>();
-  registerLspRenameTool(
-    {
-      registerTool(tool: RegisteredTool) {
-        tools.set(tool.name, tool);
-      },
-    } as never,
-    service,
-    { policy: createRequestPolicy() },
-  );
+  const pi = {
+    registerTool(tool: RegisteredTool) {
+      tools.set(tool.name, tool);
+    },
+  } as never;
+  registerLspRenameTool(createToolBus(pi), service, { policy: createRequestPolicy() });
   const tool = tools.get("lsp-rename");
   if (!tool) {
     throw new Error("lsp-rename was not registered");

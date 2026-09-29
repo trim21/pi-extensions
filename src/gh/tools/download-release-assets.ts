@@ -2,11 +2,11 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { type ToolPendant } from "../../lib/pendant.js";
+import type { ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   GhError,
@@ -203,8 +203,8 @@ export async function downloadReleaseAssets(
   };
 }
 
-export function addDownloadReleaseAssetsTool(_gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addDownloadReleaseAssetsTool(_gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "download-github-release-assets",
     label: "GitHub Release Download",
     description:

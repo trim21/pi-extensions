@@ -28,6 +28,8 @@ import { Value } from "typebox/value";
 
 import { completeText, type CompleteTextResult, type ModelRegistryLike } from "./lib/model-call.js";
 import { type ToolPendant } from "./lib/pendant.js";
+import type { ToolBus } from "./lib/tool-bus.js";
+import { createToolRegistration } from "./lib/tool-registration.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
 
@@ -296,7 +298,23 @@ export async function callVision(
 
 // ── extension ────────────────────────────────────────────────────────────────
 
-export default function visionAgent(pi: ExtensionAPI) {
+/** 视觉代理工具集（未配置视觉模型时返回 undefined）：入口从它取注册函数。 */
+export function createVisionTools(): { register(bus: ToolBus): void } | undefined {
+  // 未配置视觉模型就不注册工具：agent 看不到也调不到。provider 的
+  // baseUrl/apiKey 由 pi 的模型注册表在调用时解析（execute 里 find），
+  // 配置好 settings.json / models.json 后重新加载（/reload）即可生效。
+  if (!loadVisionConfig()?.model) {
+    return undefined;
+  }
+  return {
+    register(bus) {
+      registerVisionTool(bus);
+    },
+  };
+}
+
+export default function visionAgent(pi: ExtensionAPI): void {
+  const registration = createToolRegistration(pi);
   // 只依赖 input 字段，不绑定 pi 内部类型
   interface AnyModel {
     id?: string;
@@ -334,15 +352,21 @@ export default function visionAgent(pi: ExtensionAPI) {
     syncVisionMode(ctx.model);
   });
 
-  // 未配置视觉模型就不注册工具：agent 看不到也调不到。provider 的
-  // baseUrl/apiKey 由 pi 的模型注册表在调用时解析（execute 里 find），
-  // 配置好 settings.json / models.json 后重新加载（/reload）即可生效。
-  const visionConfig = loadVisionConfig();
-  if (!visionConfig?.model) {
+  // 未配置视觉模型就不注册工具（见 createVisionTools）。
+  const tools = createVisionTools();
+  if (!tools) {
     return;
   }
 
-  pi.registerTool({
+  // 工具在 session_start 里注册：禁用规则可以带 models，只有那时才知道本会话
+  // 的模型。
+  registration.onSessionStart(() => {
+    tools.register(registration.bus);
+  });
+}
+
+function registerVisionTool(bus: ToolBus): void {
+  bus.register({
     name: TOOL_NAME,
     label: "Describe Image",
     description:

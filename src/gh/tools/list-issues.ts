@@ -1,6 +1,6 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   type ListFilters,
@@ -24,8 +24,8 @@ async function listIssues(gh: GhClient, call: ToolCall<ListFilters>): Promise<To
   return result;
 }
 
-export function addListIssuesTool(gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addListIssuesTool(gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "list-github-issues",
     label: "GitHub Issues List",
     description:

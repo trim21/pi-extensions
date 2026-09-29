@@ -64,17 +64,9 @@
   },
   "pi": {
     "extensions": [
-      "src/aft/index.ts",
-      "src/opencode/index.ts",
-      "src/claude-code/index.ts",
-      "src/vision-agent.ts",
+      "src/index.ts",
       "src/session-name.ts",
-      "src/gh-readonly.ts",
-      "src/spawn-agent.ts",
-      "src/system-prompt/index.ts",
-      "src/talk/index.ts",
-      "src/web/search.ts",
-      "src/web/fetch.ts"
+      "src/system-prompt/index.ts"
     ],
     "skills": [
       "src/talk/skills",

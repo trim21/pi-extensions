@@ -1,6 +1,6 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   mergeChecks,
@@ -52,8 +52,8 @@ export async function prStatus(gh: GhClient, call: ToolCall<PrStatusParams>): Pr
   };
 }
 
-export function addReadPrStatusTool(gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addReadPrStatusTool(gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "read-github-pr-status",
     label: "GitHub PR Status",
     description:

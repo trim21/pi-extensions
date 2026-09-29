@@ -1,6 +1,6 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   resolveRepo,
@@ -53,8 +53,8 @@ async function waitCommitChecks(
   });
 }
 
-export function addWaitCommitChecksTool(gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addWaitCommitChecksTool(gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "wait-github-commit-checks",
     label: "Watch GitHub Commit Checks",
     description:

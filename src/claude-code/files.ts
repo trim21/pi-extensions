@@ -25,11 +25,18 @@ import {
 } from "../lib/file-reads.js";
 import { appendLspDiagnosticText, type DiagnosticReport } from "../lib/lsp/diagnostic.js";
 import { registerLspInspectTools } from "../lib/lsp/inspect-tool.js";
-import { createLspManager, type LspService, type LspServiceOptions } from "../lib/lsp/lsp.js";
+import {
+  createLspManager,
+  type LspManager,
+  type LspService,
+  type LspServiceOptions,
+} from "../lib/lsp/lsp.js";
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import type { ToolPendant } from "../lib/pendant.ts";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
+import type { ToolBus } from "../lib/tool-bus.js";
+import { createToolRegistration } from "../lib/tool-registration.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { didYouMean, resolveToolFilePath } from "./common.js";
 import { applyExactEdit } from "./edit-match.js";
@@ -173,12 +180,12 @@ export function formatReadOutput(
 }
 
 export function registerFileTools(
-  pi: ExtensionAPI,
+  bus: ToolBus,
   state: ReadsState,
   getService: () => LspService,
   policy: RequestPolicy,
 ): void {
-  pi.registerTool({
+  bus.register({
     name: "Read",
     label: "Read",
     description: [
@@ -312,7 +319,7 @@ export function registerFileTools(
     },
   });
 
-  pi.registerTool({
+  bus.register({
     name: "Edit",
     label: "Edit",
     description: [
@@ -493,7 +500,7 @@ export function registerFileTools(
     },
   });
 
-  pi.registerTool({
+  bus.register({
     name: "Write",
     label: "Write",
     description: [
@@ -591,72 +598,110 @@ export function registerFileTools(
 /** 会更新 reads state 并随 details 持久化快照的工具名。 */
 const FILE_TOOL_NAMES = new Set(["Read", "Edit", "Write", "lsp-rename"]);
 
-function restoreFileReads(
-  state: ReadsState,
-  sessionManager: ExtensionContext["sessionManager"],
-): void {
-  restoreReads(state, sessionManager, FILE_TOOL_NAMES);
-}
-
 export interface ClaudeCodeFileToolOptions extends LspServiceOptions {
   /** 与 bash runtime 共享的非沙盒请求策略；独立入口不传，自建一份。 */
   policy?: RequestPolicy;
+  /** 聚合入口注入的总线（与同入口其他模块共享）；独立入口不传，自建一份。 */
+  bus?: ToolBus;
+  /**
+   * 聚合入口注入的共享 LSP manager（两套文件工具集在同一个入口里共享一份，
+   * 否则 /lsp-* 命令与 LSP 服务会重复注册）；独立入口不传，自建一份。
+   */
+  manager?: LspManager;
+}
+
+/**
+ * 一套文件工具集：reads state 归实例所有，LSP 与请求策略可以由入口注入共享。
+ * 工具用 `register`、LSP 专属工具用 `onLspEnabled`（在 LSP 服务就绪时由
+ * manager 触发），已读记账恢复用 `restoreReads`。
+ */
+export interface FileToolset {
+  register(bus: ToolBus): void;
+  onLspEnabled(bus: ToolBus, service: LspService): void;
+  restoreReads(ctx: ExtensionContext): void;
+}
+
+/**
+ * 创建文件工具集。入口在会话启动、知道本会话模型之后再调用 `register`；
+ * `restoreReads` 与 `onLspEnabled` 分别由会话事件与 LSP manager 触发。
+ *
+ * 独立扩展入口见文件末尾的默认导出：spawn-agent 子代理按工具名把
+ * Read/Edit/Write 映射到本文件并经 `-e` 加载，形态与聚合入口一致。
+ */
+export function createClaudeCodeFileTools(
+  pi: ExtensionAPI,
+  options?: ClaudeCodeFileToolOptions,
+): FileToolset {
+  const state = createReadsState();
+  // 聚合入口注入与 bash runtime 共享的那一份；独立入口自建并订阅 pi.events。
+  const policy = options?.policy ?? createRequestPolicy(pi.events);
+  // 聚合入口注入自己的总线（与同入口其他模块共享）；独立入口自建一份。
+  const bus = options?.bus ?? createToolRegistration(pi).bus;
+
+  const toolset: FileToolset = {
+    register(currentBus) {
+      registerFileTools(currentBus, state, () => manager.mustLazyGetService(), policy);
+    },
+
+    // LSP 专属工具（lsp-rename / inspect 族）仅在 lsp.json 有 enabled 服务器时
+    // 注册；本工具集跟踪 read-before-write 状态，rename 落盘的文件要标记为已读
+    // 并随 details 持久化（restoreReads 依赖 details.reads）。
+    onLspEnabled(currentBus, service) {
+      registerLspRenameTool(currentBus, service, {
+        policy,
+        recordReads: (applied) =>
+          recordReads(
+            state,
+            applied.map((fileEdit) => ({
+              path: fileEdit.path,
+              snapshot: snapshotOf(fileEdit.newText),
+            })),
+          ),
+      });
+      registerLspInspectTools(currentBus, service);
+    },
+
+    // 扩展实例在进程启动 / /reload / /new / /resume / /fork 时重建，内存里的
+    // 已读记账随之丢失。这里从当前分支的历史工具结果里恢复：digest 是当时的值，
+    // 若文件在此期间被外部修改，Edit/Write 时的指纹对比仍会要求重新 Read，
+    // 防呆语义不因重建而弱化。
+    restoreReads(ctx) {
+      restoreReads(state, ctx.sessionManager, FILE_TOOL_NAMES);
+    },
+  };
+
+  // 独立入口没有注入 manager 时自建一份（入口共享的那份由入口创建）。
+  const manager =
+    options?.manager ??
+    createLspManager(
+      pi,
+      { onEnabled: (_pi, service) => toolset.onLspEnabled(bus, service) },
+      options,
+    );
+
+  return toolset;
 }
 
 /**
  * 独立扩展入口：files.ts 可单独经 `-e claude-code/files.ts` 加载（spawn-agent
- * 子代理把 Read/Edit/Write 工具名映射到本文件），无需经 index.ts。reads
- * state 归本文件所有：扩展实例内创建，并随 session 事件从历史分支恢复，
- * 与主进程 index.ts 聚合加载时的行为一致。
+ * 子代理把 Read/Edit/Write 工具名映射到本文件），无需经 index.ts。
  */
 export default function claudeCodeFileTools(
   pi: ExtensionAPI,
   options?: ClaudeCodeFileToolOptions,
 ): void {
-  const state = createReadsState();
-  // 聚合入口（index.ts）注入与 bash runtime 共享的那一份；独立入口（spawn-agent
-  // 按工具名 `-e` 加载本文件）自建一份，靠 pi.events 跟随同一开关。
-  const policy = options?.policy ?? createRequestPolicy(pi.events);
+  const registration = createToolRegistration(pi);
+  const toolset = createClaudeCodeFileTools(pi, { ...options, bus: registration.bus });
 
-  // LSP 专属工具（lsp-rename / inspect 族）仅在 lsp.json 存在 enabled 服务器时
-  // 注册（session_start 校验后）；本工具集跟踪 read-before-write 状态，rename
-  // 落盘的文件要标记为已读并随 details 持久化（restoreFileReads 依赖 details.reads）。
-  const manager = createLspManager(
-    pi,
-    {
-      onEnabled: (pi, service) => {
-        registerLspRenameTool(pi, service, {
-          policy,
-          recordReads: (applied) =>
-            recordReads(
-              state,
-              applied.map((fileEdit) => ({
-                path: fileEdit.path,
-                snapshot: snapshotOf(fileEdit.newText),
-              })),
-            ),
-        });
-        registerLspInspectTools(pi, service);
-      },
-    },
-    options,
-  );
-
-  // 扩展实例在进程启动 / /reload / /new / /resume / /fork 时重建，内存里的
-  // 已读记账随之丢失。这里从当前分支的历史工具结果里恢复：digest 是当时的值，
-  // 若文件在此期间被外部修改，Edit/Write 时的指纹对比仍会要求重新 Read，
-  // 防呆语义不因重建而弱化。
   pi.on("session_start", (_event, ctx) => {
-    restoreFileReads(state, ctx.sessionManager);
+    toolset.restoreReads(ctx);
   });
-
   // rewind / 树内跳转走 navigateTree → branch()，只发 session_tree 不发
-  // session_start，扩展实例也不重建。这里同样重放当前分支，丢弃被抛弃分支
-  // 的记账，避免 state 与当前分支脱节。
+  // session_start，扩展实例也不重建。这里同样重放当前分支。
   pi.on("session_tree", (_event, ctx) => {
-    restoreFileReads(state, ctx.sessionManager);
+    toolset.restoreReads(ctx);
   });
-
-  // 文件工具无条件注册；service 惰性获取，disabled 时为 no-op。
-  registerFileTools(pi, state, () => manager.mustLazyGetService(), policy);
+  registration.onSessionStart(() => {
+    toolset.register(registration.bus);
+  });
 }

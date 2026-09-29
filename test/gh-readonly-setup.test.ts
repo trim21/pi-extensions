@@ -15,7 +15,7 @@ vi.mock("node:fs", async (importOriginal) => ({
   existsSync: (...args: unknown[]) => existsMock(...args),
 }));
 
-import registerTools from "../src/gh-readonly.js";
+import registerTools from "../src/gh/index.js";
 
 function createPi() {
   const tools: unknown[] = [];
@@ -26,6 +26,14 @@ function createPi() {
     },
     on: (event: string, handler: unknown) => {
       handlers.push([event, handler]);
+      // 注册即触发：等价于 session_start 事件按注册顺序派发（工具在
+      // session_start 里按本会话模型注册）
+      if (event === "session_start") {
+        void (handler as (event: unknown, ctx: unknown) => unknown)(
+          { type: "session_start", reason: "startup" },
+          { model: undefined, cwd: process.cwd(), ui: { notify: vi.fn() } },
+        );
+      }
     },
   };
   return { pi, tools, handlers };

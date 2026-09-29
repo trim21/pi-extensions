@@ -24,6 +24,8 @@ import { type TObject, Type } from "typebox";
 
 import { type CommandResult, type CommandSpec, parseCommand } from "../lib/cli.js";
 import { resolveHomePath } from "../lib/path.js";
+import type { ToolBus } from "../lib/tool-bus.js";
+import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { restoreTalkAgentId, TALK_JOIN_ENTRY_TYPE, TalkCore } from "./core.js";
 import { age, formatDelivery } from "./format.js";
 import type { Letter } from "./mailbox.js";
@@ -97,7 +99,83 @@ function readTalkSettings(): { dbPath?: string; deliver?: "steer" | "queue" } {
   }
 }
 
-export default function talk(pi: ExtensionAPI) {
+/** talk 的三个工具：由扩展入口在 session_start 里注册。 */
+function registerTalkTools(
+  bus: ToolBus,
+  core: TalkCore,
+  requireInit: () => string | undefined,
+): void {
+  bus.register({
+    name: "talk-list-agents",
+    label: "List Talk Agents",
+    description: "List visible pi agents (id, status, work_dir, name).",
+    promptSnippet: "List other pi agents on this machine",
+    parameters: Type.Object({
+      cwd: Type.Optional(Type.String({ description: "Only list agents in this directory" })),
+    }),
+    async execute(_toolCallId, params) {
+      const initError = requireInit();
+      if (initError) {
+        return toolResult(initError);
+      }
+      return toolResult(params.cwd ? await core.listCwd(params.cwd) : await core.list());
+    },
+  });
+
+  bus.register({
+    name: "talk-ask",
+    label: "Ask Talk",
+    description:
+      "Ask another pi agent a question and block until it responds (or times out). Before asking, it checks whether that agent already sent you something; if so, you are told to read and respond first instead of asking.",
+    promptSnippet: "Ask another pi agent a question and wait for a response",
+    parameters: Type.Object({
+      to: Type.String({ description: "Target agent id (from talk-list-agents)" }),
+      message: Type.String({ description: "The question" }),
+      timeoutMs: Type.Optional(
+        Type.Number({ description: `Wait cap in ms; default ${ASK_TIMEOUT_MS}` }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const initError = requireInit();
+      if (initError) {
+        return toolResult(initError);
+      }
+      return toolResult(
+        await core.ask(
+          params.to,
+          params.message,
+          params.timeoutMs ?? ASK_TIMEOUT_MS,
+          signal ?? undefined,
+        ),
+      );
+    },
+  });
+
+  bus.register({
+    name: "talk-send",
+    label: "Send Talk Message",
+    description:
+      "Send a plain-text message to a single pi agent. Plain text only, ≤32KB — send a summary and a path, never file contents.",
+    promptSnippet: "Send a message to another pi agent",
+    parameters: Type.Object({
+      to: Type.String({ description: "Target agent id (from talk-list-agents)" }),
+      message: Type.String({ description: "Message body" }),
+    }),
+    async execute(_toolCallId, params) {
+      const initError = requireInit();
+      if (initError) {
+        return toolResult(initError);
+      }
+      return toolResult(await core.send(params.to, params.message));
+    },
+  });
+}
+
+/**
+ * talk 工具集：创建核心、注册会话接线与 /talk 命令，返回工具注册函数。
+ * 入口与独立默认导出都用它，因此两种加载方式行为一致。
+ */
+export function createTalkTools(pi: ExtensionAPI): { register(bus: ToolBus): void } {
   const settings = readTalkSettings();
   const configured = process.env.PI_TALK_DB ?? settings.dbPath;
   const dbPath = configured
@@ -220,71 +298,8 @@ export default function talk(pi: ExtensionAPI) {
   });
 
   // ── Tools ──────────────────────────────────────────────────────────────
-
-  pi.registerTool({
-    name: "talk-list-agents",
-    label: "List Talk Agents",
-    description: "List visible pi agents (id, status, work_dir, name).",
-    promptSnippet: "List other pi agents on this machine",
-    parameters: Type.Object({
-      cwd: Type.Optional(Type.String({ description: "Only list agents in this directory" })),
-    }),
-    async execute(_toolCallId, params) {
-      const initError = requireInit();
-      if (initError) {
-        return toolResult(initError);
-      }
-      return toolResult(params.cwd ? await core.listCwd(params.cwd) : await core.list());
-    },
-  });
-
-  pi.registerTool({
-    name: "talk-ask",
-    label: "Ask Talk",
-    description:
-      "Ask another pi agent a question and block until it responds (or times out). Before asking, it checks whether that agent already sent you something; if so, you are told to read and respond first instead of asking.",
-    promptSnippet: "Ask another pi agent a question and wait for a response",
-    parameters: Type.Object({
-      to: Type.String({ description: "Target agent id (from talk-list-agents)" }),
-      message: Type.String({ description: "The question" }),
-      timeoutMs: Type.Optional(
-        Type.Number({ description: `Wait cap in ms; default ${ASK_TIMEOUT_MS}` }),
-      ),
-    }),
-    async execute(_toolCallId, params, signal) {
-      const initError = requireInit();
-      if (initError) {
-        return toolResult(initError);
-      }
-      return toolResult(
-        await core.ask(
-          params.to,
-          params.message,
-          params.timeoutMs ?? ASK_TIMEOUT_MS,
-          signal ?? undefined,
-        ),
-      );
-    },
-  });
-
-  pi.registerTool({
-    name: "talk-send",
-    label: "Send Talk Message",
-    description:
-      "Send a plain-text message to a single pi agent. Plain text only, ≤32KB — send a summary and a path, never file contents.",
-    promptSnippet: "Send a message to another pi agent",
-    parameters: Type.Object({
-      to: Type.String({ description: "Target agent id (from talk-list-agents)" }),
-      message: Type.String({ description: "Message body" }),
-    }),
-    async execute(_toolCallId, params) {
-      const initError = requireInit();
-      if (initError) {
-        return toolResult(initError);
-      }
-      return toolResult(await core.send(params.to, params.message));
-    },
-  });
+  // 工具在 session_start 里注册：禁用规则可以带 models，只有那时才知道本会话
+  // 的模型。
 
   // ── /talk commands ────────────────────────────────────────────────────
 
@@ -526,4 +541,15 @@ export default function talk(pi: ExtensionAPI) {
       };
     });
   }
+
+  return {
+    register(bus) {
+      registerTalkTools(bus, core, requireInit);
+    },
+  };
+}
+
+export default function talk(pi: ExtensionAPI): void {
+  const tools = createTalkTools(pi);
+  registerToolsOnSessionStart(pi, (bus) => tools.register(bus));
 }

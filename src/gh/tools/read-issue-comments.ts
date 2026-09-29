@@ -1,10 +1,10 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, ghExec, repoArgs, subtitlePendant, toToolResultJson } from "../base.js";
 
-export function addReadIssueCommentsTool(_gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addReadIssueCommentsTool(_gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "read-github-issue-comments",
     label: "GitHub Issue Comments",
     description: "Get comments on a GitHub issue.",

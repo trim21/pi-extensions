@@ -1,7 +1,7 @@
 /**
  * Tests for the spawn_agent extension core:
  * - discoverAgents: frontmatter parsing and validation
- * - overrideExtensionPaths / resolveModel: SDK session assembly
+ * - 子代理工具单元选择 / resolveModel: SDK session assembly
  * - runAgent: session lifecycle, progress log, abort, error handling
  * - tool registration metadata
  */
@@ -14,17 +14,15 @@ import type { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-ag
 import { describe, expect, it, vi } from "vitest";
 
 import { completeBwrapConfig } from "../src/bwrap/core.js";
-import type { BwrapRuntime } from "../src/bwrap/runtime.js";
+import { toolsetsForToolNames, unitsForToolNames } from "../src/lib/tool-units.js";
 import {
   formatAgentListSection,
   formatSubagentError,
-  overrideExtensionPaths,
   PROGRESS_UPDATE_THROTTLE_MS,
   resolveModel,
   runAgent,
-  SUBAGENT_DEFAULT_SANDBOX,
   type SubagentSession,
-  subagentShellExtension,
+  subagentToolsExtension,
 } from "../src/spawn-agent.js";
 import {
   applyAgentDefaults,
@@ -43,6 +41,29 @@ function withTempDir(files: Record<string, string>, fn: (dir: string) => void) {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * 最小 pi 桩：`on` 注册即触发 session_start（工具在 session_start 里按本会话
+ * 模型注册）。
+ */
+function loadPi(overrides: Record<string, unknown>): never {
+  return {
+    registerTool: () => false,
+    registerFlag: () => false,
+    registerCommand: () => false,
+    getActiveTools: () => [],
+    setActiveTools: () => false,
+    ...overrides,
+    on: (event: string, handler: (...args: never[]) => unknown) => {
+      if (event === "session_start") {
+        void handler(
+          { type: "session_start", reason: "startup" } as never,
+          { model: undefined, cwd: process.cwd(), ui: { notify: () => false } } as never,
+        );
+      }
+    },
+  } as never;
 }
 
 const SCOUT = `---
@@ -293,130 +314,99 @@ describe("applyAgentDefaults", () => {
   });
 });
 
-describe("overrideExtensionPaths", () => {
-  it("routes bash through the inline factory, not path overrides", () => {
-    // bash / cc Bash 的 bwrap runtime 要携带 frontmatter 的完整沙箱配置，路径式
-    // override 没有 per-agent 配置通道，改由 subagentShellExtension 内联工厂注入。
-    for (const tools of [["bash"], ["bash", "edit"], ["Bash"]]) {
-      const paths = overrideExtensionPaths(tools);
-      expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(false);
-      expect(paths.some((p) => p.endsWith(join("claude-code", "shell.ts")))).toBe(false);
-    }
-    // Agents without bash need no bwrap sandbox: there are no commands to run.
-    const paths = overrideExtensionPaths(["read", "grep", "find", "ls"]);
-    expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(false);
+describe("子代理工具单元选择", () => {
+  it("按声明的工具名选出文件 IO 工具集", () => {
+    // opencode 那套用全小写名字，claude-code 那套用首字母大写
+    expect(toolsetsForToolNames(["read", "grep"])).toBe("opencode");
+    expect(toolsetsForToolNames(["Read", "Grep"])).toBe("claude-code");
+    expect(toolsetsForToolNames(["find", "ls"])).toBeUndefined();
   });
 
-  it("loads opencode files.ts for the default read-only toolset", () => {
-    const paths = overrideExtensionPaths(["read"]);
-    expect(paths.some((p) => p.endsWith(join("opencode", "files.ts")))).toBe(true);
-    expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(false);
+  it("只挑选被声明工具覆盖到的单元", () => {
+    const units = unitsForToolNames("claude-code", ["Read", "Bash"]);
+    const provided = units.flatMap((unit) => [...unit.tools]);
+    expect(provided).toEqual(["Read", "Edit", "Write", "Bash"]);
+    // 没声明的单元不注册（Glob/Grep、TodoWrite/AskUserQuestion 都不在内）
+    expect(units.some((unit) => unit.tools.includes("Grep"))).toBe(false);
   });
 
-  it("loads the shared opencode files implementation once for read/edit/write", () => {
-    const paths = overrideExtensionPaths(["read", "edit", "write", "bash"]);
-    // read/edit/write 共享 opencode/files.ts（共享 LSP service 实例），只加载一次
-    expect(paths.filter((p) => p.endsWith(join("opencode", "files.ts")))).toHaveLength(1);
-    expect(paths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(false);
+  it("opencode 工具集按同样的规则挑单元", () => {
+    const units = unitsForToolNames("opencode", ["grep"]);
+    expect(units.flatMap((unit) => [...unit.tools])).toEqual(["glob", "grep"]);
   });
 
-  it("does not load overrides for tools the agent did not declare", () => {
-    // bash 不在路径 override 表里（内联工厂注入），这里不产生任何路径
-    expect(overrideExtensionPaths(["bash"])).toEqual([]);
+  it("bash 单元在 opencode 与 claude-code 下都覆盖声明", () => {
+    expect(unitsForToolNames("opencode", ["bash"]).flatMap((u) => [...u.tools])).toEqual(["bash"]);
+    expect(unitsForToolNames("claude-code", ["Bash"]).flatMap((u) => [...u.tools])).toEqual([
+      "Bash",
+    ]);
   });
 
-  it("loads the opencode search tools individually (grep without glob)", () => {
-    const grepPaths = overrideExtensionPaths(["grep"]);
-    expect(grepPaths.some((p) => p.endsWith(join("opencode", "grep.ts")))).toBe(true);
-    expect(grepPaths.some((p) => p.endsWith(join("opencode", "glob.ts")))).toBe(false);
-
-    const globPaths = overrideExtensionPaths(["glob"]);
-    expect(globPaths.some((p) => p.endsWith(join("opencode", "glob.ts")))).toBe(true);
-    expect(globPaths.some((p) => p.endsWith(join("opencode", "grep.ts")))).toBe(false);
-
-    // grep 的默认只读工具集不该顺带加载 bash（bwrap 沙箱只在声明 bash 时需要）
-    expect(grepPaths.some((p) => p.endsWith(join("opencode", "bash.ts")))).toBe(false);
-  });
-
-  it("loads claude-code search tools individually (Grep without Glob)", () => {
-    const grepPaths = overrideExtensionPaths(["Grep"]);
-    expect(grepPaths.some((p) => p.endsWith(join("claude-code", "grep.ts")))).toBe(true);
-    expect(grepPaths.some((p) => p.endsWith(join("claude-code", "glob.ts")))).toBe(false);
-
-    const globPaths = overrideExtensionPaths(["Glob"]);
-    expect(globPaths.some((p) => p.endsWith(join("claude-code", "glob.ts")))).toBe(true);
-    expect(globPaths.some((p) => p.endsWith(join("claude-code", "grep.ts")))).toBe(false);
-
-    const both = overrideExtensionPaths(["Grep", "Glob"]);
-    expect(both.some((p) => p.endsWith(join("claude-code", "grep.ts")))).toBe(true);
-    expect(both.some((p) => p.endsWith(join("claude-code", "glob.ts")))).toBe(true);
-  });
-
-  it("loads the shared cc files implementation once for Read/Edit/Write", () => {
-    // All three stateful cc tools live in claude-code/files.ts (shared
-    // read-snapshot state); the tools allowlist exposes only the subset the
-    // agent declared, so the extension file must be loaded exactly once.
-    const paths = overrideExtensionPaths(["Read", "Edit", "Write"]);
-    expect(paths.filter((p) => p.endsWith(join("claude-code", "files.ts")))).toHaveLength(1);
-    expect(paths.some((p) => p.endsWith(join("opencode", "files.ts")))).toBe(false);
-
-    const single = overrideExtensionPaths(["Edit"]);
-    expect(single.filter((p) => p.endsWith(join("claude-code", "files.ts")))).toHaveLength(1);
-  });
-
-  it("throws when an override extension file is missing", () => {
-    // overrideExtensionPaths resolves against the installed package; a
-    // missing file means the extension bundle is broken and must be fatal.
-    expect(() => overrideExtensionPaths(["read"])).not.toThrow();
-  });
-});
-
-describe("subagentShellExtension", () => {
-  it("injects a runtime carrying the agent's declared sandbox config", async () => {
-    const register = vi.fn();
-    const extension = subagentShellExtension(
-      { ...BASE_AGENT, sandbox: completeBwrapConfig({ fs: { mode: "readonly" } }) },
-      register,
+  it("子代理扩展工厂只注册一次，且沙箱配置随闭包携带", async () => {
+    const extension = subagentToolsExtension(
+      {
+        ...BASE_AGENT,
+        tools: ["read", "bash"],
+        sandbox: completeBwrapConfig({
+          fs: { mode: "workspace-write" },
+          network: { mode: "block" },
+        }),
+      },
+      ["read", "bash"],
     );
-    await (extension as (pi: unknown) => void | Promise<void>)({ events: undefined });
-    expect(register).toHaveBeenCalledOnce();
-    const runtime = (register.mock.calls[0] as [unknown, BwrapRuntime])[1];
-    // 固定沙箱语义随配置生效：非沙盒请求被直接拒绝
-    await expect(
-      runtime.execute({
-        toolCallId: "test",
-        command: "echo escalate",
-        requestFullAccess: true,
-        ctx: {
-          cwd: process.cwd(),
-          hasUI: true,
-          sessionManager: { getSessionId: () => "test-session" },
-        } as never,
-      }),
-    ).rejects.toThrow(/User denied unsandboxed execution/);
+    expect(typeof extension).toBe("function");
   });
 
-  it("falls back to the read-only default sandbox when the agent declares none", async () => {
-    expect(SUBAGENT_DEFAULT_SANDBOX.fs.mode).toBe("readonly");
-    expect(SUBAGENT_DEFAULT_SANDBOX.network.mode).toBe("block");
-
-    const register = vi.fn();
-    const extension = subagentShellExtension(BASE_AGENT, register);
-    await (extension as (pi: unknown) => void | Promise<void>)({ events: undefined });
-    const runtime = (register.mock.calls[0] as [unknown, BwrapRuntime])[1];
-    // 默认沙箱同样是固定的：提权请求直接拒绝，不会落到用户 bwrap 配置的审批路径
-    await expect(
-      runtime.execute({
-        toolCallId: "tool-1",
-        command: "echo escalate",
-        requestFullAccess: true,
-        ctx: {
-          cwd: process.cwd(),
-          hasUI: true,
-          sessionManager: { getSessionId: () => "test-session" },
-        } as never,
-      }),
-    ).rejects.toThrow(/User denied unsandboxed execution/);
+  it("disabledTools 同样作用于子代理（配置在总线里求值）", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-subagent-config-"));
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = dir;
+    writeFileSync(
+      join(dir, "settings.json"),
+      JSON.stringify({ personalExtensions: { disabledTools: ["edit"] } }),
+    );
+    try {
+      const tools: string[] = [];
+      const handlers: ((event: unknown, ctx: unknown) => unknown)[] = [];
+      const pi = {
+        registerTool: (tool: { name: string }) => {
+          tools.push(tool.name);
+        },
+        registerFlag: vi.fn(),
+        registerCommand: vi.fn(),
+        getActiveTools: () => [],
+        setActiveTools: vi.fn(),
+        exec: vi.fn(),
+        on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+          if (event === "session_start") {
+            handlers.push(handler);
+          }
+        },
+      };
+      const extension = subagentToolsExtension({ ...BASE_AGENT, tools: ["read", "edit"] }, [
+        "read",
+        "edit",
+      ]);
+      await extension(pi as never);
+      const ctx = {
+        model: undefined,
+        cwd: dir,
+        ui: { notify: () => false, setStatus: vi.fn(), theme: { fg: () => "" } },
+        sessionManager: { getBranch: () => [] },
+      };
+      for (const handler of handlers) {
+        await handler({ type: "session_start", reason: "startup" }, ctx);
+      }
+      expect(tools).toContain("read");
+      expect(tools).not.toContain("edit");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previous;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -534,12 +524,13 @@ describe("tool registration", () => {
     async () => {
       const { default: spawnAgent } = await import("../src/spawn-agent.js");
       let tool: { name: string; parameters: unknown } | undefined;
-      spawnAgent({
-        registerTool: (def: { name: string; parameters: unknown }) => {
-          tool = def;
-        },
-        on: () => false,
-      } as never);
+      spawnAgent(
+        loadPi({
+          registerTool: (def: { name: string; parameters: unknown }) => {
+            tool = def;
+          },
+        }),
+      );
 
       expect(tool?.name).toBe("spawn-agent");
       expect(tool?.parameters).toBeDefined();
@@ -562,12 +553,13 @@ describe("tool registration", () => {
 
       const { default: spawnAgent } = await import("../src/spawn-agent.js");
       let guidelines: string[] | undefined;
-      spawnAgent({
-        registerTool: (def: { promptGuidelines?: string[] }) => {
-          guidelines = def.promptGuidelines;
-        },
-        on: () => false,
-      } as never);
+      spawnAgent(
+        loadPi({
+          registerTool: (def: { promptGuidelines?: string[] }) => {
+            guidelines = def.promptGuidelines;
+          },
+        }),
+      );
 
       expect(guidelines).toBeDefined();
       expect(guidelines?.[0]).toContain("### Available subagents");

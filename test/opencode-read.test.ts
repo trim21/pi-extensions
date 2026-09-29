@@ -12,7 +12,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import opencodeFileTools, { readLines } from "../src/opencode/files.js";
+import { createToolBus } from "../src/lib/tool-bus.js";
+import opencodeFileTools, { createOpencodeFileTools, readLines } from "../src/opencode/files.js";
 
 const MAX_LINE_LENGTH = 2000;
 const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`;
@@ -173,7 +174,7 @@ interface Tool {
 
 function loadTool(): Tool {
   let tool: Tool | undefined;
-  opencodeFileTools({
+  const pi = {
     registerTool: (def: Tool) => {
       if (def.name === "read") {
         tool = def;
@@ -181,7 +182,9 @@ function loadTool(): Tool {
     },
     on: vi.fn(),
     registerCommand: vi.fn(),
-  } as never);
+  } as never;
+  // 工具在 session_start 里注册：这里直接调用返回的注册函数
+  createOpencodeFileTools(pi).register(createToolBus(pi));
   return tool!;
 }
 

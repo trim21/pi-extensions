@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { listGithubArgs } from "../src/gh-readonly.js";
+import { listGithubArgs } from "../src/gh/index.js";
 
 describe("listGithubArgs browse path (no keywords)", () => {
   it("defaults to gh issue list in the given repo", () => {

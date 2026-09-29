@@ -14,7 +14,7 @@ import {
   releaseAssetDir,
   releaseDownloadArgs,
   releasePatterns,
-} from "../src/gh-readonly.js";
+} from "../src/gh/index.js";
 
 describe("releaseAssetDir", () => {
   it("keys the cache on owner, repo and tag", () => {

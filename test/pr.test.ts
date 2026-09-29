@@ -18,7 +18,7 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import registerTools from "../src/gh-readonly.js";
+import registerTools from "../src/gh/index.js";
 
 class FakeChildProcess extends EventEmitter {
   stdout = new PassThrough();
@@ -53,7 +53,14 @@ interface ToolDef {
 function getExecutor(): ToolDef["execute"] {
   const tools: unknown[] = [];
   const pi = {
-    on: () => {},
+    on: (event: string, handler: (...args: never[]) => unknown) => {
+      if (event === "session_start") {
+        void handler(
+          { type: "session_start", reason: "startup" } as never,
+          { model: undefined, cwd: process.cwd(), ui: { notify: () => false } } as never,
+        );
+      }
+    },
     registerTool: (t: unknown) => {
       tools.push(t);
       return tools.length;

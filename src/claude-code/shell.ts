@@ -13,12 +13,11 @@ import { Type } from "typebox";
 import {
   BashInterruptedError,
   type BwrapRuntime,
-  createBwrapRuntime,
   formatElapsedSeconds,
   sandboxHintBlock,
 } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
-import { createRequestPolicy } from "../lib/request-policy.js";
+import type { ToolBus } from "../lib/tool-bus.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 7_200_000;
@@ -88,12 +87,8 @@ function formatBashSuccess(result: Awaited<ReturnType<BwrapRuntime["execute"]>>)
  * runtime 由调用方注入：扩展工厂持有一个实例（不依赖模块级全局状态），
  * 测试可注入预置模式的实例。状态随扩展实例生命周期，session 切换重建即重置。
  */
-export function registerShellTools(
-  pi: ExtensionAPI,
-  runtime: BwrapRuntime = createBwrapRuntime(createRequestPolicy(pi.events)),
-): void {
-  runtime.setup(pi);
-  pi.registerTool({
+export function registerShellTools(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapRuntime): void {
+  bus.register({
     name: "Bash",
     promptSnippet: "execute command",
     promptGuidelines: [BASH_PROMPT],

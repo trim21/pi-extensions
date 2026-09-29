@@ -21,6 +21,8 @@ import { Type } from "typebox";
 
 import { isRecord } from "../lib/narrow.js";
 import { parseWithSchema } from "../lib/parse-with-schema.js";
+import type { ToolBus } from "../lib/tool-bus.js";
+import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { didYouMean } from "./files.js";
 import { RIPGREP_RESULT_LIMIT, runRipgrep } from "./ripgrep.js";
 
@@ -178,7 +180,11 @@ async function grep(
 }
 
 export default function opencodeGrep(pi: ExtensionAPI): void {
-  pi.registerTool({
+  registerToolsOnSessionStart(pi, registerGrepTool);
+}
+
+export function registerGrepTool(bus: ToolBus): void {
+  bus.register({
     name: "grep",
     label: "grep",
     description: [

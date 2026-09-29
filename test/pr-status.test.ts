@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { GhClient, prStatus } from "../src/gh-readonly.js";
+import { GhClient, prStatus } from "../src/gh/index.js";
 import { type FixtureRoutes, type GithubCassette, githubCassette } from "./github-fixtures.js";
 
 const PULL_ROUTE = "pulls/137";

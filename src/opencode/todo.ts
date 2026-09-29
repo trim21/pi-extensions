@@ -27,6 +27,8 @@ import { type ExtensionAPI, truncateToVisualLines } from "@earendil-works/pi-cod
 import { type Static, Type } from "typebox";
 
 import { type ToolPendant } from "../lib/pendant.js";
+import type { ToolBus } from "../lib/tool-bus.js";
+import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
 
@@ -155,8 +157,12 @@ export function buildTodoWidgetLines(todos: readonly TodoInfo[]): string[] | und
 
 // ── extension ────────────────────────────────────────────────────────────────
 
-export default function todowrite(pi: ExtensionAPI) {
-  pi.registerTool<typeof todowriteSchema, TodoDetails>({
+export default function todowrite(pi: ExtensionAPI): void {
+  registerToolsOnSessionStart(pi, registerTodoTool);
+}
+
+export function registerTodoTool(bus: ToolBus): void {
+  bus.register<typeof todowriteSchema, TodoDetails>({
     name: TOOL_NAME,
     label: "Todo Write",
     description: TODOWRITE_DESCRIPTION,

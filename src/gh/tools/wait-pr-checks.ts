@@ -1,7 +1,7 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+import type { ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   ghExec,
@@ -55,8 +55,8 @@ async function waitPrChecks(gh: GhClient, call: ToolCall<PrChecksWaitParams>): P
   });
 }
 
-export function addWaitPrChecksTool(gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addWaitPrChecksTool(gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "wait-github-pr-checks",
     label: "Watch GitHub PR Checks",
     description:

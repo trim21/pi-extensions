@@ -19,12 +19,13 @@ import {
   PLAIN_CALLGRAPH_THEME,
   type StatusSnapshot,
 } from "@cortexkit/aft-bridge";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { formatDisplayPath, formatSubtitlePath, resolvePathArg } from "../lib/path.js";
 import { type ToolPendant } from "../lib/pendant.js";
+import type { ToolBus } from "../lib/tool-bus.js";
 import {
   type AftState,
   callAftTool,
@@ -125,8 +126,8 @@ const OutlineParams = Type.Object(
   { additionalProperties: false },
 );
 
-export function registerOutlineTool(pi: ExtensionAPI, ctx: AftToolContext): void {
-  pi.registerTool({
+export function registerOutlineTool(bus: ToolBus, ctx: AftToolContext): void {
+  bus.register({
     name: "aft_outline",
     label: "aft_outline",
     description: [
@@ -209,8 +210,8 @@ const ZoomParams = Type.Object(
   { additionalProperties: false },
 );
 
-export function registerZoomTool(pi: ExtensionAPI, ctx: AftToolContext): void {
-  pi.registerTool({
+export function registerZoomTool(bus: ToolBus, ctx: AftToolContext): void {
+  bus.register({
     name: "aft_zoom",
     label: "aft_zoom",
     description: [
@@ -361,8 +362,8 @@ export async function callCallgraphWithBuildRetry(
   }
 }
 
-export function registerCallgraphTool(pi: ExtensionAPI, ctx: AftToolContext): void {
-  pi.registerTool({
+export function registerCallgraphTool(bus: ToolBus, ctx: AftToolContext): void {
+  bus.register({
     name: "aft_callgraph",
     label: "aft_callgraph",
     description: [
@@ -610,8 +611,8 @@ const SearchParams = Type.Object(
   { additionalProperties: false },
 );
 
-export function registerSearchTool(pi: ExtensionAPI, ctx: AftToolContext): void {
-  pi.registerTool({
+export function registerSearchTool(bus: ToolBus, ctx: AftToolContext): void {
+  bus.register({
     name: "aft_search",
     label: "aft_search",
     description: [

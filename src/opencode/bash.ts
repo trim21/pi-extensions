@@ -13,6 +13,8 @@ import {
 } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
 import { createRequestPolicy } from "../lib/request-policy.js";
+import type { ToolBus } from "../lib/tool-bus.js";
+import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 7_200_000;
@@ -48,10 +50,13 @@ export default function opencodeBash(
   pi: ExtensionAPI,
   runtime: BwrapRuntime = createBwrapRuntime(createRequestPolicy(pi.events)),
 ): void {
+  registerToolsOnSessionStart(pi, (bus) => registerBashTool(bus, pi, runtime));
+}
+
+export function registerBashTool(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapRuntime): void {
   // 每个扩展实例持有自己的 runtime：不依赖模块级全局状态，状态随扩展
   // 实例生命周期（进程启动 / /reload / session 切换时工厂重建即重置）。
-  runtime.setup(pi);
-  pi.registerTool({
+  bus.register({
     name: "bash",
     label: "bash",
     description: [

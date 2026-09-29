@@ -14,11 +14,11 @@ import { readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { Hover } from "vscode-languageserver-types";
 
 import { resolvePathArg } from "../path.js";
+import type { ToolBus } from "../tool-bus.js";
 import type { InspectLocation } from "./client.js";
 import type { LspService } from "./lsp.js";
 import { type LspPosition, symbolCandidates } from "./rename.js";
@@ -255,8 +255,8 @@ async function probeSymbolCandidates(options: {
   return first.output;
 }
 
-export function registerLspInspectTools(pi: ExtensionAPI, service: LspService): void {
-  pi.registerTool({
+export function registerLspInspectTools(bus: ToolBus, service: LspService): void {
+  bus.register({
     name: "lsp-find-definition",
     label: "Lsp Find Definition",
     description:
@@ -299,7 +299,7 @@ export function registerLspInspectTools(pi: ExtensionAPI, service: LspService): 
     },
   });
 
-  pi.registerTool({
+  bus.register({
     name: "lsp-find-reference",
     label: "Lsp Find Reference",
     description:
@@ -342,7 +342,7 @@ export function registerLspInspectTools(pi: ExtensionAPI, service: LspService): 
     },
   });
 
-  pi.registerTool({
+  bus.register({
     name: "lsp-inspect",
     label: "Lsp Inspect",
     description:

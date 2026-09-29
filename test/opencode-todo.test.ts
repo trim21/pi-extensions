@@ -7,11 +7,13 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import todowrite, {
+import { createToolBus } from "../src/lib/tool-bus.js";
+import {
   buildTodoMarkdown,
   buildTodoWidgetLines,
   countOpen,
   normalizeTodos,
+  registerTodoTool,
   serializeTodos,
   type TodoInfo,
   TOOL_NAME,
@@ -40,11 +42,12 @@ interface Tool {
 
 function loadTool(): { tool: Tool } {
   let tool: Tool | undefined;
-  todowrite({
+  const pi = {
     registerTool: (def: Tool) => {
       tool = def;
     },
-  } as never);
+  } as never;
+  registerTodoTool(createToolBus(pi));
   return { tool: tool! };
 }
 

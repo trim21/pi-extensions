@@ -18,6 +18,8 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../lib/tool-bus.js";
+import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { didYouMean } from "./files.js";
 import { RIPGREP_RESULT_LIMIT, runRipgrep } from "./ripgrep.js";
 
@@ -82,7 +84,11 @@ async function glob(
 }
 
 export default function opencodeGlob(pi: ExtensionAPI): void {
-  pi.registerTool({
+  registerToolsOnSessionStart(pi, registerGlobTool);
+}
+
+export function registerGlobTool(bus: ToolBus): void {
+  bus.register({
     name: "glob",
     label: "glob",
     description: [

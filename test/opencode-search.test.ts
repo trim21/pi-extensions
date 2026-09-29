@@ -11,10 +11,12 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import opencodeGlob, { buildGlobArgs, renderGlobOutput } from "../src/opencode/glob.js";
-import opencodeGrep, {
+import { createToolBus } from "../src/lib/tool-bus.js";
+import { buildGlobArgs, registerGlobTool, renderGlobOutput } from "../src/opencode/glob.js";
+import {
   buildGrepArgs,
   parseGrepRecord,
+  registerGrepTool,
   renderGrepOutput,
 } from "../src/opencode/grep.js";
 
@@ -38,8 +40,9 @@ function loadTools(): Map<string, Tool> {
     on: vi.fn(),
     registerCommand: vi.fn(),
   } as never;
-  opencodeGrep(pi);
-  opencodeGlob(pi);
+  const bus = createToolBus(pi);
+  registerGrepTool(bus);
+  registerGlobTool(bus);
   return tools;
 }
 

@@ -9,7 +9,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import opencodeFileTools, { resolveBom } from "../src/opencode/files.js";
+import { createToolBus } from "../src/lib/tool-bus.js";
+import { createOpencodeFileTools, resolveBom } from "../src/opencode/files.js";
 
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
@@ -74,13 +75,14 @@ interface Harness {
 
 function loadTool(): Harness {
   const tools = new Map<string, Tool>();
-  opencodeFileTools({
+  const pi = {
     registerTool: (def: Tool) => {
       tools.set(def.name, def);
     },
     on: vi.fn(),
     registerCommand: vi.fn(),
-  } as never);
+  } as never;
+  createOpencodeFileTools(pi).register(createToolBus(pi));
   const read = tools.get("read")!;
   return {
     write: tools.get("write")!,

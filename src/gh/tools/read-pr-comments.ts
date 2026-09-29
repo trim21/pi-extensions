@@ -1,6 +1,6 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../../lib/tool-bus.js";
 import {
   ghApiList,
   type GhClient,
@@ -11,8 +11,8 @@ import {
   toToolResultJson,
 } from "../base.js";
 
-export function addReadPrCommentsTool(_gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addReadPrCommentsTool(_gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "read-github-pr-comments",
     label: "GitHub PR Comments",
     description:

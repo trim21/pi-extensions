@@ -12,6 +12,8 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { egress } from "../lib/egress.js";
+import type { ToolBus } from "../lib/tool-bus.js";
+import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { loadSearch1ApiKey } from "./config.js";
 
 const SEARCH_URL = "https://api.search1api.com/search";
@@ -169,8 +171,8 @@ export async function searchWeb(
   return { query, hits: mapHits(parsed.results) };
 }
 
-export default function webSearchTool(pi: ExtensionAPI): void {
-  pi.registerTool({
+export function registerWebSearchTool(bus: ToolBus): void {
+  bus.register({
     name: "web_search",
     label: "Web Search",
     description:
@@ -284,4 +286,14 @@ export default function webSearchTool(pi: ExtensionAPI): void {
       }
     },
   });
+}
+
+/** 工具集入口形态：入口用它取注册函数。 */
+export function createWebSearchTool(): { register(bus: ToolBus): void } {
+  return { register: registerWebSearchTool };
+}
+
+/** 独立扩展入口：在 session_start 里按本会话模型注册。 */
+export default function webSearchTool(pi: ExtensionAPI): void {
+  registerToolsOnSessionStart(pi, registerWebSearchTool);
 }

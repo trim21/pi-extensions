@@ -11,7 +11,8 @@ import {
   type BwrapRuntime,
   createBwrapRuntime,
 } from "../src/bwrap/runtime.js";
-import opencodeBash from "../src/opencode/bash.js";
+import { createToolBus } from "../src/lib/tool-bus.js";
+import { registerBashTool } from "../src/opencode/bash.js";
 
 interface RegisteredTool {
   name: string;
@@ -30,18 +31,18 @@ function loadBashTool(): { tool: RegisteredTool; runtime: BwrapRuntime } {
   let tool: RegisteredTool | undefined;
   const runtime = createBwrapRuntime();
   runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
-  opencodeBash(
-    {
-      registerTool(def: RegisteredTool) {
-        tool = def;
-      },
-      registerFlag: vi.fn(),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-      exec: vi.fn(),
-    } as never,
-    runtime,
-  );
+  const pi = {
+    registerTool(def: RegisteredTool) {
+      tool = def;
+    },
+    registerFlag: vi.fn(),
+    registerCommand: vi.fn(),
+    on: vi.fn(),
+    exec: vi.fn(),
+  } as never;
+  // 直接走注册函数：不触发 session_start，避免 runtime.setup 的 handler 抹掉
+  // 用例预置的沙箱模式。
+  registerBashTool(createToolBus(pi), pi, runtime);
   return { tool: tool!, runtime };
 }
 

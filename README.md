@@ -10,6 +10,7 @@
 | ----------------------------------------- | --------------------------------------------------------------------------------------------- |
 | [opencode 工具集](#opencode-工具集)       | 小写 `read`/`edit`/`write`/`grep`/`glob`/`bash`/`todowrite`/`question`                        |
 | [Claude Code 工具集](#claude-code-工具集) | 大写 `Read`/`Edit`/`Write`/`Grep`/`Glob`/`Bash`/`TodoWrite`/`AskUserQuestion`                 |
+| [工具启用配置](#工具启用配置)             | `personalExtensions`：按模型选文件 IO 工具集、通配禁用/启用工具                               |
 | [bwrap](#bwrap)                           | 基于 bubblewrap 的 OS 级沙箱（内置两套工具集）：文件系统隔离 + 多档网络策略                   |
 | [写保护（内置）](#写保护内置)             | 写工具内置：限制文件写入在 workspace 内，外部写入需审批                                       |
 | [LSP（内置）](#lsp内置)                   | 文件工具内置 LSP 诊断 + `lsp-rename`/`lsp-inspect`/`lsp-find-definition`/`lsp-find-reference` |
@@ -23,13 +24,66 @@
 | [web](#web)                               | `web_search`（Search1API 搜索）与 `web_fetch`（正文提取 / 原样落盘）                          |
 | [openai-cost](#openai-cost)               | OpenAI Chat Completions，费用取自响应 `usage.cost`                                            |
 
-> **两套工具风格，按预期只启用其中一套**：本包同时提供 opencode 风格
-> （小写 `read`/`edit`/`write`/`grep`/`glob`/`bash`/`todowrite`/`question`）与 Claude Code
-> 风格（大写 `Read`/`Edit`/`Write`/`Grep`/`Glob`/`Bash`/`TodoWrite`/
-> `AskUserQuestion`）两套工具集，二者共享 bwrap 沙箱、写保护与 LSP 实现。两套同时
-> 启用会带来预期外的冗余：同名命令重复注册（如 `/bwrap` 出现 `/bwrap:1`
-> 后缀）、系统提示重复注入。请只启用其中一套：在 `~/.pi/agent/settings.json`
-> 的 `defaultTools` 中只列出一套，或启动时用 `--exclude-tools` 排除另一套。
+---
+
+## 工具启用配置
+
+所有工具由单一扩展入口 `src/index.ts` 注册（`package.json` 的 `pi.extensions` 只列
+`src/index.ts`、`src/session-name.ts`、`src/system-prompt/index.ts`）。启用的工具由
+`~/.pi/agent/settings.json` 的 `personalExtensions` section 决定：
+
+```jsonc
+{
+  "personalExtensions": {
+    // 兜底的文件 IO 工具集：opencode（小写 read/edit/write/grep/glob/bash）
+    // 或 claude-code（大写 Read/Edit/Write/Grep/Glob/Bash）
+    "fileIo": "claude-code",
+    // 按模型覆盖 fileIo，按顺序取第一条命中（工具名与模型名都是 minimatch 通配，
+    // 模型名同时试 model.id 与 provider/model）
+    "fileIoByModel": [{ "models": ["glm-*", "zhipu/*"], "fileIo": "opencode" }],
+    // 工具可用性规则：条目是工具名模式，或 { tools, models }
+    "disabledTools": ["talk-*", { "tools": ["web_*"], "models": ["gpt-*"] }],
+    "enabledTools": [{ "tools": ["web_search"], "models": ["glm-*"] }],
+  },
+}
+```
+
+规则：**命中 `disabledTools` 且未命中 `enabledTools` 的工具不注册**。带 `models` 的
+条目只在当前模型命中时参与判定。未配置该 section 时用 `fileIo: "claude-code"` 且不
+禁用任何工具。
+
+**判定时机是每个会话启动**：pi 在启动 / `/new` / `resume` / `/fork` / `/reload` 时重建
+扩展，注册就发生在 `session_start` 里（模型在扩展加载期读不到），因此新会话按自己的
+模型重新判定；**同一会话内 `/model` 切换不会改变工具集合**，换模型请开新会话。
+两个不同模型的会话可以同时用不同的工具集。
+
+配置里的非法取值、以及匹配不到任何工具的模式都会在会话启动时以 warning 通知报出。
+
+### 入口级排除项的迁移
+
+旧的 `packages[].extensions` 排除写法针对的是扩展入口文件，入口收敛后那些文件不再是
+扩展入口，改用 `personalExtensions` 表达：
+
+| 旧写法（`packages[].extensions`） | 新写法（`personalExtensions`）                                              |
+| --------------------------------- | --------------------------------------------------------------------------- |
+| `!src/opencode/index.ts`          | `"fileIo": "claude-code"`                                                   |
+| `!src/claude-code/index.ts`       | `"fileIo": "opencode"`                                                      |
+| `!src/web/search.ts`              | `"disabledTools": ["web_search"]`                                           |
+| `!src/web/fetch.ts`               | `"disabledTools": ["web_fetch"]`                                            |
+| `!src/talk/index.ts`              | `"disabledTools": ["talk-*"]`                                               |
+| `!src/aft/index.ts`               | `"disabledTools": ["aft_*"]`                                                |
+| `!src/gh-readonly.ts`             | `"disabledTools": ["read-github-*", "list-github-*", "wait-github-*", ...]` |
+| `!src/spawn-agent.ts`             | `"disabledTools": ["spawn-agent"]`                                          |
+| `!src/vision-agent.ts`            | `"disabledTools": ["describe_image"]`                                       |
+
+小技巧：可以用 `enabledTools` 做「全局禁用、某个模型才开」：
+
+```jsonc
+{
+  "disabledTools": ["web_*"],
+  "enabledTools": [{ "tools": ["web_search"], "models": ["glm-*"] }],
+}
+```
 
 ---
 
@@ -249,7 +303,11 @@ bwrap 已集成进 bash 工具实现（opencode 风格 `bash` 位于 `src/openco
 
 ## opencode 工具集
 
-opencode 风格工具集，随 `src/opencode/index.ts` 一次加载：`read` / `edit` / `write` / `grep` / `glob` / `bash` / `todowrite` / `question`，以及共享 LSP 工具。`grep` 替换 pi 内置 `grep`，`glob` 与 pi 内置 `find` 并存。各单工具文件（`src/opencode/grep.ts` 等）也可独立加载。
+opencode 风格工具集：`read` / `edit` / `write` / `grep` / `glob` / `bash` / `todowrite` / `question`，以及共享 LSP 工具。`grep` 替换 pi 内置 `grep`，`glob` 与 pi 内置 `find` 并存。
+
+启用方式：`personalExtensions.fileIo` 设为 `"opencode"`（或按模型在 `fileIoByModel` 里指定，见[工具启用配置](#工具启用配置)）。它与 Claude Code 工具集**只能启用一套**——两套都注册会让同名命令（如 `/bwrap`）重复注册、系统提示重复注入。各单工具文件（`src/opencode/grep.ts` 等）仍可单独 `-e` 加载。
+
+> **与 pi 内置工具重名的注意点**：pi 的工具表里有同名的内置项（`read` / `edit` / `write` / `bash` / `grep`…），而默认启用的内置工具只有 `read` / `bash` / `edit` / `write`。同名时该名字的启用状态由内置项决定，所以 `defaultTools: []`（关闭内置工具）会把这一套里的 `read`/`edit`/`write`/`bash`/`grep` 一起挡住，`grep` 在默认选择下也不可见。这些工具本身注册正常（`--tools read,grep` 显式列出即可用），要绕开这个限制请用 Claude Code 风格命名（`Read`/`Grep`… 无重名）。
 
 ### edit
 
@@ -320,7 +378,7 @@ pi -e ./src/opencode/index.ts
 
 ## Claude Code 工具集
 
-Claude Code 风格工具集，随 `src/claude-code/index.ts` 一次加载：`Read` / `Edit` / `Write` / `Grep` / `Glob` / `Bash` / `TodoWrite` / `AskUserQuestion`，以及共享 LSP 工具（`lsp-rename` / `lsp-inspect` / `lsp-find-definition` / `lsp-find-reference`）。各单工具文件（`src/claude-code/grep.ts` 等）也可独立加载。精确行为（输出格式、分页语义、匹配规则）见 `.agents/skills/claude-code-tools/SKILL.md`。
+Claude Code 风格工具集：`Read` / `Edit` / `Write` / `Grep` / `Glob` / `Bash` / `TodoWrite` / `AskUserQuestion`，以及共享 LSP 工具（`lsp-rename` / `lsp-inspect` / `lsp-find-definition` / `lsp-find-reference`）。这是默认启用的文件 IO 工具集（`personalExtensions.fileIo` 缺省 `"claude-code"`，见[工具启用配置](#工具启用配置)）；它与 opencode 工具集只能启用一套。各单工具文件（`src/claude-code/grep.ts` 等）仍可单独 `-e` 加载。精确行为（输出格式、分页语义、匹配规则）见 `.agents/skills/claude-code-tools/SKILL.md`。
 
 - **`Read` / `Edit` / `Write`**：与 opencode 风格共享 read-before-write 记账与文案（`File has not been read yet...` / `File has been modified since read...`），差异是三者都要求先 `Read`（`Edit` 用空 `old_string` 创建新文件、`Write` 创建新文件例外）。`Read` 支持 offset / limit 分页与 PDF `pages`
 - **`Grep` / `Glob`**：ripgrep 实现，行为跟随 Claude Code（`Glob` 带 `--no-ignore` / `--hidden` / `--sort=modified`，与 opencode 风格 `glob` 的差异是各自跟随上游）

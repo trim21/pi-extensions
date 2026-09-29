@@ -30,6 +30,7 @@ import { createInterface } from "node:readline";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
+  type ExtensionContext,
   generateDiffString,
   generateUnifiedPatch,
   withFileMutationQueue,
@@ -50,10 +51,17 @@ import {
 } from "../lib/file-reads.js";
 import { appendLspDiagnosticText } from "../lib/lsp/diagnostic.js";
 import { registerLspInspectTools } from "../lib/lsp/inspect-tool.js";
-import { createLspManager, type LspService, type LspServiceOptions } from "../lib/lsp/lsp.js";
+import {
+  createLspManager,
+  type LspManager,
+  type LspService,
+  type LspServiceOptions,
+} from "../lib/lsp/lsp.js";
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
+import type { ToolBus } from "../lib/tool-bus.js";
+import { createToolRegistration } from "../lib/tool-registration.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 import { applyEdit, normalizeToLF, stripBom } from "./edit-engine.js";
 
@@ -402,8 +410,8 @@ async function formatDirectoryEntries(dirPath: string): Promise<string[]> {
 /** 会更新 reads 记账（src/lib/file-reads.ts）并随 details 持久化快照的工具名。 */
 const READS_TOOL_NAMES = new Set(["read", "edit", "write", "lsp-rename"]);
 
-function registerReadTool(pi: ExtensionAPI, getService: () => LspService, state: ReadsState): void {
-  pi.registerTool({
+function registerReadTool(bus: ToolBus, getService: () => LspService, state: ReadsState): void {
+  bus.register({
     name: "read",
     label: "read",
     description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. A negative offset counts from the end of the file (offset=-2 reads the last 2 lines). When you need the full file, continue with offset until complete.`,
@@ -598,12 +606,12 @@ const editSchema = Type.Object({
 });
 
 function registerEditTool(
-  pi: ExtensionAPI,
+  bus: ToolBus,
   getService: () => LspService,
   policy: RequestPolicy,
   state: ReadsState,
 ): void {
-  pi.registerTool({
+  bus.register({
     name: "edit",
     label: "edit",
     description:
@@ -775,12 +783,12 @@ export function resolveBom(
 }
 
 function registerWriteTool(
-  pi: ExtensionAPI,
+  bus: ToolBus,
   getService: () => LspService,
   policy: RequestPolicy,
   state: ReadsState,
 ): void {
-  pi.registerTool({
+  bus.register({
     name: "write",
     label: "write",
     description:
@@ -864,64 +872,103 @@ function registerWriteTool(
 // ── 入口 ─────────────────────────────────────────────────────────────────────
 
 function registerFileTools(
-  pi: ExtensionAPI,
+  bus: ToolBus,
   getService: () => LspService,
   policy: RequestPolicy,
   state: ReadsState,
 ): void {
-  registerReadTool(pi, getService, state);
-  registerEditTool(pi, getService, policy, state);
-  registerWriteTool(pi, getService, policy, state);
+  registerReadTool(bus, getService, state);
+  registerEditTool(bus, getService, policy, state);
+  registerWriteTool(bus, getService, policy, state);
   // lsp-rename / inspect 工具由 manager 的 onEnabled 回调注册，不在这里注册。
 }
 
 export interface OpencodeFileToolOptions extends LspServiceOptions {
   /** 与 bash runtime 共享的非沙盒请求策略；独立入口不传，自建一份。 */
   policy?: RequestPolicy;
+  /** 聚合入口注入的总线（与同入口其他模块共享）；独立入口不传，自建一份。 */
+  bus?: ToolBus;
+  /** 聚合入口注入的共享 LSP manager（与另一套文件工具集共享同一份）。 */
+  manager?: LspManager;
 }
 
-/** 独立入口：创建 LSP manager（session_start 时按配置启用）并注册文件工具。 */
+/** 一套文件工具集：reads state 归实例所有，LSP 与请求策略可以由入口注入共享。 */
+export interface OpencodeFileToolset {
+  register(bus: ToolBus): void;
+  onLspEnabled(bus: ToolBus, service: LspService): void;
+  restoreReads(ctx: ExtensionContext): void;
+}
+
+/**
+ * 创建文件工具集。入口在会话启动、知道本会话模型之后再调用 `register`。
+ */
+export function createOpencodeFileTools(
+  pi: ExtensionAPI,
+  options?: OpencodeFileToolOptions,
+): OpencodeFileToolset {
+  // 聚合入口注入与 bash runtime 共享的那一份；独立入口自建并靠 pi.events 跟随
+  // 同一开关。
+  const policy = options?.policy ?? createRequestPolicy(pi.events);
+  const state = createReadsState();
+  // 聚合入口注入自己的总线（与同入口其他模块共享）；独立入口自建一份。
+  const bus = options?.bus ?? createToolRegistration(pi).bus;
+
+  const toolset: OpencodeFileToolset = {
+    register(currentBus) {
+      registerFileTools(currentBus, () => manager.mustLazyGetService(), policy, state);
+    },
+
+    onLspEnabled(currentBus, service) {
+      registerLspRenameTool(currentBus, service, {
+        policy,
+        recordReads: (applied) =>
+          recordReads(
+            state,
+            applied.map((fileEdit) => ({
+              path: fileEdit.path,
+              snapshot: snapshotOf(fileEdit.newText),
+            })),
+          ),
+      });
+      registerLspInspectTools(currentBus, service);
+    },
+
+    // 扩展实例在进程启动 / /reload / /new / /resume / /fork 时重建，内存里的已读
+    // 记账随之丢失，这里从当前分支的历史工具结果恢复；digest 仍是当时的值，文件
+    // 若在此期间被外部修改，edit 时的指纹对比照样要求重新 read。
+    restoreReads(ctx) {
+      restoreReads(state, ctx.sessionManager, READS_TOOL_NAMES);
+    },
+  };
+
+  const manager =
+    options?.manager ??
+    createLspManager(
+      pi,
+      { onEnabled: (_pi, service) => toolset.onLspEnabled(bus, service) },
+      options,
+    );
+
+  return toolset;
+}
+
+/** 独立入口：创建文件工具集并在每次会话启动时注册。 */
 export default function opencodeFileTools(
   pi: ExtensionAPI,
   options?: OpencodeFileToolOptions,
 ): void {
-  // 聚合入口（index.ts）注入与 bash runtime 共享的那一份；独立入口自建并靠
-  // pi.events 跟随同一开关。
-  const policy = options?.policy ?? createRequestPolicy(pi.events);
-  const state = createReadsState();
-  const manager = createLspManager(
-    pi,
-    {
-      onEnabled: (pi, service) => {
-        registerLspRenameTool(pi, service, {
-          policy,
-          recordReads: (applied) =>
-            recordReads(
-              state,
-              applied.map((fileEdit) => ({
-                path: fileEdit.path,
-                snapshot: snapshotOf(fileEdit.newText),
-              })),
-            ),
-        });
-        registerLspInspectTools(pi, service);
-      },
-    },
-    options,
-  );
+  const registration = createToolRegistration(pi);
+  const toolset = createOpencodeFileTools(pi, { ...options, bus: registration.bus });
 
-  // 扩展实例在进程启动 / /reload / /new / /resume / /fork 时重建，内存里的已读
-  // 记账随之丢失，这里从当前分支的历史工具结果恢复；digest 仍是当时的值，文件
-  // 若在此期间被外部修改，edit 时的指纹对比照样要求重新 read。
   pi.on("session_start", (_event, ctx) => {
-    restoreReads(state, ctx.sessionManager, READS_TOOL_NAMES);
+    toolset.restoreReads(ctx);
   });
   // rewind / 树内跳转走 branch()，只发 session_tree：重放当前分支，丢弃被抛弃
   // 分支的记账，避免 state 与当前分支脱节。
   pi.on("session_tree", (_event, ctx) => {
-    restoreReads(state, ctx.sessionManager, READS_TOOL_NAMES);
+    toolset.restoreReads(ctx);
   });
-
-  // 文件工具无条件注册；service 惰性获取，disabled 时为 no-op。
-  registerFileTools(pi, () => manager.mustLazyGetService(), policy, state);
+  registration.onSessionStart(() => {
+    toolset.register(registration.bus);
+  });
 }

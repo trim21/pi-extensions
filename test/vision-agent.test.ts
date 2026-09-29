@@ -67,6 +67,28 @@ async function loadVisionAgentWithHome(files: Record<string, string>) {
   return { visionAgent, tempHome };
 }
 
+/**
+ * 装一个最小 pi：捕获 session_start 并立即触发一次（工具在 session_start 里
+ * 按本会话模型注册），其余 API 由调用方按需提供。
+ */
+function loadPi(overrides: Record<string, unknown>): never {
+  const sessionCtx = { model: undefined, ui: { notify: () => false } };
+  return {
+    registerTool: () => false,
+    registerFlag: () => false,
+    registerCommand: () => false,
+    getActiveTools: () => [],
+    setActiveTools: () => false,
+    ...overrides,
+    // 注册即触发：等价于 session_start 事件按注册顺序串行派发
+    on: (name: string, handler: (...args: never[]) => unknown) => {
+      if (name === "session_start") {
+        void handler({ type: "session_start", reason: "startup" } as never, sessionCtx as never);
+      }
+    },
+  } as never;
+}
+
 /** 构造一个最小 Model mock（只带 callVision 用到的字段） */
 function modelMock(id = "mimo", maxTokens = 4096): Model<Api> {
   return { id, maxTokens } as Model<Api>;
@@ -351,12 +373,13 @@ describe("tool registration", () => {
     const { visionAgent, tempHome } = await loadVisionAgentWithHome(CONFIGURED);
     try {
       let tool: { name: string; parameters: unknown } | undefined;
-      visionAgent({
-        registerTool: (def: { name: string; parameters: unknown }) => {
-          tool = def;
-        },
-        on: () => false,
-      } as never);
+      visionAgent(
+        loadPi({
+          registerTool: (def: { name: string; parameters: unknown }) => {
+            tool = def;
+          },
+        }),
+      );
 
       expect(tool?.name).toBe(TOOL_NAME);
       expect(tool?.parameters).toBeDefined();
@@ -372,12 +395,13 @@ describe("tool registration", () => {
     });
     try {
       let tool: { name: string } | undefined;
-      visionAgent({
-        registerTool: (def: { name: string }) => {
-          tool = def;
-        },
-        on: () => false,
-      } as never);
+      visionAgent(
+        loadPi({
+          registerTool: (def: { name: string }) => {
+            tool = def;
+          },
+        }),
+      );
 
       expect(tool).toBeUndefined();
     } finally {
@@ -392,12 +416,13 @@ describe("tool registration", () => {
     });
     try {
       let tool: { name: string } | undefined;
-      visionAgent({
-        registerTool: (def: { name: string }) => {
-          tool = def;
-        },
-        on: () => false,
-      } as never);
+      visionAgent(
+        loadPi({
+          registerTool: (def: { name: string }) => {
+            tool = def;
+          },
+        }),
+      );
 
       expect(tool?.name).toBe(TOOL_NAME);
     } finally {
@@ -450,12 +475,13 @@ describe("execute", () => {
   async function loadToolWithHome(files: Record<string, string>) {
     const { visionAgent, tempHome } = await loadVisionAgentWithHome(files);
     let tool: Tool | undefined;
-    visionAgent({
-      registerTool: (def: never) => {
-        tool = def;
-      },
-      on: () => false,
-    } as never);
+    visionAgent(
+      loadPi({
+        registerTool: (def: never) => {
+          tool = def;
+        },
+      }),
+    );
     return { tool: tool!, tempHome };
   }
 

@@ -24,6 +24,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
+import type { ToolBus } from "../lib/tool-bus.js";
+import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -145,8 +147,12 @@ async function askMultiple(
 
 // ── extension ────────────────────────────────────────────────────────────────
 
-export default function question(pi: ExtensionAPI) {
-  pi.registerTool<typeof questionParamsSchema, QuestionDetails>({
+export default function question(pi: ExtensionAPI): void {
+  registerToolsOnSessionStart(pi, registerQuestionTool);
+}
+
+export function registerQuestionTool(bus: ToolBus): void {
+  bus.register<typeof questionParamsSchema, QuestionDetails>({
     name: TOOL_NAME,
     label: "Question",
     description: QUESTION_DESCRIPTION,

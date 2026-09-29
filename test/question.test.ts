@@ -7,12 +7,14 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import question, {
+import { createToolBus } from "../src/lib/tool-bus.js";
+import {
   CUSTOM_LABEL,
   DONE_LABEL,
   formatAnswers,
   normalizeQuestions,
   type Question,
+  registerQuestionTool,
   TOOL_NAME,
 } from "../src/opencode/question.js";
 
@@ -41,11 +43,12 @@ interface Tool {
 
 function loadTool(): { tool: Tool } {
   let tool: Tool | undefined;
-  question({
+  const pi = {
     registerTool: (def: Tool) => {
       tool = def;
     },
-  } as never);
+  } as never;
+  registerQuestionTool(createToolBus(pi));
   return { tool: tool! };
 }
 

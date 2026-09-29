@@ -1,10 +1,10 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, ghExec, repoArgs, subtitlePendant, toToolResult } from "../base.js";
 
-export function addReadPrDiffTool(_gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addReadPrDiffTool(_gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "read-github-pr-diff",
     label: "GitHub PR Diff",
     description: "Get the diff of a GitHub pull request.",

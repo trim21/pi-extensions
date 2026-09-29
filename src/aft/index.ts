@@ -20,8 +20,10 @@
  */
 
 import { resolveCortexKitConfigPaths } from "@cortexkit/aft-bridge";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import type { ToolBus } from "../lib/tool-bus.js";
+import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { createAftState, findBinary, resolveSessionId, shutdownAftPool } from "./bridge.js";
 import { loadAftConfig } from "./config.js";
 import {
@@ -31,13 +33,16 @@ import {
   registerZoomTool,
 } from "./tools.js";
 
-export default function aftReadTools(pi: ExtensionAPI): void {
+/**
+ * aft 工具集：入口用它。`registerForSession` 必须在会话启动时调用——二进制
+ * 探测、semantic_search 的提示、bridge 状态的创建都在里面；找不到二进制就不
+ * 注册任何工具（避免模型看到只会抛 "not initialized" 的死工具）。
+ */
+export function createAftTools(pi: ExtensionAPI): {
+  registerForSession(bus: ToolBus, ctx: ExtensionContext): Promise<void>;
+} {
   const cwd = process.cwd();
   const cfg = loadAftConfig(resolveCortexKitConfigPaths(cwd).userConfigPath);
-  if (!cfg.enabled) {
-    return;
-  }
-
   // bridge 状态跟 session 生命周期走，作用域就是本工厂闭包，不落到模块级。
   let state: Awaited<ReturnType<typeof createAftState>> | null = null;
 
@@ -52,9 +57,11 @@ export default function aftReadTools(pi: ExtensionAPI): void {
 
   const toolCtx = { cwd, getState };
 
-  // 工具注册延迟到 session_start：先确认二进制可用再决定注册面。pi 允许在
-  // session_start 里 registerTool（工具表按 name 覆盖，跨 session 重复注册幂等）。
-  pi.on("session_start", async (_event, ctx) => {
+  async function registerForSession(bus: ToolBus, ctx: ExtensionContext): Promise<void> {
+    if (!cfg.enabled) {
+      return;
+    }
+
     const binaryPath = await findBinary();
     if (!binaryPath) {
       ctx.ui.notify(
@@ -66,23 +73,26 @@ export default function aftReadTools(pi: ExtensionAPI): void {
       return;
     }
 
-    registerOutlineTool(pi, toolCtx);
-    registerZoomTool(pi, toolCtx);
-    registerCallgraphTool(pi, toolCtx);
-    if (cfg.semanticSearch) {
-      if (cfg.semanticRemote) {
-        registerSearchTool(pi, toolCtx);
-      } else {
-        // 只开了开关、没配外部 embedding 后端：与其静默不注册，不如说明缺什么。
-        ctx.ui.notify(
-          "aft_search is not registered: semantic_search needs an external embedding backend (aft.jsonc semantic.backend = openai_compatible | ollama, plus base_url). The local ONNX fastembed default is not used here.",
-          "warning",
-        );
-      }
+    // 只开了 semantic_search 开关、没配外部 embedding 后端：与其静默不注册，
+    // 不如说明缺什么。
+    if (cfg.semanticSearch && !cfg.semanticRemote) {
+      ctx.ui.notify(
+        "aft_search is not registered: semantic_search needs an external embedding backend (aft.jsonc semantic.backend = openai_compatible | ollama, plus base_url). The local ONNX fastembed default is not used here.",
+        "warning",
+      );
+    }
+
+    // 先注册工具再建 bridge 状态：状态构建失败（如 bridge 起不来）时工具仍然
+    // 可见，错误按原样浮出给用户，而不是变成「工具消失」。
+    registerOutlineTool(bus, toolCtx);
+    registerZoomTool(bus, toolCtx);
+    registerCallgraphTool(bus, toolCtx);
+    if (cfg.semanticSearch && cfg.semanticRemote) {
+      registerSearchTool(bus, toolCtx);
     }
 
     state = await createAftState(cwd, resolveSessionId(ctx), binaryPath, cfg.semanticRemote);
-  });
+  }
 
   // 释放当前 session 的 bridge 状态。session_shutdown 是 pi 的正常生命周期；
   // beforeExit 兜底进程自然退出（不能注册 SIGINT/SIGTERM——那会吞掉 pi 主进程
@@ -105,4 +115,11 @@ export default function aftReadTools(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     await shutdown();
   });
+
+  return { registerForSession };
+}
+
+export default function aftReadTools(pi: ExtensionAPI): void {
+  const tools = createAftTools(pi);
+  registerToolsOnSessionStart(pi, (bus, ctx) => tools.registerForSession(bus, ctx));
 }

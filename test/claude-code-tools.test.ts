@@ -30,6 +30,29 @@ import claudeCodeTools from "../src/claude-code/index.js";
 import { buildGrepArguments, pageGrepOutput } from "../src/claude-code/search.js";
 import { registerShellTools } from "../src/claude-code/shell.js";
 import { deserializeReads } from "../src/lib/file-reads.js";
+import { createToolBus } from "../src/lib/tool-bus.js";
+
+/** 加载按路径独立加载的模块入口（spawn-agent -e 加载同一形态），并触发 session_start。 */
+function loadStandaloneEntry(factory: (pi: never) => void): {
+  tools: Map<string, RegisteredTool>;
+  handlers: Map<string, ((...args: any[]) => unknown)[]>;
+} {
+  const tools = new Map<string, RegisteredTool>();
+  const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
+  factory({
+    registerTool(tool: RegisteredTool) {
+      tools.set(tool.name, tool);
+    },
+    registerFlag: vi.fn(),
+    registerCommand: vi.fn(),
+    on(event: string, handler: (...args: any[]) => unknown) {
+      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+    },
+    exec: vi.fn(),
+  } as never);
+  emitSessionStartSync(handlers);
+  return { tools, handlers };
+}
 
 interface RegisteredTool {
   name: string;
@@ -42,16 +65,9 @@ interface RegisteredTool {
 }
 
 function loadTools(): Map<string, RegisteredTool> {
-  const tools = new Map<string, RegisteredTool>();
-  claudeCodeTools({
-    registerTool(tool: RegisteredTool) {
-      tools.set(tool.name, tool);
-    },
-    registerFlag: vi.fn(),
-    registerCommand: vi.fn(),
-    on: vi.fn(),
-    exec: vi.fn(),
-  } as never);
+  // 工具在 session_start 里注册（禁用规则可以带 models，那时才知道模型）
+  const { tools, handlers } = loadToolsWithHandlers();
+  emitSessionStartSync(handlers);
   return tools;
 }
 
@@ -103,12 +119,8 @@ function loadFileToolsWithConfig(globalConfigPath: string): {
   return { tools, handlers };
 }
 
-/** 依次触发 session_start handlers（manager 装配 + reads 恢复 + bwrap 装配等）。 */
-async function emitSessionStart(
-  handlers: Map<string, ((...args: any[]) => unknown)[]>,
-  ctx: Record<string, unknown>,
-): Promise<void> {
-  const fullCtx = {
+function sessionStartCtx(ctx: Record<string, unknown>): Record<string, unknown> {
+  return {
     cwd: process.cwd(),
     hasUI: true,
     sessionManager: { getBranch: () => [] },
@@ -121,29 +133,49 @@ async function emitSessionStart(
       ...(ctx.ui as Record<string, unknown> | undefined),
     },
   };
+}
+
+/** 依次触发 session_start handlers（manager 装配 + reads 恢复 + bwrap 装配等）。 */
+async function emitSessionStart(
+  handlers: Map<string, ((...args: any[]) => unknown)[]>,
+  ctx: Record<string, unknown>,
+): Promise<void> {
+  const fullCtx = sessionStartCtx(ctx);
   for (const handler of handlers.get("session_start") ?? []) {
     await handler({ type: "session_start", reason: "startup" }, fullCtx);
   }
 }
 
+/**
+ * 同步触发 session_start。工具注册本身是同步的，只有 LSP 装配是异步的；
+ * 只关心「工具是否注册」的用例用这个，避免把测试改成 async。
+ */
+function emitSessionStartSync(
+  handlers: Map<string, ((...args: any[]) => unknown)[]>,
+  ctx: Record<string, unknown> = {},
+): void {
+  const fullCtx = sessionStartCtx(ctx);
+  for (const handler of handlers.get("session_start") ?? []) {
+    void handler({ type: "session_start", reason: "startup" }, fullCtx);
+  }
+}
+
 /** 用注入的 runtime 单独注册 Bash 工具，测试可预置沙箱模式。 */
 function loadBashTool(runtime: BwrapRuntime): RegisteredTool {
-  let bashTool: RegisteredTool | undefined;
-  registerShellTools(
-    {
-      registerTool(tool: RegisteredTool) {
-        if (tool.name === "Bash") {
-          bashTool = tool;
-        }
-      },
-      registerFlag: vi.fn(),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-      exec: vi.fn(),
-    } as never,
-    runtime,
-  );
-  return bashTool!;
+  const tools = new Map<string, RegisteredTool>();
+  const pi = {
+    registerTool(tool: RegisteredTool) {
+      tools.set(tool.name, tool);
+    },
+    registerFlag: vi.fn(),
+    registerCommand: vi.fn(),
+    on: vi.fn(),
+    exec: vi.fn(),
+  } as never;
+  // 不触发 session_start：runtime.setup 的 session_start handler 会把沙箱模式
+  // 同步回配置值，抹掉用例预置的模式。
+  registerShellTools(createToolBus(pi), pi, runtime);
+  return tools.get("Bash")!;
 }
 
 function context(cwd: string, overrides: Record<string, unknown> = {}) {
@@ -925,6 +957,8 @@ describe("reads state restore on session_start", () => {
     await writeFile(filePath, "hello world\n", "utf8");
     const { tools, handlers } = loadToolsWithHandlers();
     const ctx = context(directory);
+    // 工具在 session_start 里注册：先跑一次让 Read/Edit 可用，恢复逻辑在下面再触发一次
+    await emitSessionStart(handlers, { cwd: directory });
 
     // 模拟历史会话：之前 Read 过，快照保存在 toolResult details 里
     const readResult = await call(tools.get("Read")!, { file_path: filePath }, ctx);
@@ -963,6 +997,8 @@ describe("reads state restore on session_start", () => {
     await writeFile(filePath, "first\n", "utf8");
     const { tools, handlers } = loadToolsWithHandlers();
     const ctx = context(directory);
+    // 工具在 session_start 里注册：先跑一次让 Read/Edit 可用，恢复逻辑在下面再触发一次
+    await emitSessionStart(handlers, { cwd: directory });
 
     const readResult = await call(tools.get("Read")!, { file_path: filePath }, ctx);
     const branch = [
@@ -998,6 +1034,8 @@ describe("reads state restore on session_start", () => {
     await writeFile(filePath, "hello world\n", "utf8");
     const { tools, handlers } = loadToolsWithHandlers();
     const ctx = context(directory);
+    // 工具在 session_start 里注册：先跑一次让 Read/Edit 可用，恢复逻辑在下面再触发一次
+    await emitSessionStart(handlers, { cwd: directory });
 
     // 当前分支里有一次 Read，session_start 恢复后 Edit 成功
     const readResult = await call(tools.get("Read")!, { file_path: filePath }, ctx);
@@ -1230,6 +1268,7 @@ describe("Glob and Grep", () => {
     await utimes(b, new Date(2020, 0, 1), new Date(2020, 0, 1)); // b is older than a
     let tool: RegisteredTool | undefined;
     const exec = vi.fn(async () => ({ code: 0, stdout: `${b}\n${a}`, stderr: "" }));
+    const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
     claudeCodeTools({
       registerTool: (registered: RegisteredTool) => {
         if (registered.name === "Grep") {
@@ -1238,9 +1277,12 @@ describe("Glob and Grep", () => {
       },
       registerFlag: vi.fn(),
       registerCommand: vi.fn(),
-      on: vi.fn(),
+      on(event: string, handler: (...args: any[]) => unknown) {
+        handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+      },
       exec,
     } as never);
+    emitSessionStartSync(handlers);
     const result = await call(
       tool!,
       { pattern: "needle", output_mode: "files_with_matches" },
@@ -1673,17 +1715,7 @@ describe("standalone extension entries (spawn-agent -e loading)", () => {
   // 必须是有效的扩展入口：默认导出 factory 函数，且只注册自身工具
   // （--tools 白名单负责按需暴露，注册本身不越界）。
   it("files.ts default export registers Read/Edit/Write with its own state", () => {
-    const tools = new Map<string, RegisteredTool>();
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    claudeCodeFileTools({
-      registerTool(tool: RegisteredTool) {
-        tools.set(tool.name, tool);
-      },
-      registerFlag: vi.fn(),
-      registerCommand: vi.fn(),
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      exec: vi.fn(),
-    } as never);
+    const { tools, handlers } = loadStandaloneEntry(claudeCodeFileTools);
     expect([...tools.keys()]).toEqual(["Read", "Edit", "Write"]);
     // state 恢复与 LSP 装配都依赖 session 事件，独立入口同样注册（与 index.ts 一致）
     expect(handlers.has("session_start")).toBe(true);
@@ -1691,25 +1723,15 @@ describe("standalone extension entries (spawn-agent -e loading)", () => {
   });
 
   it("grep.ts default export registers Grep only", () => {
-    const tools = new Map<string, RegisteredTool>();
-    claudeCodeGrepTool({
-      registerTool(tool: RegisteredTool) {
-        tools.set(tool.name, tool);
-      },
-      on: vi.fn(),
-    } as never);
+    const { tools, handlers } = loadStandaloneEntry(claudeCodeGrepTool);
     expect([...tools.keys()]).toEqual(["Grep"]);
+    expect(handlers.has("session_start")).toBe(true);
   });
 
   it("glob.ts default export registers Glob only", () => {
-    const tools = new Map<string, RegisteredTool>();
-    claudeCodeGlobTool({
-      registerTool(tool: RegisteredTool) {
-        tools.set(tool.name, tool);
-      },
-      on: vi.fn(),
-    } as never);
+    const { tools, handlers } = loadStandaloneEntry(claudeCodeGlobTool);
     expect([...tools.keys()]).toEqual(["Glob"]);
+    expect(handlers.has("session_start")).toBe(true);
   });
 });
 

@@ -1,10 +1,10 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, ghExec, subtitlePendant, toToolResult } from "../base.js";
 
-export function addReadRepoTool(_gh: GhClient, pi: ExtensionAPI) {
-  pi.registerTool({
+export function addReadRepoTool(_gh: GhClient, bus: ToolBus) {
+  bus.register({
     name: "read-github-repo",
     label: "GitHub Repo",
     description: "Get repository information.",
