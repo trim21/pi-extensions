@@ -17,7 +17,8 @@ import {
   createReadsState,
   type FileSnapshot,
   type ReadsState,
-  readStateKey,
+  recordRead,
+  recordReads,
   requireCurrentRead,
   restoreReads,
   snapshotOf,
@@ -247,13 +248,11 @@ export function registerFileTools(
           { type: "text", text: `Read image file [${imageMime}]` },
           { type: "image", data, mimeType: imageMime },
         ];
-        const snapshot = snapshotOf(image, false);
-        const key = await readStateKey(filePath);
-        state.reads.set(key, snapshot);
+        const reads = await recordRead(state, filePath, snapshotOf(image, false));
         return {
           content,
           details: {
-            reads: { [key]: snapshot },
+            reads,
             pendant: {
               subtitle: formatSubtitlePath(ctx.cwd, filePath),
               title: "Read",
@@ -264,7 +263,6 @@ export function registerFileTools(
 
       const offset = params.offset ?? 1;
       const limit = params.limit;
-      const key = await readStateKey(filePath);
       const buffer = await readFile(filePath);
 
       if (isBinary(buffer.subarray(0, SAMPLE_BYTES))) {
@@ -285,8 +283,7 @@ export function registerFileTools(
           `File content (${estimatedTokens} tokens) exceeds maximum allowed tokens (${MAX_READ_TOKENS}). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file.`,
         );
       }
-      const snapshot = snapshotOf(buffer);
-      state.reads.set(key, snapshot);
+      const reads = await recordRead(state, filePath, snapshotOf(buffer));
       // 与 Edit / Write 同一条驻留路径：didOpen 后等待该文件的诊断并报告
       const diagnostics = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
         notify: (message, level) => ctx.ui.notify(message, level),
@@ -300,7 +297,7 @@ export function registerFileTools(
           },
         ],
         details: {
-          reads: { [key]: snapshot },
+          reads,
           pendant: {
             subtitle: formatSubtitlePath(
               ctx.cwd,
@@ -384,9 +381,7 @@ export function registerFileTools(
             await mkdir(dirname(filePath), { recursive: true });
           }
           await writeFile(filePath, newString, "utf8");
-          const snapshot = snapshotOf(newString);
-          const key = await readStateKey(filePath);
-          state.reads.set(key, snapshot);
+          const reads = await recordRead(state, filePath, snapshotOf(newString));
           const diff = generateDiffString("", convertLeadingTabsToSpaces(newString));
           signal?.throwIfAborted();
           const diagnostics = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
@@ -399,7 +394,7 @@ export function registerFileTools(
               diff: diff.diff,
               patch: generateUnifiedPatch(filePath, "", convertLeadingTabsToSpaces(newString)),
               firstChangedLine: diff.firstChangedLine,
-              reads: { [key]: snapshot },
+              reads,
             },
             diagnostics,
           ];
@@ -436,8 +431,7 @@ export function registerFileTools(
             "File is a Jupyter Notebook. Use the NotebookEditTool to edit this file.",
           );
         }
-        const key = await readStateKey(filePath);
-        requireCurrentRead(state, key, filePath, content);
+        await requireCurrentRead(state, filePath, content);
         await access(filePath, constants.R_OK | constants.W_OK);
         signal?.throwIfAborted();
         const original = content.toString("utf8");
@@ -450,8 +444,7 @@ export function registerFileTools(
           signal,
         });
         await writeFile(filePath, restored, "utf8");
-        const snapshot = snapshotOf(restored);
-        state.reads.set(key, snapshot);
+        const reads = await recordRead(state, filePath, snapshotOf(restored));
         // patch/diff 仅供显示：前导 tab 转空格，避免 UI 渲染错位（对齐 Claude Code）
         const diff = generateDiffString(
           convertLeadingTabsToSpaces(original),
@@ -475,7 +468,7 @@ export function registerFileTools(
               convertLeadingTabsToSpaces(restored),
             ),
             firstChangedLine: diff.firstChangedLine,
-            reads: { [key]: snapshot },
+            reads,
           },
           diagnostics,
         ];
@@ -527,13 +520,11 @@ export function registerFileTools(
         [string, FileToolDetails, DiagnosticReport]
       >(filePath, async () => {
         let original: string | undefined;
-        let key: string | undefined;
         try {
           const value = await stat(filePath);
           if (value.isFile()) {
             const content = await readFile(filePath);
-            key = await readStateKey(filePath);
-            requireCurrentRead(state, key, filePath, content);
+            await requireCurrentRead(state, filePath, content);
             original = content.toString("utf8");
           }
         } catch (error) {
@@ -552,10 +543,7 @@ export function registerFileTools(
         });
         await mkdir(dirname(filePath), { recursive: true });
         await writeFile(filePath, params.content, "utf8");
-        const snapshot = snapshotOf(params.content);
-        // 新建文件：writeFile 之后 realpath 才能解析；覆盖写则复用上面的 key
-        const resolvedKey = key ?? (await readStateKey(filePath));
-        state.reads.set(resolvedKey, snapshot);
+        const reads = await recordRead(state, filePath, snapshotOf(params.content));
         const diff = generateDiffString(original ?? "", params.content);
         const text =
           original === undefined
@@ -572,7 +560,7 @@ export function registerFileTools(
             diff: diff.diff,
             patch: generateUnifiedPatch(filePath, original ?? "", params.content),
             firstChangedLine: diff.firstChangedLine,
-            reads: { [resolvedKey]: snapshot },
+            reads,
           },
           diagnostics,
         ];
@@ -639,16 +627,14 @@ export default function claudeCodeFileTools(
       onEnabled: (pi, service) => {
         registerLspRenameTool(pi, service, {
           policy,
-          recordReads: async (applied) => {
-            const reads: Record<string, FileSnapshot> = {};
-            for (const fileEdit of applied) {
-              const key = await readStateKey(fileEdit.path);
-              const snapshot = snapshotOf(fileEdit.newText);
-              state.reads.set(key, snapshot);
-              reads[key] = snapshot;
-            }
-            return reads;
-          },
+          recordReads: (applied) =>
+            recordReads(
+              state,
+              applied.map((fileEdit) => ({
+                path: fileEdit.path,
+                snapshot: snapshotOf(fileEdit.newText),
+              })),
+            ),
         });
         registerLspInspectTools(pi, service);
       },

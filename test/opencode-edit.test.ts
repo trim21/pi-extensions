@@ -8,7 +8,7 @@
  * - abort handling
  * - 审批拿到的前后内容就是落盘的那份（预览即写入内容）
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -371,6 +371,38 @@ describe("opencode edit read-before-edit guard", () => {
     );
     expect(await readFile(target, "utf8")).toBe("ONE\nTWO\n");
   });
+
+  // Windows 上创建目录 symlink 需要特权/开发者模式：只跑 Unix。
+  it.skipIf(process.platform === "win32")(
+    "edits a file just written through a symlinked directory without a re-read",
+    async () => {
+      const realDir = join(dir, "real");
+      await mkdir(realDir);
+      const linkDir = join(dir, "link");
+      await symlink(realDir, linkDir, "dir");
+      const linked = join(linkDir, "note.txt");
+      const { tool, write } = loadTool();
+
+      // write 的记账必须落在 realpath 上：否则此刻 realpath 解析出的 key 查不到
+      // 记录，紧接着的 edit 会要求模型重新 read 自己刚写的文件
+      await write.execute(
+        "id",
+        { filePath: linked, content: "one\ntwo\n" },
+        undefined,
+        undefined,
+        ctx,
+      );
+      await tool.execute(
+        "id",
+        { filePath: linked, oldString: "two", newString: "TWO" },
+        undefined,
+        undefined,
+        ctx,
+      );
+
+      expect(await readFile(join(realDir, "note.txt"), "utf8")).toBe("one\nTWO\n");
+    },
+  );
 
   it("allows editing a file that write just created without a read", async () => {
     const { tool, write } = loadTool();

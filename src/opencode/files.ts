@@ -38,11 +38,11 @@ import { Type } from "typebox";
 
 import {
   createReadsState,
-  digestIfExists,
   fileDigest,
   type FileSnapshot,
   type ReadsState,
-  readStateKey,
+  recordRead,
+  recordReads,
   requireCurrentRead,
   requireUnchangedRead,
   restoreReads,
@@ -500,13 +500,11 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService, state:
           { type: "text", text: "Image read successfully" },
           { type: "image", data: base64, mimeType },
         ];
-        const key = await readStateKey(absolutePath);
-        const snapshot = snapshotOf(buffer, false);
-        state.reads.set(key, snapshot);
+        const reads = await recordRead(state, absolutePath, snapshotOf(buffer, false));
         return {
           content,
           details: {
-            reads: { [key]: snapshot },
+            reads,
             pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath) },
           },
         };
@@ -521,7 +519,6 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService, state:
 
       // 记账指纹先于分页读取：文件若在读取期间被改动，指纹对应的是改动前的
       // 内容，后续 edit 会要求重新 read（失败方向安全）。
-      const key = await readStateKey(absolutePath);
       const snapshot: FileSnapshot = { digest: await fileDigest(absolutePath), textEditable: true };
 
       const effectiveOffset = offset || 1;
@@ -555,7 +552,7 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService, state:
         outputText = `${header}${numbered}\n\n(End of file - total ${page.count} lines)${footer}`;
       }
 
-      state.reads.set(key, snapshot);
+      const reads = await recordRead(state, absolutePath, snapshot);
 
       // opencode: 与 edit / write 同一条驻留路径：didOpen 后等待该文件的诊断并报告
       const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
@@ -572,7 +569,7 @@ function registerReadTool(pi: ExtensionAPI, getService: () => LspService, state:
         content,
         details: {
           ...details,
-          reads: { [key]: snapshot },
+          reads,
           pendant: {
             subtitle: formatSubtitlePath(
               ctx.cwd,
@@ -667,16 +664,14 @@ function registerEditTool(
             await mkdir(dirname(absolutePath), { recursive: true });
             signal?.throwIfAborted();
             await writeFile(absolutePath, newString, "utf8");
-            // 新建文件无需先 read（无处可读），写后记账；realpath 要等文件落盘
-            const key = await readStateKey(absolutePath);
-            const snapshot = snapshotOf(newString);
-            state.reads.set(key, snapshot);
+            // 新建文件无需先 read（无处可读），写后记账
+            const reads = await recordRead(state, absolutePath, snapshotOf(newString));
             const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
               signal,
             });
             return [
               "Edit applied successfully.",
-              { diff: "", patch: "", firstChangedLine: 0, reads: { [key]: snapshot } },
+              { diff: "", patch: "", firstChangedLine: 0, reads },
               diagnostics,
             ] as const;
           }
@@ -702,8 +697,7 @@ function registerEditTool(
 
           // 指纹校验必须发生在写入之前：未 read 或外部已改动都拒绝编辑
           const rawContent = await readFile(absolutePath, "utf8");
-          const key = await readStateKey(absolutePath);
-          requireCurrentRead(state, key, absolutePath, rawContent);
+          await requireCurrentRead(state, absolutePath, rawContent);
 
           const applied = applyEdit(rawContent, oldString, newString, replaceAll);
           signal?.throwIfAborted();
@@ -715,8 +709,7 @@ function registerEditTool(
             signal,
           });
           await writeFile(absolutePath, applied.finalContent, "utf8");
-          const snapshot = snapshotOf(applied.finalContent);
-          state.reads.set(key, snapshot);
+          const reads = await recordRead(state, absolutePath, snapshotOf(applied.finalContent));
 
           const diffOld = normalizeToLF(applied.contentOld);
           const diffNew = normalizeToLF(applied.contentNew);
@@ -731,7 +724,7 @@ function registerEditTool(
               diff: diffResult.diff,
               patch,
               firstChangedLine: diffResult.firstChangedLine,
-              reads: { [key]: snapshot },
+              reads,
             },
             diagnostics,
           ] as const;
@@ -811,12 +804,9 @@ function registerWriteTool(
         async () => {
           signal?.throwIfAborted();
 
-          const key = await readStateKey(absolutePath);
           // write 不要求先读过；但若已有读取记录，磁盘内容必须仍是读取时的样子，
           // 否则先重新 read（外部改动过的文件不让盲写覆盖）
-          if (state.reads.has(key)) {
-            requireUnchangedRead(state, key, await digestIfExists(absolutePath));
-          }
+          await requireUnchangedRead(state, absolutePath);
 
           // opencode: desiredBom = source.bom || next.bom —— 保留原文件 BOM，
           // 否则用新内容自带的 BOM。旧内容整读一次，既是 BOM 的来源，也是审批预览
@@ -842,14 +832,13 @@ function registerWriteTool(
           await mkdir(dir, { recursive: true });
           signal?.throwIfAborted();
           await writeFile(absolutePath, finalContent, "utf8");
-          // 写后记账（key 在写入前已算过）：紧接着的 edit 不该再要求重新 read
-          const snapshot = snapshotOf(finalContent);
-          state.reads.set(key, snapshot);
+          // 写后记账：紧接着的 edit 不该再要求重新 read
+          const reads = await recordRead(state, absolutePath, snapshotOf(finalContent));
           const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
             signal,
           });
 
-          return ["Wrote file successfully.", { reads: { [key]: snapshot } }, diagnostics] as const;
+          return ["Wrote file successfully.", { reads }, diagnostics] as const;
         },
       );
 
@@ -906,16 +895,14 @@ export default function opencodeFileTools(
       onEnabled: (pi, service) => {
         registerLspRenameTool(pi, service, {
           policy,
-          recordReads: async (applied) => {
-            const reads: Record<string, FileSnapshot> = {};
-            for (const fileEdit of applied) {
-              const key = await readStateKey(fileEdit.path);
-              const snapshot = snapshotOf(fileEdit.newText);
-              state.reads.set(key, snapshot);
-              reads[key] = snapshot;
-            }
-            return reads;
-          },
+          recordReads: (applied) =>
+            recordReads(
+              state,
+              applied.map((fileEdit) => ({
+                path: fileEdit.path,
+                snapshot: snapshotOf(fileEdit.newText),
+              })),
+            ),
         });
         registerLspInspectTools(pi, service);
       },

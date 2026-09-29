@@ -6,11 +6,15 @@
  * - 工具名集合：claude-code 是大写 Read/Edit/Write，opencode 是小写；
  * - 指纹来源：claude-code 手里已有内容，直接 snapshotOf(content)；opencode 的
  *   read 是流式分页读取，整文件指纹用 fileDigest(path)。
+ *
+ * 记账 key 的解析与读写由本模块独占（readStateKey / recordRead / require*），
+ * 调用点只给路径与快照，不自己拼 details 里的 map。
  */
 
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { realpath } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
@@ -72,18 +76,60 @@ export async function digestIfExists(filePath: string): Promise<string | undefin
 }
 
 /**
- * 记账 key：解析 symlink 后的真实路径。文件尚不存在（Write 新建 / Edit 空
- * old_string 创建）时 realpath 抛 ENOENT，回退到调用方给出的路径。
+ * 记账 key：解析 symlink 后的真实路径。文件尚未落盘（Write 新建 / Edit 空
+ * old_string 创建）时向上找到最深的已存在祖先、解析它再把剩余路径段拼回去——
+ * 结果与文件落盘后 realpath(filePath) 相同，因此调用点不必关心算 key 的时机
+ * （写入路径尤其容易在创建分支上算早）。
  */
 export async function readStateKey(filePath: string): Promise<string> {
-  try {
-    return await realpath(filePath);
-  } catch (error) {
-    if (isMissingPath(error)) {
+  const pending: string[] = [];
+  let current = filePath;
+  for (;;) {
+    try {
+      return join(await realpath(current), ...pending.toReversed());
+    } catch (error) {
+      if (!isMissingPath(error)) {
+        throw error;
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      // 一路到文件系统根仍不存在：无法解析，回退调用方给出的路径
       return filePath;
     }
-    throw error;
+    pending.push(basename(current));
+    current = parent;
   }
+}
+
+/**
+ * 记账「这些文件的内容即各自的 snapshot」：解析 key 写入 state，返回可直接放进
+ * 工具 details 的 reads 片段。
+ *
+ * 这一侧是对象而不是 Map：details 是 JSON（宿主按 `JsonValue` 写进 session
+ * JSONL），Map 序列化过去会变成 `{}`，记账就丢了；读取方向与之相对（
+ * `deserializeReads` 从同一个对象形状还原成 Map）。
+ */
+export async function recordReads(
+  state: ReadsState,
+  entries: readonly { path: string; snapshot: FileSnapshot }[],
+): Promise<Record<string, FileSnapshot>> {
+  const reads: Record<string, FileSnapshot> = {};
+  for (const entry of entries) {
+    const key = await readStateKey(entry.path);
+    state.reads.set(key, entry.snapshot);
+    reads[key] = entry.snapshot;
+  }
+  return reads;
+}
+
+/** 单文件记账：`recordReads` 的单项形式。 */
+export async function recordRead(
+  state: ReadsState,
+  filePath: string,
+  snapshot: FileSnapshot,
+): Promise<Record<string, FileSnapshot>> {
+  return await recordReads(state, [{ path: filePath, snapshot }]);
 }
 
 function snapshotsEqual(left: FileSnapshot, right: FileSnapshot): boolean {
@@ -91,13 +137,12 @@ function snapshotsEqual(left: FileSnapshot, right: FileSnapshot): boolean {
 }
 
 /** 校验「已读且未变」：未读过、非文本、指纹不符都拒绝写入。 */
-export function requireCurrentRead(
+export async function requireCurrentRead(
   state: ReadsState,
-  key: string,
   filePath: string,
   currentContent: Uint8Array | string,
-): void {
-  const readSnapshot = state.reads.get(key);
+): Promise<void> {
+  const readSnapshot = state.reads.get(await readStateKey(filePath));
   if (!readSnapshot) {
     throw new Error("File has not been read yet. Read it first before writing to it.");
   }
@@ -113,21 +158,17 @@ export function requireCurrentRead(
 
 /**
  * 过期校验：该文件已有读取记录时，要求磁盘上的当前指纹与记录一致，否则拒绝
- * 写入；从未读过（没有记录）时直接放行。
+ * 写入；从未读过（没有记录）时直接放行，且不做整文件指纹计算。
  *
  * opencode 的 write 用这个：没读过的文件允许直接写，读过之后再被外部改动就必须
- * 重新 read。`currentDigest` 为 undefined（文件已不存在）同样算过期。
+ * 重新 read。文件已不存在（指纹 undefined）同样算过期。
  */
-export function requireUnchangedRead(
-  state: ReadsState,
-  key: string,
-  currentDigest: string | undefined,
-): void {
-  const readSnapshot = state.reads.get(key);
+export async function requireUnchangedRead(state: ReadsState, filePath: string): Promise<void> {
+  const readSnapshot = state.reads.get(await readStateKey(filePath));
   if (!readSnapshot) {
     return;
   }
-  if (currentDigest === undefined || readSnapshot.digest !== currentDigest) {
+  if (readSnapshot.digest !== (await digestIfExists(filePath))) {
     throw new Error(
       "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.",
     );
