@@ -45,9 +45,9 @@
 
 渲染成 TS 声明（`declare const tools: {...}`）写进 `codemode` 的工具描述。pi 用 `prepareLoadout` 每次请求重算，我们没有这个机制；代价是同一会话内后期才注册的工具（LSP 那几个）不在描述里——但脚本仍能调用它们。
 
-**8. `store` 落在 session 自定义 entry 上。**
+**8. `store` 的记录放在工具结果的 `details.store` 里。**
 
-`codemode-store` entry 记录 `{ set, delete }`，读时从分支根重放，失败脚本的写入丢弃。跟随分支（rewind / fork）自然一致，且不需要额外的持久化机制。
+每次成功调用的 `details.store` 记录本次的 `{ set, delete }`，下一次调用从当前分支上 codemode 的 `toolResult` 条目按顺序重放——与 `src/lib/file-reads.ts` 从 `details.reads` 重放已读同一套做法（`getBranch()` 扫描 toolResult 的 details）。跟随分支（rewind / fork / resume）自然一致，不需要额外的持久化机制，也不需要自定义 entry 类型；失败脚本不写 `details.store`，其写入自然丢弃。
 
 **9. 输出预算：默认 10000 tokens，超限头尾截断，全文落临时文件。**
 

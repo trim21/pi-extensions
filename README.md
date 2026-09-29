@@ -45,8 +45,9 @@
 - **脚本接口**：`tools` / `ALL_TOOLS` / `text` / `image` / `exit` / `console.*` /
   `store(key, value)` / `load(key)`；首行可选 `// @options: {"max_output_tokens": 10000}`。
   脚本没有超时：死循环由调用方中止（Esc）结束，等嵌套调用返回（含用户审批弹窗）多久都不算超时。
-- **store** 写在会话的自定义 entry 上（跟随分支），输出超过 `max_output_tokens` 时头尾
-  截断并把全文落到 `$TMPDIR/pi-codemode-*.txt`。
+- **store** 记在每次成功调用工具结果的 `details.store` 上（与 `src/lib/file-reads.ts` 的
+  已读记账同一套做法），下一次调用从当前分支的 toolResult 重放；输出超过 `max_output_tokens`
+  时头尾截断并把全文落到 `$TMPDIR/pi-codemode-*.txt`。
 - **构建**：worker 入口是 esbuild 产物 `src/codemode/worker.js`（随仓库提交，
   `pnpm run build:codemode-worker` 重新生成，pre-commit 会自动跑）；`quickjs-wasi` 的
   wasm 在注册工具时编译一次，之后每次执行复用。

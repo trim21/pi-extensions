@@ -102,6 +102,14 @@ function textOf(result: { content: unknown }): string {
     .join("\n");
 }
 
+/** 分支上一条 codemode 的 toolResult：store 从这里重放。 */
+function toolResultEntry(store: { set: Record<string, unknown>; delete: string[] }): unknown {
+  return {
+    type: "message",
+    message: { role: "toolResult", toolName: "codemode", details: { store } },
+  };
+}
+
 interface ToolResultShape {
   content: unknown;
   details?: unknown;
@@ -212,16 +220,18 @@ describe("codemode 工具", () => {
     expect(textOf(result)).toContain("not a function");
   });
 
-  it("store 写入落 session entry，load 从分支读回", async () => {
+  it("store 写入落在工具结果的 details 上，并从分支的 toolResult 重放", async () => {
     const h = await harness();
-    await runScript(h, `store("seen", 7); return "ok";`);
-    expect(h.appended).toEqual([
-      { customType: "codemode-store", data: { set: { seen: 7 }, delete: [] } },
-    ]);
+    const written = await runScript(h, `store("seen", 7); return "ok";`);
+    expect((written.details as { store?: unknown }).store).toEqual({
+      set: { seen: 7 },
+      delete: [],
+    });
+    expect(h.appended).toEqual([]);
 
     const h2 = await harness();
     const fromBranch = await runScript(h2, `return (load("seen") ?? 0) + 1;`, [
-      { type: "custom", customType: "codemode-store", data: { set: { seen: 41 }, delete: [] } },
+      toolResultEntry({ set: { seen: 41 }, delete: [] }),
     ]);
     expect(textOf(fromBranch)).toContain("42");
   });
@@ -229,11 +239,7 @@ describe("codemode 工具", () => {
   it("load 从分支读回时字符串与对象原样返回", async () => {
     const h = await harness();
     const result = await runScript(h, `return { name: load("name"), cfg: load("cfg") };`, [
-      {
-        type: "custom",
-        customType: "codemode-store",
-        data: { set: { name: "Read", cfg: { parallel: true } }, delete: [] },
-      },
+      toolResultEntry({ set: { name: "Read", cfg: { parallel: true } }, delete: [] }),
     ]);
 
     expect(result.isError).toBeFalsy();
@@ -241,10 +247,27 @@ describe("codemode 工具", () => {
     expect(textOf(result)).toContain('"parallel": true');
   });
 
-  it("失败脚本的 store 写入不落盘", async () => {
+  it("分支上其他工具的 toolResult 不参与 store 恢复", async () => {
+    const h = await harness();
+    const result = await runScript(h, `return typeof load("leaked");`, [
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "Read",
+          details: { store: { set: { leaked: 1 }, delete: [] } },
+        },
+      },
+    ]);
+
+    expect(textOf(result)).toContain("undefined");
+  });
+
+  it("失败脚本不写 store", async () => {
     const h = await harness();
     const result = await runScript(h, `store("k", 1); throw new Error("boom");`);
     expect(result.isError).toBe(true);
+    expect((result.details as { store?: unknown }).store).toBeUndefined();
     expect(h.appended).toEqual([]);
   });
 

@@ -101,6 +101,11 @@
 - **WHEN** 一次脚本 `store` 一个值，之后另一次脚本 `load` 同一个 key
 - **THEN** 第二次脚本读到第一次写入的值，且失败脚本的写入不被保留
 
+#### Scenario: store 随工具结果持久化
+
+- **WHEN** 一次成功的 codemode 调用写入了 store
+- **THEN** 该次写入出现在这次工具结果的 `details.store` 上，下一次调用从当前分支上 codemode 的 toolResult 条目重放恢复
+
 #### Scenario: 永不 settle 的 promise
 
 - **WHEN** 脚本 `await new Promise(() => {})`

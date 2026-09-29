@@ -26,9 +26,6 @@ import { CODEMODE_SOURCE_GRAMMAR, DEFAULT_OUTPUT_TOKENS, parseCodemodeSource } f
 
 export const CODEMODE_TOOL_NAME = "codemode";
 
-/** store 落在 session 的自定义 entry 上：随分支保存与恢复。 */
-const STORE_ENTRY_TYPE = "codemode-store";
-
 /** 估计 token 用的字符数（与 pi 一致）。 */
 const CHARS_PER_TOKEN = 4;
 
@@ -89,17 +86,29 @@ function buildDescription(tools: readonly CallableTool[]): string {
   ].join("\n");
 }
 
+/**
+ * store 的恢复：把当前分支上每次 codemode 调用记在工具结果 `details.store` 里的写入
+ * 按顺序重放（与 `src/lib/file-reads.ts` 从 toolResult 的 details 重放已读同一套做法）。
+ * 只认分支上的结果，所以 rewind / fork / resume 后 store 跟着分支走。
+ */
 function readStore(ctx: ExtensionContext): Record<string, unknown> {
   const store = new Map<string, unknown>();
   for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type !== "custom" || entry.customType !== STORE_ENTRY_TYPE) {
+    if (entry.type !== "message" || entry.message.role !== "toolResult") {
       continue;
     }
-    const data = (entry as { data?: unknown }).data;
-    if (typeof data !== "object" || data === null) {
+    if (entry.message.toolName !== CODEMODE_TOOL_NAME) {
       continue;
     }
-    const writes = data as Partial<StoreWrites>;
+    const details = entry.message.details;
+    if (typeof details !== "object" || details === null) {
+      continue;
+    }
+    const record = (details as { store?: unknown }).store;
+    if (typeof record !== "object" || record === null || Array.isArray(record)) {
+      continue;
+    }
+    const writes = record as Partial<StoreWrites>;
     for (const key of writes.delete ?? []) {
       store.delete(key);
     }
@@ -294,9 +303,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
           const images = imagesOf(outcome.output);
           if (outcome.ok) {
             const writes = outcome.writes;
-            if (Object.keys(writes.set).length > 0 || writes.delete.length > 0) {
-              pi.appendEntry(STORE_ENTRY_TYPE, writes);
-            }
+            const hasWrites = Object.keys(writes.set).length > 0 || writes.delete.length > 0;
             const value =
               outcome.value === undefined ? "" : `\n\n${JSON.stringify(outcome.value, null, 2)}`;
             const truncated = await truncateOutput(
@@ -315,6 +322,8 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
               ],
               details: {
                 calls: outcome.calls,
+                // store 的写入随工具结果持久化，下一次调用从这里重放恢复
+                ...(hasWrites && { store: writes }),
                 pendant: scriptPendant(code, `${outcome.calls.length} tool call(s)`),
                 ...(truncated.fullOutputPath && { fullOutputPath: truncated.fullOutputPath }),
               },
