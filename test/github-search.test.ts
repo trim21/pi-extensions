@@ -7,7 +7,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { buildSearchQuery, renderHits, SEARCH_FIELDS, type SearchHit } from "../src/lib/github.js";
+import {
+  buildSearchQuery,
+  createGithubSearch,
+  renderHits,
+  SEARCH_FIELDS,
+  type SearchHit,
+} from "../src/lib/github.js";
 
 function hit(overrides: Partial<SearchHit> = {}): SearchHit {
   return {
@@ -125,5 +131,80 @@ describe("renderHits", () => {
     expect(() => renderHits([hit()], { fields: "number,bogus" })).toThrow(
       `unknown field: bogus (valid: ${SEARCH_FIELDS.join(", ")})`,
     );
+  });
+});
+
+/** Serve the given responses in order (the last one repeats); record every requested URL. */
+function stubFetch(responses: { status: number; body: unknown }[]): {
+  fetch: typeof globalThis.fetch;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  let index = 0;
+  const fetchStub = async (input: Parameters<typeof globalThis.fetch>[0]): Promise<Response> => {
+    calls.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const response = responses[Math.min(index, responses.length - 1)];
+    index += 1;
+    return Response.json(response?.body ?? null, {
+      status: response?.status ?? 500,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  return { fetch: fetchStub, calls };
+}
+
+/** Minimal `/search/issues` item that satisfies the client's response schema. */
+const SEARCH_ITEM = {
+  number: 12,
+  state: "open",
+  title: "lsp: derive resolved config from shared client defaults",
+  html_url: "https://github.com/a/b/issues/12",
+  repository_url: "https://api.github.com/repos/a/b",
+  user: { login: "trim21" },
+  labels: [],
+  milestone: null,
+  assignees: [],
+  comments: 0,
+  created_at: "2024-11-01T00:00:00Z",
+  updated_at: "2024-11-02T00:00:00Z",
+  closed_at: null,
+  pull_request: null,
+};
+
+function searchBody(): { total_count: number; incomplete_results: boolean; items: unknown[] } {
+  return { total_count: 1, incomplete_results: false, items: [SEARCH_ITEM] };
+}
+
+/**
+ * 请求走 `api.call`：缓存的 token 失效（401）时丢缓存换新 token 重试一次，而不是
+ * 直接把 401 抛给调用方。
+ *
+ * 注意：octokit 打包的 throttling 对 `/search` 路由有约 2s 的最小间隔（实测：同一
+ * 进程里第二次走到该路由要等 ~2s，换成 `/repos` 路由则不会；重试的第二次请求同样
+ * 要等），所以本组用例的耗时来自 octokit 自身的节流，不是被测代码变慢。
+ */
+describe("search 的请求路径", () => {
+  it("缓存的 token 失效时换新 token 重试一次", async () => {
+    const api = stubFetch([
+      { status: 401, body: { message: "Bad credentials" } },
+      { status: 200, body: searchBody() },
+    ]);
+    const search = createGithubSearch({ fetch: api.fetch, token: async () => "test-token" });
+
+    const hits = await search.search("issue", { repo: "a/b" });
+
+    expect(hits.map((entry) => entry.number)).toEqual([12]);
+    expect(api.calls).toHaveLength(2);
+  });
+
+  // `@me` 是 gh CLI 的简写：octokit 路径不展开，也不额外发 users.getAuthenticated
+  it("带关键词的搜索不展开 @me", async () => {
+    const api = stubFetch([{ status: 200, body: searchBody() }]);
+    const search = createGithubSearch({ fetch: api.fetch, token: async () => "test-token" });
+
+    await search.search("issue", { repo: "a/b", assignee: "@me" });
+
+    expect(api.calls).toHaveLength(1);
+    expect(decodeURIComponent(api.calls[0] ?? "")).toContain("assignee:@me");
   });
 });

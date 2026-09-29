@@ -310,22 +310,18 @@ export function createGithubSearch(options: GithubClientOptions = {}): GithubSea
   return {
     async search(kind, params) {
       const limit = Math.min(Math.max(params.limit ?? 30, 1), 100);
-      const effective = { ...params, limit };
 
       try {
-        const octokit = await api.call(async (client) => {
-          if (effective.assignee === "@me") {
-            const { data } = await client.rest.users.getAuthenticated();
-            effective.assignee = data.login;
-          }
-          return client;
+        // `@me` 是 gh CLI 的简写，REST 搜索不认识：这里不展开，带关键词时它按字面量
+        // 进入查询串（无关键词的列表走 gh CLI，由 gh 自己展开）。
+        const q = buildSearchQuery(kind, { ...params, limit });
+        return await api.call(async (client) => {
+          const { data } = await client.rest.search.issuesAndPullRequests({
+            q,
+            per_page: limit,
+          });
+          return data.items.map((item) => normalize(parseWithSchema(searchItemSchema, item)));
         });
-        const q = buildSearchQuery(kind, effective);
-        const { data } = await octokit.rest.search.issuesAndPullRequests({
-          q,
-          per_page: limit,
-        });
-        return data.items.map((item) => normalize(parseWithSchema(searchItemSchema, item)));
       } catch (error) {
         const status = (error as { status?: number }).status;
         const message = (error as { message?: string }).message ?? String(error);
