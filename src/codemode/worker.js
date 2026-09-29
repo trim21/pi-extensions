@@ -368,7 +368,7 @@ function decodeHostMessage(value) {
 // src/codemode/worker.ts
 var MEMORY_LIMIT_BYTES = 512 * 1024 * 1024;
 function toScriptIdentifier(name) {
-  return name.replaceAll(/[^A-Za-z0-9_$]/g, "_").replaceAll(/^(\d)/, "_$1");
+  return name.replaceAll(/[^A-Za-z0-9_$]/g, "_").replaceAll(/^\d/g, "_");
 }
 function discardOutput(memory) {
   return {

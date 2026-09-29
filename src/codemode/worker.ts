@@ -28,7 +28,7 @@ const MEMORY_LIMIT_BYTES = 512 * 1024 * 1024;
 
 /** 工具名到脚本标识符的归一化：非法字符换成 `_`，数字开头补 `_`。 */
 export function toScriptIdentifier(name: string): string {
-  return name.replaceAll(/[^A-Za-z0-9_$]/g, "_").replaceAll(/^(\d)/, "_$1");
+  return name.replaceAll(/[^A-Za-z0-9_$]/g, "_").replaceAll(/^\d/g, "_");
 }
 
 /**
