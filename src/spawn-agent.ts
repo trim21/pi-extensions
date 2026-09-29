@@ -10,7 +10,11 @@
  * pass to the tool. Execution
  * is blocking: the tool awaits the subagent session until the turn settles and
  * returns its final output to the parent model. Progress is streamed through
- * `onUpdate`, the same channel the built-in bash tool uses for live output.
+ * `onUpdate`, the same channel the built-in bash tool uses for live output, and
+ * is throttled like the bash tool: pushes are capped at one per
+ * `PROGRESS_UPDATE_THROTTLE_MS` so a burst of thinking deltas does not
+ * re-render the panel per chunk, and the trailing push still delivers the
+ * latest state at the end of the window.
  * Progress is a rolling log: `tool: <name>` lines for tool calls and
  * `text: <content>` lines for completed text blocks, keeping only the last few
  * lines (`MAX_PROGRESS_LINES` in spawn-agent-progress.ts). Consecutive tool calls are merged into a
@@ -64,6 +68,7 @@ import {
   SettingsManager,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
+import { throttle } from "lodash-es";
 import { Type } from "typebox";
 
 import { type BwrapConfig, completeBwrapConfig } from "./bwrap/core.js";
@@ -87,6 +92,11 @@ import { createSubagentProgress, formatTokens } from "./spawn-agent-progress.js"
 const MAX_OUTPUT_BYTES = 50 * 1024;
 /** Read-only toolset used when an agent does not declare `tools`. */
 const DEFAULT_TOOLS = ["read", "grep", "find", "ls"];
+/**
+ * 进度推送的最小间隔（对齐 bash 工具的进度限流）:逐 chunk 的 thinking 增量
+ * 会让面板每个 chunk 都重渲染一次。配合 trailing,窗口结束时的最新状态仍会送达。
+ */
+export const PROGRESS_UPDATE_THROTTLE_MS = 100;
 /**
  * 子代理未在 frontmatter 声明 `sandbox` 时 bash 使用的固定沙箱：文件系统只读 + 断网。
  * 与主会话（跟随用户 sandbox.json）相反，子代理不继承用户配置——为交互会话放宽的
@@ -412,12 +422,16 @@ export async function runAgent(
 
   const progress = createSubagentProgress({ name: result.agent });
 
-  const emitUpdate = () => {
-    onUpdate?.({
-      content: [{ type: "text", text: progress.render(result.usage, result.model) }],
-      details: {},
-    });
-  };
+  const emitUpdate = throttle(
+    () => {
+      onUpdate?.({
+        content: [{ type: "text", text: progress.render(result.usage, result.model) }],
+        details: {},
+      });
+    },
+    PROGRESS_UPDATE_THROTTLE_MS,
+    { trailing: true },
+  );
 
   const handleEvent = (event: AgentSessionEvent) => {
     switch (event.type) {

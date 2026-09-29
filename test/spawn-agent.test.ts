@@ -19,6 +19,7 @@ import {
   formatAgentListSection,
   formatSubagentError,
   overrideExtensionPaths,
+  PROGRESS_UPDATE_THROTTLE_MS,
   resolveModel,
   runAgent,
   SUBAGENT_DEFAULT_SANDBOX,
@@ -1123,6 +1124,9 @@ async function runWithEvents(events: unknown[]) {
   }
   h.settle();
   await running;
+  // 进度推送按 100ms 限流:窗口内被合并的事件由 trailing 帧补齐最终状态,
+  // 等它送达后断言才能看到面板最终内容,否则只能看到窗口里的第一次推送。
+  await new Promise((resolve) => setTimeout(resolve, PROGRESS_UPDATE_THROTTLE_MS + 20));
   return updates;
 }
 
