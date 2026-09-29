@@ -44,11 +44,19 @@ export function createToolServices(pi: ExtensionAPI, options?: ToolServicesOptio
   runtime.setup(pi);
 
   let delegate: ((service: LspService) => void) | undefined;
+  // manager 的 session_start handler 注册在入口的注册回调之前（入口须先知道本会话
+  // 的模型才能选出工具集），所以它触发 onEnabled 时 delegate 往往还没就位。先缓存
+  // 服务，等 setLspEnabledHandler 调用时立即补发，注册不再依赖两者的先后顺序。
+  let pendingService: LspService | undefined;
   const manager = createLspManager(
     pi,
     {
       onEnabled: (_pi, service) => {
-        delegate?.(service);
+        if (delegate) {
+          delegate(service);
+        } else {
+          pendingService = service;
+        }
       },
     },
     options,
@@ -60,6 +68,14 @@ export function createToolServices(pi: ExtensionAPI, options?: ToolServicesOptio
     manager,
     setLspEnabledHandler(handler) {
       delegate = handler;
+      if (!handler) {
+        return;
+      }
+      const pending = pendingService;
+      pendingService = undefined;
+      if (pending) {
+        handler(pending);
+      }
     },
   };
 }
