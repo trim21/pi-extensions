@@ -41,9 +41,12 @@ export function addListIssuesTool(gh: GhClient, pi: ExtensionAPI) {
         }),
       ),
       label: Type.Optional(Type.String({ description: "Filter by label" })),
-      author: Type.Optional(Type.String({ description: "Filter by author" })),
+      // `@me` 由 GitHub 的搜索 / 过滤 API 解析：不带 keywords 时 gh 自行展开（GraphQL 过滤分支）
+      // 或按字面量转发（搜索分支），带 keywords 时我们直接把 `assignee:@me` 交给搜索 API。
+      // 两条传输都支持，因此本仓库不要再实现一次展开。
+      author: Type.Optional(Type.String({ description: "Filter by author ('@me' for yourself)" })),
       assignee: Type.Optional(
-        Type.String({ description: "Filter by assignee (@me for yourself)" }),
+        Type.String({ description: "Filter by assignee ('@me' for yourself)" }),
       ),
       milestone: Type.Optional(Type.String({ description: "Filter by milestone" })),
       limit: Type.Optional(Type.Number({ description: "Max results (default 30, max 100)" })),
