@@ -8,6 +8,11 @@
  * openai_compatible / ollama 且有 base_url）时注册；aft 默认的本地 ONNX
  * fastembed 后端不使用。
  *
+ * 项目根是**会话工作目录**（`session_start` 的 `ctx.cwd`），不是 pi 进程的启动
+ * 目录：引擎按项目根建索引与调用图存储，用错会把用户家目录当项目根并自动关闭这
+ * 些能力。扩展自己只读用户级 aft.jsonc（路径与会话目录无关），项目级 aft.jsonc
+ * 由 bridge 按项目根自行读取。
+ *
  * bridge 状态（日志 + 常驻 aft 子进程）的生命周期跟 session 走：session_start
  * 时先解析 aft 二进制（含 GitHub release auto-download 兜底）——找不到就
  * notify warning 且不注册任何 aft 工具，避免模型看到只会抛 "not initialized"
@@ -19,7 +24,7 @@
  *   pi -e ./aft/index.ts
  */
 
-import { resolveCortexKitConfigPaths } from "@cortexkit/aft-bridge";
+import { resolveCortexKitUserConfigPath } from "@cortexkit/aft-bridge";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { ToolBus } from "../lib/tool-bus.js";
@@ -27,6 +32,7 @@ import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { createAftState, findBinary, resolveSessionId, shutdownAftPool } from "./bridge.js";
 import { loadAftConfig } from "./config.js";
 import {
+  type AftToolContext,
   registerCallgraphTool,
   registerOutlineTool,
   registerSearchTool,
@@ -35,14 +41,15 @@ import {
 
 /**
  * aft 工具集：入口用它。`registerForSession` 必须在会话启动时调用——二进制
- * 探测、semantic_search 的提示、bridge 状态的创建都在里面；找不到二进制就不
- * 注册任何工具（避免模型看到只会抛 "not initialized" 的死工具）。
+ * 探测、semantic_search 的提示、bridge 状态（项目根 = 本会话的 `ctx.cwd`）的
+ * 创建都在里面；找不到二进制就不注册任何工具（避免模型看到只会抛
+ * "not initialized" 的死工具）。
  */
 export function createAftTools(pi: ExtensionAPI): {
   registerForSession(bus: ToolBus, ctx: ExtensionContext): Promise<void>;
 } {
-  const cwd = process.cwd();
-  const cfg = loadAftConfig(resolveCortexKitConfigPaths(cwd).userConfigPath);
+  // 扩展自己的门控只读用户级配置：项目级 aft.jsonc 由 bridge 按会话工作目录读。
+  const cfg = loadAftConfig(resolveCortexKitUserConfigPath());
   // bridge 状态跟 session 生命周期走，作用域就是本工厂闭包，不落到模块级。
   let state: Awaited<ReturnType<typeof createAftState>> | null = null;
 
@@ -55,7 +62,7 @@ export function createAftTools(pi: ExtensionAPI): {
     return state;
   };
 
-  const toolCtx = { cwd, getState };
+  const toolCtx: AftToolContext = { getState };
 
   async function registerForSession(bus: ToolBus, ctx: ExtensionContext): Promise<void> {
     if (!cfg.enabled) {
@@ -91,7 +98,7 @@ export function createAftTools(pi: ExtensionAPI): {
       registerSearchTool(bus, toolCtx);
     }
 
-    state = await createAftState(cwd, resolveSessionId(ctx), binaryPath, cfg.semanticRemote);
+    state = await createAftState(ctx.cwd, resolveSessionId(ctx), binaryPath, cfg.semanticRemote);
   }
 
   // 释放当前 session 的 bridge 状态。session_shutdown 是 pi 的正常生命周期；

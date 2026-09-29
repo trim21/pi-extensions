@@ -49,6 +49,9 @@ interface Surface {
 
 const RESOLVED_BINARY = "/usr/local/bin/aft";
 
+/** 会话工作目录：与进程启动目录（process.cwd()）不同，保证断言能区分两者。 */
+const SESSION_CWD = "/work/session-project";
+
 async function registerWith(
   config: Partial<AftReadConfig>,
   options?: { poolError?: Error; binary?: string | null },
@@ -74,7 +77,7 @@ async function registerWith(
       },
       pool: {
         pool: { getBridge: () => ({}) } as unknown as AftTransportPool,
-        projectRoot: process.cwd(),
+        projectRoot: SESSION_CWD,
       },
     });
   }
@@ -96,7 +99,10 @@ async function registerWith(
   } as unknown as ExtensionAPI;
 
   aftExtension(pi);
-  const notifyCtx = { ui: { notify: (message: string) => void notices.push(message) } };
+  const notifyCtx = {
+    cwd: SESSION_CWD,
+    ui: { notify: (message: string) => void notices.push(message) },
+  };
   let startError: unknown;
   const startHandler = handlers.get("session_start");
   if (startHandler) {
@@ -164,12 +170,13 @@ describe("aft tool surface", () => {
     expect(createAftState).not.toHaveBeenCalled();
   });
 
-  it("passes the resolved binary path to createAftState", async () => {
+  it("uses the session working directory as the bridge project root", async () => {
     const { names, notices } = await registerWith({});
     expect(names).toContain("aft_outline");
     expect(notices).toEqual([]);
+    expect(SESSION_CWD).not.toBe(process.cwd());
     expect(createAftState).toHaveBeenCalledWith(
-      process.cwd(),
+      SESSION_CWD,
       "session-test",
       RESOLVED_BINARY,
       undefined,

@@ -57,13 +57,13 @@ const AFT_GUIDELINES = readFileSync(
 ).trim();
 
 export interface AftToolContext {
-  cwd: string;
   /** 当前 session 的 bridge 状态；session 未初始化时抛错。 */
   getState(): AftState;
 }
 
 function bridgeFor(ctx: AftToolContext): AftProjectTransport {
-  return ctx.getState().pool.pool.getBridge(ctx.cwd);
+  const { pool } = ctx.getState();
+  return pool.pool.getBridge(pool.projectRoot);
 }
 
 /**
@@ -152,7 +152,7 @@ export function registerOutlineTool(bus: ToolBus, ctx: AftToolContext): void {
         filesMode = stats?.isDirectory() ?? false;
       }
       const rawArgs = compactArgs({
-        target: filesMode ? target : resolved,
+        target: resolved,
         files: filesMode || undefined,
         includeTests: params.includeTests,
       });

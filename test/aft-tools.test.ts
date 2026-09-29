@@ -1,11 +1,12 @@
-import { homedir } from "node:os";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { AftProjectTransport } from "@cortexkit/aft-bridge";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { callAftTool } from "../src/aft/bridge.js";
+import { type AftState, callAftTool } from "../src/aft/bridge.js";
 import {
   buildOutlineSubtitle,
   buildZoomSubtitle,
@@ -13,8 +14,10 @@ import {
   compactArgs,
   createSemanticIndexProgressFormatter,
   formatSemanticIndexProgress,
+  registerOutlineTool,
 } from "../src/aft/tools.js";
 import { resolvePathArg } from "../src/lib/path.js";
+import type { ToolBus } from "../src/lib/tool-bus.js";
 
 vi.mock("../src/aft/bridge.js", () => ({
   callAftTool: vi.fn(),
@@ -114,6 +117,77 @@ describe("buildOutlineSubtitle", () => {
     expect(buildOutlineSubtitle(cwd, longPath)).toBe(
       'target="another-long-name/App.module.spec.test.ts"',
     );
+  });
+});
+
+describe("aft_outline 路径转发", () => {
+  const callAftToolMock = vi.mocked(callAftTool);
+
+  beforeEach(() => {
+    callAftToolMock.mockReset();
+    callAftToolMock.mockResolvedValue({ text: "outline", response: {} });
+  });
+
+  /** 用假的总线注册 aft_outline，跑一次 execute，取回转发给引擎的参数。 */
+  async function forwardOutline(
+    params: { target: string; files?: boolean },
+    sessionCwd: string,
+  ): Promise<Record<string, unknown>> {
+    const state = {
+      pool: {
+        pool: { getBridge: () => ({}) as unknown as AftProjectTransport },
+        projectRoot: sessionCwd,
+      },
+    } as unknown as AftState;
+    const definitions: ToolDefinition[] = [];
+    const bus = {
+      register: (definition: ToolDefinition) => {
+        definitions.push(definition);
+        return true;
+      },
+    } as unknown as ToolBus;
+    registerOutlineTool(bus, { getState: () => state });
+    const definition = definitions[0];
+    if (!definition) {
+      throw new Error("aft_outline was not registered");
+    }
+
+    await definition.execute("call-outline", params, undefined, undefined, {
+      cwd: sessionCwd,
+    } as ExtensionContext);
+
+    const call = callAftToolMock.mock.calls.at(-1);
+    return call?.[2] ?? {};
+  }
+
+  it("把相对目录 target 解析成会话工作目录下的绝对路径", async () => {
+    const sessionCwd = await mkdtemp(join(tmpdir(), "aft-outline-"));
+    await mkdir(join(sessionCwd, "pkg"));
+
+    const args = await forwardOutline({ target: "pkg", files: true }, sessionCwd);
+
+    expect(args.target).toBe(join(sessionCwd, "pkg"));
+    expect(args.files).toBe(true);
+  });
+
+  it("未指定 files 而 target 是目录时，同样转发绝对路径", async () => {
+    const sessionCwd = await mkdtemp(join(tmpdir(), "aft-outline-"));
+    await mkdir(join(sessionCwd, "pkg"));
+
+    const args = await forwardOutline({ target: "pkg" }, sessionCwd);
+
+    expect(args.target).toBe(join(sessionCwd, "pkg"));
+    expect(args.files).toBe(true);
+  });
+
+  it("文件 target 转发绝对路径且不进入 files 模式", async () => {
+    const sessionCwd = await mkdtemp(join(tmpdir(), "aft-outline-"));
+    await writeFile(join(sessionCwd, "app.ts"), "export const a = 1;\n");
+
+    const args = await forwardOutline({ target: "app.ts" }, sessionCwd);
+
+    expect(args.target).toBe(join(sessionCwd, "app.ts"));
+    expect(args.files).toBeUndefined();
   });
 });
 
