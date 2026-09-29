@@ -1,4 +1,6 @@
 pnpm run build:holder
 pnpm run build:codemode-worker
+# 构建产物随源码提交：重新生成后立刻入暂存，否则提交里带的是旧产物
+git add src/bwrap/holder.js src/codemode/worker.js
 pnpm exec tsc
 pnpm exec lint-staged

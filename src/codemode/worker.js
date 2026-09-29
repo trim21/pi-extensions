@@ -5,8 +5,7 @@ import { JSException, MAX_STACK_SIZE, QuickJS } from "quickjs-wasi";
 // src/codemode/prelude.ts
 var MAX_STORE_VALUE_CHARS = 256 * 1024;
 var MAX_STORE_TOTAL_CHARS = 1024 * 1024;
-var IMAGE_HELPER_EXPECTS =
-  "image expects a non-empty image URL string, an object with image_url, or a raw MCP image block";
+var IMAGE_HELPER_EXPECTS = "image expects a non-empty image URL string, an object with image_url, or a raw MCP image block";
 var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 	"use strict";
 	const stringify = JSON.stringify;
@@ -288,70 +287,70 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 var outputItemSchema = Type.Union([
   Type.Object({ type: Type.Literal("text"), text: Type.String() }),
-  Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String() }),
+  Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String() })
 ]);
 var toolDeclSchema = Type.Object({
   name: Type.String(),
-  description: Type.Optional(Type.String()),
+  description: Type.Optional(Type.String())
 });
 var startSchema = Type.Object({
   t: Type.Literal("start"),
   code: Type.String(),
   tools: Type.Array(toolDeclSchema),
-  store: Type.Record(Type.String(), Type.Unknown()),
+  store: Type.Record(Type.String(), Type.Unknown())
 });
 var resultSchema = Type.Union([
   Type.Object({
     t: Type.Literal("result"),
     id: Type.Number(),
     ok: Type.Literal(true),
-    value: Type.Unknown(),
+    value: Type.Unknown()
   }),
   Type.Object({
     t: Type.Literal("result"),
     id: Type.Number(),
     ok: Type.Literal(false),
-    error: Type.String(),
-  }),
+    error: Type.String()
+  })
 ]);
 var callSchema = Type.Object({
   t: Type.Literal("call"),
   id: Type.Number(),
   name: Type.String(),
-  args: Type.Unknown(),
+  args: Type.Unknown()
 });
 var outputSchema = Type.Object({
   t: Type.Literal("output"),
-  items: Type.Array(outputItemSchema),
+  items: Type.Array(outputItemSchema)
 });
 var scriptErrorSchema = Type.Object({
   kind: Type.Union([
     Type.Literal("script"),
     Type.Literal("timeout"),
     Type.Literal("aborted"),
-    Type.Literal("sandbox"),
+    Type.Literal("sandbox")
   ]),
   name: Type.Optional(Type.String()),
   message: Type.String(),
-  stack: Type.Optional(Type.String()),
+  stack: Type.Optional(Type.String())
 });
 var storeWritesSchema = Type.Object({
   set: Type.Record(Type.String(), Type.Unknown()),
-  delete: Type.Array(Type.String()),
+  delete: Type.Array(Type.String())
 });
 var doneSchema = Type.Union([
   Type.Object({
     t: Type.Literal("done"),
     ok: Type.Literal(true),
     value: Type.Unknown(),
-    writes: storeWritesSchema,
+    writes: storeWritesSchema
   }),
   Type.Object({
     t: Type.Literal("done"),
     ok: Type.Literal(false),
     error: scriptErrorSchema,
-    writes: storeWritesSchema,
-  }),
+    writes: storeWritesSchema
+  })
 ]);
 var hostMessageSchema = Type.Union([startSchema, resultSchema]);
 var workerMessageSchema = Type.Union([callSchema, outputSchema, doneSchema]);
@@ -381,7 +380,7 @@ function discardOutput(memory) {
       }
       view.setUint32(nwrittenPtr, written, true);
       return 0;
-    },
+    }
   };
 }
 function post(message) {
@@ -427,61 +426,60 @@ async function runScript(wasm, start) {
     memoryLimit: MEMORY_LIMIT_BYTES,
     // 没有这个上限时深递归会打穿 wasm 栈变成 trap，而不是脚本里可捕获的 RangeError
     maxStackSize: MAX_STACK_SIZE,
-    wasi: discardOutput,
+    wasi: discardOutput
   });
-  const bridge = vm.newFunction("bridge", (kind, a, b, c) => {
-    const stringOr = (value, fallback) =>
-      value === void 0 || value.isUndefined ? fallback : value.toString();
-    switch (kind.toString()) {
-      case "call": {
-        post({
-          t: "call",
-          id: a.toNumber(),
-          name: stringOr(b, ""),
-          args: c === void 0 || c.isUndefined ? void 0 : JSON.parse(c.toString()),
-        });
-        break;
-      }
-      case "output": {
-        post({
-          t: "output",
-          items:
-            a.toString() === "image"
-              ? [
-                  {
-                    type: "image",
-                    data: stringOr(b, ""),
-                    mimeType: stringOr(c, "application/octet-stream"),
-                  },
-                ]
-              : [{ type: "text", text: stringOr(b, "") }],
-        });
-        break;
-      }
-      case "done": {
-        const writes = c === void 0 || c.isUndefined ? emptyWrites() : parseWrites(c.toString());
-        if (a.toBoolean()) {
+  const bridge = vm.newFunction(
+    "bridge",
+    (kind, a, b, c) => {
+      const stringOr = (value, fallback) => value === void 0 || value.isUndefined ? fallback : value.toString();
+      switch (kind.toString()) {
+        case "call": {
           post({
-            t: "done",
-            ok: true,
-            value: b === void 0 || b.isUndefined ? void 0 : JSON.parse(b.toString()),
-            writes,
+            t: "call",
+            id: a.toNumber(),
+            name: stringOr(b, ""),
+            args: c === void 0 || c.isUndefined ? void 0 : JSON.parse(c.toString())
           });
-        } else {
-          post({
-            t: "done",
-            ok: false,
-            error: scriptError(b === void 0 ? void 0 : b.toString(), "script"),
-            writes,
-          });
+          break;
         }
-        break;
+        case "output": {
+          post({
+            t: "output",
+            items: a.toString() === "image" ? [
+              {
+                type: "image",
+                data: stringOr(b, ""),
+                mimeType: stringOr(c, "application/octet-stream")
+              }
+            ] : [{ type: "text", text: stringOr(b, "") }]
+          });
+          break;
+        }
+        case "done": {
+          const writes = c === void 0 || c.isUndefined ? emptyWrites() : parseWrites(c.toString());
+          if (a.toBoolean()) {
+            post({
+              t: "done",
+              ok: true,
+              value: b === void 0 || b.isUndefined ? void 0 : JSON.parse(b.toString()),
+              writes
+            });
+          } else {
+            post({
+              t: "done",
+              ok: false,
+              error: scriptError(b === void 0 ? void 0 : b.toString(), "script"),
+              writes
+            });
+          }
+          break;
+        }
       }
+      return vm.undefined;
     }
-    return vm.undefined;
-  });
-  const api = vm.withScope((scope) =>
-    scope.escape(
+  );
+  const api = vm.withScope(
+    (scope) => scope.escape(
       vm.callFunction(
         vm.evalCode(PRELUDE_SOURCE, "codemode-prelude.js"),
         vm.undefined,
@@ -491,13 +489,13 @@ async function runScript(wasm, start) {
             start.tools.map((tool) => ({
               name: tool.name,
               jsName: toScriptIdentifier(tool.name),
-              description: tool.description,
-            })),
-          ),
+              description: tool.description
+            }))
+          )
         ),
-        vm.newString(JSON.stringify(start.store)),
-      ),
-    ),
+        vm.newString(JSON.stringify(start.store))
+      )
+    )
   );
   const settle = api.getProp("settle");
   const run = api.getProp("run");
@@ -519,21 +517,18 @@ async function runScript(wasm, start) {
           api,
           vm.newNumber(result.id),
           result.ok ? vm.true : vm.false,
-          result.ok
-            ? result.value === void 0
-              ? vm.undefined
-              : vm.newString(JSON.stringify(result.value))
-            : vm.newString(result.error),
+          result.ok ? result.value === void 0 ? vm.undefined : vm.newString(JSON.stringify(result.value)) : vm.newString(result.error)
         );
       });
-    } catch {}
+    } catch {
+    }
     drain();
   });
   try {
     const fn = vm.evalCode(
       `(async (tools, console) => {${start.code}
 })`,
-      "codemode.js",
+      "codemode.js"
     );
     vm.callFunction(run, api, fn).dispose();
     fn.dispose();
@@ -545,16 +540,16 @@ async function runScript(wasm, start) {
         ok: false,
         error: scriptError(
           JSON.stringify({ name: error.name, message: error.message, stack: error.stack }),
-          "script",
+          "script"
         ),
-        writes: emptyWrites(),
+        writes: emptyWrites()
       });
     } else {
       post({
         t: "done",
         ok: false,
         error: { kind: "sandbox", message: error instanceof Error ? error.message : String(error) },
-        writes: emptyWrites(),
+        writes: emptyWrites()
       });
     }
   }
@@ -572,7 +567,7 @@ function main() {
         t: "done",
         ok: false,
         error: { kind: "sandbox", message: "codemode worker: expected a start message first" },
-        writes: emptyWrites(),
+        writes: emptyWrites()
       });
       return;
     }
@@ -580,4 +575,6 @@ function main() {
   });
 }
 main();
-export { toScriptIdentifier };
+export {
+  toScriptIdentifier
+};
