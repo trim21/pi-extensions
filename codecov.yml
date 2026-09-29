@@ -1,0 +1,10 @@
+# codecov 默认的 project 门槛是 `target: auto` 加零容差：只要覆盖率比上一次低 0.01%
+# 就判红。实测本项目覆盖率在 73.07%~73.14% 之间自然抖动（LSP / watcher 等用例偶尔
+# 走不到某些分支），于是同一个门槛时红时绿。这里给 project 留一点容差；「新代码有
+# 没有测到」由 codecov/patch 把关。
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 0.5%
