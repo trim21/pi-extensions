@@ -19,6 +19,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { createAftTools } from "./aft/index.js";
 import { createClaudeCodeFileTools } from "./claude-code/files.js";
+import { createCodemodeTools } from "./codemode/tool.js";
 import { createGithubTools } from "./gh/index.js";
 import type { ToolBus } from "./lib/tool-bus.js";
 import { createToolRegistration } from "./lib/tool-registration.js";
@@ -57,6 +58,7 @@ export default function personalExtensions(pi: ExtensionAPI): void {
   addModule("web_search", createWebSearchTool());
   addModule("web_fetch", createWebFetch(pi));
   const aft = createAftTools(pi);
+  const codemode = createCodemodeTools(pi);
 
   // 注册期的失败攒起来，在会话启动时一次性上报（那里才有 UI）。
   const warnings: string[] = [];
@@ -65,6 +67,15 @@ export default function personalExtensions(pi: ExtensionAPI): void {
   function runModule<T>(name: string, run: () => T): T | undefined {
     try {
       return run();
+    } catch (error) {
+      warnings.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
+  }
+
+  async function runModuleAsync<T>(name: string, run: () => Promise<T>): Promise<T | undefined> {
+    try {
+      return await run();
     } catch (error) {
       warnings.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
       return undefined;
@@ -109,6 +120,8 @@ export default function personalExtensions(pi: ExtensionAPI): void {
     for (const { name, module } of modules) {
       runModule(name, () => module.register(bus));
     }
+    // codemode 最后注册：它把总线上已有的工具写进自己的描述，并在注册时编译 wasm
+    await runModuleAsync("codemode", () => codemode.register(bus));
 
     for (const warning of warnings) {
       ctx.ui.notify(warning, "warning");

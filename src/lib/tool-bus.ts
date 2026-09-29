@@ -124,3 +124,10 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
     },
   };
 }
+
+/** 工具结果里的文本内容拼接，便于调用方展示或回传给脚本。 */
+export function toolResultText(result: ToolExecutionResult): string {
+  return result.content
+    .map((part) => (part.type === "text" ? part.text : `[image ${part.mimeType}]`))
+    .join("\n");
+}

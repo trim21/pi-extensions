@@ -1,3 +1,4 @@
 pnpm run build:holder
+pnpm run build:codemode-worker
 pnpm exec tsc
 pnpm exec lint-staged

@@ -38,6 +38,7 @@ export default defineConfig(
       "**/generated/**",
       "test/fixtures/**",
       "src/bwrap/holder.js",
+      "src/codemode/worker.js",
     ],
   },
   eslint.configs.recommended,

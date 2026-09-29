@@ -11,6 +11,7 @@
 | [opencode 工具集](#opencode-工具集)       | 小写 `read`/`edit`/`write`/`grep`/`glob`/`bash`/`todowrite`/`question`                        |
 | [Claude Code 工具集](#claude-code-工具集) | 大写 `Read`/`Edit`/`Write`/`Grep`/`Glob`/`Bash`/`TodoWrite`/`AskUserQuestion`                 |
 | [工具启用配置](#工具启用配置)             | `personalExtensions`：按模型选文件 IO 工具集、通配禁用/启用工具                               |
+| [codemode](#codemode)                     | 模型写一段 JS，在 QuickJS 沙箱里批量/串行调用其它工具，只有脚本输出进上下文                   |
 | [bwrap](#bwrap)                           | 基于 bubblewrap 的 OS 级沙箱（内置两套工具集）：文件系统隔离 + 多档网络策略                   |
 | [写保护（内置）](#写保护内置)             | 写工具内置：限制文件写入在 workspace 内，外部写入需审批                                       |
 | [LSP（内置）](#lsp内置)                   | 文件工具内置 LSP 诊断 + `lsp-rename`/`lsp-inspect`/`lsp-find-definition`/`lsp-find-reference` |
@@ -25,6 +26,30 @@
 | [openai-cost](#openai-cost)               | OpenAI Chat Completions，费用取自响应 `usage.cost`                                            |
 
 ---
+
+## codemode
+
+`codemode` 让模型写一段 JavaScript（作为 async 函数体，`await` 与 `return` 都可用），在
+进程内的 worker 线程里用 QuickJS wasm VM 执行。VM 里没有 node、文件系统、网络、timer
+或模块加载，脚本唯一的出口是 `tools.<name>(args)`。
+
+- **嵌套调用经工具总线**：`tools.Read({ file_path })` 最终执行的是 `Read` 工具自己的
+  `execute`，所以工具的审批照常生效（写工作区外会弹 write-guard，Bash 沙箱外执行会弹
+  自己的提权确认）。codemode 不额外加确认层：脚本里连发十次写操作就是十次工具自己的
+  审批（需要审批的那些）。
+- **可调用集合** = 总线上实际注册的工具减去 `codemode` 自身，执行时再与当前 active
+  列表求交，所以 `personalExtensions.disabledTools`、pi 的 `defaultTools` / `--tools`、
+  子代理的工具白名单都同样约束脚本。
+- **只有脚本输出进上下文**：`text(value)` / `console.log(...)` 与 `return` 值进入工具结果，
+  中间的工具调用与它们的返回内容不会（也不在会话记录里留下工具调用条目）。
+- **脚本接口**：`tools` / `ALL_TOOLS` / `text` / `image` / `exit` / `console.*` /
+  `store(key, value)` / `load(key)`；首行可选 `// @options: {"timeout_ms": 30000,
+"max_output_tokens": 10000}`。默认没有超时，靠调用方中止或 `timeout_ms` 结束。
+- **store** 写在会话的自定义 entry 上（跟随分支），输出超过 `max_output_tokens` 时头尾
+  截断并把全文落到 `$TMPDIR/pi-codemode-*.txt`。
+- **构建**：worker 入口是 esbuild 产物 `src/codemode/worker.js`（随仓库提交，
+  `pnpm run build:codemode-worker` 重新生成，pre-commit 会自动跑）；`quickjs-wasi` 的
+  wasm 在注册工具时编译一次，之后每次执行复用。
 
 ## 工具启用配置
 
