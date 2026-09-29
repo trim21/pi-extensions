@@ -24,18 +24,12 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import {
-  type Api,
-  type ApiStreamOptions,
-  type AssistantMessage,
-  contentText,
-  type Context,
-  type Model,
-} from "@earendil-works/pi-ai";
+import { type Api, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { completeText, type ModelRegistryLike } from "./lib/model-call.js";
 import { isRecord } from "./lib/narrow.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -74,19 +68,6 @@ const sessionNameSettingsSchema = Type.Object({
 });
 
 type SessionNameSettings = Static<typeof sessionNameSettingsSchema>;
-
-/**
- * 命名所需的模型注册表操作：扩展传 ctx.modelRegistry，测试传 mock。
- * 结构化类型（duck typing），只声明用到的两个方法。
- */
-export interface ModelRegistryLike {
-  find(provider: string, modelId: string): Model<Api> | undefined;
-  complete(
-    model: Model<Api>,
-    context: Context,
-    options?: ApiStreamOptions<Api> & { signal?: AbortSignal },
-  ): Promise<AssistantMessage>;
-}
 
 /** 命名所需的 session 操作：扩展传 pi，测试传 mock */
 export interface NamerAPI {
@@ -216,12 +197,6 @@ export function buildNamerPrompt(maxLength: number): string {
   ].join("\n");
 }
 
-/** 合并调用方 signal 与本地超时；调用方未传时仍然有超时兜底 */
-function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const timeout = AbortSignal.timeout(ms);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
 /**
  * 通过模型注册表调用命名模型，让模型把 prompt 概括成短名。
  * 走 pi 的 AI SDK（modelRegistry.complete），复用 provider 解析与
@@ -239,18 +214,15 @@ export async function callNamer(
   maxLength: number,
   signal?: AbortSignal,
 ): Promise<string> {
-  const result = await registry.complete(
+  const { text: output } = await completeText({
+    registry,
     model,
-    {
-      systemPrompt: buildNamerPrompt(maxLength),
-      messages: [{ role: "user", content: text, timestamp: Date.now() }],
-    },
-    { maxTokens: NAMER_MAX_TOKENS, signal: withTimeout(signal, REQUEST_TIMEOUT_MS) },
-  );
-  const output = contentText(result.content).trim();
-  if (!output) {
-    throw new Error("API 未返回内容");
-  }
+    systemPrompt: buildNamerPrompt(maxLength),
+    content: text,
+    maxTokens: NAMER_MAX_TOKENS,
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    signal,
+  });
   return output;
 }
 

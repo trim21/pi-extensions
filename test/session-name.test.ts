@@ -13,6 +13,7 @@ import { join } from "node:path";
 import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 
+import type { ModelRegistryLike } from "../src/lib/model-call.js";
 import {
   buildNamerPrompt,
   callNamer,
@@ -20,7 +21,6 @@ import {
   extractFirstUserPrompt,
   generateSessionName,
   loadSessionNameConfig,
-  type ModelRegistryLike,
   NAMER_MAX_TOKENS,
   sanitizeName,
 } from "../src/session-name.js";

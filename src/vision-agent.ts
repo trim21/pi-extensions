@@ -21,20 +21,12 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
 
-import {
-  type Api,
-  type ApiStreamOptions,
-  type AssistantMessage,
-  contentText,
-  type Context,
-  type ImageContent,
-  type Model,
-  type TextContent,
-} from "@earendil-works/pi-ai";
+import { type Api, type ImageContent, type Model, type TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { completeText, type CompleteTextResult, type ModelRegistryLike } from "./lib/model-call.js";
 import { type ToolPendant } from "./lib/pendant.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
@@ -98,19 +90,6 @@ const visionSettingsSchema = Type.Object({
     }),
   ),
 });
-
-/**
- * 视觉识别所需的模型注册表操作：扩展传 ctx.modelRegistry，测试传 mock。
- * 结构化类型（duck typing），只声明用到的两个方法。
- */
-export interface ModelRegistryLike {
-  find(provider: string, modelId: string): Model<Api> | undefined;
-  complete(
-    model: Model<Api>,
-    context: Context,
-    options?: ApiStreamOptions<Api> & { signal?: AbortSignal },
-  ): Promise<AssistantMessage>;
-}
 
 // ── 纯函数（可测试）──────────────────────────────────────────────────────────
 
@@ -270,12 +249,6 @@ function loadImageBytes(path: string): { base64: string; mimeType: string; label
   return { base64: buffer.toString("base64"), mimeType, label: basename(path) };
 }
 
-/** 合并调用方 signal 与本地超时；调用方未传时仍然有超时兜底 */
-function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const timeout = AbortSignal.timeout(ms);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
 /**
  * 通过模型注册表调用视觉模型识别图片。所有图片文件直接以 base64 放进
  * 同一个 user 消息 —— 不需要模型或 agent 先读取图片文件。走 pi 的 AI SDK
@@ -298,19 +271,16 @@ export async function callVision(
     ),
     { type: "text", text: prompt } satisfies TextContent,
   ];
-  let result: AssistantMessage;
+  let result: CompleteTextResult;
   try {
-    result = await registry.complete(
+    result = await completeText({
+      registry,
       model,
-      {
-        systemPrompt: VISION_SYSTEM_PROMPT,
-        messages: [{ role: "user", content, timestamp: Date.now() }],
-      },
-      {
-        maxTokens: model.maxTokens,
-        signal: withTimeout(signal, REQUEST_TIMEOUT_MS),
-      },
-    );
+      systemPrompt: VISION_SYSTEM_PROMPT,
+      content,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      signal,
+    });
   } catch (error) {
     // 用户主动取消（signal abort）不是失败，转成 VisionAbortError 由调用方处理
     if (error instanceof Error && error.name === "AbortError") {
@@ -318,14 +288,10 @@ export async function callVision(
     }
     throw error;
   }
-  const text = contentText(result.content).trim();
-  if (!text) {
-    throw new Error("API 未返回内容");
-  }
   const tokenStr =
     typeof result.usage.totalTokens === "number" ? String(result.usage.totalTokens) : "?";
   const labels = loaded.map((l) => l.label).join(", ");
-  return `[${labels}]\n${text}\n[模型: ${model.id}, tokens: ${tokenStr}]`;
+  return `[${labels}]\n${result.text}\n[模型: ${model.id}, tokens: ${tokenStr}]`;
 }
 
 // ── extension ────────────────────────────────────────────────────────────────

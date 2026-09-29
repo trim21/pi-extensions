@@ -13,13 +13,13 @@ import { join } from "node:path";
 import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 
+import type { ModelRegistryLike } from "../src/lib/model-call.js";
 import {
   buildPendantMarkdown,
   buildPrompt,
   callVision,
   isMultimodal,
   loadVisionConfig,
-  type ModelRegistryLike,
   resolveImagePaths,
   TOOL_NAME,
   VISION_SYSTEM_PROMPT,
