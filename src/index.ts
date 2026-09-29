@@ -1,10 +1,10 @@
 /**
  * 本仓库的统一扩展入口：所有工具都在这里注册。
  *
- * 为什么是单一入口：pi 给每个扩展入口单独的模块图，模块级状态不跨入口共享。
- * 工具集中在一处之后，同一入口内的模块（codemode 等）才能看到并直接调用
- * 全部工具；`personalExtensions` 配置（`fileIo` / `fileIoByModel` /
- * `disabledTools` / `enabledTools`）也才有唯一的求值点。
+ * 为什么是单一入口：pi 给每个扩展入口单独的模块图，模块级状态不跨入口共享
+ * （两套文件 IO 工具集、LSP 服务、bwrap runtime 都各自持有状态），而且只有集中
+ * 在一处，`personalExtensions` 配置（`fileIo` / `fileIoByModel` / `disabledTools`
+ * / `enabledTools`）才有一个唯一的求值点。
  *
  * 注册时机：pi 在每次会话启动（启动、/new、resume、fork、/reload）时重建扩展，
  * 所以在 `session_start` 里注册即「每个会话按自己的模型判定一次」。模型在扩展

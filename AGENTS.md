@@ -49,7 +49,7 @@ src/
 test/             # Vitest 测试，文件与 src 对应
 ```
 
-- **所有工具由 `src/index.ts` 一个入口注册**（`pi.extensions` 只列它 + `session-name` + `system-prompt`）：pi 给每个扩展入口单独的模块图，集中在一处工具之间才能互相看见（codemode 等直接调用工具的场景依赖这一点）。
+- **所有工具由 `src/index.ts` 一个入口注册**（`pi.extensions` 只列它 + `session-name` + `system-prompt`）：pi 给每个扩展入口单独的模块图，集中在一处才有唯一的配置求值点，也才能让同入口的模块直接调用别的工具。
 - 注册流程：`personalExtensions` 配置（`src/lib/tools-config.ts`）→ 总线（`src/lib/tool-bus.ts`，`register` / `list` / `get` / `executeTool`）→ 各模块的 `registerXxx(bus, ...)`。**工具一律经 `bus.register(def)` 注册，不要再直接调 `pi.registerTool`**（否则 `disabledTools` 过滤会漏掉它）。
 - `ToolUnit` 表（`src/lib/tool-units.ts`）描述「哪些工具名由哪个单元提供」，主入口与 spawn-agent 的子代理共用它。
 - `claude-code` 与 `opencode` 是两套平行的文件 IO 工具集，由 `personalExtensions.fileIo`（可带 `fileIoByModel` 按模型覆盖）**二选一**；两者在行为、命名上的差异与冲突是符合预期的，不要试图统一。共享部件（请求策略、bwrap runtime、LSP manager、reads 恢复）由 `src/lib/tool-services.ts` 持有并注入，模块自己不要再建一份（会重复注册 `/bwrap*`、`/lsp-*` 命令）。
