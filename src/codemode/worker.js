@@ -324,12 +324,7 @@ var outputSchema = Type.Object({
   items: Type.Array(outputItemSchema)
 });
 var scriptErrorSchema = Type.Object({
-  kind: Type.Union([
-    Type.Literal("script"),
-    Type.Literal("timeout"),
-    Type.Literal("aborted"),
-    Type.Literal("sandbox")
-  ]),
+  kind: Type.Union([Type.Literal("script"), Type.Literal("aborted"), Type.Literal("sandbox")]),
   name: Type.Optional(Type.String()),
   message: Type.String(),
   stack: Type.Optional(Type.String())

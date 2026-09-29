@@ -12,7 +12,6 @@ async function run(
     code,
     tools: [{ name: "Read", description: "read a file" }],
     store: {},
-    timeoutMs: 10_000,
     onCall: async ({ args }) => ({ ok: true, value: { echoed: args } }),
     ...overrides,
   });
@@ -95,28 +94,49 @@ describe("codemode 沙箱", () => {
     expect(result.error.message).toContain("boom");
   });
 
-  it("死循环被超时终止，保留已产生的输出", async () => {
-    const onOutput = vi.fn();
-    const result = await run(
-      `
-      text("before the loop");
-      while (true) {}
-      `,
-      { timeoutMs: 1_000, onOutput },
-    );
+  it("死循环被中止终止，保留已产生的输出", async () => {
+    const controller = new AbortController();
+    // 等输出真的到了再中止：否则机器一慢，abort 会先于脚本产出而变成「无输出」
+    const onOutput = vi.fn((items: readonly { type: string; text?: string }[]) => {
+      if (items.some((item) => item.type === "text" && item.text?.includes("before the loop"))) {
+        controller.abort();
+      }
+    });
+    const pending = run(`text("before the loop");\nwhile (true) {}`, {
+      signal: controller.signal,
+      onOutput,
+    });
+    const guard = setTimeout(() => controller.abort(), 10_000);
 
+    const result = await pending;
+    clearTimeout(guard);
+    expect(onOutput).toHaveBeenCalledWith([{ type: "text", text: "before the loop" }]);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.kind).toBe("timeout");
+      expect(result.error.kind).toBe("aborted");
     }
     expect(result.output).toEqual([{ type: "text", text: "before the loop" }]);
-    expect(onOutput).toHaveBeenCalledWith([{ type: "text", text: "before the loop" }]);
+  });
+
+  it("等嵌套调用的时间不受任何时限约束", async () => {
+    // 写类工具的确认框、Bash 提权都要人等；脚本没有超时，等多久都照常返回
+    const result = await run(`return await tools.Read({ path: "slow" });`, {
+      onCall: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        return { ok: true, value: "slow result" };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe("slow result");
+    }
   });
 
   it("中止信号终止脚本", async () => {
     const controller = new AbortController();
     // 用死循环而不是挂起的 promise：后者会被 stalled() 立刻判失败
-    const pending = run(`while (true) {}`, { signal: controller.signal, timeoutMs: 30_000 });
+    const pending = run(`while (true) {}`, { signal: controller.signal });
     setTimeout(() => controller.abort(), 200);
 
     const result = await pending;

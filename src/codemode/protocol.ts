@@ -3,8 +3,8 @@
  *
  * 每次执行起一个新的 worker：主线程把注册时编好的 wasm 模块连同脚本、可调用工具、
  * 初始 store 一起发过去，worker 里建 QuickJS VM 跑脚本，脚本的嵌套调用与输出回传，
- * 主线程执行工具后把结果发回去。超时/中止由主线程 `worker.terminate()` 负责，因此
- * 不需要取消消息。
+ * 主线程执行工具后把结果发回去。脚本没有超时，只有调用方的中止：中止时主线程直接
+ * `worker.terminate()`，因此不需要取消消息。
  *
  * worker 边界两侧都做 typebox 校验：worker 里跑的是模型写的代码，回传的消息同样
  * 当外部输入对待。
@@ -60,12 +60,7 @@ const outputSchema = Type.Object({
 });
 
 const scriptErrorSchema = Type.Object({
-  kind: Type.Union([
-    Type.Literal("script"),
-    Type.Literal("timeout"),
-    Type.Literal("aborted"),
-    Type.Literal("sandbox"),
-  ]),
+  kind: Type.Union([Type.Literal("script"), Type.Literal("aborted"), Type.Literal("sandbox")]),
   name: Type.Optional(Type.String()),
   message: Type.String(),
   stack: Type.Optional(Type.String()),
@@ -104,7 +99,7 @@ export interface WorkerBootstrap {
 export type CodemodeOutputItem =
   { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
-export type ScriptErrorKind = "script" | "timeout" | "aborted" | "sandbox";
+export type ScriptErrorKind = "script" | "aborted" | "sandbox";
 
 export interface ScriptError {
   kind: ScriptErrorKind;

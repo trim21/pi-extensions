@@ -42,7 +42,7 @@ export interface SandboxRunOptions {
   code: string;
   tools: readonly ScriptTool[];
   store: Record<string, unknown>;
-  timeoutMs: number;
+  /** 调用方中止本次执行；脚本没有自己的超时，死循环只能靠它结束。 */
   signal?: AbortSignal;
   /** 每次嵌套调用：由调用方执行工具并把结果回给脚本。 */
   onCall(request: { id: number; name: string; args: unknown }): Promise<SandboxCallOutcome>;
@@ -84,7 +84,6 @@ function runInWorker(wasm: object, options: SandboxRunOptions): Promise<SandboxO
     const calls: ScriptCall[] = [];
     const started = new Map<number, { name: string; at: number }>();
     let settled = false;
-    let deadline: NodeJS.Timeout | undefined;
 
     const finish = (
       body:
@@ -95,9 +94,6 @@ function runInWorker(wasm: object, options: SandboxRunOptions): Promise<SandboxO
         return;
       }
       settled = true;
-      if (deadline) {
-        clearTimeout(deadline);
-      }
       void worker.terminate();
       resolve({ ...body, output, calls });
     };
@@ -105,14 +101,6 @@ function runInWorker(wasm: object, options: SandboxRunOptions): Promise<SandboxO
     const fail = (message: string, kind: ScriptError["kind"] = "sandbox"): void => {
       finish({ ok: false, error: { kind, message }, writes: NO_WRITES });
     };
-
-    // 默认没有超时（Infinity）：setTimeout 会把 Infinity 当成 1ms，必须显式判断
-    if (Number.isFinite(options.timeoutMs)) {
-      deadline = setTimeout(() => {
-        fail(`the script exceeded its ${options.timeoutMs}ms deadline`, "timeout");
-      }, options.timeoutMs);
-      deadline.unref();
-    }
 
     if (options.signal) {
       if (options.signal.aborted) {

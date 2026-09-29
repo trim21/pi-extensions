@@ -68,28 +68,28 @@
 - **WHEN** 脚本连续发起多次写类调用，且这些工具自身不需要审批
 - **THEN** codemode 不弹出任何额外确认，直接执行
 
-### Requirement: 超时与中止
+### Requirement: 中止
 
-脚本执行 MUST 受 `// @options:` 中 `timeout_ms` 与调用方中止信号的约束。超时或中止时 MUST 终止执行该脚本的 worker 线程，且 MUST NOT 留下仍在运行的线程或进程。
-
-#### Scenario: 超时终止
-
-- **WHEN** 脚本超过 `timeout_ms` 仍在运行
-- **THEN** 执行该脚本的 worker 被终止，工具结果失败并保留终止前已产生的输出
+脚本没有整体超时：脚本执行 MUST 只受调用方中止信号的约束。中止时 MUST 终止执行该脚本的 worker 线程，且 MUST NOT 留下仍在运行的线程或进程。脚本等待嵌套调用返回的时长 MUST NOT 受任何时限约束（其中包含用户确认写类调用、Bash 提权弹窗的等待）。
 
 #### Scenario: 中止终止
 
 - **WHEN** 调用方中止本次工具调用
 - **THEN** 该 worker 被终止，工具结果以中止结束
 
+#### Scenario: 等用户确认多久都不算失败
+
+- **WHEN** 脚本发起一个需要用户确认的嵌套调用，用户过了很久才确认
+- **THEN** 该调用照常返回结果，脚本继续运行
+
 #### Scenario: 无残留
 
-- **WHEN** 脚本以任何方式结束（成功、失败、超时、中止）
+- **WHEN** 脚本以任何方式结束（成功、失败、中止）
 - **THEN** 该次执行的 worker 线程结束
 
 ### Requirement: 脚本接口
 
-脚本 MUST 提供：`tools.<name>(args)`（返回 promise）、`ALL_TOOLS`、`text(value)`、`image(value)`、`exit()`、`console.*`、`store(key, value)`、`load(key)`，MUST 支持顶层 `await` 与 `return`，首行 MAY 为 `// @options:` 行（`timeout_ms`、`max_output_tokens`；未知字段 MUST 报错）。脚本未调用任何工具却停在一个永远不会 settle 的 promise 上时 MUST 立刻失败，而不是挂住。
+脚本 MUST 提供：`tools.<name>(args)`（返回 promise）、`ALL_TOOLS`、`text(value)`、`image(value)`、`exit()`、`console.*`、`store(key, value)`、`load(key)`，MUST 支持顶层 `await` 与 `return`，首行 MAY 为 `// @options:` 行（`max_output_tokens`；未知字段 MUST 报错）。脚本未调用任何工具却停在一个永远不会 settle 的 promise 上时 MUST 立刻失败，而不是挂住。
 
 #### Scenario: 输出与返回值
 

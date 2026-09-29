@@ -43,8 +43,8 @@
 - **只有脚本输出进上下文**：`text(value)` / `console.log(...)` 与 `return` 值进入工具结果，
   中间的工具调用与它们的返回内容不会（也不在会话记录里留下工具调用条目）。
 - **脚本接口**：`tools` / `ALL_TOOLS` / `text` / `image` / `exit` / `console.*` /
-  `store(key, value)` / `load(key)`；首行可选 `// @options: {"timeout_ms": 30000,
-"max_output_tokens": 10000}`。默认没有超时，靠调用方中止或 `timeout_ms` 结束。
+  `store(key, value)` / `load(key)`；首行可选 `// @options: {"max_output_tokens": 10000}`。
+  脚本没有超时：死循环由调用方中止（Esc）结束，等嵌套调用返回（含用户审批弹窗）多久都不算超时。
 - **store** 写在会话的自定义 entry 上（跟随分支），输出超过 `max_output_tokens` 时头尾
   截断并把全文落到 `$TMPDIR/pi-codemode-*.txt`。
 - **构建**：worker 入口是 esbuild 产物 `src/codemode/worker.js`（随仓库提交，

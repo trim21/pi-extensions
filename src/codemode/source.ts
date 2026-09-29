@@ -1,19 +1,14 @@
 /**
- * codemode 脚本源码的解析：首行可选的 `// @options: {"max_output_tokens":…, "timeout_ms":…}`。
+ * codemode 脚本源码的解析：首行可选的 `// @options: {"max_output_tokens":…}`。
  *
  * 选项行与脚本首行共用一行，解析后原样保留为空行，脚本里报错的行号因此与用户写的
  * 一致。解析失败（空输入、JSON 非法、未知字段、只有选项行没有代码）直接报错。
  */
 
 const OPTIONS_PREFIX = "// @options:";
-const SUPPORTED_FIELDS = ["max_output_tokens", "timeout_ms"] as const;
+const SUPPORTED_FIELDS = ["max_output_tokens"] as const;
 
 export const DEFAULT_OUTPUT_TOKENS = 10_000;
-/**
- * 脚本默认没有超时：编排一批工具调用本来就可能跑几分钟（例如批量读大文件）。
- * 调用方中止与 `// @options: {"timeout_ms": …}` 都能提前结束。
- */
-export const DEFAULT_TIMEOUT_MS = Infinity;
 
 export class CodemodeSourceError extends Error {
   constructor(message: string) {
@@ -24,7 +19,6 @@ export class CodemodeSourceError extends Error {
 
 export interface CodemodeSourceOptions {
   maxOutputTokens: number;
-  timeoutMs: number;
 }
 
 export interface ParsedCodemodeSource {
@@ -54,11 +48,7 @@ function parseOptions(json: string): Partial<CodemodeSourceOptions> {
     if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
       throw new CodemodeSourceError(`${OPTIONS_PREFIX} ${key} must be a positive number`);
     }
-    if (key === "max_output_tokens") {
-      options.maxOutputTokens = value;
-    } else {
-      options.timeoutMs = value;
-    }
+    options.maxOutputTokens = value;
   }
   return options;
 }

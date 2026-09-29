@@ -22,12 +22,7 @@ import { type ToolBus, toolResultText } from "../lib/tool-bus.js";
 import { renderDeclarations, toScriptTools } from "./declarations.js";
 import type { CodemodeOutputItem, ScriptError, StoreWrites } from "./protocol.js";
 import { type CodemodeSandbox, createCodemodeSandbox, type ScriptCall } from "./sandbox.js";
-import {
-  CODEMODE_SOURCE_GRAMMAR,
-  DEFAULT_OUTPUT_TOKENS,
-  DEFAULT_TIMEOUT_MS,
-  parseCodemodeSource,
-} from "./source.js";
+import { CODEMODE_SOURCE_GRAMMAR, DEFAULT_OUTPUT_TOKENS, parseCodemodeSource } from "./source.js";
 
 export const CODEMODE_TOOL_NAME = "codemode";
 
@@ -230,7 +225,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
         parameters: Type.Object({
           code: Type.String({
             description:
-              'Raw JavaScript source. Top-level await and return work. May start with a `// @options: {"timeout_ms": 30000}` line.',
+              'Raw JavaScript source. Top-level await and return work. May start with a `// @options: {"max_output_tokens": 10000}` line.',
           }),
         }),
         constrainedSampling: {
@@ -241,12 +236,10 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
 
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
           let code: string;
-          let timeoutMs = DEFAULT_TIMEOUT_MS;
           let maxOutputTokens = DEFAULT_OUTPUT_TOKENS;
           try {
             const parsed = parseCodemodeSource(params.code);
             code = parsed.code;
-            timeoutMs = parsed.options.timeoutMs ?? timeoutMs;
             maxOutputTokens = parsed.options.maxOutputTokens ?? maxOutputTokens;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -264,7 +257,6 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
             code,
             tools: scriptTools,
             store: readStore(ctx),
-            timeoutMs,
             signal,
             onOutput: (items) => {
               const text = textOf(items);

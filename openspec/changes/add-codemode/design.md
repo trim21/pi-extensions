@@ -55,7 +55,7 @@
 
 **10. 中断用主线程 `terminate()`，不做共享内存中断标志。**
 
-每次执行都是新 worker，`terminate()` 就是彻底且干净的中止；脚本超时不上报「在 VM 内优雅退出」的差别不值得引入 SharedArrayBuffer 标志。所有路径（成功、失败、超时、中止）都在 `finally` 里 `terminate()`，不留线程。
+每次执行都是新 worker，`terminate()` 就是彻底且干净的中止；脚本没有超时（等用户审批不该被判超时，剩下的死循环靠中止即可），所以也不必引入 SharedArrayBuffer 中断标志。所有路径（成功、失败、中止）都 `terminate()`，不留线程。
 
 **11. worker 产物用 esbuild bundle 成 `worker.js` 提交。**
 
@@ -63,7 +63,7 @@ worker 必须以文件路径启动，而源码目录里的 `.ts` 因为内部相
 
 **12. `// @options:` 与语法约束采样。**
 
-首行可选 `// @options: {"timeout_ms":…,"max_output_tokens":…}`，解析后该行留空以保持行号；同时导出 Lark 语法给 `constrainedSampling`，让支持语法约束的 provider 直接吐裸 JS，而不是 JSON 转义过的字符串。
+首行可选 `// @options: {"max_output_tokens":…}`，解析后该行留空以保持行号；同时导出 Lark 语法给 `constrainedSampling`，让支持语法约束的 provider 直接吐裸 JS，而不是 JSON 转义过的字符串。
 
 ## Risks
 

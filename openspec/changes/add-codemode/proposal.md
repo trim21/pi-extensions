@@ -11,7 +11,7 @@ pi 的内置版本要 0.99 的 `exposure` / `prepareLoadout` / `ctx.executeTool`
 - 新增工具 `codemode`：入参是一段 JavaScript，在与 pi 同进程的 worker 线程里、由本仓库自带的 QuickJS wasm VM 执行（`quickjs-wasi` 是唯一新依赖）。
 - 脚本里的 `tools.<name>(args)` → 主线程 `bus.executeTool(name, args, { ctx, signal })`：走的是各工具自己的实现，所以工具内部的审批（写工作区外的 write-guard、Bash 的沙箱提权等）照常弹 UI；codemode 不额外加确认层。
 - 可调用集合 = 总线上实际注册的工具减去 `codemode` 自身，执行时再与 `pi.getActiveTools()` 求交；工具描述（TS 声明）在注册时按这个集合渲染。
-- 脚本接口：`tools` / `ALL_TOOLS` / `text` / `image` / `exit` / `console.*` / `store` / `load`，支持顶层 `await` 与 `return`，首行可选 `// @options: {"timeout_ms":…,"max_output_tokens":…}`。
+- 脚本接口：`tools` / `ALL_TOOLS` / `text` / `image` / `exit` / `console.*` / `store` / `load`，支持顶层 `await` 与 `return`，首行可选 `// @options: {"max_output_tokens":…}`。
 - `store` 写在 session 自定义 entry 上（随分支走），输出超预算时头尾截断并把全文落到临时文件。
 
 ## Impact

@@ -112,12 +112,14 @@ async function runScript(
   h: Harness,
   code: string,
   branch: unknown[] = [],
+  signal?: AbortSignal,
+  onUpdate?: (text: string) => void,
 ): Promise<ToolResultShape> {
   const result = await h.codemode.execute(
     "call-1",
     { code },
-    undefined,
-    undefined,
+    signal,
+    onUpdate ? (update: { content: unknown }) => onUpdate(textOf(update)) : undefined,
     context(h.select, branch),
   );
   return result;
@@ -254,16 +256,28 @@ describe("codemode 工具", () => {
     ).toEqual(["Read"]);
   });
 
-  it("超时结果带上已产生的输出", async () => {
+  it("中止后结果带上已产生的输出", async () => {
     const h = await harness();
-    const result = await runScript(
+    const controller = new AbortController();
+    // 等输出真的到了再中止，避免机器慢时 abort 先于脚本产出
+    const pending = runScript(
       h,
-      `// @options: {"timeout_ms": 800}\ntext("hi"); while (true) {}`,
+      `text("hi"); while (true) {}`,
+      [],
+      controller.signal,
+      (progress) => {
+        if (progress.includes("hi")) {
+          controller.abort();
+        }
+      },
     );
+    const guard = setTimeout(() => controller.abort(), 10_000);
+    const result = await pending;
+    clearTimeout(guard);
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("hi");
-    expect(textOf(result)).toContain("timeout");
+    expect(textOf(result)).toContain("aborted");
   });
 
   it("输出超预算时截断并落全文", async () => {
