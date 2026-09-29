@@ -3,10 +3,10 @@
  *
  * 沙箱就是 QuickJS VM 本身（VM 里没有 node、文件、网络、timer），脚本唯一的出口是
  * 注入的工具，而这些工具由主线程执行——所以这里只做三件事：把注册时编译好的 wasm
- * 与脚本交给 worker、转发脚本的嵌套调用与输出、在结束/超时/中止时 `terminate()`。
+ * 与脚本交给 worker、转发脚本的嵌套调用与输出、在结束或中止时 `terminate()`。
  *
- * worker 一次执行一个：死循环脚本由主线程 terminate 掉，连同它那份 VM 一起丢弃，
- * 不会污染后续执行，也不需要取消协议。
+ * worker 一次执行一个：脚本没有超时，死循环由调用方中止后 terminate 掉，连同它那份
+ * VM 一起丢弃，不会污染后续执行，也不需要取消协议。
  */
 
 import { Worker } from "node:worker_threads";
