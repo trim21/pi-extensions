@@ -680,7 +680,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
   const initialized = await withTimeout(
     connection.sendRequest(InitializeRequest.type, {
       rootUri: pathToFileURL(input.root).href,
-      processId: input.server.process.pid ?? null,
+      processId: process.pid,
       workspaceFolders: [{ name: "workspace", uri: pathToFileURL(input.root).href }],
       initializationOptions: {
         ...input.server.initialization,
