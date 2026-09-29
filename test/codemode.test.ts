@@ -51,6 +51,31 @@ describe("codemode 沙箱", () => {
     }
   });
 
+  it("load 原样读回字符串、数组与对象（不是把值当 JSON 再解析一次）", async () => {
+    const result = await run(
+      `return { str: load("str"), numStr: load("numStr"), list: load("list"), nested: load("nested"), missing: typeof load("nope") };`,
+      {
+        store: {
+          str: "CODEMODE_TOOL_NAME",
+          numStr: "41",
+          list: [1, "two"],
+          nested: { a: [true, null] },
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({
+        str: "CODEMODE_TOOL_NAME",
+        numStr: "41",
+        list: [1, "two"],
+        nested: { a: [true, null] },
+        missing: "undefined",
+      });
+    }
+  });
+
   it("工具报错以 Error 回到脚本，脚本可以捕获", async () => {
     const result = await run(
       `

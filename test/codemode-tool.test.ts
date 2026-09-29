@@ -226,6 +226,21 @@ describe("codemode 工具", () => {
     expect(textOf(fromBranch)).toContain("42");
   });
 
+  it("load 从分支读回时字符串与对象原样返回", async () => {
+    const h = await harness();
+    const result = await runScript(h, `return { name: load("name"), cfg: load("cfg") };`, [
+      {
+        type: "custom",
+        customType: "codemode-store",
+        data: { set: { name: "Read", cfg: { parallel: true } }, delete: [] },
+      },
+    ]);
+
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain('"name": "Read"');
+    expect(textOf(result)).toContain('"parallel": true');
+  });
+
   it("失败脚本的 store 写入不落盘", async () => {
     const h = await harness();
     const result = await runScript(h, `store("k", 1); throw new Error("boom");`);

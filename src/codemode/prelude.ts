@@ -104,10 +104,15 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 	Object.freeze(allTools);
 
 	// key -> JSON 文本；容量按 key 与 JSON 的字符数计
-	const stored = new Map(Object.entries(parse(storeJson)));
+	const stored = new Map();
 	const writes = new Map();
 	let storedChars = 0;
-	for (const [key, json] of stored) storedChars += key.length + json.length;
+	for (const [key, value] of Object.entries(parse(storeJson))) {
+		const json = stringify(value);
+		if (json === undefined) continue;
+		stored.set(key, json);
+		storedChars += key.length + json.length;
+	}
 
 	function checkKey(name, key) {
 		if (typeof key !== "string") throw new TypeErrorCtor(name + "() key must be a string");
