@@ -282,21 +282,33 @@ export const clientDefaults = {
   maxOpenDocuments: 32,
 } as const;
 
-export interface CreateInput {
+/**
+ * 客户端可调项的唯一定义：`create()` 的覆盖参数、`lsp.ts` 的 `ResolvedLspConfig`
+ * 与 `resolveConfig` 共用同一份字段集合，新增旋钮只需在这里声明一次即可被
+ * 配置解析与客户端构造同时要求。超时均为解析后的毫秒数，缺省值见 clientDefaults。
+ */
+export interface LspClientOptions {
+  /** push 诊断去抖（ms）。 */
+  diagnosticsDebounceMs: number;
+  /** document 模式诊断等待上限（ms）。 */
+  diagnosticsDocumentWaitTimeoutMs: number;
+  /** 上一份诊断为空的文档的等待上限（ms）；缺省见 clientDefaults。 */
+  diagnosticsSilentWaitTimeoutMs: number;
+  /** full 模式诊断等待上限（ms）。 */
+  diagnosticsFullWaitTimeoutMs: number;
+  /** 单次 pull 诊断请求超时（ms）。 */
+  diagnosticsRequestTimeoutMs: number;
+  /** 服务器 initialize 握手超时（ms）。 */
+  initializeTimeoutMs: number;
+  /** 驻留文档上限（LRU 容量，缺省 32）；超过时淘汰最久未使用并 didClose。 */
+  maxOpenDocuments: number;
+}
+
+export interface CreateInput extends Partial<LspClientOptions> {
   serverID: string;
   server: LspServerHandle;
   root: string;
   directory: string;
-  /** 可覆盖的超时参数（缺省用 client 默认值，由全局/本地 lsp.json 配置注入）。 */
-  diagnosticsDebounceMs?: number;
-  diagnosticsDocumentWaitTimeoutMs?: number;
-  /** 上一份诊断为空的文档的等待上限；缺省见 clientDefaults。 */
-  diagnosticsSilentWaitTimeoutMs?: number;
-  diagnosticsFullWaitTimeoutMs?: number;
-  diagnosticsRequestTimeoutMs?: number;
-  initializeTimeoutMs?: number;
-  /** 驻留文档上限（LRU 容量，缺省 32）；超过时淘汰最久未使用并 didClose。 */
-  maxOpenDocuments?: number;
   /** 覆盖 rename 覆盖校验的轮询节奏（缺省见 DEFAULT_RENAME_VERIFICATION_TIMING）。 */
   renameVerificationTiming?: Partial<RenameVerificationTiming>;
 }

@@ -37,6 +37,7 @@ import {
   type Diagnostic,
   type Info as LspClient,
   type InspectLocation,
+  type LspClientOptions,
   LspMethodNotSupportedError,
   RenameNotPossibleError,
   WATCH_KIND_CHANGE,
@@ -68,7 +69,7 @@ const watchConfigSchema = Type.Object({
   ignore: Type.Optional(Type.Array(Type.String())),
 });
 
-/** lsp.json 的配置项（全局与本地同构；只描述用户可写的原始形态，缺省见 configDefaults）。 */
+/** lsp.json 的配置项（全局与本地同构；只描述用户可写的原始形态，缺省见 watchDefaults / clientDefaults）。 */
 const lspConfigSchema = Type.Object({
   /** 配置文件版本（当前 1）；未知版本会被 typebox 严格校验拒绝。 */
   version: Type.Optional(Type.Number()),
@@ -78,7 +79,7 @@ const lspConfigSchema = Type.Object({
   enabled: Type.Optional(Type.Array(Type.String())),
   /** 从启用集中排除的服务器 id（缺省 = 无）。 */
   disabled: Type.Optional(Type.Array(Type.String())),
-  /** 工作区文件监听配置（缺省全部字段见 configDefaults.watch）。 */
+  /** 工作区文件监听配置（缺省全部字段见 watchDefaults）。 */
   watch: Type.Optional(watchConfigSchema),
   /** 驻留文档上限（LRU 容量），超过时淘汰最久未使用并 didClose。 */
   maxOpenDocuments: Type.Optional(Type.Number({ minimum: 1 })),
@@ -99,18 +100,12 @@ const lspConfigSchema = Type.Object({
 /** 配置值（单文件解析结果）；超时字段为原始写法（number 或字符串），换算在 resolveConfig。 */
 export type LspConfig = Static<typeof lspConfigSchema>;
 
-/**
- * 解析期缺省（单一来源）。超时/LRU 与 client.create 共用 clientDefaults；
- * watch 无 client 对应项，数值在此集中。
- */
-const configDefaults = {
-  watch: {
-    enabled: true,
-    debounceMs: 300,
-    flushMs: 1_000,
-    maxBatch: 500,
-  },
-  maxOpenDocuments: clientDefaults.maxOpenDocuments,
+/** 解析期缺省：watch 段（无 client 对应项，数值在此集中）；客户端参数缺省见 clientDefaults。 */
+const watchDefaults = {
+  enabled: true,
+  debounceMs: 300,
+  flushMs: 1_000,
+  maxBatch: 500,
 } as const;
 
 /** 服务器启动失败后自动重试的冷却（ms）；冷却内跳过，之后下次触碰自动重试。 */
@@ -127,8 +122,12 @@ interface EffectiveWatchConfig {
   ignore: string[];
 }
 
-/** 全局 + 本地合并并解析后的生效配置：所有字段为确定值，无"未配置"歧义。 */
-export interface ResolvedLspConfig {
+/**
+ * 全局 + 本地合并并解析后的生效配置：所有字段为确定值，无"未配置"歧义。
+ * 客户端参数的整体形状复用 `LspClientOptions`（定义在 client.ts，与
+ * `create()` 的覆盖参数同源），因此这里不再逐字段重声明。
+ */
+export interface ResolvedLspConfig extends LspClientOptions {
   /** 合并后的服务器定义（未配置任何服务器时为空表）。 */
   servers: Record<string, ServerConfig>;
   /** enabled 白名单（undefined = 全部启用）。 */
@@ -137,15 +136,6 @@ export interface ResolvedLspConfig {
   disabled: Set<string> | undefined;
   /** 工作区监听配置（缺省值已应用）。 */
   watch: EffectiveWatchConfig;
-  /** 驻留文档 LRU 容量。 */
-  maxOpenDocuments: number;
-  /** 以下超时均为换算后的毫秒数（缺省见 configDefaults / clientDefaults）。 */
-  diagnosticsDebounceMs: number;
-  diagnosticsDocumentWaitTimeoutMs: number;
-  diagnosticsSilentWaitTimeoutMs: number;
-  diagnosticsFullWaitTimeoutMs: number;
-  diagnosticsRequestTimeoutMs: number;
-  initializeTimeoutMs: number;
 }
 
 /** "500" → 500、"5s" → 5000、"1m" → 60000；无效字符串返回 NaN（由调用方兜底缺省）。 */
@@ -177,7 +167,7 @@ function toMs(value: number | string | undefined): number | undefined {
 }
 
 /**
- * 把合并后的原始配置解析为生效配置：应用 configDefaults 缺省、字符串时长换算、
+ * 把合并后的原始配置解析为生效配置：应用 watchDefaults / clientDefaults 缺省、字符串时长换算、
  * 白名单转 Set；per-server 的 workingDir / rootMarkers 互斥校验在此完成
  * （配置解析期抛错，与 enabled 白名单校验同层）。
  */
@@ -195,13 +185,13 @@ export function resolveConfig(raw: LspConfig): ResolvedLspConfig {
     enabled: raw.enabled === undefined ? undefined : new Set(raw.enabled),
     disabled: raw.disabled === undefined ? undefined : new Set(raw.disabled),
     watch: {
-      enabled: raw.watch?.enabled ?? configDefaults.watch.enabled,
-      debounceMs: toMs(raw.watch?.debounceMs) ?? configDefaults.watch.debounceMs,
-      flushMs: configDefaults.watch.flushMs,
-      maxBatch: raw.watch?.maxBatch ?? configDefaults.watch.maxBatch,
+      enabled: raw.watch?.enabled ?? watchDefaults.enabled,
+      debounceMs: toMs(raw.watch?.debounceMs) ?? watchDefaults.debounceMs,
+      flushMs: watchDefaults.flushMs,
+      maxBatch: raw.watch?.maxBatch ?? watchDefaults.maxBatch,
       ignore: raw.watch?.ignore ?? [],
     },
-    maxOpenDocuments: raw.maxOpenDocuments ?? configDefaults.maxOpenDocuments,
+    maxOpenDocuments: raw.maxOpenDocuments ?? clientDefaults.maxOpenDocuments,
     diagnosticsDebounceMs: toMs(raw.diagnosticsDebounceMs) ?? clientDefaults.diagnosticsDebounceMs,
     diagnosticsDocumentWaitTimeoutMs:
       toMs(raw.diagnosticsDocumentWaitTimeoutMs) ?? clientDefaults.diagnosticsDocumentWaitTimeoutMs,
@@ -848,19 +838,22 @@ export function createLspService(
           reportStartupFailure(key, adapter.id, root, "binary not found", notify);
           return;
         }
+        const overrides: Partial<LspClientOptions> = {};
+        if (adapter.diagnosticsWaitMs !== undefined) {
+          overrides.diagnosticsDocumentWaitTimeoutMs = adapter.diagnosticsWaitMs;
+        }
+        if (adapter.startupTimeoutMs !== undefined) {
+          overrides.initializeTimeoutMs = adapter.startupTimeoutMs;
+        }
         const client = await create({
           serverID: adapter.id,
           server: handle,
           root,
           directory: cwd,
-          diagnosticsDebounceMs: config.diagnosticsDebounceMs,
-          diagnosticsDocumentWaitTimeoutMs:
-            adapter.diagnosticsWaitMs ?? config.diagnosticsDocumentWaitTimeoutMs,
-          diagnosticsSilentWaitTimeoutMs: config.diagnosticsSilentWaitTimeoutMs,
-          diagnosticsFullWaitTimeoutMs: config.diagnosticsFullWaitTimeoutMs,
-          diagnosticsRequestTimeoutMs: config.diagnosticsRequestTimeoutMs,
-          initializeTimeoutMs: adapter.startupTimeoutMs ?? config.initializeTimeoutMs,
-          maxOpenDocuments: config.maxOpenDocuments,
+          // 客户端参数整体取自生效配置（ResolvedLspConfig extends LspClientOptions），
+          // 不做逐字段搬运：新增旋钮时漏接线会静默失效，这里靠展开消除该位置。
+          ...config,
+          ...overrides,
         });
         if (state.closing || state.disabled) {
           await client.shutdown();

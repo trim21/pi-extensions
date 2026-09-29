@@ -1,6 +1,7 @@
 /**
  * lsp.json 配置测试（全局 ~/.pi/agent/lsp.json + 本地 <cwd>/.pi/lsp.json）：
- * - mergeConfig / resolveConfig 纯函数（全局/本地合并 → ResolvedLspConfig，结果用 inline snapshot）
+ * - mergeConfig / resolveConfig 纯函数（全局/本地合并 → ResolvedLspConfig：服务层字段用
+ *   inline snapshot 断言，客户端参数与 clientDefaults 比对）
  * - loadLspConfig 文件 IO：缺失视为空配置、解析失败直接抛错
  * - filterAdapters 白名单与排除过滤
  * - 集成：配置过滤后未启用的 adapter 不 spawn（mock stdio LSP server 走真实握手）
@@ -16,6 +17,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LspServerAdapter } from "../src/lib/lsp/adapter.js";
+import { clientDefaults } from "../src/lib/lsp/client.js";
 import {
   createLspManager,
   createLspService,
@@ -24,6 +26,7 @@ import {
   type LspService,
   mergeConfig,
   resolveConfig,
+  type ResolvedLspConfig,
 } from "../src/lib/lsp/lsp.js";
 import { type FileChange, watchWorkspace } from "../src/lib/lsp/watcher.js";
 
@@ -59,27 +62,47 @@ function mockAdapter(id: string): {
   };
 }
 
+/**
+ * 拆开解析结果：服务层字段（servers / enabled / disabled / watch）用内联快照断言，
+ * 客户端参数（clientDefaults 的字段集合）单独断言——新增一个客户端旋钮时只需要改
+ * 「客户端参数缺省值」用例，不必改下面每处快照。
+ */
+function splitResolved(config: ResolvedLspConfig) {
+  const { servers, enabled, disabled, watch, ...client } = config;
+  return { service: { servers, enabled, disabled, watch }, client };
+}
+
 describe("mergeConfig + resolveConfig", () => {
+  // 缺省值只在测试里钉这一处：下面各处断言客户端的解析结果与 clientDefaults 相等，
+  // 新增一个旋钮时改这里一行即可，不必动每处用例的快照。
+  it("客户端参数缺省值集中在 clientDefaults", () => {
+    expect(clientDefaults).toMatchInlineSnapshot(`
+      {
+        "diagnosticsDebounceMs": 150,
+        "diagnosticsDocumentWaitTimeoutMs": 5000,
+        "diagnosticsFullWaitTimeoutMs": 10000,
+        "diagnosticsRequestTimeoutMs": 3000,
+        "diagnosticsSilentWaitTimeoutMs": 1500,
+        "initializeTimeoutMs": 45000,
+        "maxOpenDocuments": 32,
+      }
+    `);
+  });
+
   it("解析配置：超时支持 number 和带单位的字符串，结果换算为 ms", () => {
-    expect(
+    const { service, client } = splitResolved(
       resolveConfig({
         enabled: ["pyright"],
         initializeTimeoutMs: 10_000,
         diagnosticsDebounceMs: "5s",
       }),
-    ).toMatchInlineSnapshot(`
+    );
+    expect(service).toMatchInlineSnapshot(`
       {
-        "diagnosticsDebounceMs": 5000,
-        "diagnosticsDocumentWaitTimeoutMs": 5000,
-        "diagnosticsFullWaitTimeoutMs": 10000,
-        "diagnosticsRequestTimeoutMs": 3000,
-        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": Set {
           "pyright",
         },
-        "initializeTimeoutMs": 10000,
-        "maxOpenDocuments": 32,
         "servers": {},
         "watch": {
           "debounceMs": 300,
@@ -90,10 +113,16 @@ describe("mergeConfig + resolveConfig", () => {
         },
       }
     `);
+    expect(client).toEqual({
+      ...clientDefaults,
+      // 字符串时长 "5s" 换算为 ms；number 原样透传
+      diagnosticsDebounceMs: 5_000,
+      initializeTimeoutMs: 10_000,
+    });
   });
 
   it("全局为基底、本地逐字段覆盖", () => {
-    expect(
+    const { service, client } = splitResolved(
       resolveConfig(
         mergeConfig(
           {
@@ -105,13 +134,9 @@ describe("mergeConfig + resolveConfig", () => {
           { disabled: ["ruff"], initializeTimeoutMs: 10_000 },
         ),
       ),
-    ).toMatchInlineSnapshot(`
+    );
+    expect(service).toMatchInlineSnapshot(`
       {
-        "diagnosticsDebounceMs": 150,
-        "diagnosticsDocumentWaitTimeoutMs": 3000,
-        "diagnosticsFullWaitTimeoutMs": 10000,
-        "diagnosticsRequestTimeoutMs": 3000,
-        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": Set {
           "ruff",
         },
@@ -119,8 +144,6 @@ describe("mergeConfig + resolveConfig", () => {
           "typescript",
           "pyright",
         },
-        "initializeTimeoutMs": 10000,
-        "maxOpenDocuments": 32,
         "servers": {},
         "watch": {
           "debounceMs": 300,
@@ -131,10 +154,16 @@ describe("mergeConfig + resolveConfig", () => {
         },
       }
     `);
+    expect(client).toEqual({
+      ...clientDefaults,
+      // document 等待 3s；本地把全局的 60s 覆盖为 10s
+      diagnosticsDocumentWaitTimeoutMs: 3_000,
+      initializeTimeoutMs: 10_000,
+    });
   });
 
   it("servers 全局与本地按 id 合并（同名 id 整体覆盖、新增 id，全局其余保留）", () => {
-    expect(
+    const { service, client } = splitResolved(
       resolveConfig(
         mergeConfig(
           {
@@ -151,17 +180,11 @@ describe("mergeConfig + resolveConfig", () => {
           },
         ),
       ),
-    ).toMatchInlineSnapshot(`
+    );
+    expect(service).toMatchInlineSnapshot(`
       {
-        "diagnosticsDebounceMs": 150,
-        "diagnosticsDocumentWaitTimeoutMs": 5000,
-        "diagnosticsFullWaitTimeoutMs": 10000,
-        "diagnosticsRequestTimeoutMs": 3000,
-        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": undefined,
-        "initializeTimeoutMs": 45000,
-        "maxOpenDocuments": 32,
         "servers": {
           "a": {
             "bin": "/local/a",
@@ -182,23 +205,19 @@ describe("mergeConfig + resolveConfig", () => {
         },
       }
     `);
+    expect(client).toEqual(clientDefaults);
   });
 
   it("本地未写 servers 时全局 servers 保留", () => {
-    expect(resolveConfig(mergeConfig({ servers: { a: { bin: "/global/a" } } }, { enabled: ["a"] })))
-      .toMatchInlineSnapshot(`
+    const { service, client } = splitResolved(
+      resolveConfig(mergeConfig({ servers: { a: { bin: "/global/a" } } }, { enabled: ["a"] })),
+    );
+    expect(service).toMatchInlineSnapshot(`
       {
-        "diagnosticsDebounceMs": 150,
-        "diagnosticsDocumentWaitTimeoutMs": 5000,
-        "diagnosticsFullWaitTimeoutMs": 10000,
-        "diagnosticsRequestTimeoutMs": 3000,
-        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": Set {
           "a",
         },
-        "initializeTimeoutMs": 45000,
-        "maxOpenDocuments": 32,
         "servers": {
           "a": {
             "bin": "/global/a",
@@ -213,29 +232,24 @@ describe("mergeConfig + resolveConfig", () => {
         },
       }
     `);
+    expect(client).toEqual(clientDefaults);
   });
 
   it("本地未写 watch 段时全局 watch（含 ignore）保留", () => {
-    expect(
+    const { service, client } = splitResolved(
       resolveConfig(
         mergeConfig(
           { enabled: ["pyright"], watch: { ignore: ["**/.git/**"] } },
           { enabled: ["typescript"] },
         ),
       ),
-    ).toMatchInlineSnapshot(`
+    );
+    expect(service).toMatchInlineSnapshot(`
       {
-        "diagnosticsDebounceMs": 150,
-        "diagnosticsDocumentWaitTimeoutMs": 5000,
-        "diagnosticsFullWaitTimeoutMs": 10000,
-        "diagnosticsRequestTimeoutMs": 3000,
-        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": Set {
           "typescript",
         },
-        "initializeTimeoutMs": 45000,
-        "maxOpenDocuments": 32,
         "servers": {},
         "watch": {
           "debounceMs": 300,
@@ -248,10 +262,11 @@ describe("mergeConfig + resolveConfig", () => {
         },
       }
     `);
+    expect(client).toEqual(clientDefaults);
   });
 
   it("watch 本地与全局按字段合并：本地逐字段覆盖，ignore 取并集去重（全局在前）", () => {
-    expect(
+    const { service, client } = splitResolved(
       resolveConfig(
         mergeConfig(
           {
@@ -266,17 +281,11 @@ describe("mergeConfig + resolveConfig", () => {
           },
         ),
       ),
-    ).toMatchInlineSnapshot(`
+    );
+    expect(service).toMatchInlineSnapshot(`
       {
-        "diagnosticsDebounceMs": 150,
-        "diagnosticsDocumentWaitTimeoutMs": 5000,
-        "diagnosticsFullWaitTimeoutMs": 10000,
-        "diagnosticsRequestTimeoutMs": 3000,
-        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": undefined,
-        "initializeTimeoutMs": 45000,
-        "maxOpenDocuments": 32,
         "servers": {},
         "watch": {
           "debounceMs": 1000,
@@ -291,25 +300,20 @@ describe("mergeConfig + resolveConfig", () => {
         },
       }
     `);
+    expect(client).toEqual(clientDefaults);
   });
 
   it("watch 与 maxOpenDocuments 可配置：debounceMs 字符串时长换算成 ms", () => {
-    expect(
+    const { service, client } = splitResolved(
       resolveConfig({
         watch: { enabled: false, debounceMs: "5s", maxBatch: 100, ignore: ["**/*.log"] },
         maxOpenDocuments: 8,
       }),
-    ).toMatchInlineSnapshot(`
+    );
+    expect(service).toMatchInlineSnapshot(`
       {
-        "diagnosticsDebounceMs": 150,
-        "diagnosticsDocumentWaitTimeoutMs": 5000,
-        "diagnosticsFullWaitTimeoutMs": 10000,
-        "diagnosticsRequestTimeoutMs": 3000,
-        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": undefined,
-        "initializeTimeoutMs": 45000,
-        "maxOpenDocuments": 8,
         "servers": {},
         "watch": {
           "debounceMs": 5000,
@@ -322,6 +326,7 @@ describe("mergeConfig + resolveConfig", () => {
         },
       }
     `);
+    expect(client).toEqual({ ...clientDefaults, maxOpenDocuments: 8 });
   });
 
   it("workingDir 与 rootMarkers 同时配置是配置错误", () => {
@@ -340,17 +345,11 @@ describe("mergeConfig + resolveConfig", () => {
   });
 
   it("未配置任何字段时解析为完整缺省配置", () => {
-    expect(resolveConfig({})).toMatchInlineSnapshot(`
+    const { service, client } = splitResolved(resolveConfig({}));
+    expect(service).toMatchInlineSnapshot(`
       {
-        "diagnosticsDebounceMs": 150,
-        "diagnosticsDocumentWaitTimeoutMs": 5000,
-        "diagnosticsFullWaitTimeoutMs": 10000,
-        "diagnosticsRequestTimeoutMs": 3000,
-        "diagnosticsSilentWaitTimeoutMs": 1500,
         "disabled": undefined,
         "enabled": undefined,
-        "initializeTimeoutMs": 45000,
-        "maxOpenDocuments": 32,
         "servers": {},
         "watch": {
           "debounceMs": 300,
@@ -361,6 +360,7 @@ describe("mergeConfig + resolveConfig", () => {
         },
       }
     `);
+    expect(client).toEqual(clientDefaults);
   });
 });
 
