@@ -97,7 +97,6 @@ export function renderDeclarations(tools: readonly ToolLike[]): string {
     "declare function text(value: unknown): void;",
     "declare function image(value: unknown): void;",
     "declare function exit(): void;",
-    "declare function store(key: string, value: unknown): void;",
-    "declare function load(key: string): unknown;",
+    "declare const store: { set(key: string, value: unknown): void; get(key: string): unknown; list(): string[] };",
   ].join("\n");
 }

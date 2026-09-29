@@ -162,6 +162,14 @@ describe("codemode 工具", () => {
     expect(h.codemode.description).not.toContain("codemode(args:");
   });
 
+  it("描述里给出 store 的三个方法", async () => {
+    const h = await harness();
+    expect(h.codemode.description).toContain("declare const store:");
+    expect(h.codemode.description).toContain("set(key: string, value: unknown): void");
+    expect(h.codemode.description).toContain("get(key: string): unknown");
+    expect(h.codemode.description).toContain("list(): string[]");
+  });
+
   it("嵌套调用走工具总线，工具拿到 ctx 与结果回给脚本", async () => {
     const h = await harness();
     const result = await runScript(h, `return await tools.Read({ file_path: "/tmp/a" });`);
@@ -222,7 +230,7 @@ describe("codemode 工具", () => {
 
   it("store 写入落在工具结果的 details 上，并从分支的 toolResult 重放", async () => {
     const h = await harness();
-    const written = await runScript(h, `store("seen", 7); return "ok";`);
+    const written = await runScript(h, `store.set("seen", 7); return "ok";`);
     expect((written.details as { store?: unknown }).store).toEqual({
       set: { seen: 7 },
       delete: [],
@@ -230,7 +238,7 @@ describe("codemode 工具", () => {
     expect(h.appended).toEqual([]);
 
     const h2 = await harness();
-    const fromBranch = await runScript(h2, `return (load("seen") ?? 0) + 1;`, [
+    const fromBranch = await runScript(h2, `return (store.get("seen") ?? 0) + 1;`, [
       toolResultEntry({ set: { seen: 41 }, delete: [] }),
     ]);
     expect(textOf(fromBranch)).toContain("42");
@@ -238,9 +246,11 @@ describe("codemode 工具", () => {
 
   it("load 从分支读回时字符串与对象原样返回", async () => {
     const h = await harness();
-    const result = await runScript(h, `return { name: load("name"), cfg: load("cfg") };`, [
-      toolResultEntry({ set: { name: "Read", cfg: { parallel: true } }, delete: [] }),
-    ]);
+    const result = await runScript(
+      h,
+      `return { name: store.get("name"), cfg: store.get("cfg") };`,
+      [toolResultEntry({ set: { name: "Read", cfg: { parallel: true } }, delete: [] })],
+    );
 
     expect(result.isError).toBeFalsy();
     expect(textOf(result)).toContain('"name": "Read"');
@@ -249,7 +259,7 @@ describe("codemode 工具", () => {
 
   it("分支上其他工具的 toolResult 不参与 store 恢复", async () => {
     const h = await harness();
-    const result = await runScript(h, `return typeof load("leaked");`, [
+    const result = await runScript(h, `return typeof store.get("leaked");`, [
       {
         type: "message",
         message: {
@@ -265,7 +275,7 @@ describe("codemode 工具", () => {
 
   it("失败脚本不写 store", async () => {
     const h = await harness();
-    const result = await runScript(h, `store("k", 1); throw new Error("boom");`);
+    const result = await runScript(h, `store.set("k", 1); throw new Error("boom");`);
     expect(result.isError).toBe(true);
     expect((result.details as { store?: unknown }).store).toBeUndefined();
     expect(h.appended).toEqual([]);

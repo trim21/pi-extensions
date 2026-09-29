@@ -23,7 +23,7 @@ describe("codemode 沙箱", () => {
       `
       const file = await tools.Read({ path: "a.txt" });
       text("read " + file.echoed.path);
-      store("last", file.echoed.path);
+      store.set("last", file.echoed.path);
       console.log("done");
       return { path: file.echoed.path };
       `,
@@ -43,17 +43,32 @@ describe("codemode 沙箱", () => {
     expect(result.calls).toEqual([{ name: "Read", status: "ok", durationMs: expect.any(Number) }]);
   });
 
-  it("load 能读到初始 store", async () => {
-    const result = await run(`return (load("runs") ?? 0) + 1;`, { store: { runs: 41 } });
+  it("store.get 能读到初始 store", async () => {
+    const result = await run(`return (store.get("runs") ?? 0) + 1;`, { store: { runs: 41 } });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value).toBe(42);
     }
   });
 
-  it("load 原样读回字符串、数组与对象（不是把值当 JSON 再解析一次）", async () => {
+  it("store.list 返回升序键，被删除的键不再出现", async () => {
+    const result = await run(`
+      store.set("b", 1);
+      store.set("a", 2);
+      store.set("c", 3);
+      store.set("b", undefined);
+      return store.list();
+    `);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual(["a", "c"]);
+    }
+  });
+
+  it("store.get 原样读回字符串、数组与对象（不是把值当 JSON 再解析一次）", async () => {
     const result = await run(
-      `return { str: load("str"), numStr: load("numStr"), list: load("list"), nested: load("nested"), missing: typeof load("nope") };`,
+      `return { str: store.get("str"), numStr: store.get("numStr"), list: store.get("list"), nested: store.get("nested"), missing: typeof store.get("nope") };`,
       {
         store: {
           str: "CODEMODE_TOOL_NAME",
@@ -185,7 +200,7 @@ describe("codemode 沙箱", () => {
   it("exit() 立刻结束并保留输出与 store", async () => {
     const result = await run(`
       text("bye");
-      store("k", 1);
+      store.set("k", 1);
       exit();
       text("never");
     `);

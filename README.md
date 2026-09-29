@@ -43,7 +43,8 @@
 - **只有脚本输出进上下文**：`text(value)` / `console.log(...)` 与 `return` 值进入工具结果，
   中间的工具调用与它们的返回内容不会（也不在会话记录里留下工具调用条目）。
 - **脚本接口**：`tools` / `ALL_TOOLS` / `text` / `image` / `exit` / `console.*` /
-  `store(key, value)` / `load(key)`；首行可选 `// @options: {"max_output_tokens": 10000}`。
+  `store.set` / `store.get` / `store.list`（会话内持久的键值表）；首行可选
+  `// @options: {"max_output_tokens": 10000}`。
   脚本没有超时：死循环由调用方中止（Esc）结束，等嵌套调用返回（含用户审批弹窗）多久都不算超时。
 - **store** 记在每次成功调用工具结果的 `details.store` 上（与 `src/lib/file-reads.ts` 的
   已读记账同一套做法），下一次调用从当前分支的 toolResult 重放；输出超过 `max_output_tokens`

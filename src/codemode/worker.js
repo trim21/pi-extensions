@@ -103,41 +103,47 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 		if (typeof key !== "string") throw new TypeErrorCtor(name + "() key must be a string");
 	}
 
-	function store(key, value) {
-		checkKey("store", key);
-		const previous = stored.has(key) ? key.length + stored.get(key).length : 0;
-		if (value === undefined) {
-			stored.delete(key);
-			storedChars -= previous;
-			writes.set(key, undefined);
-			return;
-		}
-		let json;
-		try {
-			json = stringify(value);
-		} catch (error) {
-			throw new TypeErrorCtor("store(" + stringify(key) + ") value is not JSON-serializable: " + format(error));
-		}
-		if (json === undefined) {
-			throw new TypeErrorCtor("store(" + stringify(key) + ") value is not JSON-serializable");
-		}
-		if (json.length > ${MAX_STORE_VALUE_CHARS}) {
-			throw new RangeError("store(" + stringify(key) + ") value exceeds ${MAX_STORE_VALUE_CHARS} characters of JSON");
-		}
-		const next = storedChars - previous + key.length + json.length;
-		if (next > ${MAX_STORE_TOTAL_CHARS}) {
-			throw new RangeError("store is full: stored values would exceed ${MAX_STORE_TOTAL_CHARS} characters of JSON");
-		}
-		stored.set(key, json);
-		storedChars = next;
-		writes.set(key, json);
-	}
-
-	function load(key) {
-		checkKey("load", key);
-		const json = stored.get(key);
-		return json === undefined ? undefined : parse(json);
-	}
+	// 脚本侧是一个键值表：store.set / store.get / store.list，数据本身留在闭包里
+	const store = Object.freeze({
+		set(key, value) {
+			checkKey("store.set", key);
+			const previous = stored.has(key) ? key.length + stored.get(key).length : 0;
+			if (value === undefined) {
+				stored.delete(key);
+				storedChars -= previous;
+				writes.set(key, undefined);
+				return;
+			}
+			let json;
+			try {
+				json = stringify(value);
+			} catch (error) {
+				throw new TypeErrorCtor("store.set(" + stringify(key) + ") value is not JSON-serializable: " + format(error));
+			}
+			if (json === undefined) {
+				throw new TypeErrorCtor("store.set(" + stringify(key) + ") value is not JSON-serializable");
+			}
+			if (json.length > ${MAX_STORE_VALUE_CHARS}) {
+				throw new RangeError("store.set(" + stringify(key) + ") value exceeds ${MAX_STORE_VALUE_CHARS} characters of JSON");
+			}
+			const next = storedChars - previous + key.length + json.length;
+			if (next > ${MAX_STORE_TOTAL_CHARS}) {
+				throw new RangeError("store is full: stored values would exceed ${MAX_STORE_TOTAL_CHARS} characters of JSON");
+			}
+			stored.set(key, json);
+			storedChars = next;
+			writes.set(key, json);
+		},
+		get(key) {
+			checkKey("store.get", key);
+			const json = stored.get(key);
+			return json === undefined ? undefined : parse(json);
+		},
+		// 升序返回当前键：上下文压缩后模型可以靠它找回自己写过的名字
+		list() {
+			return Array.from(stored.keys()).sort();
+		},
+	});
 
 	function serializeWrites() {
 		const entries = [];
@@ -146,7 +152,6 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 	}
 
 	Object.defineProperty(globalThis, "store", { value: store, enumerable: true });
-	Object.defineProperty(globalThis, "load", { value: load, enumerable: true });
 
 	// 原始值转字符串，其余 JSON 化
 	function outputText(value) {
