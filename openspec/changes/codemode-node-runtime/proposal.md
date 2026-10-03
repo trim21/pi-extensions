@@ -11,7 +11,8 @@
 - **没有 bwrap 时不静默降级**：先按请求策略取用户授权，再以普通子进程执行；headless 会话、Windows 或 `/bwrap-deny-request` 生效时直接拒绝并在结果里说明原因。
 - **协议换通道**：宿主与子进程共用一条全双工专用 fd（spawn 建的 socketpair，magic + 长度分帧）；stdin/stdout/stderr 全归脚本，任何库直接打印都不会污染协议。
 - **脚本接口**：`call` / `CallFailedError` / `ALL_TOOLS` / `text` / `image` / `exit` / `console` / `store` 保持不变；脚本可以直接使用 Node 内置模块（`node:fs`、`node:path` ……）。**BREAKING**：删掉 `fs.read` / `fs.write` 这两个原语、以及配套的脚本侧已读记账与「与文件工具共用记账」的互锁——文件读写改用 `node:fs`。
-- **仍排除文件读写工具**：`Read` / `Edit` / `Write`（与 opencode 的小写同名工具）不在可调用集合里，脚本碰文件用 `node:fs`，不需要再经桥调那套面向 LLM 的文件工具。
+- **执行有墙钟上限**：缺省 120 秒，脚本可用首行 `// @options: {"timeout_ms": …}` 放宽；到点杀掉整个进程组并以超时失败结束（消息里给出当前上限与放宽方式）。它取代原来那套基于 `process.getActiveResourcesInfo()` 的卡死检测。
+- **可调用集合排除会等人的工具**：除既有的文件读写工具与 `spawn-agent` 外，`Bash` / `web_fetch` / `lsp-rename` / `AskUserQuestion` / `talk-ask` 也不再对脚本可见——执行有上限，脚本里不该出现把时间交给人或外部等待的调用。脚本碰文件用 `node:fs`，要跑命令或抓网页则作为独立工具调用。
 - **脚本以 Node 程序执行**：入口是 `bootstrap.ts` 转译出的 `bootstrap.js`（随仓库提交，pre-commit 重新生成），脚本本体经协议帧传入，宿主不再需要临时文件；删掉 worker 线程、QuickJS wasm、`worker.js` 构建产物、QuickJS prelude 与 `fs.ts` 原语。
 
 ## Capabilities
@@ -30,4 +31,4 @@
 - 测试：`test/codemode.test.ts`（沙箱语义重写）、`test/codemode-tool.test.ts`（描述与调用语义）、删除 `test/codemode-fs.test.ts` 与 worker 产物断言；新增 `test/codemode-protocol.test.ts`（分帧与校验）、`test/codemode-sandbox-mode.test.ts`（无 bwrap 时的授权路径）、bwrap argv 组装用例。
 - 文档：README 与 AGENTS.md 的 codemode 段落。
 - 兼容性：脚本侧 API 破坏性变化（`fs.read` / `fs.write` 消失），但脚本不落盘、不进仓库，只有会话内的临时脚本受影响。
-- 已知行为回归：「脚本停在一个永远不会 settle 的 promise 上立刻失败」这条检测随 QuickJS 一起消失（真 Node 有 timer，无法从外部判断），改为由调用方中止结束——见 design.md。
+- 已知行为变化：「脚本停在一个永远不会 settle 的 promise 上立刻失败」不再是立刻判定（真 Node 有 timer，宿主无法从外部判断），改为到执行上限时被杀掉；会话仍然不会被挂住。

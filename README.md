@@ -33,13 +33,15 @@
 bwrap 沙箱里的 Node 子进程里执行（每次调用一个新进程）。脚本的出口是 `call(name, args)`
 与 Node 本身——能读写什么、能不能出网由沙箱配置决定（与 Bash 沙箱同一份）。
 
-- **嵌套调用经工具总线**：`call("Bash", { command })` 最终执行的是 `Bash` 工具自己的
-  `execute`，所以工具的审批照常生效（Bash 沙箱外执行会弹自己的提权确认）。codemode
-  不额外加确认层：脚本里连发十次调用就是十次工具自己的审批（需要审批的那些）。
-- **可调用集合** = 总线上实际注册的工具减去排除名单（`codemode` 自身、`spawn-agent`、
-  以及两套文件工具集的 `Read`/`Edit`/`Write` 与 `read`/`edit`/`write`），执行时再与当前
-  active 列表求交，所以 `personalExtensions.disabledTools`、pi 的 `defaultTools` /
-  `--tools`、子代理的工具白名单都同样约束脚本。
+- **嵌套调用经工具总线**：`call(name, args)` 最终执行的是那个工具自己的 `execute`，工具
+  自身的限制与审批照常生效（用户自己注册的、需要审批的工具照旧会弹）。codemode 不额外加
+  确认层。
+- **可调用集合** = 总线上实际注册的工具减去排除名单，执行时再与当前 active 列表求交，所以
+  `personalExtensions.disabledTools`、pi 的 `defaultTools` / `--tools`、子代理的工具白名单
+  都同样约束脚本。排除名单分三类：`codemode` 自身与 `spawn-agent`；文件读写工具
+  （`Read`/`Edit`/`Write` 与 `read`/`edit`/`write`）；以及所有会把执行时间交给人或外部等待
+  的工具——`Bash`（沙箱外执行要审批）、`web_fetch`、`lsp-rename`（写审批）、
+  `AskUserQuestion`、`talk-ask`。要跑命令或抓网页就直接作为工具调用，不放进脚本。
 - **脚本跑在沙箱里的真 Node 子进程**：能力边界与同一配置下 Bash 沙箱一致（fs 模式、可写
   路径、只读保护、network 模式全部取自 `bwrap.json`），所以文件读写直接用 `node:fs`、
   路径用 `node:path`，`process` / 计时器 / `fetch` 也都在；相对路径相对当前 cwd。脚本的
@@ -56,9 +58,11 @@ bwrap 沙箱里的 Node 子进程里执行（每次调用一个新进程）。�
   没有声明输出结构的工具回退成工具输出的文本。
 - **脚本接口**：`call` / `CallFailedError` / `ALL_TOOLS` / `text` / `image` / `exit` /
   `console.*` / `store.set` / `store.get` / `store.list`（会话内持久的键值表）；首行可选
-  `// @options: {"max_output_tokens": 10000}`。脚本没有超时：死循环由调用方中止（Esc）
-  结束，等嵌套调用返回（含用户审批弹窗）多久都不算超时；脚本只等一个永远不会 settle 的
-  promise 时立刻失败（子进程自己按挂起的异步资源判定）。
+  `// @options: {"max_output_tokens": 10000, "timeout_ms": 120000}`。
+- **执行上限**：每次调用有墙钟上限（缺省 120 秒），到点杀掉整个进程组并以超时失败结束，
+  错误里给出当前上限与放宽方式；调用方中止（Esc）随时生效。上限从子进程起好之后开始算，
+  拿不到 bwrap 时向用户请求授权的等待不计入；可调用集合里没有等人的工具，所以脚本里不会
+  出现不受脚本控制的等待。
 - **工具描述**里给出每个可调用工具的 `declare function call(name, args): Promise<T>` 重载，
   参数与返回类型都取自工具自己的 schema，所以模型在写脚本前就知道返回值形状。
 - **store** 记在每次成功调用工具结果的 `details.store` 上（与 `src/lib/file-reads.ts` 的

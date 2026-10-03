@@ -250,7 +250,6 @@ describe.skipIf(!sandboxed)("codemode 沙箱", () => {
 
   it("中止信号终止脚本", async () => {
     const controller = new AbortController();
-    // 用死循环而不是挂起的 promise：后者会被卡死检测立刻判失败
     const pending = run(`while (true) {}`, { signal: controller.signal });
     setTimeout(() => controller.abort(), 200);
 
@@ -261,15 +260,47 @@ describe.skipIf(!sandboxed)("codemode 沙箱", () => {
     }
   });
 
-  it("等一个永远不会 settle 的 promise 立刻失败", async () => {
-    const result = await run(`await new Promise(() => {});`);
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
+  it("超过 timeoutMs 时杀掉子进程并以 timeout 结束", async () => {
+    const started = Date.now();
+    const result = await run(`await new Promise(() => {});`, { timeoutMs: 400 });
 
-    expect(result.error.kind).toBe("script");
-    expect(result.error.message).toContain("can never settle");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("timeout");
+      expect(result.error.message).toContain("timed out after 400 ms");
+      expect(result.error.message).toContain("@options");
+    }
+    // 到点即结束，而不是等脚本自己停下来（它永远不会）
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("脚本自己挂着的 timer 也挡不住超时", async () => {
+    const result = await run(
+      `setTimeout(() => text("late"), 60_000); await new Promise(() => {});`,
+      {
+        timeoutMs: 400,
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("timeout");
+    }
+    expect(result.output).toEqual([]);
+  });
+
+  it("脚本在超时前结束时不受影响", async () => {
+    const result = await run(
+      `await new Promise((resolve) => setTimeout(resolve, 200)); return "in time";`,
+      {
+        timeoutMs: 5_000,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe("in time");
+    }
   });
 
   it("exit() 立刻结束并保留输出与 store", async () => {

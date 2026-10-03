@@ -35,7 +35,7 @@ const MAX_HEADER_CHARS = 12;
 export type CodemodeOutputItem =
   { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
-export type ScriptErrorKind = "script" | "aborted" | "sandbox";
+export type ScriptErrorKind = "script" | "aborted" | "timeout" | "sandbox";
 
 export interface ScriptError {
   kind: ScriptErrorKind;
@@ -84,7 +84,12 @@ const storeWritesSchema = Type.Object({
 });
 
 const scriptErrorSchema = Type.Object({
-  kind: Type.Union([Type.Literal("script"), Type.Literal("aborted"), Type.Literal("sandbox")]),
+  kind: Type.Union([
+    Type.Literal("script"),
+    Type.Literal("aborted"),
+    Type.Literal("timeout"),
+    Type.Literal("sandbox"),
+  ]),
   name: Type.Optional(Type.String()),
   message: Type.String(),
   stack: Type.Optional(Type.String()),

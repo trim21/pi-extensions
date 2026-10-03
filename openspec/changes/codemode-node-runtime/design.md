@@ -60,17 +60,32 @@ stdin/stdout/stderr 于是完全归脚本：stdin 是 `/dev/null`（协议不占
 
 脚本本体通过 `new Function` 以注入的接口为参数求值：`call` / `CallFailedError` / `ALL_TOOLS` / `text` / `image` / `exit` / `console` / `store` 是注入值，Node 内置能力（`process`、`node:fs` 等）天然可见。
 
-### D5：卡死检测在子进程内做
+### D5：执行上限取代卡死检测
 
-真 Node 有 timer，宿主无法再靠「VM 里没有 timer」判断脚本挂住了，但子进程自己有判断依据：脚本既没有在飞的嵌套调用、也没有任何挂起的异步资源时，那个从不 settle 的 promise 永远不会被唤醒。bootstrap 每 250 ms 用 `process.getActiveResourcesInfo()`（Node 公开 API）与启动时的基线做差集，差集里只剩我们自己的轮询 timer、且没有在飞的嵌套调用时判定挂死，按错误结束这一轮。
+真 Node 有 timer 与 socket，宿主无法再靠「VM 里没有 timer」判断脚本挂住了。曾经做过一版子进程内的卡死检测（`process.getActiveResourcesInfo()` 与基线做差集，差集只剩自己的轮询 timer 就判定挂死），但它依赖 libuv 的资源名，是与「加一个真正的超时」重复的机制。
 
-这样保留了既有契约（「永不 settle 的 promise 立刻失败」）与它的场景。代价是对 Node 资源名有依赖：名字变化只会让检测变钝（漏报），不会误杀——误杀只在「脚本真的在等一个不会被列出的资源」时才是问题（如原生插件自建的通知机制），这种脚本今天同样跑不了（VM 里没有原生模块）。
+最终做法是：**去掉卡死检测，改成墙钟上限**，缺省 120 s，脚本可用首行 `// @options: {"timeout_ms": …}` 放宽。上限从子进程起好之后开始算，到点杀掉整个进程组，结果以 `kind: "timeout"` 失败，消息里给出当前上限与放宽方式（模型能自己看懂并改脚本）。
+
+墙钟上限之所以在过去不可行、现在可行：它会把「等人」的时间也算进去，而脚本里的嵌套调用以前可能停在用户审批上（写工作区外的文件、Bash 提权），用户思考多久都算脚本的运行时间——那时超时看起来就像 bug。现在会等人的工具一律不进可调用集合（`Bash` / `web_fetch` / `lsp-rename` / `AskUserQuestion` / `talk-ask`），脚本里不再有不受脚本控制的等待，超时就是纯粹的执行上限。
+
+保留下来的契约是「挂住的脚本不会把会话挂住」，只是判据从「立刻（250 ms）」变成「到上限」。
+
+实现上上限不另起一套计时：把调用方的中止信号与 `AbortSignal.timeout(timeoutMs)` 用
+`AbortSignal.any` 合成一条信号，中止与超时共用同一条收尾路径（杀掉整个进程组），区别只在
+错误类型（`aborted` / `timeout`）——`AbortSignal.timeout` 的 timer 本身是 unref 的，不会吊住
+pi 的事件循环。
 
 ### D6：协议帧的校验与错误归一
 
 子进程 → 宿主的帧用 `protocol.ts` 的 TypeBox schema 校验（防的是子进程的意外输出）。宿主 → 子进程的帧由 bootstrap 手工做形状检查：帧类型固定、id 是数字，因此不需要把 TypeBox 带进子进程（子进程零运行期依赖）。
 
 失败语义不变：`fs` / 工具调用的失败都在脚本侧 reject 成 `CallFailedError`；协议损坏、子进程提前退出、spawn 失败在工具结果里是「沙箱」类失败。
+
+### D6b：会等人的工具不进可调用集合
+
+除原有的排除项（`codemode` 自身、`spawn-agent`、两套文件读写工具）外，再把 `Bash`（沙箱外执行要审批）、`web_fetch`、`lsp-rename`（写审批）与 `AskUserQuestion`、`talk-ask`（等用户或另一个 agent 的回答）排除。理由与 D5 配套：脚本有了墙钟上限，就不该存在「把执行时间交给人」的调用，否则超时会打断用户正在回答的提问。
+
+代价是模型不能在脚本里跑命令或抓网页——它可以直接调这些工具，或把命令拆成多次 codemode 之外的调用；如果模型确实想在脚本里跑一条命令，得先确认这对它是不是真的必要（当前判断是不必要：Bash 是交互式审批的入口，不适合放进编排）。
 
 ### D7：无 bwrap 时授权后无沙箱执行
 

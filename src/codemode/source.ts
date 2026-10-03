@@ -1,14 +1,21 @@
 /**
- * codemode 脚本源码的解析：首行可选的 `// @options: {"max_output_tokens":…}`。
+ * codemode 脚本源码的解析：首行可选的 `// @options: {"max_output_tokens":…,"timeout_ms":…}`。
  *
  * 选项行与脚本首行共用一行，解析后原样保留为空行，脚本里报错的行号因此与用户写的
  * 一致。解析失败（空输入、JSON 非法、未知字段、只有选项行没有代码）直接报错。
  */
 
 const OPTIONS_PREFIX = "// @options:";
-const SUPPORTED_FIELDS = ["max_output_tokens"] as const;
+
+/** 选项字段（JSON 里的名字）→ `CodemodeSourceOptions` 的属性名。 */
+const OPTION_FIELDS = {
+  max_output_tokens: "maxOutputTokens",
+  timeout_ms: "timeoutMs",
+} as const;
 
 export const DEFAULT_OUTPUT_TOKENS = 10_000;
+/** 一次 codemode 调用的默认墙钟上限：脚本没有整体超时是危险的，默认值够跑常见的批量调用。 */
+export const DEFAULT_TIMEOUT_MS = 120_000;
 
 export class CodemodeSourceError extends Error {
   constructor(message: string) {
@@ -19,6 +26,7 @@ export class CodemodeSourceError extends Error {
 
 export interface CodemodeSourceOptions {
   maxOutputTokens: number;
+  timeoutMs: number;
 }
 
 export interface ParsedCodemodeSource {
@@ -40,15 +48,20 @@ function parseOptions(json: string): Partial<CodemodeSourceOptions> {
   }
   const options: Partial<CodemodeSourceOptions> = {};
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    if (!(SUPPORTED_FIELDS as readonly string[]).includes(key)) {
+    if (!Object.hasOwn(OPTION_FIELDS, key)) {
       throw new CodemodeSourceError(
-        `${OPTIONS_PREFIX} does not support ${JSON.stringify(key)}; supported fields are ${SUPPORTED_FIELDS.map((field) => `\`${field}\``).join(" and ")}`,
+        `${OPTIONS_PREFIX} does not support ${JSON.stringify(key)}; supported fields are ${Object.keys(
+          OPTION_FIELDS,
+        )
+          .map((name) => `\`${name}\``)
+          .join(" and ")}`,
       );
     }
+    const field = OPTION_FIELDS[key as keyof typeof OPTION_FIELDS];
     if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
       throw new CodemodeSourceError(`${OPTIONS_PREFIX} ${key} must be a positive number`);
     }
-    options.maxOutputTokens = value;
+    options[field] = value;
   }
   return options;
 }

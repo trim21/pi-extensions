@@ -19,6 +19,9 @@
  * `return` 都可用；其余能力（`node:fs`、`process`、`setTimeout` …）来自 Node 本身，边界由
  * 宿主给的沙箱配置决定，这个小程序不做额外的权限裁剪。
  *
+ * 这里不做超时：执行上限由宿主侧计时（到点杀掉整个进程组），因为它要连脚本自己起的
+ * 子进程一起收掉。
+ *
  * 状态都在 `main()` 的闭包里：这是一个一次性的单次执行进程，跑完即退出。
  */
 
@@ -48,7 +51,6 @@ const MAX_HEADER_CHARS = 12;
 const MAX_STORE_VALUE_CHARS = 256 * 1024;
 /** 全部 store 值的 JSON 上限（字符数）。 */
 const MAX_STORE_TOTAL_CHARS = 1024 * 1024;
-const STALL_CHECK_INTERVAL_MS = 250;
 const IMAGE_HELPER_EXPECTS =
   "image expects a non-empty image URL string, an object with image_url, or a raw MCP image block";
 
@@ -177,8 +179,6 @@ function main(): void {
   const channel = new Socket({ fd: CHANNEL_FD, readable: true, writable: true });
   let buffered = Buffer.alloc(0);
   let finished = false;
-  let inflight = 0;
-  let stopStallWatch: (() => void) | undefined;
   let nextId = 1;
   /** 在飞的嵌套调用：宿主回帧时按 id settle。 */
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
@@ -199,7 +199,6 @@ function main(): void {
       return;
     }
     finished = true;
-    stopStallWatch?.();
     if (ok) {
       send({ t: "done", ok: true, value: payload, writes });
     } else {
@@ -335,44 +334,6 @@ function main(): void {
     };
   }
 
-  /**
-   * 卡死检测：脚本既没有在飞的嵌套调用、又没有挂起的异步资源时，那个从不 settle 的
-   * promise 永远不会被唤醒（真 Node 里有 timer，宿主端没法判断，子进程自己可以）。
-   * 基线在脚本开始前取，因为我们自己的轮询 timer 也在资源列表里。
-   */
-  function startStallWatch(baseline: readonly string[]): () => void {
-    const timer = setInterval(() => {
-      if (finished || inflight > 0) {
-        return;
-      }
-      const counts = new Map<string, number>();
-      for (const name of baseline) {
-        counts.set(name, (counts.get(name) ?? 0) + 1);
-      }
-      const extra: string[] = [];
-      for (const name of process.getActiveResourcesInfo()) {
-        const remaining = counts.get(name) ?? 0;
-        if (remaining > 0) {
-          counts.set(name, remaining - 1);
-        } else {
-          extra.push(name);
-        }
-      }
-      // 差集里只剩我们自己的轮询 timer：脚本没有任何能唤醒它的东西
-      if (extra.length === 1 && extra[0] === "Timeout") {
-        done(false, {
-          kind: "script",
-          name: "Error",
-          message:
-            "The script is waiting on a promise that can never settle: no tool call is pending, and nothing else is pending in the runtime.",
-        });
-      }
-    }, STALL_CHECK_INTERVAL_MS);
-    return () => {
-      clearInterval(timer);
-    };
-  }
-
   function toolCaller(name: string): (args: unknown) => Promise<unknown> {
     return (args) =>
       new Promise((resolve, reject) => {
@@ -385,7 +346,6 @@ function main(): void {
         }
         const id = nextId++;
         pending.set(id, { resolve, reject });
-        inflight += 1;
         send({ t: "call", id, name, args });
       });
   }
@@ -396,7 +356,6 @@ function main(): void {
       return;
     }
     pending.delete(id);
-    inflight -= 1;
     if (!ok) {
       entry.reject(new CallFailedError(typeof payload === "string" ? payload : format(payload)));
       return;
@@ -455,8 +414,6 @@ function main(): void {
       done(false, { kind: "script", ...describeError(error) });
       return;
     }
-
-    stopStallWatch = startStallWatch(process.getActiveResourcesInfo());
 
     let result: Promise<unknown>;
     try {

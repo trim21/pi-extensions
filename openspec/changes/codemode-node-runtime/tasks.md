@@ -16,7 +16,7 @@
 
 - [x] 3.1 `src/codemode/prelude.ts` 换成 `bootstrap.ts` + esbuild 产物 `bootstrap.js`（只 import `node:` 内置与 `./protocol.js` 的类型）：注入 `call` / `CallFailedError` / `ALL_TOOLS` / `text` / `image` / `exit` / `console` / `store`，用 `new Function` 求值脚本，经协议 fd 收发 `ready` / `call` / `output` / `done` / `start` / `result`；`pnpm exec vitest run test/codemode.test.ts` 中「call 成功 / 失败统一是 CallFailedError / 未知工具名 / 动态工具名 / store 读写 / text 与 return」全部通过
 - [x] 3.2 脚本自己的 stdout / stderr 输出进入工具结果（宿主收集子进程的 stdio；`console.*` 由 bootstrap 的代理走协议帧以保证与 `text()` 同序），`test/codemode.test.ts` 用「脚本 `console.log` + 直接写 `process.stdout` / `process.stderr` + 向协议 fd 写垃圾字节」验证输出内容正确、嵌套调用照常
-- [x] 3.3 卡死检测：bootstrap 每 250 ms 用 `process.getActiveResourcesInfo()` 与启动基线做差集，在没有在飞嵌套调用且差集只剩自己的轮询 timer 时按错误结束这一轮；`test/codemode.test.ts` 的「永不 settle 的 promise 立刻失败」通过，而「等 600 ms 的 timer 后返回」「等待一个很慢的嵌套调用」不被误杀
+- [x] 3.3 执行上限：宿主侧按 `timeoutMs`（缺省 120 s，`@options.timeout_ms` 可覆盖）计时，到点杀掉进程组并以 `kind: "timeout"` 结束，消息给出当前上限与放宽方式；上限从子进程起好之后开始算（无沙箱授权的等待不计入）。`test/codemode.test.ts` 覆盖「超过 timeoutMs 被杀掉」「脚本自己挂着的 timer 挡不住超时」「超时前结束不受影响」，`test/codemode-tool.test.ts` 覆盖 `@options.timeout_ms` 的放宽与非法值
 - [x] 3.4 `src/codemode/declarations.ts` 与 `src/codemode/tool.ts` 去掉 `fs` 声明、在工具描述里说明脚本跑在 Node 运行时（可用 `node:fs` 等内置能力）且文件读写工具不可调用；`test/codemode-tool.test.ts` 的「描述列出可调用工具」「描述给出返回类型」「文件读写工具不可调用」断言更新后通过
 
 ## 4. 删除旧运行时与相关接线

@@ -110,6 +110,25 @@ describe("拿不到 bwrap 时", () => {
     }
   });
 
+  it("用户思考很久也不计入执行上限（上限从子进程起好之后开始算）", async () => {
+    const approve = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return true;
+    });
+    const result = await run(unavailableView(), {
+      approveUnsandboxed: approve,
+      // 上限远小于用户批准所花的时间：若把批准算进去，脚本必然超时
+      timeoutMs: 200,
+      code: `return "approved then ran";`,
+    });
+
+    expect(approve).toHaveBeenCalledOnce();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe("approved then ran");
+    }
+  });
+
   it("已中止的调用直接以 aborted 结束，不起进程", async () => {
     const controller = new AbortController();
     controller.abort();

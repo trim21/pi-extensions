@@ -69,8 +69,13 @@ export interface SandboxRunOptions {
    * 缺省（无 UI 等）表示拒绝——调用方负责给出拒绝文案。
    */
   approveUnsandboxed?(): Promise<boolean>;
-  /** 调用方中止本次执行；脚本没有自己的超时，死循环只能靠它结束。 */
+  /** 调用方中止本次执行。 */
   signal?: AbortSignal;
+  /**
+   * 整个执行的墙钟上限（毫秒）：从子进程起好开始算，到点杀掉整个进程组并以 `timeout` 结束。
+   * 不传表示不限时（策略由调用方决定，见 `DEFAULT_TIMEOUT_MS`）。
+   */
+  timeoutMs?: number;
   /** 每次嵌套调用：由调用方执行工具并把结果回给脚本。 */
   onCall(request: { id: number; name: string; args: unknown }): Promise<SandboxCallOutcome>;
   /** 脚本流式产生的输出项，用于 toolcall 进度。 */
@@ -174,6 +179,11 @@ async function runOnce(options: SandboxRunOptions): Promise<SandboxOutcome> {
     const decoder = new StringDecoder("utf8");
     let settled = false;
     let draining: NodeJS.Timeout | undefined;
+    /**
+     * 收尾信号 = 调用方中止信号 + 执行上限（`AbortSignal.timeout`，它的 timer 是 unref 的，
+     * 不会吊住 pi 的事件循环）。两条来源共用同一条中止路径，区别只在错误类型。
+     */
+    const abort = combineAbortSignals(options.signal, options.timeoutMs);
     let outcome:
       | { ok: true; value: unknown; writes: StoreWrites }
       | { ok: false; error: ScriptError; writes: StoreWrites }
@@ -195,7 +205,7 @@ async function runOnce(options: SandboxRunOptions): Promise<SandboxOutcome> {
       if (draining !== undefined) {
         clearTimeout(draining);
       }
-      options.signal?.removeEventListener("abort", onAbort);
+      abort.combined?.removeEventListener("abort", onAbort);
       killProcessGroup(child.pid);
       void handle.close().catch(() => {
         /* 进程已经退出，收尾失败无所谓 */
@@ -209,11 +219,19 @@ async function runOnce(options: SandboxRunOptions): Promise<SandboxOutcome> {
     }
 
     function onAbort(): void {
-      outcome = {
-        ok: false,
-        error: { kind: "aborted", message: "codemode execution was aborted" },
-        writes: NO_WRITES,
-      };
+      const timeoutMs = options.timeoutMs;
+      outcome =
+        timeoutMs !== undefined && abort.timeout?.aborted === true
+          ? {
+              ok: false,
+              error: { kind: "timeout", message: timeoutMessage(timeoutMs) },
+              writes: NO_WRITES,
+            }
+          : {
+              ok: false,
+              error: { kind: "aborted", message: "codemode execution was aborted" },
+              writes: NO_WRITES,
+            };
       finish();
     }
 
@@ -336,8 +354,35 @@ async function runOnce(options: SandboxRunOptions): Promise<SandboxOutcome> {
       };
       finish();
     });
-    options.signal?.addEventListener("abort", onAbort, { once: true });
+    abort.combined?.addEventListener("abort", onAbort, { once: true });
+    // 起进程这段时间里发生的命中不会回调已存在的监听器，补一次检查
+    if (abort.combined?.aborted === true) {
+      onAbort();
+    }
   });
+}
+
+/**
+ * 把调用方中止信号与执行上限合成一条信号。上限从子进程起好之后开始算：起进程前的无沙箱
+ * 授权问的是用户，那段时间不该计入脚本的执行时间。
+ */
+function combineAbortSignals(
+  signal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): { combined: AbortSignal | undefined; timeout: AbortSignal | undefined } {
+  const timeout = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
+  if (signal === undefined) {
+    return { combined: timeout, timeout };
+  }
+  return { combined: timeout === undefined ? signal : AbortSignal.any([signal, timeout]), timeout };
+}
+
+/** 超时失败的消息：给出当前上限与放宽方式，模型据此改脚本或调大上限。 */
+function timeoutMessage(timeoutMs: number): string {
+  return (
+    `codemode timed out after ${timeoutMs} ms while the script was still running.` +
+    ` Raise it with \`// @options: {"timeout_ms": ${timeoutMs * 2}}\` if the script legitimately needs longer.`
+  );
 }
 
 function fail(kind: ScriptError["kind"], message: string): SandboxOutcome {

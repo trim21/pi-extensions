@@ -5,7 +5,6 @@ const MAGIC = `${String.fromCodePoint(FRAME_MAGIC_BYTE)}PI_CODEMODE${String.from
 const MAX_HEADER_CHARS = 12;
 const MAX_STORE_VALUE_CHARS = 256 * 1024;
 const MAX_STORE_TOTAL_CHARS = 1024 * 1024;
-const STALL_CHECK_INTERVAL_MS = 250;
 const IMAGE_HELPER_EXPECTS = "image expects a non-empty image URL string, an object with image_url, or a raw MCP image block";
 class CallFailedError extends Error {
   constructor(message) {
@@ -109,8 +108,6 @@ function main() {
   const channel = new Socket({ fd: CHANNEL_FD, readable: true, writable: true });
   let buffered = Buffer.alloc(0);
   let finished = false;
-  let inflight = 0;
-  let stopStallWatch;
   let nextId = 1;
   const pending = /* @__PURE__ */ new Map();
   const writes = { set: {}, delete: [] };
@@ -123,7 +120,6 @@ function main() {
       return;
     }
     finished = true;
-    stopStallWatch?.();
     if (ok) {
       send({ t: "done", ok: true, value: payload, writes });
     } else {
@@ -239,36 +235,6 @@ function main() {
       }
     };
   }
-  function startStallWatch(baseline) {
-    const timer = setInterval(() => {
-      if (finished || inflight > 0) {
-        return;
-      }
-      const counts = /* @__PURE__ */ new Map();
-      for (const name of baseline) {
-        counts.set(name, (counts.get(name) ?? 0) + 1);
-      }
-      const extra = [];
-      for (const name of process.getActiveResourcesInfo()) {
-        const remaining = counts.get(name) ?? 0;
-        if (remaining > 0) {
-          counts.set(name, remaining - 1);
-        } else {
-          extra.push(name);
-        }
-      }
-      if (extra.length === 1 && extra[0] === "Timeout") {
-        done(false, {
-          kind: "script",
-          name: "Error",
-          message: "The script is waiting on a promise that can never settle: no tool call is pending, and nothing else is pending in the runtime."
-        });
-      }
-    }, STALL_CHECK_INTERVAL_MS);
-    return () => {
-      clearInterval(timer);
-    };
-  }
   function toolCaller(name) {
     return (args) => new Promise((resolve, reject) => {
       try {
@@ -279,7 +245,6 @@ function main() {
       }
       const id = nextId++;
       pending.set(id, { resolve, reject });
-      inflight += 1;
       send({ t: "call", id, name, args });
     });
   }
@@ -289,7 +254,6 @@ function main() {
       return;
     }
     pending.delete(id);
-    inflight -= 1;
     if (!ok) {
       entry.reject(new CallFailedError(typeof payload === "string" ? payload : format(payload)));
       return;
@@ -345,7 +309,6 @@ ${code}
       done(false, { kind: "script", ...describeError(error) });
       return;
     }
-    stopStallWatch = startStallWatch(process.getActiveResourcesInfo());
     let result;
     try {
       result = factory(

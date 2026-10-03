@@ -32,6 +32,8 @@ interface Harness {
   spawnAgentTool: ReturnType<typeof vi.fn>;
   searchTool: ReturnType<typeof vi.fn>;
   brokenTool: ReturnType<typeof vi.fn>;
+  /** 会挂住等人的工具（Bash / web_fetch / lsp-rename / AskUserQuestion / talk-ask）的桩。 */
+  waitingTools: Map<string, ReturnType<typeof vi.fn>>;
 }
 
 /** 缺省的审批回答（本测试用来断言 codemode 不调用它）。 */
@@ -47,7 +49,18 @@ const noopEvents = { on: () => noopUnsubscribe, emit: () => {} };
 async function harness(options: { active?: string[] } = {}): Promise<Harness> {
   const registered = new Map<string, ToolDefinition>();
   const appended: { customType: string; data: unknown }[] = [];
-  const active = options.active ?? ["Read", "Edit", "echo", "search", "broken"];
+  const active = options.active ?? [
+    "Read",
+    "Edit",
+    "echo",
+    "search",
+    "broken",
+    "Bash",
+    "web_fetch",
+    "lsp-rename",
+    "AskUserQuestion",
+    "talk-ask",
+  ];
   const select = vi.fn(approveOnce);
 
   const pi = {
@@ -164,6 +177,23 @@ async function harness(options: { active?: string[] } = {}): Promise<Harness> {
     }),
   );
 
+  // 会等人的工具：不进可调用集合，脚本不该能把执行时间交给用户的回答或审批
+  const waitingTools = new Map<string, ReturnType<typeof vi.fn>>();
+  for (const name of ["Bash", "web_fetch", "lsp-rename", "AskUserQuestion", "talk-ask"]) {
+    const stub = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: `${name} ran` }],
+      details: {},
+    }));
+    waitingTools.set(name, stub);
+    bus.register({
+      name,
+      label: name,
+      description: `${name} waits on the user`,
+      parameters: Type.Object({}),
+      execute: stub,
+    });
+  }
+
   createCodemodeTools(pi).register(bus, {
     policy: createRequestPolicy(),
     // 这两个描述符/路由用例不需要真沙箱：fs 与 network 都 allow-all 时不进 bwrap，
@@ -185,6 +215,7 @@ async function harness(options: { active?: string[] } = {}): Promise<Harness> {
     spawnAgentTool,
     searchTool,
     brokenTool,
+    waitingTools,
   };
 }
 
@@ -288,10 +319,32 @@ describe("codemode 工具", () => {
     expect(h.codemode.description).not.toContain('declare function call(name: "codemode"');
   });
 
-  it("文件工具不进可调用集合：脚本改用 fs 原语", async () => {
+  it("会等人的工具（Bash 等）不进可调用集合", async () => {
     const h = await harness();
 
-    for (const name of ["Read", "Edit"]) {
+    for (const name of ["Bash", "web_fetch", "lsp-rename", "AskUserQuestion", "talk-ask"]) {
+      expect(h.codemode.description).not.toContain(`declare function call(name: "${name}"`);
+      const result = await runScript(
+        h,
+        `try {
+           await call(${JSON.stringify(name)}, {});
+           return "called";
+         } catch (error) {
+           return [error instanceof CallFailedError, error.message].join("|");
+         }`,
+      );
+
+      expect(textOf(result)).toContain(
+        String.raw`"true|Tool \"${name}\" is not available in codemode."`,
+      );
+      expect(h.waitingTools.get(name)).not.toHaveBeenCalled();
+    }
+  });
+
+  it("文件工具不进可调用集合：脚本改用 node:fs", async () => {
+    const h = await harness();
+
+    for (const name of ["Read", "Edit", "Write", "read", "edit", "write"]) {
       expect(h.codemode.description).not.toContain(`declare function call(name: "${name}"`);
     }
 
@@ -324,6 +377,14 @@ describe("codemode 工具", () => {
       "declare function call(name: string, args?: unknown): Promise<unknown>;",
     );
     expect(h.codemode.description).toContain("declare class CallFailedError extends Error");
+  });
+
+  it("描述说明执行有墙钟上限以及怎么放宽", async () => {
+    const h = await harness();
+
+    expect(h.codemode.description).toContain("killed after 120 seconds");
+    expect(h.codemode.description).toContain(`// @options: {"timeout_ms": <ms>}`);
+    expect(h.codemode.description).toContain("not\n  callable from a script");
   });
 
   it("描述说明脚本跑在 Node 运行时里，且没有把文件工具当可调用工具", async () => {
@@ -571,6 +632,27 @@ describe("codemode 工具", () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("does not support");
     expect(h.echoTool).not.toHaveBeenCalled();
+  });
+
+  it("@options 的 timeout_ms 放宽执行上限", async () => {
+    const h = await harness();
+    const started = Date.now();
+    const result = await runScript(
+      h,
+      `// @options: {"timeout_ms": 300}\nawait new Promise(() => {});`,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("timed out after 300 ms");
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("@options 的 timeout_ms 必须是正数", async () => {
+    const h = await harness();
+    const result = await runScript(h, `// @options: {"timeout_ms": 0}\nreturn 1;`);
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("timeout_ms must be a positive number");
   });
 
   it("脚本报错时保留部分输出与调用记录", async () => {

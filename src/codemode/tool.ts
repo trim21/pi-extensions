@@ -25,7 +25,12 @@ import { type ToolBus, toolResultText } from "../lib/tool-bus.js";
 import { renderDeclarations, toScriptTools } from "./declarations.js";
 import type { CodemodeOutputItem, ScriptError, StoreWrites } from "./protocol.js";
 import { type CodemodeSandbox, createCodemodeSandbox, type ScriptCall } from "./sandbox.js";
-import { CODEMODE_SOURCE_GRAMMAR, DEFAULT_OUTPUT_TOKENS, parseCodemodeSource } from "./source.js";
+import {
+  CODEMODE_SOURCE_GRAMMAR,
+  DEFAULT_OUTPUT_TOKENS,
+  DEFAULT_TIMEOUT_MS,
+  parseCodemodeSource,
+} from "./source.js";
 
 export const CODEMODE_TOOL_NAME = "codemode";
 
@@ -34,7 +39,10 @@ export const CODEMODE_TOOL_NAME = "codemode";
  * - codemode 自身（防递归）；
  * - spawn-agent：它启动一个新的隔离会话，成本与运行时长都不适合放进脚本编排；
  * - 两套文件工具集的读写工具：脚本是普通 Node 程序，文件读写直接用 `node:fs`（原文、不截断），
- *   不重复给一套为 LLM 上下文设计的行号/截断/锚点语义。
+ *   不重复给一套为 LLM 上下文设计的行号/截断/锚点语义；
+ * - 所有会把脚本挂起来等人的工具：Bash（沙箱外执行要审批）、web_fetch、lsp-rename（写审批），
+ *   以及 AskUserQuestion / talk-ask（等用户或另一个 agent 的回答）。执行有墙钟上限，脚本里
+ *   不该出现「等待人」这种不受脚本控制的时间——那会让超时看起来像 bug。
  */
 const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set([
   CODEMODE_TOOL_NAME,
@@ -45,6 +53,12 @@ const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read",
   "edit",
   "write",
+  "Bash",
+  "bash",
+  "web_fetch",
+  "lsp-rename",
+  "AskUserQuestion",
+  "talk-ask",
 ]);
 
 /** 估计 token 用的字符数（与 pi 一致）。 */
@@ -104,8 +118,10 @@ function buildDescription(tools: readonly CallableTool[]): string {
     "  this conversation; nested calls and their results stay out of it.",
     "- `store.set(key, value)`, `store.get(key)` and `store.list()` are a small key/value store that",
     "  persists across codemode calls in this session; `store.set(key, undefined)` removes a key.",
-    "- Tool calls still go through each tool's own approvals, so a call that needs the user's consent",
-    "  will ask for it.",
+    `- The script is killed after ${DEFAULT_TIMEOUT_MS / 1000} seconds of wall-clock time; start the`,
+    `  code with \`// @options: {"timeout_ms": <ms>}\` to raise that limit for a legitimately long run.`,
+    "- Tools that wait on a human (Bash, web_fetch, lsp-rename, AskUserQuestion, talk-ask) are not",
+    "  callable from a script; call those as separate tool calls instead.",
     "- Prefer one script over many round trips: batch independent calls with `Promise.all`, filter in",
     "  JavaScript, and print only what matters.",
     "",
@@ -299,10 +315,12 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
           let code: string;
           let maxOutputTokens = DEFAULT_OUTPUT_TOKENS;
+          let timeoutMs = DEFAULT_TIMEOUT_MS;
           try {
             const parsed = parseCodemodeSource(params.code);
             code = parsed.code;
             maxOutputTokens = parsed.options.maxOutputTokens ?? maxOutputTokens;
+            timeoutMs = parsed.options.timeoutMs ?? timeoutMs;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             return {
@@ -322,6 +340,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
             workspace: ctx.cwd,
             sandbox: deps.runtime.sandboxView(ctx),
             signal,
+            timeoutMs,
             approveUnsandboxed: async () => {
               unsandboxedGranted ??= await approveUnsandboxed(ctx, deps.policy, signal);
               return unsandboxedGranted;
