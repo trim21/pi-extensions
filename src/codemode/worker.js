@@ -101,6 +101,16 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 	}
 	Object.freeze(call);
 
+	// 脚本的文件原语：与工具走同一条桥，但它们是内建能力而不是工具——不进 ALL_TOOLS，
+	// 也不出现在工具描述的工具重载里（声明单独渲染），写审批与已读记账由宿主负责。
+	// 脚本侧是 Node 风格的位置参数，过桥仍是一个可校验的对象。
+	const readFile = caller("fs.read");
+	const writeFile = caller("fs.write");
+	const fs = Object.freeze({
+		read: (path) => readFile({ path }),
+		write: (path, content) => writeFile({ path, content }),
+	});
+
 	// key -> JSON 文本；容量按 key 与 JSON 的字符数计
 	const stored = new Map();
 	const writes = new Map();
@@ -243,6 +253,7 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 	Object.defineProperty(globalThis, "call", { value: call, enumerable: true });
 	Object.defineProperty(globalThis, "CallFailedError", { value: CallFailedError, enumerable: true });
 	Object.defineProperty(globalThis, "ALL_TOOLS", { value: allTools, enumerable: true });
+	Object.defineProperty(globalThis, "fs", { value: fs, enumerable: true });
 	Object.defineProperty(globalThis, "console", { value: console, enumerable: true });
 	Object.defineProperty(globalThis, "text", { value: text, enumerable: true });
 	Object.defineProperty(globalThis, "image", { value: image, enumerable: true });
@@ -309,6 +320,7 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 // src/codemode/protocol.ts
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+var MEMORY_LIMIT_BYTES = 2 * 1024 ** 3;
 var outputItemSchema = Type.Union([
   Type.Object({ type: Type.Literal("text"), text: Type.String() }),
   Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String() })
@@ -387,7 +399,6 @@ function decodeHostMessage(value) {
 }
 
 // src/codemode/worker.ts
-var MEMORY_LIMIT_BYTES = 512 * 1024 * 1024;
 function discardOutput(memory) {
   return {
     fd_write(_fd, iovsPtr, iovsLen, nwrittenPtr) {

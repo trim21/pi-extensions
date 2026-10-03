@@ -13,6 +13,18 @@
 import { type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
 
+// ── 资源上限 ─────────────────────────────────────────────────────────────────
+
+/**
+ * QuickJS VM 的堆上限。它不是预留（创建 VM 只占几 MiB，按脚本实际分配增长），而是
+ * 「超量分配变成脚本里可捕获的 InternalError，而不是拖垮宿主」的那条线。
+ *
+ * 文件读取没有单独的上限：读进来的内容不进模型上下文，所以不需要按上下文预算裁剪；
+ * 真正放不下时（VM 堆不够、或超出宿主字符串/缓冲上限）会以错误回到脚本里，让它自己
+ * 决定怎么办。
+ */
+export const MEMORY_LIMIT_BYTES = 2 * 1024 ** 3;
+
 // ── 消息 schema ──────────────────────────────────────────────────────────────
 
 const outputItemSchema = Type.Union([

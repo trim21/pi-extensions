@@ -17,14 +17,12 @@ import { PRELUDE_SOURCE } from "./prelude.js";
 import {
   decodeHostMessage,
   type HostMessage,
+  MEMORY_LIMIT_BYTES,
   type ScriptError,
   type StoreWrites,
   type WorkerBootstrap,
   type WorkerMessage,
 } from "./protocol.js";
-
-/** QuickJS VM 的堆上限：超量分配在脚本里变成 InternalError，而不是拖垮宿主。 */
-const MEMORY_LIMIT_BYTES = 512 * 1024 * 1024;
 
 /**
  * QuickJS 把引擎诊断写到 fd 1 / 2，那会直接进 pi 的 TUI；按写入长度回报并丢弃内容，

@@ -1,3 +1,7 @@
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -7,6 +11,8 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 
 import { createCodemodeTools } from "../src/codemode/tool.js";
+import { createReadsState } from "../src/lib/file-reads.js";
+import { createRequestPolicy } from "../src/lib/request-policy.js";
 import {
   createToolBus,
   defineStructuredTool,
@@ -21,6 +27,7 @@ interface Harness {
   appended: { customType: string; data: unknown }[];
   readTool: ReturnType<typeof vi.fn>;
   editTool: ReturnType<typeof vi.fn>;
+  echoTool: ReturnType<typeof vi.fn>;
   spawnAgentTool: ReturnType<typeof vi.fn>;
   searchTool: ReturnType<typeof vi.fn>;
   brokenTool: ReturnType<typeof vi.fn>;
@@ -39,7 +46,7 @@ const noopEvents = { on: () => noopUnsubscribe, emit: () => {} };
 async function harness(options: { active?: string[] } = {}): Promise<Harness> {
   const registered = new Map<string, ToolDefinition>();
   const appended: { customType: string; data: unknown }[] = [];
-  const active = options.active ?? ["Read", "Edit", "search", "broken"];
+  const active = options.active ?? ["Read", "Edit", "echo", "search", "broken"];
   const select = vi.fn(approveOnce);
 
   const pi = {
@@ -58,6 +65,12 @@ async function harness(options: { active?: string[] } = {}): Promise<Harness> {
   }));
   const editTool = vi.fn(async () => ({
     content: [{ type: "text" as const, text: "edited" }],
+    details: {},
+  }));
+
+  // 普通（无 structuredSchema）工具：脚本里拿它的文本输出
+  const echoTool = vi.fn(async (_id: string, params: { message: string }) => ({
+    content: [{ type: "text" as const, text: `echo: ${params.message}` }],
     details: {},
   }));
 
@@ -119,6 +132,13 @@ async function harness(options: { active?: string[] } = {}): Promise<Harness> {
     parameters: Type.Object({ agent: Type.String(), task: Type.String() }),
     execute: spawnAgentTool,
   });
+  bus.register({
+    name: "echo",
+    label: "Echo",
+    description: "echo a message back",
+    parameters: Type.Object({ message: Type.String() }),
+    execute: echoTool,
+  });
   bus.register(
     defineStructuredTool({
       name: "search",
@@ -143,7 +163,10 @@ async function harness(options: { active?: string[] } = {}): Promise<Harness> {
     }),
   );
 
-  await createCodemodeTools(pi).register(bus);
+  await createCodemodeTools(pi).register(bus, {
+    policy: createRequestPolicy(),
+    reads: createReadsState(),
+  });
   const codemode = registered.get("codemode");
   if (!codemode) {
     throw new Error("codemode tool was not registered");
@@ -155,6 +178,7 @@ async function harness(options: { active?: string[] } = {}): Promise<Harness> {
     appended,
     readTool,
     editTool,
+    echoTool,
     spawnAgentTool,
     searchTool,
     brokenTool,
@@ -237,16 +261,39 @@ describe("codemode 工具", () => {
 
   it("描述里列出可调用工具，且不含自己", async () => {
     const h = await harness();
-    expect(h.codemode.description).toContain('declare function call(name: "Read", args: {');
-    expect(h.codemode.description).toContain('declare function call(name: "Edit", args: {');
+    expect(h.codemode.description).toContain('declare function call(name: "echo", args: {');
+    expect(h.codemode.description).toContain('declare function call(name: "search", args: {');
     expect(h.codemode.description).not.toContain('declare function call(name: "codemode"');
+  });
+
+  it("文件工具不进可调用集合：脚本改用 fs 原语", async () => {
+    const h = await harness();
+
+    for (const name of ["Read", "Edit"]) {
+      expect(h.codemode.description).not.toContain(`declare function call(name: "${name}"`);
+    }
+
+    const result = await runScript(
+      h,
+      `try {
+         await call("Read", { file_path: "/tmp/a" });
+         return "called";
+       } catch (error) {
+         return [error instanceof CallFailedError, error.message].join("|");
+       }`,
+    );
+
+    expect(textOf(result)).toContain(
+      String.raw`"true|Tool \"Read\" is not available in codemode."`,
+    );
+    expect(h.readTool).not.toHaveBeenCalled();
   });
 
   it("描述里按 structuredSchema 渲染返回类型，未声明的回退文本", async () => {
     const h = await harness();
 
     expect(h.codemode.description).toContain(
-      'declare function call(name: "Read", args: {\n  file_path: string;\n}): Promise<string>;',
+      'declare function call(name: "echo", args: {\n  message: string;\n}): Promise<string>;',
     );
     expect(h.codemode.description).toContain(
       'declare function call(name: "search", args: {\n  query: string;\n}): Promise<{\n  files: Array<string>;\n  truncated: boolean;\n}>;',
@@ -255,6 +302,26 @@ describe("codemode 工具", () => {
       "declare function call(name: string, args?: unknown): Promise<unknown>;",
     );
     expect(h.codemode.description).toContain("declare class CallFailedError extends Error");
+  });
+
+  it("描述里有 fs 原语的声明，但它们不是可调用工具", async () => {
+    const h = await harness();
+
+    expect(h.codemode.description).toContain(
+      [
+        "declare const fs: {",
+        "  read(path: string): Promise<string>;",
+        "  write(path: string, content: string): Promise<void>;",
+        "};",
+      ].join("\n"),
+    );
+    // fs 是内建能力：既不在 call 重载里，也不在 ALL_TOOLS 里
+    expect(h.codemode.description).not.toContain('declare function call(name: "fs.read"');
+    const result = await runScript(
+      h,
+      `return [typeof fs.read, ALL_TOOLS.some((tool) => tool.name.startsWith("fs."))].join("|");`,
+    );
+    expect(textOf(result)).toContain('"function|false"');
   });
 
   it("描述里不列出 spawn-agent", async () => {
@@ -290,24 +357,21 @@ describe("codemode 工具", () => {
 
   it("嵌套调用走工具总线，工具拿到 ctx 与结果回给脚本", async () => {
     const h = await harness();
-    const result = await runScript(h, `return await call("Read", { file_path: "/tmp/a" });`);
+    const result = await runScript(h, `return await call("echo", { message: "hi" });`);
 
-    expect(h.readTool).toHaveBeenCalledOnce();
-    expect(h.readTool.mock.calls[0]?.[0]).toBeTypeOf("string");
-    expect(h.readTool.mock.calls[0]?.[1]).toEqual({ file_path: "/tmp/a" });
-    expect(h.readTool.mock.calls[0]?.[4]).toMatchObject({ cwd: "/tmp" });
-    expect(textOf(result)).toContain("file content");
+    expect(h.echoTool).toHaveBeenCalledOnce();
+    expect(h.echoTool.mock.calls[0]?.[0]).toBeTypeOf("string");
+    expect(h.echoTool.mock.calls[0]?.[1]).toEqual({ message: "hi" });
+    expect(h.echoTool.mock.calls[0]?.[4]).toMatchObject({ cwd: "/tmp" });
+    expect(textOf(result)).toContain("echo: hi");
   });
 
-  it("codemode 不额外加确认层：写类工具直接执行", async () => {
+  it("codemode 不额外加确认层：写类调用直接执行", async () => {
     const h = await harness();
-    const result = await runScript(
-      h,
-      `await call("Edit", { file_path: "/tmp/a", old_string: "x", new_string: "y" }); return "done";`,
-    );
+    const result = await runScript(h, `await call("echo", { message: "x" }); return "done";`);
 
     expect(h.select).not.toHaveBeenCalled();
-    expect(h.editTool).toHaveBeenCalledOnce();
+    expect(h.echoTool).toHaveBeenCalledOnce();
     expect(textOf(result)).toContain("done");
   });
 
@@ -317,7 +381,7 @@ describe("codemode 工具", () => {
       h,
       `
       try {
-        await call("Edit", { file_path: "/tmp/a" });
+        await call("echo", {});
         return "not reached";
       } catch (error) {
         return "caught: " + error.message;
@@ -325,7 +389,7 @@ describe("codemode 工具", () => {
       `,
     );
 
-    expect(h.editTool).not.toHaveBeenCalled();
+    expect(h.echoTool).not.toHaveBeenCalled();
     // 返回值是字符串，会被 JSON 化（引号/转义），这里只断言关键内容
     expect(textOf(result)).toContain("caught: Invalid arguments for tool");
     expect(textOf(result)).toContain("must have required properties");
@@ -333,10 +397,10 @@ describe("codemode 工具", () => {
 
   it("未 active 的工具在脚本里不可调用", async () => {
     const h = await harness({ active: ["Read"] });
-    const result = await runScript(h, `return await call("Edit", { file_path: "/tmp/a" });`);
+    const result = await runScript(h, `return await call("echo", { message: "hi" });`);
 
     expect(result.isError).toBe(true);
-    expect(h.editTool).not.toHaveBeenCalled();
+    expect(h.echoTool).not.toHaveBeenCalled();
   });
 
   it("脚本调用 codemode 自身被拒", async () => {
@@ -377,6 +441,47 @@ describe("codemode 工具", () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("does not match its structuredSchema");
+  });
+
+  it("脚本里的 fs.read / fs.write 由宿主执行，已读记账随结果持久化", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "codemode-fs-e2e-"));
+    try {
+      const source = join(dir, "source.txt");
+      const target = join(dir, "target.txt");
+      await writeFile(source, "hello", "utf8");
+
+      const h = await harness();
+      const result = await runScript(
+        h,
+        `const content = await fs.read(${JSON.stringify(source)});
+         await fs.write(${JSON.stringify(target)}, content + " world");
+         return content;`,
+      );
+
+      expect(textOf(result)).toContain("hello");
+      expect(result.isError).toBeUndefined();
+      expect(await readFile(target, "utf8")).toBe("hello world");
+      // 读到的文件进同一份记账，并随工具结果持久化（重放分支时收回来）
+      const reads = (result.details as { reads?: Record<string, unknown> }).reads ?? {};
+      expect(Object.keys(reads)).toContain(await realpath(source));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fs 原语的失败在脚本里是 CallFailedError", async () => {
+    const h = await harness();
+    const result = await runScript(
+      h,
+      `try {
+         await fs.read(${JSON.stringify(join(tmpdir(), "codemode-missing-file.txt"))});
+         return "not reached";
+       } catch (error) {
+         return [error instanceof CallFailedError, error.name].join("|");
+       }`,
+    );
+
+    expect(textOf(result)).toContain('"true|CallFailedError"');
   });
 
   it("store 写入落在工具结果的 details 上，并从分支的 toolResult 重放", async () => {
@@ -437,14 +542,14 @@ describe("codemode 工具", () => {
     const result = await runScript(h, `// @options: {"nope": 1}\nreturn 1;`);
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("does not support");
-    expect(h.readTool).not.toHaveBeenCalled();
+    expect(h.echoTool).not.toHaveBeenCalled();
   });
 
   it("脚本报错时保留部分输出与调用记录", async () => {
     const h = await harness();
     const result = await runScript(
       h,
-      `await call("Read", { file_path: "/tmp/a" }); text("before"); throw new Error("boom");`,
+      `await call("echo", { message: "hi" }); text("before"); throw new Error("boom");`,
     );
 
     expect(result.isError).toBe(true);
@@ -452,7 +557,7 @@ describe("codemode 工具", () => {
     expect(textOf(result)).toContain("boom");
     expect(
       (result.details as { calls: { name: string }[] }).calls.map((call) => call.name),
-    ).toEqual(["Read"]);
+    ).toEqual(["echo"]);
   });
 
   it("中止后结果带上已产生的输出", async () => {

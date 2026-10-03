@@ -102,13 +102,20 @@ export function toScriptTools(tools: readonly ToolLike[]): ScriptTool[] {
   }));
 }
 
-/** 渲染脚本侧的声明：每个工具一条 `call` 重载，外加 `CallFailedError` 与全局辅助函数。 */
+/** 渲染脚本侧的声明：每个工具一条 `call` 重载，外加 `fs` 原语、`CallFailedError` 与全局辅助函数。 */
 export function renderDeclarations(tools: readonly ToolLike[]): string {
   return [
     ...tools.map((tool) => renderOverload(tool)),
     // 动态名字的兜底重载，必须放最后
     "declare function call(name: string, args?: unknown): Promise<unknown>;",
     "declare const ALL_TOOLS: Array<{ name: string; description?: string }>;",
+    // 文件原语：直接读写文件。它们不是工具，所以不在上面的 call 重载里。
+    [
+      "declare const fs: {",
+      "  read(path: string): Promise<string>;",
+      "  write(path: string, content: string): Promise<void>;",
+      "};",
+    ].join("\n"),
     'declare class CallFailedError extends Error { readonly name: "CallFailedError"; }',
     "declare function text(value: unknown): void;",
     "declare function image(value: unknown): void;",

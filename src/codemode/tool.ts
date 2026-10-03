@@ -1,11 +1,12 @@
 /**
- * codemode 工具：模型写一段 JavaScript，脚本在 QuickJS VM（worker 线程）里执行，脚本唯一
- * 的能力是调用 `call(name, args)`——每个嵌套调用都由主线程经本仓库的工具总线执行，因此工具实现
- * 内部的审批（工作区外写入、Bash 沙箱提权等）照常生效；codemode 不再加自己的确认层。
+ * codemode 工具：模型写一段 JavaScript，脚本在 QuickJS VM（worker 线程）里执行，脚本的
+ * 能力有两条：`call(name, args)` 调用工具（每个嵌套调用都由主线程经本仓库的工具总线执行，
+ * 因此工具实现内部的审批——工作区外写入、Bash 沙箱提权等——照常生效；codemode 不再加
+ * 自己的确认层），以及 `fs.read` / `fs.write` 两个文件原语（同样由主线程执行，与文件工具
+ * 共用写审批与已读记账，见 fs.ts）。
  *
- * 可调用集合：总线上实际注册的工具减去 codemode 自身与 spawn-agent，执行时再与 active
+ * 可调用集合：总线上实际注册的工具减去 `EXCLUDED_TOOL_NAMES`，执行时再与 active
  * 列表求交——pi 自己的 `defaultTools` / `--tools` / 子代理白名单的排除因此同样生效。
- * spawn-agent 被排除是因为它启动一个新的隔离会话、成本与运行时长都不适合放进脚本编排。
  *
  * wasm 在注册这个工具时编译一次（`createCodemodeSandbox`），worker 复用编译结果。
  */
@@ -18,27 +19,52 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { FileSnapshot, ReadsState } from "../lib/file-reads.js";
 import type { ToolPendant } from "../lib/pendant.js";
+import type { RequestPolicy } from "../lib/request-policy.js";
 import { type ToolBus, toolResultText } from "../lib/tool-bus.js";
 import { renderDeclarations, toScriptTools } from "./declarations.js";
+import { createCodemodeFs } from "./fs.js";
 import type { CodemodeOutputItem, ScriptError, StoreWrites } from "./protocol.js";
 import { type CodemodeSandbox, createCodemodeSandbox, type ScriptCall } from "./sandbox.js";
 import { CODEMODE_SOURCE_GRAMMAR, DEFAULT_OUTPUT_TOKENS, parseCodemodeSource } from "./source.js";
 
 export const CODEMODE_TOOL_NAME = "codemode";
 
-/** 不暴露给脚本的工具：codemode 自身（防递归）与 spawn-agent（见文件头注释）。 */
-const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set([CODEMODE_TOOL_NAME, "spawn-agent"]);
+/**
+ * 不暴露给脚本的工具：
+ * - codemode 自身（防递归）；
+ * - spawn-agent：它启动一个新的隔离会话，成本与运行时长都不适合放进脚本编排；
+ * - 两套文件工具集的读写工具：脚本用 `fs.read` / `fs.write`（原文、不截断、按路径整体
+ *   写入），不重复给一套为 LLM 上下文设计的行号/锚点语义。
+ */
+const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set([
+  CODEMODE_TOOL_NAME,
+  "spawn-agent",
+  "Read",
+  "Edit",
+  "Write",
+  "read",
+  "edit",
+  "write",
+]);
 
 /** 估计 token 用的字符数（与 pi 一致）。 */
 const CHARS_PER_TOKEN = 4;
+
+export interface CodemodeToolDeps {
+  /** 与写类工具共享的非沙盒请求策略（写审批要用）。 */
+  policy: RequestPolicy;
+  /** 与文件工具共享的已读记账：脚本的 fs 原语据此做 stale 保护（两边互通）。 */
+  reads: ReadsState;
+}
 
 export interface CodemodeTools {
   /**
    * 注册 codemode 工具。注册时编译 quickjs.wasm（编译失败则注册失败，由入口记成
    * 警告），之后每次执行复用同一份编译结果。
    */
-  register(bus: ToolBus): Promise<void>;
+  register(bus: ToolBus, deps: CodemodeToolDeps): Promise<void>;
 }
 
 interface CallableTool {
@@ -124,6 +150,11 @@ function readStore(ctx: ExtensionContext): Record<string, unknown> {
     }
   }
   return Object.fromEntries(store);
+}
+
+/** 本次脚本有没有通过 fs 读写过文件（决定 details 里要不要带 reads 记账）。 */
+function hasReads(reads: Record<string, FileSnapshot>): boolean {
+  return Object.keys(reads).length > 0;
 }
 
 function errorText(error: ScriptError): string {
@@ -224,8 +255,9 @@ function formatCallSummary(calls: readonly ScriptCall[]): string {
 
 export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
   return {
-    async register(bus) {
+    async register(bus, deps) {
       const sandbox: CodemodeSandbox = await createCodemodeSandbox();
+      const fs = createCodemodeFs(deps);
       const tools = collectTools(bus, allowedToolNames(pi));
       const callable = new Set(tools.map((tool) => tool.name));
       const scriptTools = toScriptTools(tools);
@@ -269,6 +301,9 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
             };
           }
 
+          // 脚本的 fs 原语读到的文件也进同一份记账，随结果持久化（与 details.store 同一处）
+          const recordedReads: Record<string, FileSnapshot> = {};
+
           const outcome = await sandbox.run({
             code,
             tools: scriptTools,
@@ -295,6 +330,20 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
               });
             },
             onCall: async ({ name, args }) => {
+              if (fs.handles(name)) {
+                try {
+                  const result = await fs.execute(name, args, { ctx, signal });
+                  if (result.reads !== undefined) {
+                    Object.assign(recordedReads, result.reads);
+                  }
+                  return { ok: true, value: result.value };
+                } catch (error) {
+                  return {
+                    ok: false,
+                    error: error instanceof Error ? error.message : String(error),
+                  };
+                }
+              }
               if (!callable.has(name)) {
                 return { ok: false, error: `Tool "${name}" is not available in codemode.` };
               }
@@ -336,6 +385,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
                 calls: outcome.calls,
                 // store 的写入随工具结果持久化，下一次调用从这里重放恢复
                 ...(hasWrites && { store: writes }),
+                ...(hasReads(recordedReads) && { reads: recordedReads }),
                 pendant: scriptPendant(code, `${outcome.calls.length} tool call(s)`),
                 ...(truncated.fullOutputPath && { fullOutputPath: truncated.fullOutputPath }),
               },
@@ -356,6 +406,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
             details: {
               calls: outcome.calls,
               error: outcome.error.kind,
+              ...(hasReads(recordedReads) && { reads: recordedReads }),
               pendant: scriptPendant(code, `failed (${outcome.error.kind})`),
             },
           };
