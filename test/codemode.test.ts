@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { createCodemodeSandbox, type SandboxRunOptions } from "../src/codemode/sandbox.js";
@@ -264,5 +266,22 @@ describe("codemode 沙箱", () => {
     if (result.ok) {
       expect(result.value).toEqual({ echoed: undefined });
     }
+  });
+});
+
+describe("worker 产物", () => {
+  /**
+   * `worker.js` 是 `new Worker(url)` 直接起的普通 Node 模块，不像主线程那样经 jiti 加载
+   * ——jiti 从 pi 自己的 node_modules 解析裸包名，所以 `typebox` 这类由 pi 提供的依赖在主线程
+   * 可用、在 worker 里却解析不到（发布后表现为 `Cannot find package "typebox"`）。
+   * 产物里出现除 node 内置与自身 dependencies 之外的裸导入，就是这个 bug 复发。
+   */
+  it("自包含：只裸导入 node 内置模块与 quickjs-wasi", async () => {
+    const source = await readFile(new URL("../src/codemode/worker.js", import.meta.url), "utf8");
+    const bare = [...source.matchAll(/^import\s[^"']*from\s*["']([^"']+)["']/gm)]
+      .map((match) => match[1])
+      .filter((specifier) => !specifier.startsWith("node:") && specifier !== "quickjs-wasi");
+
+    expect(bare).toEqual([]);
   });
 });

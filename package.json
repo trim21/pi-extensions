@@ -28,7 +28,7 @@
     "aft-search": "jiti bin/aft-search.ts",
     "build:holder": "esbuild src/bwrap/holder.ts --format=esm --target=node24 --outfile=src/bwrap/holder.js",
     "prepare": "husky",
-    "build:codemode-worker": "esbuild src/codemode/worker.ts --bundle --packages=external --format=esm --target=node24 --outfile=src/codemode/worker.js"
+    "build:codemode-worker": "esbuild src/codemode/worker.ts --bundle --platform=node --external:quickjs-wasi --format=esm --target=node24 --outfile=src/codemode/worker.js"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.84.1",

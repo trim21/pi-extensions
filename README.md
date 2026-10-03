@@ -64,7 +64,10 @@
   时头尾截断并把全文落到 `$TMPDIR/pi-codemode-*.txt`。
 - **构建**：worker 入口是 esbuild 产物 `src/codemode/worker.js`（随仓库提交，
   `pnpm run build:codemode-worker` 重新生成，pre-commit 会自动跑）；`quickjs-wasi` 的
-  wasm 在注册工具时编译一次，之后每次执行复用。
+  wasm 在注册工具时编译一次，之后每次执行复用。产物必须**自包含**：它由 `new Worker(url)`
+  作为普通 Node 模块加载，不像主线程那样经 jiti 从 pi 的 `node_modules` 解析裸包名，所以
+  除了 `quickjs-wasi`（我们自己的 dependency）之外的依赖都要打包进去——否则用户装好包后
+  worker 会在启动时报 `Cannot find package`。
 
 ## 工具启用配置
 
