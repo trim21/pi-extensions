@@ -4,7 +4,6 @@ import { Value } from "typebox/value";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  ghExec,
   resolveRepo,
   splitRepo,
   type StructuredResultOf,
@@ -20,7 +19,8 @@ interface PrChecksWaitParams {
   fail_fast?: boolean;
 }
 
-const prHeadSchema = Type.Object({ headRefOid: Type.String() });
+/** pulls.get 里我们只需要 head commit 的 SHA（它决定查哪个 commit 的 checks）。 */
+const pullHeadSchema = Type.Object({ head: Type.Object({ sha: Type.String() }) });
 
 /** The toolcall handler behind `wait-github-pr-checks`. */
 async function waitPrChecks(
@@ -39,18 +39,17 @@ async function waitPrChecks(
   const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
   const { owner, repo: repoName } = splitRepo(effectiveRepo);
 
-  const prOut = await ghExec(
-    ["pr", "view", String(number), "--repo", effectiveRepo, "--json", "headRefOid"],
-    { cwd: ctx.cwd, signal, input: params },
+  const pull = Value.Parse(
+    pullHeadSchema,
+    await gh.reads.pull(owner, repoName, Number(number), signal),
   );
-  const { headRefOid } = Value.Parse(prHeadSchema, JSON.parse(prOut));
 
   return waitChecksReport({
     checks: gh.checks,
     subject: `PR #${number}`,
     owner,
     repo: repoName,
-    headSha: headRefOid,
+    headSha: pull.head.sha,
     failFast: fail_fast === true,
     signal,
     onUpdate,

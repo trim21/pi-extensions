@@ -39,8 +39,8 @@ export function readFixture<T>(file: string): T {
  */
 export type FixtureRoute =
   | string
-  | { file: string; headers?: Record<string, string> }
-  | { body: unknown; headers?: Record<string, string> };
+  | { file: string; headers?: Record<string, string>; status?: number }
+  | { body: unknown; headers?: Record<string, string>; status?: number };
 
 /** URL substring → route. The first matching entry wins, so order them. */
 export type FixtureRoutes = Record<string, FixtureRoute>;
@@ -63,8 +63,13 @@ export interface GithubCassette {
  * A JSON response carrying its URL, like a real fetch response does: octokit's
  * paginate reads `response.url` while normalizing a list payload.
  */
-function jsonResponse(url: string, body: unknown, headers: Record<string, string> = {}): Response {
-  const response = Response.json(body, { status: 200, headers });
+function jsonResponse(
+  url: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+  status = 200,
+): Response {
+  const response = Response.json(body, { status, headers });
   Object.defineProperty(response, "url", { value: url });
   return response;
 }
@@ -171,6 +176,8 @@ export function githubCassette(routes: FixtureRoutes): GithubCassette {
       const file = typeof route === "string" ? route : "file" in route ? route.file : undefined;
       const headers = typeof route === "string" ? {} : (route.headers ?? {});
 
+      const status = typeof route === "string" ? 200 : (route.status ?? 200);
+
       let body: unknown;
       if (file === undefined) {
         body = (route as { body: unknown }).body;
@@ -190,7 +197,7 @@ export function githubCassette(routes: FixtureRoutes): GithubCassette {
       }
 
       served.set(match, body);
-      return jsonResponse(url, body, headers);
+      return jsonResponse(url, body, headers, status);
     }
 
     throw new Error(`unexpected request, no fixture route: ${url}`);

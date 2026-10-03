@@ -6,15 +6,20 @@
 
 import { dateOnly } from "../lib/github.js";
 
-/** 一行一个 release：`tag  标记  发布日期  标题`。 */
+/**
+ * 一行一个 release：`tag  标记  发布日期  标题`。
+ *
+ * 标记有 `latest`（该仓库最新发布）/ `prerelease` / `draft`；REST 没有「isLatest」字段
+ * （那是 gh 按列表顺序算的），所以由调用方按第一个非 draft/prerelease 的条目传进来。
+ */
 export function renderReleaseList(
   releases: {
-    tagName: string;
-    name?: string;
-    isLatest?: boolean;
-    isPrerelease?: boolean;
-    isDraft?: boolean;
-    publishedAt?: string | null;
+    tag_name: string;
+    name?: string | null;
+    latest?: boolean;
+    prerelease?: boolean;
+    draft?: boolean;
+    published_at?: string | null;
   }[],
 ): string {
   if (releases.length === 0) {
@@ -23,14 +28,14 @@ export function renderReleaseList(
   return releases
     .map((release) => {
       const flags = [
-        release.isLatest ? "latest" : "",
-        release.isPrerelease ? "prerelease" : "",
-        release.isDraft ? "draft" : "",
+        release.latest ? "latest" : "",
+        release.prerelease ? "prerelease" : "",
+        release.draft ? "draft" : "",
       ].filter(Boolean);
       return [
-        release.tagName,
+        release.tag_name,
         flags.join(","),
-        dateOnly(release.publishedAt),
+        dateOnly(release.published_at),
         release.name ?? "",
       ].join("\t");
     })
@@ -40,14 +45,14 @@ export function renderReleaseList(
 /** 一行一个运行：`id  状态  结论  工作流  分支  事件  创建时间  链接`。 */
 export function renderRunList(
   runs: {
-    databaseId: number;
-    status?: string;
+    id: number;
+    status?: string | null;
     conclusion?: string | null;
-    workflowName?: string;
-    headBranch?: string;
+    name?: string | null;
+    head_branch?: string | null;
     event?: string;
-    createdAt?: string;
-    url?: string;
+    created_at?: string;
+    html_url?: string;
   }[],
 ): string {
   if (runs.length === 0) {
@@ -56,14 +61,14 @@ export function renderRunList(
   return runs
     .map((run) =>
       [
-        String(run.databaseId),
+        String(run.id),
         run.status ?? "",
         run.conclusion ?? "",
-        run.workflowName ?? "",
-        run.headBranch ?? "",
+        run.name ?? "",
+        run.head_branch ?? "",
         run.event ?? "",
-        dateOnly(run.createdAt),
-        run.url ?? "",
+        dateOnly(run.created_at),
+        run.html_url ?? "",
       ].join("\t"),
     )
     .join("\n");
@@ -71,37 +76,35 @@ export function renderRunList(
 
 /** 仓库概览：标题行 + 一行事实 + 一行链接 + 一行日期/许可。 */
 export function renderRepoView(repo: {
-  nameWithOwner?: string;
-  description?: string;
-  url?: string;
+  full_name?: string;
+  description?: string | null;
+  html_url?: string;
   visibility?: string;
-  primaryLanguage?: { name: string } | null;
-  defaultBranchRef?: { name: string } | null;
-  stargazerCount?: number;
-  forkCount?: number;
-  issues?: { totalCount: number } | null;
-  pullRequests?: { totalCount: number } | null;
-  licenseInfo?: { name: string } | null;
-  pushedAt?: string;
-  createdAt?: string;
+  language?: string | null;
+  default_branch?: string;
+  stargazers_count?: number;
+  forks_count?: number;
+  open_issues_count?: number;
+  license?: { name?: string } | null;
+  pushed_at?: string;
+  created_at?: string;
 }): string {
   const facts = [
     repo.visibility?.toLowerCase(),
-    repo.primaryLanguage?.name,
-    repo.defaultBranchRef && `default branch ${repo.defaultBranchRef.name}`,
-    repo.stargazerCount !== undefined && `stars ${repo.stargazerCount}`,
-    repo.forkCount !== undefined && `forks ${repo.forkCount}`,
-    repo.issues && `open issues ${repo.issues.totalCount}`,
-    repo.pullRequests && `open PRs ${repo.pullRequests.totalCount}`,
+    repo.language,
+    repo.default_branch && `default branch ${repo.default_branch}`,
+    repo.stargazers_count !== undefined && `stars ${repo.stargazers_count}`,
+    repo.forks_count !== undefined && `forks ${repo.forks_count}`,
+    repo.open_issues_count !== undefined && `open issues ${repo.open_issues_count}`,
   ].filter(Boolean);
   return [
-    [repo.nameWithOwner, repo.description].filter(Boolean).join(" — "),
+    [repo.full_name, repo.description].filter(Boolean).join(" — "),
     facts.join(" · "),
-    repo.url ?? "",
+    repo.html_url ?? "",
     [
-      repo.pushedAt && `pushed ${dateOnly(repo.pushedAt)}`,
-      repo.createdAt && `created ${dateOnly(repo.createdAt)}`,
-      repo.licenseInfo?.name,
+      repo.pushed_at && `pushed ${dateOnly(repo.pushed_at)}`,
+      repo.created_at && `created ${dateOnly(repo.created_at)}`,
+      repo.license?.name,
     ]
       .filter(Boolean)
       .join(" · "),
@@ -112,33 +115,30 @@ export function renderRepoView(repo: {
 
 /** release 详情：标题、事实、资产清单、正文。 */
 export function renderReleaseView(release: {
-  tagName?: string;
-  name?: string;
-  url?: string;
-  isLatest?: boolean;
-  isPrerelease?: boolean;
-  isDraft?: boolean;
-  publishedAt?: string | null;
-  createdAt?: string;
+  tag_name?: string;
+  name?: string | null;
+  html_url?: string;
+  /** 由调用方按「列表里第一个非 draft / prerelease」推断（REST 没有这个字段）。 */
+  latest?: boolean;
+  prerelease?: boolean;
+  draft?: boolean;
+  published_at?: string | null;
+  created_at?: string;
   author?: { login?: string } | null;
-  assets?: { name?: string; size?: number; downloadCount?: number }[];
-  body?: string;
+  assets?: { name?: string; size?: number; download_count?: number }[];
+  body?: string | null;
 }): string {
-  const flags = [
-    release.isLatest && "latest",
-    release.isPrerelease && "prerelease",
-    release.isDraft && "draft",
-  ]
+  const flags = [release.prerelease && "prerelease", release.draft && "draft"]
     .filter(Boolean)
     .join(",");
   const assets = release.assets ?? [];
   const lines = [
-    [release.tagName, release.name].filter(Boolean).join(" — "),
+    [release.tag_name, release.name].filter(Boolean).join(" — "),
     [
-      `published ${dateOnly(release.publishedAt ?? release.createdAt)}`,
+      `published ${dateOnly(release.published_at ?? release.created_at)}`,
       flags,
       release.author?.login && `by ${release.author.login}`,
-      release.url,
+      release.html_url,
     ]
       .filter(Boolean)
       .join(" · "),
@@ -147,7 +147,7 @@ export function renderReleaseView(release: {
     lines.push(`assets (${assets.length}):`);
     for (const asset of assets) {
       lines.push(
-        `- ${asset.name ?? ""} ${asset.size ?? 0} bytes, ${asset.downloadCount ?? 0} downloads`,
+        `- ${asset.name ?? ""} ${asset.size ?? 0} bytes, ${asset.download_count ?? 0} downloads`,
       );
     }
   }

@@ -4,8 +4,8 @@ import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  ghExec,
-  repoArgs,
+  resolveRepo,
+  splitRepo,
   subtitlePendant,
   toToolResult,
   withStructuredResult,
@@ -13,10 +13,7 @@ import {
 import { renderReleaseList } from "../render.js";
 import { ghReleaseListPayloadSchema, ghReleaseSummarySchema } from "../schemas.js";
 
-/** 我们向 gh 要的 release 字段，与渲染和载荷一一对应。 */
-const RELEASE_FIELDS = "tagName,name,isLatest,isPrerelease,isDraft,publishedAt,createdAt";
-
-export function addListReleasesTool(_gh: GhClient, bus: ToolBus) {
+export function addListReleasesTool(gh: GhClient, bus: ToolBus) {
   bus.register(
     defineStructuredTool({
       name: "list-github-releases",
@@ -31,13 +28,17 @@ export function addListReleasesTool(_gh: GhClient, bus: ToolBus) {
       structuredSchema: ghReleaseListPayloadSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const { repo, limit } = params;
-        const args = ["release", "list", ...repoArgs(repo), "--json", RELEASE_FIELDS];
-        if (limit) {
-          args.push("--limit", String(limit));
-        }
-        const stdout = await ghExec(args, { cwd: ctx.cwd, signal, input: params });
-        const releases = parseWithSchema(Type.Array(ghReleaseSummarySchema), JSON.parse(stdout));
-        const text = renderReleaseList(releases);
+        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+        const { owner, repo: repoName } = splitRepo(effectiveRepo);
+        const items = await gh.reads.listReleases(owner, repoName, limit, signal);
+        const releases = parseWithSchema(Type.Array(ghReleaseSummarySchema), items);
+        // REST 没有 isLatest：按列表顺序取第一个非 draft / prerelease 的条目
+        const latestIndex = releases.findIndex(
+          (release) => release.draft !== true && release.prerelease !== true,
+        );
+        const text = renderReleaseList(
+          releases.map((release, index) => ({ ...release, latest: index === latestIndex })),
+        );
         const result = toToolResult(text, params);
         result.details.pendant = subtitlePendant(params);
         return withStructuredResult(result, { text, releases });

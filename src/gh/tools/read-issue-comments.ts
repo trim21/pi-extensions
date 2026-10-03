@@ -3,14 +3,14 @@ import { Type } from "typebox";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  ghExec,
-  repoArgs,
+  resolveRepo,
+  splitRepo,
   subtitlePendant,
   toStructuredJsonResult,
 } from "../base.js";
 import { issueCommentsSchema } from "../schemas.js";
 
-export function addReadIssueCommentsTool(_gh: GhClient, bus: ToolBus) {
+export function addReadIssueCommentsTool(gh: GhClient, bus: ToolBus) {
   bus.register(
     defineStructuredTool({
       name: "read-github-issue-comments",
@@ -24,11 +24,14 @@ export function addReadIssueCommentsTool(_gh: GhClient, bus: ToolBus) {
       structuredSchema: issueCommentsSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const { number, repo } = params;
-        const out = await ghExec(
-          ["issue", "view", String(number), ...repoArgs(repo), "--json", "comments"],
-          { cwd: ctx.cwd, signal, input: params },
+        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+        const { owner, repo: repoName } = splitRepo(effectiveRepo);
+        const comments = await gh.reads.issueComments(owner, repoName, Number(number), signal);
+        const result = toStructuredJsonResult(
+          JSON.stringify({ comments }, null, 2),
+          params,
+          issueCommentsSchema,
         );
-        const result = toStructuredJsonResult(out, params, issueCommentsSchema);
         result.details.pendant = subtitlePendant(params, "number");
         return result;
       },
