@@ -1,0 +1,28 @@
+{
+  "id": "c3",
+  "success": true,
+  "symbol": "buildZoomSubtitle",
+  "file": "src/aft/tools.ts",
+  "signature": "buildZoomSubtitle(cwd: string, params): string | undefined",
+  "parameters": [
+    "cwd",
+    "params"
+  ],
+  "total_affected": 2,
+  "affected_files": 1,
+  "callers": [
+    {
+      "caller_symbol": "registerZoomTool",
+      "caller_file": "src/aft/tools.ts",
+      "line": 237,
+      "is_entry_point": false,
+      "parameters": [
+        "extCtx.cwd",
+        "params"
+      ]
+    }
+  ],
+  "depth_limited": false,
+  "truncated": 0,
+  "text": "2 affected call sites in 1 file"
+}

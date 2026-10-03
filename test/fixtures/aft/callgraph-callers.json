@@ -1,0 +1,34 @@
+{
+  "id": "c1",
+  "success": true,
+  "symbol": "callAftTool",
+  "file": "src/aft/bridge.ts",
+  "callers": [
+    {
+      "file": "src/aft/tools.ts",
+      "callers": [
+        {
+          "symbol": "registerOutlineTool",
+          "line": 152,
+          "resolved_by": "definition"
+        }
+      ]
+    },
+    {
+      "file": "src/aft/tools.ts",
+      "callers": [
+        {
+          "symbol": "registerZoomTool",
+          "line": 236,
+          "resolved_by": "name_match",
+          "approximate": true
+        }
+      ]
+    }
+  ],
+  "total_callers": 2,
+  "scanned_files": 12,
+  "depth_limited": false,
+  "truncated": 0,
+  "text": "2 callers in 1 file"
+}
