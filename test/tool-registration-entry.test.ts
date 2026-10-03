@@ -13,6 +13,11 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// 每个用例都要 vi.resetModules() 后重新 import 整个入口（含 codemode 注册时的 wasm 编译）：
+// 第一条在 CI 冷缓存上要 5 秒上下，默认 5s 超时会随机判定失败。这是真实的加载成本，不是挂住，
+// 因此只给本文件放宽超时。
+vi.setConfig({ testTimeout: 30_000 });
+
 const moduleRegistrations: { name: string; registered: string[] }[] = [];
 let failingModule: string | undefined;
 
