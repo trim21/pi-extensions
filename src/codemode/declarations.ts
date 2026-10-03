@@ -12,7 +12,8 @@ interface ToolLike {
   name: string;
   description?: string;
   parameters?: unknown;
-  structuredSchema?: unknown;
+  /** 只有声明了它的工具才可调用（见 `tool.ts` 的准入条件），因此这里是必需的。 */
+  structuredSchema: unknown;
 }
 
 type JsonSchema = Record<string, unknown>;
@@ -88,8 +89,7 @@ function renderType(schema: unknown, indent: string): string {
 function renderOverload(tool: ToolLike): string {
   const summary = tool.description?.split("\n", 1)[0]?.trim();
   const doc = summary ? `/** ${summary} */\n` : "";
-  const output =
-    tool.structuredSchema === undefined ? "string" : renderType(tool.structuredSchema, "");
+  const output = renderType(tool.structuredSchema, "");
   return `${doc}declare function call(name: ${JSON.stringify(tool.name)}, args: ${renderType(tool.parameters, "")}): Promise<${output}>;`;
 }
 

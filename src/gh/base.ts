@@ -20,10 +20,13 @@ import {
   type CommitStatus,
   createGithubChecks,
   createGithubSearch,
+  GH_LIST_FIELDS,
   type GithubChecksClient,
   type GithubClientOptions,
   type GithubSearch,
+  normalizeGhList,
   renderHits,
+  type SearchHit,
 } from "../lib/github.js";
 import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { type ToolPendant } from "../lib/pendant.js";
@@ -356,25 +359,32 @@ export function listGithubArgs(kind: "issue" | "pr", params: ListFilters): strin
   return args;
 }
 
-export async function listGithub(
+/**
+ * 浏览分支（`gh issue list` / `gh pr list`，不带 keywords）：直接要 `--json`，再归一到与
+ * 搜索分支同一套 `SearchHit`。repo 缺省时先解析当前仓库——文本要据此决定是否带 repo 列，
+ * 载荷里也必须有值。
+ */
+export async function browseList(
   kind: "issue" | "pr",
   params: ListFilters,
   ctx: { cwd?: string; signal?: AbortSignal; input?: unknown },
-): Promise<string> {
-  return ghExec(listGithubArgs(kind, params), ctx);
+): Promise<{ repo: string; hits: SearchHit[] }> {
+  const repo = params.repo ?? (await resolveRepo(undefined, ctx.signal, ctx.cwd, ctx.input));
+  const args = [...listGithubArgs(kind, params), "--json", GH_LIST_FIELDS];
+  const stdout = await ghExec(args, ctx);
+  return { repo, hits: normalizeGhList(stdout, repo) };
 }
 
-/** Run a keyword search through the octokit client and render the rows. */
-export async function searchList(
+/** 行列表的文本：两条分支共用一套 TSV 渲染；空结果是成功结果。 */
+export function renderHitList(
   kind: "issue" | "pr",
-  params: ListFilters,
-  githubSearch: GithubSearch,
-): Promise<string> {
-  const hits = await githubSearch.search(kind, params);
+  hits: SearchHit[],
+  options: { repo?: string; fields?: string },
+): string {
   if (hits.length === 0) {
     return `(no matching ${kind === "issue" ? "issues" : "pull requests"})`;
   }
-  return renderHits(hits, { repo: params.repo, fields: params.fields });
+  return renderHits(hits, options);
 }
 
 /**

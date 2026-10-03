@@ -36,12 +36,14 @@
 - **嵌套调用经工具总线**：`call("Bash", { command })` 最终执行的是 `Bash` 工具自己的
   `execute`，所以工具的审批照常生效（Bash 沙箱外执行会弹自己的提权确认）。codemode
   不额外加确认层：脚本里连发十次调用就是十次工具自己的审批（需要审批的那些）。
-- **可调用集合** = 总线上实际注册的工具减去排除名单，执行时再与当前 active 列表求交，
-  所以 `personalExtensions.disabledTools`、pi 的 `defaultTools` / `--tools`、子代理的工具
-  白名单都同样约束脚本。排除名单：`codemode` 自身与 `spawn-agent`；两套文件工具集的
-  读写工具（`Read`/`Edit`/`Write` 与 `read`/`edit`/`write`）；两套工具集的搜索工具
-  （`Grep`/`Glob` 与 `grep`/`glob`）——脚本搜文件用 `call("Bash", { command: "rg …" })`，
-  走同一个沙箱、拿得到退出码，还能拼管道，而那两个工具是给模型看结果的。
+- **可调用集合 = 声明了结构化输出的工具**（有 `structuredSchema` 的才进），执行时再与当前
+  active 列表求交，所以 `personalExtensions.disabledTools`、pi 的 `defaultTools` /
+  `--tools`、子代理的工具白名单都同样约束脚本。脚本拿到的返回值必须有确定的形状，因此没给
+  结构化结果的工具不进集合——这条规则自己维持一致，不需要维护一份会漂移的黑名单。由此天然
+  不在集合里的：`codemode` 自身与 `spawn-agent`、文件读写工具（脚本用 `fs.read` /
+  `fs.write`）、搜索工具（脚本用 `call("Bash", { command: "rg …" })`，走同一个沙箱、拿得到
+  退出码，还能拼管道）、`lsp-rename`（写工具）以及 talk / 会话工具（会把执行时间交给外部
+  输入）。
 - **文件读写只有 `fs` 一条路**：`fs.read(path)` 返回文件全文的原始 UTF-8 文本（不加行号、
   不截断、不设大小上限，只有内容不是合法 UTF-8 时报错），`fs.write(path, content)` 整体写入并自动创建
   父目录，相对路径相对当前 cwd。`fs.write` 与写类工具共用同一套保护：写前要求「已读且读后

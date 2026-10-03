@@ -18,8 +18,9 @@ import { Type } from "typebox";
 import type { Hover } from "vscode-languageserver-types";
 
 import { resolvePathArg } from "../path.js";
-import type { ToolBus } from "../tool-bus.js";
+import { defineStructuredTool, type ToolBus } from "../tool-bus.js";
 import type { InspectLocation } from "./client.js";
+import { lspHoverStructuredSchema, lspLocationsStructuredSchema } from "./inspect-schemas.js";
 import type { LspService } from "./lsp.js";
 import { type LspPosition, symbolCandidates } from "./rename.js";
 
@@ -29,10 +30,29 @@ const MAX_ENTRIES_PER_FILE = 10;
 const MAX_FILES_LISTED = 30;
 const MAX_SNIPPET_LENGTH = 200;
 
-/** 一次探测的产出：text 是消歧分组键，subtitle 供 pendant 摘要。 */
-interface InspectOutput {
+/** 渲染产出：text 也是消歧分组键。 */
+interface RenderedOutput {
   text: string;
   subtitle: string;
+}
+
+/**
+ * 一次探测的产出：渲染文本 + 结构化结果里除 `text` 之外的字段（选中哪一组，就取那一组的
+ * payload）。泛型让每个工具自己决定载荷。
+ */
+interface InspectOutput<TPayload> extends RenderedOutput {
+  payload: TPayload;
+}
+
+/** 位置载荷：服务层归一化后的绝对路径 + 1-based 行列号。 */
+function toLocationPayload(
+  locations: readonly InspectLocation[],
+): { path: string; line: number; character: number }[] {
+  return locations.map((location) => ({
+    path: location.path,
+    line: location.line + 1,
+    character: location.character + 1,
+  }));
 }
 
 function loadPrompt(fileName: string): string {
@@ -113,7 +133,7 @@ function toCoordinates(location: InspectLocation): string {
 async function formatDefinitionLocations(
   locations: InspectLocation[],
   cache: Map<string, string[]>,
-): Promise<InspectOutput> {
+): Promise<RenderedOutput> {
   if (locations.length === 0) {
     return { text: "No definition found for this symbol.", subtitle: "0 definition(s)" };
   }
@@ -131,7 +151,7 @@ async function formatDefinitionLocations(
 async function formatReferenceLocations(
   locations: InspectLocation[],
   cache: Map<string, string[]>,
-): Promise<InspectOutput> {
+): Promise<RenderedOutput> {
   if (locations.length === 0) {
     return { text: "No references found for this symbol.", subtitle: "0 reference(s)" };
   }
@@ -198,15 +218,15 @@ function formatHoverContents(contents: Hover["contents"]): string {
  * 行内同名候选逐个探测：输出一致即同一符号的多次出现；不一致报歧义并列出
  * 各候选的 1-based 列号（与 lsp-rename 的消歧行为一致）。
  */
-async function probeSymbolCandidates(options: {
+async function probeSymbolCandidates<TPayload>(options: {
   content: string;
   filePath: string;
   line: number;
   symbol: string;
   character?: number;
   signal?: AbortSignal;
-  probe: (position: LspPosition) => Promise<InspectOutput>;
-}): Promise<InspectOutput> {
+  probe: (position: LspPosition) => Promise<InspectOutput<TPayload>>;
+}): Promise<InspectOutput<TPayload>> {
   const candidates = symbolCandidates(
     options.content,
     options.line - 1,
@@ -218,12 +238,12 @@ async function probeSymbolCandidates(options: {
       `Symbol "${options.symbol}" not found on line ${options.line} of ${options.filePath}. Read the file again and locate the symbol.`,
     );
   }
-  const outputs: InspectOutput[] = [];
+  const outputs: InspectOutput<TPayload>[] = [];
   for (const candidate of candidates) {
     options.signal?.throwIfAborted();
     outputs.push(await options.probe(candidate));
   }
-  const groups = new Map<string, { output: InspectOutput; candidates: LspPosition[] }>();
+  const groups = new Map<string, { output: InspectOutput<TPayload>; candidates: LspPosition[] }>();
   for (const [index, candidate] of candidates.entries()) {
     const output = outputs.at(index);
     if (!output) {
@@ -256,137 +276,168 @@ async function probeSymbolCandidates(options: {
 }
 
 export function registerLspInspectTools(bus: ToolBus, service: LspService): void {
-  bus.register({
-    name: "lsp-find-definition",
-    label: "Lsp Find Definition",
-    description:
-      "Find where a code symbol is defined via LSP. Returns 1-based path:line:col locations with source line snippets.",
-    promptSnippet: "Find symbol definitions via LSP",
-    promptGuidelines: [FIND_DEFINITION_PROMPT],
-    parameters: POSITION_SCHEMA,
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      signal?.throwIfAborted();
-      const { path: filePath, content } = await readSymbolFile(ctx.cwd, params.file_path);
-      const cache = new Map<string, string[]>();
-      const output = await probeSymbolCandidates({
-        content,
-        filePath,
-        line: params.line,
-        symbol: params.symbol,
-        character: params.character,
-        signal,
-        probe: async (position) => {
-          const result = await service.inspect({
-            file: filePath,
-            cwd: ctx.cwd,
-            line: position.line,
-            character: position.character,
-            query: "definition",
-            options: { signal },
-          });
-          return formatDefinitionLocations(result.locations, cache);
-        },
-      });
-      return {
-        content: [{ type: "text" as const, text: output.text }],
-        details: {
-          pendant: {
-            title: "lsp-find-definition",
-            subtitle: `${params.symbol} · ${output.subtitle}`,
-          },
-        },
-      };
-    },
-  });
-
-  bus.register({
-    name: "lsp-find-reference",
-    label: "Lsp Find Reference",
-    description:
-      "Find all references to a code symbol across the workspace via LSP (includes the declaration). Grouped by file with 1-based line:col and source snippets.",
-    promptSnippet: "Find symbol references via LSP",
-    promptGuidelines: [FIND_REFERENCE_PROMPT],
-    parameters: POSITION_SCHEMA,
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      signal?.throwIfAborted();
-      const { path: filePath, content } = await readSymbolFile(ctx.cwd, params.file_path);
-      const cache = new Map<string, string[]>();
-      const output = await probeSymbolCandidates({
-        content,
-        filePath,
-        line: params.line,
-        symbol: params.symbol,
-        character: params.character,
-        signal,
-        probe: async (position) => {
-          const result = await service.inspect({
-            file: filePath,
-            cwd: ctx.cwd,
-            line: position.line,
-            character: position.character,
-            query: "references",
-            options: { signal },
-          });
-          return formatReferenceLocations(result.locations, cache);
-        },
-      });
-      return {
-        content: [{ type: "text" as const, text: output.text }],
-        details: {
-          pendant: {
-            title: "lsp-find-reference",
-            subtitle: `${params.symbol} · ${output.subtitle}`,
-          },
-        },
-      };
-    },
-  });
-
-  bus.register({
-    name: "lsp-inspect",
-    label: "Lsp Inspect",
-    description:
-      "Get hover information (type signature, documentation) for a code symbol via LSP. Content is passed through from the language server.",
-    promptSnippet: "Get hover info for a symbol via LSP",
-    promptGuidelines: [INSPECT_PROMPT],
-    parameters: POSITION_SCHEMA,
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      signal?.throwIfAborted();
-      const { path: filePath, content } = await readSymbolFile(ctx.cwd, params.file_path);
-      const output = await probeSymbolCandidates({
-        content,
-        filePath,
-        line: params.line,
-        symbol: params.symbol,
-        character: params.character,
-        signal,
-        probe: async (position) => {
-          const result = await service.inspect({
-            file: filePath,
-            cwd: ctx.cwd,
-            line: position.line,
-            character: position.character,
-            query: "hover",
-            options: { signal },
-          });
-          if (result.hover === null) {
+  bus.register(
+    defineStructuredTool({
+      name: "lsp-find-definition",
+      label: "Lsp Find Definition",
+      description:
+        "Find where a code symbol is defined via LSP. Returns 1-based path:line:col locations with source line snippets.",
+      promptSnippet: "Find symbol definitions via LSP",
+      promptGuidelines: [FIND_DEFINITION_PROMPT],
+      parameters: POSITION_SCHEMA,
+      structuredSchema: lspLocationsStructuredSchema,
+      async execute(_id, params, signal, _onUpdate, ctx) {
+        signal?.throwIfAborted();
+        const { path: filePath, content } = await readSymbolFile(ctx.cwd, params.file_path);
+        const cache = new Map<string, string[]>();
+        const output = await probeSymbolCandidates({
+          content,
+          filePath,
+          line: params.line,
+          symbol: params.symbol,
+          character: params.character,
+          signal,
+          probe: async (position) => {
+            const result = await service.inspect({
+              file: filePath,
+              cwd: ctx.cwd,
+              line: position.line,
+              character: position.character,
+              query: "definition",
+              options: { signal },
+            });
+            const rendered = await formatDefinitionLocations(result.locations, cache);
             return {
-              text: `No hover information for '${params.symbol}' at line ${params.line} of ${filePath}.`,
-              subtitle: "no hover info",
+              ...rendered,
+              payload: {
+                serverID: result.serverID,
+                locations: toLocationPayload(result.locations),
+              },
             };
-          }
-          return {
-            text: formatHoverContents(result.hover.contents),
-            subtitle: "hover",
-          };
-        },
-      });
-      return {
-        content: [{ type: "text" as const, text: output.text }],
-        details: {
-          pendant: { title: "lsp-inspect", subtitle: `${params.symbol} · ${output.subtitle}` },
-        },
-      };
-    },
-  });
+          },
+        });
+        return {
+          content: [{ type: "text" as const, text: output.text }],
+          details: {
+            pendant: {
+              title: "lsp-find-definition",
+              subtitle: `${params.symbol} · ${output.subtitle}`,
+            },
+          },
+          structuredResult: { ok: true as const, value: { text: output.text, ...output.payload } },
+        };
+      },
+    }),
+  );
+
+  bus.register(
+    defineStructuredTool({
+      name: "lsp-find-reference",
+      label: "Lsp Find Reference",
+      description:
+        "Find all references to a code symbol across the workspace via LSP (includes the declaration). Grouped by file with 1-based line:col and source snippets.",
+      promptSnippet: "Find symbol references via LSP",
+      promptGuidelines: [FIND_REFERENCE_PROMPT],
+      parameters: POSITION_SCHEMA,
+      structuredSchema: lspLocationsStructuredSchema,
+      async execute(_id, params, signal, _onUpdate, ctx) {
+        signal?.throwIfAborted();
+        const { path: filePath, content } = await readSymbolFile(ctx.cwd, params.file_path);
+        const cache = new Map<string, string[]>();
+        const output = await probeSymbolCandidates({
+          content,
+          filePath,
+          line: params.line,
+          symbol: params.symbol,
+          character: params.character,
+          signal,
+          probe: async (position) => {
+            const result = await service.inspect({
+              file: filePath,
+              cwd: ctx.cwd,
+              line: position.line,
+              character: position.character,
+              query: "references",
+              options: { signal },
+            });
+            const rendered = await formatReferenceLocations(result.locations, cache);
+            return {
+              ...rendered,
+              // 文本为上下文做了截断（每文件 10 条、最多 30 个文件），载荷给全部位置
+              payload: {
+                serverID: result.serverID,
+                locations: toLocationPayload(result.locations),
+              },
+            };
+          },
+        });
+        return {
+          content: [{ type: "text" as const, text: output.text }],
+          details: {
+            pendant: {
+              title: "lsp-find-reference",
+              subtitle: `${params.symbol} · ${output.subtitle}`,
+            },
+          },
+          structuredResult: { ok: true as const, value: { text: output.text, ...output.payload } },
+        };
+      },
+    }),
+  );
+
+  bus.register(
+    defineStructuredTool({
+      name: "lsp-inspect",
+      label: "Lsp Inspect",
+      description:
+        "Get hover information (type signature, documentation) for a code symbol via LSP. Content is passed through from the language server.",
+      promptSnippet: "Get hover info for a symbol via LSP",
+      promptGuidelines: [INSPECT_PROMPT],
+      parameters: POSITION_SCHEMA,
+      structuredSchema: lspHoverStructuredSchema,
+      async execute(_id, params, signal, _onUpdate, ctx) {
+        signal?.throwIfAborted();
+        const { path: filePath, content } = await readSymbolFile(ctx.cwd, params.file_path);
+        const output = await probeSymbolCandidates({
+          content,
+          filePath,
+          line: params.line,
+          symbol: params.symbol,
+          character: params.character,
+          signal,
+          probe: async (position) => {
+            const result = await service.inspect({
+              file: filePath,
+              cwd: ctx.cwd,
+              line: position.line,
+              character: position.character,
+              query: "hover",
+              options: { signal },
+            });
+            // hover 的内容是服务器给的异构结构（string / MarkedString / MarkupContent），
+            // 渲染成文本给它；载荷里只另带是谁回答的
+            if (result.hover === null) {
+              return {
+                text: `No hover information for '${params.symbol}' at line ${params.line} of ${filePath}.`,
+                subtitle: "no hover info",
+                payload: { serverID: result.serverID },
+              };
+            }
+            return {
+              text: formatHoverContents(result.hover.contents),
+              subtitle: "hover",
+              payload: { serverID: result.serverID },
+            };
+          },
+        });
+        return {
+          content: [{ type: "text" as const, text: output.text }],
+          details: {
+            pendant: { title: "lsp-inspect", subtitle: `${params.symbol} · ${output.subtitle}` },
+          },
+          structuredResult: { ok: true as const, value: { text: output.text, ...output.payload } },
+        };
+      },
+    }),
+  );
 }

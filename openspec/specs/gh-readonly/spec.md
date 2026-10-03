@@ -216,6 +216,7 @@ GitHub 只读工具集：issue / PR / release / 仓库信息查询与 CI 日志�
 
 - **注册门控**：Windows 或 PATH 无 `gh` 时不注册工具（notify warning / error）。
 - **输出截断**：`gh` stdout 统一截断为 2000 行 / 50KB，details 带 `truncated` 标志（`read-github-ci-logs` 不再产出长文本，只返回 JSON 索引）。
+- **文本渲染**：`list-github-issues` / `list-github-prs` / `list-github-releases` / `list-github-workflow-runs` / `read-github-repo` / `read-github-release` 改走 `gh … --json`，文本由 `src/gh/render.ts` 的纯函数渲染（issue/PR 列表统一为 TSV 行，列由 `fields` 决定）；`read-github-pr-diff` 的变更统计由 `parseDiffStats` 从同一份 diff 解析；`watch-github-run` 在 `gh run watch` 结束后补一次 `gh run view --json`（这些命令都没有 `--json`）。
 - **错误契约**：非零退出抛 `GhError`，消息带调用输入与输出上下文，标注 `(command timed out)` / `(command aborted)` / `spawn failed`；被 kill 的进程退出码记为失败而非成功。
 - **repo 缺省**：未指定 `repo` 时用当前目录解析（`gh repo view --json nameWithOwner`）。
 - **octokit 读取**：`read-github-pr-status` / `wait-github-pr-checks` / `wait-github-commit-checks` 的 checks，以及 `get-github-workflow-jobs` 与 `read-github-ci-logs` 的 job 元数据，都走 `src/lib/github.ts` 的 octokit 客户端（`GithubChecksClient`：`pullHead` / `headSha` / `statuses` / `checkRuns` / `runJobs` / `job`）；job 列表用 `octokit.paginate` 跟随 Link 分页，因此没有 30 条上限；`run_id` / `job_id` 由 check run 的 `details_url`（`/actions/runs/<run_id>/job/<job_id>`）解析。

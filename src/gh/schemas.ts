@@ -228,3 +228,216 @@ export const checksVerdictSchema = Type.Object({
     }),
   ),
 });
+
+// ── 文本类工具改成 --json 之后的载荷 ─────────────────────────────────────────
+//
+// 这批工具的文本由我们自己从 JSON 渲染，因此载荷是 gh 的 JSON（字段名就是 gh 的）加一个
+// `text`（与工具输出一致）。与上面十个透传工具一样，gh 的 JSON 允许额外字段。
+
+/** `list-github-issues` / `list-github-prs` 的一行：浏览与搜索两条分支归一后的记录。 */
+export const ghHitSchema = Type.Object(
+  {
+    number: Type.Number(),
+    state: Type.Union([Type.Literal("open"), Type.Literal("closed"), Type.Literal("merged")]),
+    title: Type.String(),
+    url: Type.String(),
+    repo: Type.String({ description: "OWNER/REPO；浏览分支取参数或当前仓库" }),
+    author: Type.String(),
+    labels: Type.Array(Type.String()),
+    milestone: Type.String(),
+    assignees: Type.Array(Type.String()),
+    comments: Type.Number({ description: "评论数（浏览分支是评论数组的长度）" }),
+    createdAt: Type.String({ description: "YYYY-MM-DD" }),
+    updatedAt: Type.String({ description: "YYYY-MM-DD" }),
+    closedAt: Type.String(),
+    mergedAt: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export const ghHitListPayloadSchema = Type.Object(
+  {
+    text: Type.String({ description: "与工具输出一致的行列表（可能被行数/字节预算截断）" }),
+    items: Type.Array(ghHitSchema, { description: "全部命中，不受文本截断影响" }),
+  },
+  { additionalProperties: false },
+);
+
+/** `gh release list --json` 的一行。 */
+export const ghReleaseSummarySchema = Type.Object(
+  {
+    tagName: Type.String(),
+    name: Type.Optional(Type.String()),
+    isLatest: Type.Optional(Type.Boolean()),
+    isPrerelease: Type.Optional(Type.Boolean()),
+    isDraft: Type.Optional(Type.Boolean()),
+    publishedAt: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    createdAt: Type.Optional(Type.String()),
+  },
+  { additionalProperties: true },
+);
+
+export const ghReleaseListPayloadSchema = Type.Object(
+  {
+    text: Type.String(),
+    releases: Type.Array(ghReleaseSummarySchema),
+  },
+  { additionalProperties: false },
+);
+
+/** `gh run list` / `gh run view --json` 的共同字段。 */
+export const ghRunSummarySchema = Type.Object(
+  {
+    databaseId: Type.Number(),
+    displayTitle: Type.Optional(Type.String()),
+    status: Type.Optional(Type.String()),
+    conclusion: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    workflowName: Type.Optional(Type.String()),
+    headBranch: Type.Optional(Type.String()),
+    event: Type.Optional(Type.String()),
+    createdAt: Type.Optional(Type.String()),
+    updatedAt: Type.Optional(Type.String()),
+    startedAt: Type.Optional(Type.String()),
+    url: Type.Optional(Type.String()),
+  },
+  { additionalProperties: true },
+);
+
+export const ghRunListPayloadSchema = Type.Object(
+  {
+    text: Type.String(),
+    runs: Type.Array(ghRunSummarySchema),
+  },
+  { additionalProperties: false },
+);
+
+/** `watch-github-run`：文本是 `gh run watch` 的输出，载荷是收尾时查到的运行状态。 */
+export const ghRunPayloadSchema = Type.Object(
+  {
+    text: Type.String(),
+    run: ghRunSummarySchema,
+  },
+  { additionalProperties: false },
+);
+
+/** `gh repo view --json` 里我们渲染与脚本可能用到的字段。 */
+export const ghRepoViewSchema = Type.Object(
+  {
+    name: Type.Optional(Type.String()),
+    nameWithOwner: Type.Optional(Type.String()),
+    description: Type.Optional(Type.String()),
+    url: Type.Optional(Type.String()),
+    homepageUrl: Type.Optional(Type.String()),
+    visibility: Type.Optional(Type.String()),
+    isPrivate: Type.Optional(Type.Boolean()),
+    isFork: Type.Optional(Type.Boolean()),
+    isArchived: Type.Optional(Type.Boolean()),
+    stargazerCount: Type.Optional(Type.Number()),
+    forkCount: Type.Optional(Type.Number()),
+    primaryLanguage: Type.Optional(
+      Type.Union([
+        Type.Object({ name: Type.String() }, { additionalProperties: true }),
+        Type.Null(),
+      ]),
+    ),
+    defaultBranchRef: Type.Optional(
+      Type.Union([
+        Type.Object({ name: Type.String() }, { additionalProperties: true }),
+        Type.Null(),
+      ]),
+    ),
+    licenseInfo: Type.Optional(
+      Type.Union([
+        Type.Object({ name: Type.String() }, { additionalProperties: true }),
+        Type.Null(),
+      ]),
+    ),
+    issues: Type.Optional(
+      Type.Union([
+        Type.Object({ totalCount: Type.Number() }, { additionalProperties: true }),
+        Type.Null(),
+      ]),
+    ),
+    pullRequests: Type.Optional(
+      Type.Union([
+        Type.Object({ totalCount: Type.Number() }, { additionalProperties: true }),
+        Type.Null(),
+      ]),
+    ),
+    pushedAt: Type.Optional(Type.String()),
+    createdAt: Type.Optional(Type.String()),
+    updatedAt: Type.Optional(Type.String()),
+  },
+  { additionalProperties: true },
+);
+
+export const ghRepoPayloadSchema = Type.Object(
+  {
+    text: Type.String(),
+    repo: ghRepoViewSchema,
+  },
+  { additionalProperties: false },
+);
+
+/** `gh release view --json` 里我们渲染与脚本可能用到的字段。 */
+export const ghReleaseViewSchema = Type.Object(
+  {
+    tagName: Type.Optional(Type.String()),
+    name: Type.Optional(Type.String()),
+    body: Type.Optional(Type.String()),
+    url: Type.Optional(Type.String()),
+    isDraft: Type.Optional(Type.Boolean()),
+    isPrerelease: Type.Optional(Type.Boolean()),
+    createdAt: Type.Optional(Type.String()),
+    publishedAt: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    targetCommitish: Type.Optional(Type.String()),
+    author: Type.Optional(Type.Union([ghActorSchema, Type.Null()])),
+    assets: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            name: Type.Optional(Type.String()),
+            size: Type.Optional(Type.Number()),
+            downloadCount: Type.Optional(Type.Number()),
+            contentType: Type.Optional(Type.String()),
+            state: Type.Optional(Type.String()),
+            url: Type.Optional(Type.String()),
+          },
+          { additionalProperties: true },
+        ),
+      ),
+    ),
+  },
+  { additionalProperties: true },
+);
+
+export const ghReleaseViewPayloadSchema = Type.Object(
+  {
+    text: Type.String(),
+    release: ghReleaseViewSchema,
+  },
+  { additionalProperties: false },
+);
+
+/** `read-github-pr-diff`：文本是原始 diff，载荷是从它解析出的变更统计。 */
+export const ghDiffPayloadSchema = Type.Object(
+  {
+    text: Type.String(),
+    files: Type.Array(
+      Type.Object(
+        {
+          path: Type.String(),
+          additions: Type.Number(),
+          deletions: Type.Number(),
+          /** diff 里的旧路径，重命名/复制时与 `path` 不同。 */
+          oldPath: Type.Optional(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    additions: Type.Number(),
+    deletions: Type.Number(),
+    changedFiles: Type.Number(),
+  },
+  { additionalProperties: false },
+);

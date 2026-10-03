@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type {
+  AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
   ToolDefinition,
@@ -28,6 +29,7 @@ interface Harness {
   readTool: ReturnType<typeof vi.fn>;
   editTool: ReturnType<typeof vi.fn>;
   echoTool: ReturnType<typeof vi.fn>;
+  textOnlyTool: ReturnType<typeof vi.fn>;
   spawnAgentTool: ReturnType<typeof vi.fn>;
   searchTool: ReturnType<typeof vi.fn>;
   brokenTool: ReturnType<typeof vi.fn>;
@@ -48,7 +50,7 @@ async function harness(
 ): Promise<Harness> {
   const registered = new Map<string, ToolDefinition>();
   const appended: { customType: string; data: unknown }[] = [];
-  const active = options.active ?? ["Read", "Edit", "echo", "search", "broken"];
+  const active = options.active ?? ["Read", "Edit", "echo", "text-only", "search", "broken"];
   const select = vi.fn(approveOnce);
 
   const pi = {
@@ -70,9 +72,16 @@ async function harness(
     details: {},
   }));
 
-  // 普通（无 structuredSchema）工具：脚本里拿它的文本输出
+  // 声明了 schema 的工具：脚本拿到解包后的载荷
   const echoTool = vi.fn(async (_id: string, params: { message: string }) => ({
     content: [{ type: "text" as const, text: `echo: ${params.message}` }],
+    details: {},
+    structuredResult: { ok: true as const, value: { message: `echo: ${params.message}` } },
+  }));
+
+  // 声明了 schema、但只给了文本（还没有结构化结果的工具），脚本拿文本——覆盖回退路径
+  const textOnlyTool = vi.fn(async (_id: string, params: { message: string }) => ({
+    content: [{ type: "text" as const, text: `plain: ${params.message}` }],
     details: {},
   }));
 
@@ -134,13 +143,29 @@ async function harness(
     parameters: Type.Object({ agent: Type.String(), task: Type.String() }),
     execute: spawnAgentTool,
   });
-  bus.register({
-    name: "echo",
-    label: "Echo",
-    description: "echo a message back",
-    parameters: Type.Object({ message: Type.String() }),
-    execute: echoTool,
-  });
+  bus.register(
+    defineStructuredTool({
+      name: "echo",
+      label: "Echo",
+      description: "echo a message back",
+      parameters: Type.Object({ message: Type.String() }),
+      structuredSchema: Type.Object({ message: Type.String() }),
+      execute: echoTool,
+    }),
+  );
+  bus.register(
+    defineStructuredTool({
+      name: "text-only",
+      label: "Text only",
+      description: "declares a schema but only returns text",
+      parameters: Type.Object({ message: Type.String() }),
+      structuredSchema: Type.Object({ message: Type.String() }),
+      // 故意绕过编译期检查：验证「声明了 schema 却没给 structuredResult」时运行期的兜底
+      execute: textOnlyTool as unknown as () => Promise<
+        AgentToolResult<unknown> & { structuredResult: StructuredResult<{ message: string }> }
+      >,
+    }),
+  );
   bus.register(
     defineStructuredTool({
       name: "search",
@@ -184,6 +209,7 @@ async function harness(
     readTool,
     editTool,
     echoTool,
+    textOnlyTool,
     spawnAgentTool,
     searchTool,
     brokenTool,
@@ -264,11 +290,17 @@ describe("codemode 工具", () => {
     expect(markdown.endsWith("\n````")).toBe(true);
   });
 
-  it("描述里列出可调用工具，且不含自己", async () => {
+  it("描述里只列出声明了结构化输出的工具", async () => {
     const h = await harness();
-    expect(h.codemode.description).toContain('declare function call(name: "echo", args: {');
-    expect(h.codemode.description).toContain('declare function call(name: "search", args: {');
-    expect(h.codemode.description).not.toContain('declare function call(name: "codemode"');
+
+    // 有 structuredSchema 的：进了可调用集合
+    for (const name of ["echo", "search", "text-only", "broken"]) {
+      expect(h.codemode.description).toContain(`declare function call(name: "${name}", args:`);
+    }
+    // 没有 schema 的（含 codemode 自己、spawn-agent、文件工具）：既不列出也不可调用
+    for (const name of ["codemode", "spawn-agent", "Read", "Edit"]) {
+      expect(h.codemode.description).not.toContain(`declare function call(name: "${name}"`);
+    }
   });
 
   it("文件工具不进可调用集合：脚本改用 fs 原语", async () => {
@@ -294,11 +326,11 @@ describe("codemode 工具", () => {
     expect(h.readTool).not.toHaveBeenCalled();
   });
 
-  it("描述里按 structuredSchema 渲染返回类型，未声明的回退文本", async () => {
+  it("描述里按 structuredSchema 渲染返回类型", async () => {
     const h = await harness();
 
     expect(h.codemode.description).toContain(
-      'declare function call(name: "echo", args: {\n  message: string;\n}): Promise<string>;',
+      'declare function call(name: "echo", args: {\n  message: string;\n}): Promise<{\n  message: string;\n}>;',
     );
     expect(h.codemode.description).toContain(
       'declare function call(name: "search", args: {\n  query: string;\n}): Promise<{\n  files: Array<string>;\n  truncated: boolean;\n}>;',
@@ -307,6 +339,25 @@ describe("codemode 工具", () => {
       "declare function call(name: string, args?: unknown): Promise<unknown>;",
     );
     expect(h.codemode.description).toContain("declare class CallFailedError extends Error");
+  });
+
+  it("声明了结构化输出却没给载荷时，脚本拿到 CallFailedError", async () => {
+    const h = await harness();
+    const result = await runScript(
+      h,
+      `try {
+         await call("text-only", { message: "hi" });
+         return "called";
+       } catch (error) {
+         return [error instanceof CallFailedError, error.message].join("|");
+       }`,
+    );
+
+    expect(h.textOnlyTool).toHaveBeenCalledOnce();
+    // 运行时复核由总线负责：声明了 schema 就必须要给结构化载荷
+    expect(textOf(result)).toContain(
+      "declared a structuredSchema but returned no structuredResult",
+    );
   });
 
   it("描述里有 fs 原语的声明，但它们不是可调用工具", async () => {

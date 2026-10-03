@@ -186,6 +186,11 @@ export function renderHits(hits: SearchHit[], options: { repo?: string; fields?:
 }
 
 function toDate(iso: string | null | undefined): string {
+  return dateOnly(iso);
+}
+
+/** ISO 时间戳取日期部分（`2026-10-03`）；缺省或 null 给空串。 */
+export function dateOnly(iso: string | null | undefined): string {
   return iso ? iso.slice(0, 10) : "";
 }
 
@@ -215,6 +220,76 @@ function normalize(raw: SearchItem): SearchHit {
     closedAt: toDate(raw.closed_at),
     mergedAt: toDate(mergedAt),
   };
+}
+
+/**
+ * `gh issue list --json …` / `gh pr list --json …` 的响应形状。gh 走 GraphQL，字段是
+ * camelCase，`state` 是大写的 `OPEN` / `CLOSED` / `MERGED`，`comments` 是整个评论数组
+ * （不是计数）——所以浏览分支要在归一化这一步把它压成计数，才能和搜索分支（REST，
+ * 下划线命名、state 小写、comments 是数字）共用同一套 SearchHit、渲染与载荷。
+ */
+const ghListRecordSchema = Type.Object({
+  number: Type.Number(),
+  title: Type.String(),
+  state: Type.String(),
+  url: Type.String(),
+  labels: Type.Array(Type.Object({ name: Type.String() }, { additionalProperties: true })),
+  milestone: Type.Union([
+    Type.Object({ title: Type.String() }, { additionalProperties: true }),
+    Type.Null(),
+  ]),
+  assignees: Type.Array(Type.Object({ login: Type.String() }, { additionalProperties: true })),
+  author: Type.Union([
+    Type.Object({ login: Type.String() }, { additionalProperties: true }),
+    Type.Null(),
+  ]),
+  comments: Type.Array(Type.Unknown()),
+  createdAt: Type.String(),
+  updatedAt: Type.String(),
+  closedAt: Type.Union([Type.String(), Type.Null()]),
+  mergedAt: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+});
+
+/** 浏览分支要 gh 给的字段，与 `SearchHit` 的列一一对应（`comments` 只用来数个数）。 */
+export const GH_LIST_FIELDS = [
+  "number",
+  "title",
+  "state",
+  "url",
+  "labels",
+  "milestone",
+  "assignees",
+  "author",
+  "comments",
+  "createdAt",
+  "updatedAt",
+  "closedAt",
+  "mergedAt",
+].join(",");
+
+/** 把 `gh issue list --json` / `gh pr list --json` 的输出归一到 `SearchHit`（repo 由调用方给）。 */
+export function normalizeGhList(stdout: string, repo: string): SearchHit[] {
+  const items = parseWithSchema(Type.Array(ghListRecordSchema), JSON.parse(stdout));
+  return items.map((item) => {
+    const mergedAt = item.mergedAt ?? null;
+    return {
+      number: item.number,
+      // gh 给 MERGED 状态的 PR 与 OPEN/CLOSED 一样是 state 字段，merged 语义与搜索分支对齐
+      state: mergedAt ? "merged" : (item.state.toLowerCase() as SearchHit["state"]),
+      title: item.title,
+      url: item.url,
+      repo,
+      author: item.author?.login ?? "",
+      labels: item.labels.map((label) => label.name),
+      milestone: item.milestone?.title ?? "",
+      assignees: item.assignees.map((assignee) => assignee.login),
+      comments: item.comments.length,
+      createdAt: toDate(item.createdAt),
+      updatedAt: toDate(item.updatedAt),
+      closedAt: toDate(item.closedAt),
+      mergedAt: toDate(mergedAt),
+    };
+  });
 }
 
 /**

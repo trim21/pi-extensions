@@ -223,6 +223,11 @@ describe.concurrent.each(Object.entries(ENTRIES))(
           const text: string = result.content[0].text;
           expect(text).toContain("greet");
           expect(text).toContain("name: string");
+          // 结构化载荷：文本 + 回答的服务器 id（hover 的内容本身仍在文本里）
+          expect(result.structuredResult).toEqual({
+            ok: true,
+            value: { text, serverID: "typescript" },
+          });
         } finally {
           await cleanup();
         }
@@ -264,6 +269,15 @@ describe.concurrent.each(Object.entries(ENTRIES))(
             ctx,
           );
           expect(result.content[0].text).toContain(`${mainPath}:1:`);
+          // 载荷里的位置是 1-based，与文本里的 path:line:col 同一套口径
+          expect(result.structuredResult).toEqual({
+            ok: true,
+            value: {
+              text: result.content[0].text,
+              serverID: "typescript",
+              locations: [{ path: mainPath, line: 1, character: 16 }],
+            },
+          });
           expect(await readFile(mainPath, "utf8")).toBe("const item = { item: 1 };\n");
         } finally {
           await cleanup();
