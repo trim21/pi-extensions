@@ -305,7 +305,7 @@ export interface GithubApi {
    * 用同一个 token 直接 fetch（二进制资产、源码归档这类要走原始响应体、不能经 octokit
    * 的 JSON 解析的请求）。重定向自动跟随，401 同样丢缓存重试一次。
    */
-  rawFetch(url: string, init: RequestInit): Promise<Response>;
+  rawFetch(url: string, init?: RequestInit): Promise<Response>;
 }
 
 export interface GithubClientOptions {
@@ -346,7 +346,7 @@ export function createGithubApi(options: GithubClientOptions = {}): GithubApi {
     return client;
   }
 
-  async function rawFetchOnce(url: string, init: RequestInit): Promise<Response> {
+  async function rawFetchOnce(url: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${await getToken()}`);
     headers.set("accept", "application/vnd.github+json");
