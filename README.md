@@ -31,24 +31,31 @@
 
 `codemode` 让模型写一段 JavaScript（作为 async 函数体，`await` 与 `return` 都可用），在
 进程内的 worker 线程里用 QuickJS wasm VM 执行。VM 里没有 node、文件系统、网络、timer
-或模块加载，脚本唯一的出口是 `call(name, args)`。
+或模块加载，脚本的出口只有 `call(name, args)` 与 `fs.read` / `fs.write` 两个文件原语。
 
-- **嵌套调用经工具总线**：`call("Read", { file_path })` 最终执行的是 `Read` 工具自己的
-  `execute`，所以工具的审批照常生效（写工作区外会弹 write-guard，Bash 沙箱外执行会弹
-  自己的提权确认）。codemode 不额外加确认层：脚本里连发十次写操作就是十次工具自己的
-  审批（需要审批的那些）。
-- **可调用集合** = 总线上实际注册的工具减去 `codemode` 自身，执行时再与当前 active
-  列表求交，所以 `personalExtensions.disabledTools`、pi 的 `defaultTools` / `--tools`、
-  子代理的工具白名单都同样约束脚本。
+- **嵌套调用经工具总线**：`call("Bash", { command })` 最终执行的是 `Bash` 工具自己的
+  `execute`，所以工具的审批照常生效（Bash 沙箱外执行会弹自己的提权确认）。codemode
+  不额外加确认层：脚本里连发十次调用就是十次工具自己的审批（需要审批的那些）。
+- **可调用集合** = 总线上实际注册的工具减去排除名单（`codemode` 自身、`spawn-agent`、
+  以及两套文件工具集的 `Read`/`Edit`/`Write` 与 `read`/`edit`/`write`），执行时再与当前
+  active 列表求交，所以 `personalExtensions.disabledTools`、pi 的 `defaultTools` /
+  `--tools`、子代理的工具白名单都同样约束脚本。
+- **文件读写只有 `fs` 一条路**：`fs.read(path)` 返回文件全文的原始 UTF-8 文本（不加行号、
+  不截断、不设大小上限，只有内容不是合法 UTF-8 时报错），`fs.write(path, content)` 整体写入并自动创建
+  父目录，相对路径相对当前 cwd。`fs.write` 与写类工具共用同一套保护：写前要求「已读且读后
+  未变」（记账与文件工具共享，工具读过的文件脚本可以直接写），工作区外写入走 write-guard
+  的 diff 审批，headless / Windows / `/bwrap-deny-request` 下直接拒绝。文件读写工具本身
+  不在可调用集合里，脚本要改一行内容也走 `fs.read` + `fs.write`（行级替换用 `Edit` 工具
+  直接改，不进脚本）。
 - **只有脚本输出进上下文**：`text(value)` / `console.log(...)` 与 `return` 值进入工具结果，
   中间的工具调用与它们的返回内容不会（也不在会话记录里留下工具调用条目）。
 - **返回值**：声明了 `structuredSchema` 的工具（如 gh-readonly 的读类工具）把结果放在
   `structuredResult` 里，`call()` 解包成对象给脚本；`{ ok: false, error }` 会 reject 成
-  `CallFailedError`（脚本可按 `instanceof CallFailedError` 区分工具失败与自身运行期错误）。
+  `CallFailedError`（脚本可按 `instanceof CallFailedError` 区分调用失败与自身运行期错误）。
   没有声明输出结构的工具回退成工具输出的文本。
-- **脚本接口**：`call` / `CallFailedError` / `ALL_TOOLS` / `text` / `image` / `exit` /
-  `console.*` / `store.set` / `store.get` / `store.list`（会话内持久的键值表）；首行可选
-  `// @options: {"max_output_tokens": 10000}`。
+- **脚本接口**：`call` / `CallFailedError` / `ALL_TOOLS` / `fs.read` / `fs.write` /
+  `text` / `image` / `exit` / `console.*` / `store.set` / `store.get` / `store.list`
+  （会话内持久的键值表）；首行可选 `// @options: {"max_output_tokens": 10000}`。
   脚本没有超时：死循环由调用方中止（Esc）结束，等嵌套调用返回（含用户审批弹窗）多久都不算超时。
 - **工具描述**里给出每个可调用工具的 `declare function call(name, args): Promise<T>` 重载，
   参数与返回类型都取自工具自己的 schema，所以模型在写脚本前就知道返回值形状。

@@ -407,8 +407,14 @@ async function formatDirectoryEntries(dirPath: string): Promise<string[]> {
 
 // ── read-before-edit 记账 ────────────────────────────────────────────────────
 
-/** 会更新 reads 记账（src/lib/file-reads.ts）并随 details 持久化快照的工具名。 */
-const READS_TOOL_NAMES = new Set(["read", "edit", "write", "lsp-rename"]);
+/**
+ * 会更新 reads 记账（src/lib/file-reads.ts）并随 details 持久化快照的工具名。
+ *
+ * 含 `codemode`：脚本的 `fs.read` / `fs.write`（src/codemode/fs.ts）与本工具集共用
+ * 同一个 ReadsState，脚本记下的已读落在 codemode 自己的工具结果里，重放分支时要一起
+ * 收回来（见 `restoreReads`）。
+ */
+const READS_TOOL_NAMES = new Set(["read", "edit", "write", "lsp-rename", "codemode"]);
 
 function registerReadTool(bus: ToolBus, getService: () => LspService, state: ReadsState): void {
   bus.register({
@@ -897,6 +903,8 @@ export interface OpencodeFileToolset {
   register(bus: ToolBus): void;
   onLspEnabled(bus: ToolBus, service: LspService): void;
   restoreReads(ctx: ExtensionContext): void;
+  /** 与工具共用的已读记账：codemode 的 fs 原语拿它做 stale 保护（两边互通）。 */
+  readonly reads: ReadsState;
 }
 
 /**
@@ -939,6 +947,8 @@ export function createOpencodeFileTools(
     restoreReads(ctx) {
       restoreReads(state, ctx.sessionManager, READS_TOOL_NAMES);
     },
+
+    reads: state,
   };
 
   const manager =

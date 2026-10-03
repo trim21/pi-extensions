@@ -1,16 +1,16 @@
 /**
  * codemode 脚本侧的 prelude：在 QuickJS VM 里先于脚本求值，构建脚本能看到的全部
- * 能力（`call` / `CallFailedError` / `ALL_TOOLS` / `text` / `image` / `exit` /
+ * 能力（`call` / `CallFailedError` / `ALL_TOOLS` / `fs` / `text` / `image` / `exit` /
  * `console` / `store`），并把宿主桥接封在闭包里——脚本拿不到 `bridge` 本身。
  *
  * 值与参数过桥时都是 JSON 文本，本侧负责 parse/stringify；异步调用用一个 pending
- * 表把 id 映射到 promise，由宿主在结果到达时 settle。每次嵌套调用失败都由宿主以
- * `ok: false` 回报，本侧统一 reject 成 `CallFailedError`（脚本可以按 instanceof 区分
- * 「工具失败」与自己的运行期错误）。
+ * 表把 id 映射到 promise，由宿主在结果到达时 settle。每次调用失败（工具或 fs 原语）
+ * 都由宿主以 `ok: false` 回报，本侧统一 reject 成 `CallFailedError`（脚本可以按
+ * instanceof 区分「调用失败」与自己的运行期错误）。
  *
  * 求值结果是一个函数 `(bridge, toolsJson, storeJson) => { settle, run, stalled }`。
  * `bridge(kind, a, b, c)`：
- * - `"call"`（id, name, argsJson）
+ * - `"call"`（id, name, argsJson）：工具，以及名字为 `fs.read` / `fs.write` 的 fs 原语
  * - `"output"`（"text", text）/（"image", data, mimeType）
  * - `"done"`（ok, valueJsonOrErrorJson, writesJson）
  */
@@ -117,6 +117,16 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 		return fn(args);
 	}
 	Object.freeze(call);
+
+	// 脚本的文件原语：与工具走同一条桥，但它们是内建能力而不是工具——不进 ALL_TOOLS，
+	// 也不出现在工具描述的工具重载里（声明单独渲染），写审批与已读记账由宿主负责。
+	// 脚本侧是 Node 风格的位置参数，过桥仍是一个可校验的对象。
+	const readFile = caller("fs.read");
+	const writeFile = caller("fs.write");
+	const fs = Object.freeze({
+		read: (path) => readFile({ path }),
+		write: (path, content) => writeFile({ path, content }),
+	});
 
 	// key -> JSON 文本；容量按 key 与 JSON 的字符数计
 	const stored = new Map();
@@ -260,6 +270,7 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 	Object.defineProperty(globalThis, "call", { value: call, enumerable: true });
 	Object.defineProperty(globalThis, "CallFailedError", { value: CallFailedError, enumerable: true });
 	Object.defineProperty(globalThis, "ALL_TOOLS", { value: allTools, enumerable: true });
+	Object.defineProperty(globalThis, "fs", { value: fs, enumerable: true });
 	Object.defineProperty(globalThis, "console", { value: console, enumerable: true });
 	Object.defineProperty(globalThis, "text", { value: text, enumerable: true });
 	Object.defineProperty(globalThis, "image", { value: image, enumerable: true });
