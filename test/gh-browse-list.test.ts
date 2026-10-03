@@ -1,7 +1,9 @@
 /**
- * `list-github-issues` / `list-github-prs` 的两条分支（浏览走 `gh … --json`、关键词搜索走
- * octokit）现在归一成同一套 `SearchHit`，因此文本与结构化载荷共用一份数据。这里用假 gh
- * 进程驱动工具（`executeTool` 会跑一遍总线的 schema 复核），断言文本与载荷。
+ * `list-github-issues` / `list-github-prs` 的浏览分支现在走 octokit 的 REST 列表端点
+ * （关键词搜索那条分支本来就走 octokit）。这里用录制/回放的 cassette 喂响应：
+ * 请求 URL 与真实调用一致，断言文本与结构化载荷都从同一份 REST 数据产出。
+ *
+ * 「当前仓库」仍由 `gh repo view` 解析（本次迁移不动这条路径），所以只有一个假 gh 进程。
  */
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -16,10 +18,11 @@ vi.mock("node:child_process", () => ({
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import type { GhClient } from "../src/gh/base.js";
+import { GhClient } from "../src/gh/base.js";
 import { addListIssuesTool } from "../src/gh/tools/list-issues.js";
 import { addListPrsTool } from "../src/gh/tools/list-prs.js";
 import { createToolBus, type ToolBus } from "../src/lib/tool-bus.js";
+import { type FixtureRoutes, githubCassette } from "./github-fixtures.js";
 
 class FakeChildProcess extends EventEmitter {
   killed = false;
@@ -33,13 +36,12 @@ class FakeChildProcess extends EventEmitter {
   }
 }
 
-/** 假 gh：按 argv 决定 stdout，退出码 0。 */
-function fakeGh(respond: (args: string[]) => string): void {
-  spawnMock.mockImplementation((_file: string, args: string[]) => {
+/** 假 gh：只为 `gh repo view --json nameWithOwner`（resolveRepo）服务。 */
+function fakeRepoView(): void {
+  spawnMock.mockImplementation(() => {
     const child = new FakeChildProcess();
-    const stdout = respond(args);
     queueMicrotask(() => {
-      child.stdout.end(stdout);
+      child.stdout.end(JSON.stringify({ nameWithOwner: "trim21/pi-extensions" }));
       child.stderr.end("");
       child.emit("close", 0);
     });
@@ -51,29 +53,44 @@ afterEach(() => {
   spawnMock.mockReset();
 });
 
-const ISSUES_JSON = JSON.stringify([
-  {
-    number: 14,
-    title: "Dependency Dashboard",
-    state: "OPEN",
-    url: "https://github.com/trim21/pi-extensions/issues/14",
-    labels: [{ name: "dependencies" }],
-    milestone: null,
-    assignees: [{ login: "trim21" }],
-    author: { login: "app/renovate" },
-    comments: [{ id: "1" }, { id: "2" }],
-    createdAt: "2026-06-20T10:30:53Z",
-    updatedAt: "2026-10-03T13:06:52Z",
-    closedAt: null,
-  },
-]);
+const ISSUE = {
+  number: 14,
+  title: "Dependency Dashboard",
+  state: "open",
+  html_url: "https://github.com/trim21/pi-extensions/issues/14",
+  user: { login: "app/renovate" },
+  labels: [{ name: "dependencies" }],
+  milestone: null,
+  assignees: [{ login: "trim21" }],
+  comments: 2,
+  created_at: "2026-06-20T10:30:53Z",
+  updated_at: "2026-10-03T13:06:52Z",
+  closed_at: null,
+};
 
-function setupBus(gh: GhClient): ToolBus {
+const PULL = {
+  number: 176,
+  title: "structured results",
+  state: "closed",
+  html_url: "https://example.test/pr/176",
+  user: { login: "trim21" },
+  labels: [],
+  milestone: null,
+  assignees: null,
+  created_at: "2026-10-03T00:00:00Z",
+  updated_at: "2026-10-03T01:00:00Z",
+  closed_at: "2026-10-03T01:00:00Z",
+  merged_at: "2026-10-03T01:00:00Z",
+};
+
+function setupBus(routes: FixtureRoutes): { bus: ToolBus; calls: string[] } {
+  const cassette = githubCassette(routes);
+  const gh = new GhClient(cassette.fetch, { token: async () => "test-token" });
   const pi = { registerTool: () => {} } as unknown as ExtensionAPI;
   const bus = createToolBus(pi);
   addListIssuesTool(gh, bus);
   addListPrsTool(gh, bus);
-  return bus;
+  return { bus, calls: cassette.calls };
 }
 
 const ctx = { cwd: "/tmp" } as never;
@@ -85,13 +102,10 @@ function textOf(result: { content: { type: string; text?: string }[] }): string 
 
 describe("list-github-issues 的浏览分支", () => {
   it("文本与载荷同源：TSV 与归一化后的行", async () => {
-    fakeGh((args) => {
-      if (args[0] === "repo") {
-        return JSON.stringify({ nameWithOwner: "trim21/pi-extensions" });
-      }
-      return ISSUES_JSON;
+    fakeRepoView();
+    const { bus, calls } = setupBus({
+      "repos/trim21/pi-extensions/issues": { body: [ISSUE] },
     });
-    const bus = setupBus({} as GhClient);
 
     const result = await bus.executeTool("list-github-issues", {}, { ctx });
 
@@ -122,11 +136,11 @@ describe("list-github-issues 的浏览分支", () => {
         ],
       },
     });
+    expect(calls.some((url) => url.includes("/repos/trim21/pi-extensions/issues"))).toBe(true);
   });
 
   it("显式 repo 时文本不带 repo 列", async () => {
-    fakeGh(() => ISSUES_JSON);
-    const bus = setupBus({} as GhClient);
+    const { bus } = setupBus({ "repos/trim21/pi-extensions/issues": { body: [ISSUE] } });
 
     const result = await bus.executeTool(
       "list-github-issues",
@@ -137,29 +151,8 @@ describe("list-github-issues 的浏览分支", () => {
     expect(textOf(result)).toBe("14\topen\tDependency Dashboard\tdependencies\t2026-10-03");
   });
 
-  it("PR 的 merged 状态由 mergedAt 推断", async () => {
-    fakeGh((args) =>
-      args[0] === "repo"
-        ? JSON.stringify({ nameWithOwner: "trim21/pi-extensions" })
-        : JSON.stringify([
-            {
-              number: 176,
-              title: "structured results",
-              state: "MERGED",
-              url: "https://example.test/pr/176",
-              labels: [],
-              milestone: null,
-              assignees: [],
-              author: { login: "trim21" },
-              comments: [],
-              createdAt: "2026-10-03T00:00:00Z",
-              updatedAt: "2026-10-03T01:00:00Z",
-              closedAt: "2026-10-03T01:00:00Z",
-              mergedAt: "2026-10-03T01:00:00Z",
-            },
-          ]),
-    );
-    const bus = setupBus({} as GhClient);
+  it("PR 的 merged 状态由 merged_at 推断", async () => {
+    const { bus } = setupBus({ "repos/trim21/pi-extensions/pulls": { body: [PULL] } });
 
     const result = await bus.executeTool(
       "list-github-prs",
@@ -169,33 +162,47 @@ describe("list-github-issues 的浏览分支", () => {
 
     expect(textOf(result)).toBe("176\tmerged\t2026-10-03");
   });
+
+  it("@me 按字面量传给 REST，不做展开", async () => {
+    const { bus, calls } = setupBus({ "repos/trim21/pi-extensions/issues": { body: [] } });
+
+    await bus.executeTool(
+      "list-github-issues",
+      { repo: "trim21/pi-extensions", author: "@me" },
+      { ctx },
+    );
+
+    expect(calls.some((url) => url.includes("creator=%40me"))).toBe(true);
+  });
 });
 
 describe("list-github-issues 的搜索分支", () => {
   it("搜索命中同样进载荷", async () => {
-    const gh = {
-      search: {
-        search: vi.fn(async () => [
-          {
-            number: 7,
-            state: "closed" as const,
-            title: "old issue",
-            url: "https://example.test/issues/7",
-            repo: "other/repo",
-            author: "someone",
-            labels: [],
-            milestone: "",
-            assignees: [],
-            comments: 0,
-            createdAt: "2026-01-01",
-            updatedAt: "2026-01-02",
-            closedAt: "2026-01-02",
-            mergedAt: "",
-          },
-        ]),
+    const { bus } = setupBus({
+      "/search/issues": {
+        body: {
+          total_count: 1,
+          items: [
+            {
+              number: 7,
+              state: "closed",
+              title: "old issue",
+              html_url: "https://example.test/issues/7",
+              repository_url: "https://api.github.com/repos/other/repo",
+              user: { login: "someone" },
+              labels: [],
+              milestone: null,
+              assignees: [],
+              comments: 0,
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-02T00:00:00Z",
+              closed_at: "2026-01-02T00:00:00Z",
+              pull_request: null,
+            },
+          ],
+        },
       },
-    } as unknown as GhClient;
-    const bus = setupBus(gh);
+    });
 
     const result = await bus.executeTool(
       "list-github-issues",

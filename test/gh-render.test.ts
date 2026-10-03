@@ -17,20 +17,20 @@ describe("gh 渲染器", () => {
     expect(
       renderReleaseList([
         {
-          tagName: "v2.102.0",
+          tag_name: "v2.102.0",
           name: "GitHub CLI 2.102.0",
-          isLatest: true,
-          isPrerelease: false,
-          isDraft: false,
-          publishedAt: "2026-09-30T02:40:02Z",
+          latest: true,
+          prerelease: false,
+          draft: false,
+          published_at: "2026-09-30T02:40:02Z",
         },
         {
-          tagName: "v2.103.0-rc.1",
+          tag_name: "v2.103.0-rc.1",
           name: "RC",
-          isLatest: false,
-          isPrerelease: true,
-          isDraft: true,
-          publishedAt: null,
+          latest: false,
+          prerelease: true,
+          draft: true,
+          published_at: null,
         },
       ]),
     ).toBe(
@@ -43,14 +43,14 @@ describe("gh 渲染器", () => {
     expect(
       renderRunList([
         {
-          databaseId: 37131067543,
+          id: 37131067543,
           status: "completed",
           conclusion: "success",
-          workflowName: "CI",
-          headBranch: "master",
+          name: "CI",
+          head_branch: "master",
           event: "push",
-          createdAt: "2026-10-03T14:50:27Z",
-          url: "https://example.test/run/1",
+          created_at: "2026-10-03T14:50:27Z",
+          html_url: "https://example.test/run/1",
         },
       ]),
     ).toBe(
@@ -62,24 +62,23 @@ describe("gh 渲染器", () => {
   it("仓库概览：标题、事实、链接、日期与许可", () => {
     expect(
       renderRepoView({
-        nameWithOwner: "trim21/pi-extensions",
+        full_name: "trim21/pi-extensions",
         description: "pi extensions",
-        url: "https://github.com/trim21/pi-extensions",
-        visibility: "PUBLIC",
-        primaryLanguage: { name: "TypeScript" },
-        defaultBranchRef: { name: "master" },
-        stargazerCount: 3,
-        forkCount: 0,
-        issues: { totalCount: 1 },
-        pullRequests: { totalCount: 2 },
-        licenseInfo: { name: "MIT License" },
-        pushedAt: "2026-10-03T14:50:26Z",
-        createdAt: "2026-06-20T10:09:24Z",
+        html_url: "https://github.com/trim21/pi-extensions",
+        visibility: "public",
+        language: "TypeScript",
+        default_branch: "master",
+        stargazers_count: 3,
+        forks_count: 0,
+        open_issues_count: 3,
+        license: { name: "MIT License" },
+        pushed_at: "2026-10-03T14:50:26Z",
+        created_at: "2026-06-20T10:09:24Z",
       }),
     ).toBe(
       [
         "trim21/pi-extensions — pi extensions",
-        "public · TypeScript · default branch master · stars 3 · forks 0 · open issues 1 · open PRs 2",
+        "public · TypeScript · default branch master · stars 3 · forks 0 · open issues 3",
         "https://github.com/trim21/pi-extensions",
         "pushed 2026-10-03 · created 2026-06-20 · MIT License",
       ].join("\n"),
@@ -89,19 +88,19 @@ describe("gh 渲染器", () => {
   it("release 详情：元信息、资产清单、正文", () => {
     expect(
       renderReleaseView({
-        tagName: "v2.102.0",
+        tag_name: "v2.102.0",
         name: "GitHub CLI 2.102.0",
-        url: "https://example.test/release",
-        isLatest: true,
-        publishedAt: "2026-09-30T02:40:02Z",
+        html_url: "https://example.test/release",
+        latest: true,
+        published_at: "2026-09-30T02:40:02Z",
         author: { login: "github-actions" },
-        assets: [{ name: "checksums.txt", size: 1971, downloadCount: 27528 }],
+        assets: [{ name: "checksums.txt", size: 1971, download_count: 27528 }],
         body: "# Notes\n",
       }),
     ).toBe(
       [
         "v2.102.0 — GitHub CLI 2.102.0",
-        "published 2026-09-30 · latest · by github-actions · https://example.test/release",
+        "published 2026-09-30 · by github-actions · https://example.test/release",
         "assets (1):",
         "- checksums.txt 1971 bytes, 27528 downloads",
         "",

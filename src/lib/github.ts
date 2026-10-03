@@ -223,70 +223,47 @@ function normalize(raw: SearchItem): SearchHit {
 }
 
 /**
- * `gh issue list --json …` / `gh pr list --json …` 的响应形状。gh 走 GraphQL，字段是
- * camelCase，`state` 是大写的 `OPEN` / `CLOSED` / `MERGED`，`comments` 是整个评论数组
- * （不是计数）——所以浏览分支要在归一化这一步把它压成计数，才能和搜索分支（REST，
- * 下划线命名、state 小写、comments 是数字）共用同一套 SearchHit、渲染与载荷。
+ * REST 列表端点（`issues.listForRepo` / `pulls.list`）的条目形状。与搜索 API 的条目差别：
+ * repo 不在条目里（由调用方给），PR 的合并信息在 `merged_at`/`merged`。
  */
-const ghListRecordSchema = Type.Object({
+const restListItemSchema = Type.Object({
   number: Type.Number(),
-  title: Type.String(),
   state: Type.String(),
-  url: Type.String(),
-  labels: Type.Array(Type.Object({ name: Type.String() }, { additionalProperties: true })),
-  milestone: Type.Union([
-    Type.Object({ title: Type.String() }, { additionalProperties: true }),
-    Type.Null(),
-  ]),
-  assignees: Type.Array(Type.Object({ login: Type.String() }, { additionalProperties: true })),
-  author: Type.Union([
-    Type.Object({ login: Type.String() }, { additionalProperties: true }),
-    Type.Null(),
-  ]),
-  comments: Type.Array(Type.Unknown()),
-  createdAt: Type.String(),
-  updatedAt: Type.String(),
-  closedAt: Type.Union([Type.String(), Type.Null()]),
-  mergedAt: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  title: Type.String(),
+  html_url: Type.String(),
+  user: Type.Union([Type.Object({ login: Type.String() }), Type.Null()]),
+  labels: Type.Array(Type.Object({ name: Type.Optional(Type.String()) })),
+  milestone: Type.Union([Type.Object({ title: Type.Optional(Type.String()) }), Type.Null()]),
+  assignees: Type.Union([Type.Array(Type.Object({ login: Type.String() })), Type.Null()]),
+  comments: Type.Optional(Type.Number()),
+  created_at: Type.String(),
+  updated_at: Type.String(),
+  closed_at: Type.Union([Type.String(), Type.Null()]),
+  merged_at: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 });
 
-/** 浏览分支要 gh 给的字段，与 `SearchHit` 的列一一对应（`comments` 只用来数个数）。 */
-export const GH_LIST_FIELDS = [
-  "number",
-  "title",
-  "state",
-  "url",
-  "labels",
-  "milestone",
-  "assignees",
-  "author",
-  "comments",
-  "createdAt",
-  "updatedAt",
-  "closedAt",
-  "mergedAt",
-].join(",");
-
-/** 把 `gh issue list --json` / `gh pr list --json` 的输出归一到 `SearchHit`（repo 由调用方给）。 */
-export function normalizeGhList(stdout: string, repo: string): SearchHit[] {
-  const items = parseWithSchema(Type.Array(ghListRecordSchema), JSON.parse(stdout));
-  return items.map((item) => {
-    const mergedAt = item.mergedAt ?? null;
+/**
+ * 把 REST 列表条目归一到 `SearchHit`，与搜索分支共用一套渲染与载荷。`repo` 由调用方给
+ * （REST 列表端点的条目里没有仓库信息）。
+ */
+export function normalizeRestList(items: unknown, repo: string): SearchHit[] {
+  return parseWithSchema(Type.Array(restListItemSchema), items).map((item) => {
+    const mergedAt = item.merged_at ?? null;
     return {
       number: item.number,
-      // gh 给 MERGED 状态的 PR 与 OPEN/CLOSED 一样是 state 字段，merged 语义与搜索分支对齐
-      state: mergedAt ? "merged" : (item.state.toLowerCase() as SearchHit["state"]),
+      // 已合并的 PR 在 REST 里也是 `closed`，merged 语义与搜索分支一致地由 merged_at 推断
+      state: mergedAt === null ? (item.state === "open" ? "open" : "closed") : "merged",
       title: item.title,
-      url: item.url,
+      url: item.html_url,
       repo,
-      author: item.author?.login ?? "",
-      labels: item.labels.map((label) => label.name),
+      author: item.user?.login ?? "",
+      labels: item.labels.map((label) => label.name ?? ""),
       milestone: item.milestone?.title ?? "",
-      assignees: item.assignees.map((assignee) => assignee.login),
-      comments: item.comments.length,
-      createdAt: toDate(item.createdAt),
-      updatedAt: toDate(item.updatedAt),
-      closedAt: toDate(item.closedAt),
+      assignees: (item.assignees ?? []).map((assignee) => assignee.login),
+      comments: item.comments ?? 0,
+      createdAt: toDate(item.created_at),
+      updatedAt: toDate(item.updated_at),
+      closedAt: toDate(item.closed_at),
       mergedAt: toDate(mergedAt),
     };
   });
@@ -321,9 +298,14 @@ function describeHttpError(status: number | undefined): string {
   return `GitHub API error${status === undefined ? "" : ` (HTTP ${status})`}`;
 }
 
-interface GithubApi {
+export interface GithubApi {
   /** Run an octokit request; retries once with a fresh token on 401. */
   call<T>(fn: (octokit: Octokit) => Promise<T>): Promise<T>;
+  /**
+   * 用同一个 token 直接 fetch（二进制资产、源码归档这类要走原始响应体、不能经 octokit
+   * 的 JSON 解析的请求）。重定向自动跟随，401 同样丢缓存重试一次。
+   */
+  rawFetch(url: string, init: RequestInit): Promise<Response>;
 }
 
 export interface GithubClientOptions {
@@ -343,15 +325,39 @@ export interface GithubClientOptions {
  * module-level state. A stale cached token can produce 401s; the cache is
  * dropped and the request retried once in that case.
  */
-function createGithubApi(options: GithubClientOptions = {}): GithubApi {
+export function createGithubApi(options: GithubClientOptions = {}): GithubApi {
   let client: Octokit | undefined;
+  // token 单独缓存：rawFetch（二进制/归档下载）不走 octokit，但同样不该每次 spawn
+  // `gh auth token`。401 时两个缓存一起丢。
+  let token: string | undefined;
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const tokenProvider = options.token ?? ghAuthToken;
+
+  async function getToken(): Promise<string> {
+    token ??= await tokenProvider();
+    return token;
+  }
 
   async function getClient(): Promise<Octokit> {
     client ??= new Octokit({
-      auth: await (options.token ?? ghAuthToken)(),
+      auth: await getToken(),
       ...(options.fetch && { request: { fetch: options.fetch } }),
     });
     return client;
+  }
+
+  async function rawFetchOnce(url: string, init: RequestInit): Promise<Response> {
+    const headers = new Headers(init.headers);
+    headers.set("authorization", `Bearer ${await getToken()}`);
+    headers.set("accept", "application/vnd.github+json");
+    headers.set("x-github-api-version", "2022-11-28");
+    const response = await fetchImpl(url, { ...init, headers });
+    if (response.status === 401) {
+      // 缓存的 token 可能已过期：丢缓存后由调用方重试一次
+      token = undefined;
+      client = undefined;
+    }
+    return response;
   }
 
   return {
@@ -362,11 +368,22 @@ function createGithubApi(options: GithubClientOptions = {}): GithubApi {
         } catch (error) {
           const status = (error as { status?: number }).status;
           if (status === 401 && attempt === 0 && client) {
+            token = undefined;
             client = undefined;
             continue;
           }
           throw error;
         }
+      }
+    },
+
+    async rawFetch(url, init) {
+      for (let attempt = 0; ; attempt += 1) {
+        const response = await rawFetchOnce(url, init);
+        if (response.status !== 401 || attempt > 0) {
+          return response;
+        }
+        await response.body?.cancel();
       }
     },
   };

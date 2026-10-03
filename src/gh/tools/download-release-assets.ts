@@ -1,6 +1,6 @@
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, matchesGlob } from "node:path";
 
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -9,9 +9,6 @@ import { type ToolPendant } from "../../lib/pendant.js";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  GhError,
-  ghExec,
-  repoArgs,
   resolveRepo,
   splitRepo,
   structuredFailure,
@@ -30,10 +27,10 @@ interface ReleaseDownloadParams {
   archive?: "zip" | "tar.gz";
 }
 
-/** `gh release view --json tagName,assets` 里本工具真正读取的字段。 */
+/** `repos.getReleaseByTag` / `getLatestRelease` 里本工具真正读取的字段。 */
 const releaseViewSchema = Type.Object({
-  tagName: Type.String(),
-  assets: Type.Array(Type.Object({ name: Type.String(), size: Type.Number() })),
+  tag_name: Type.String(),
+  assets: Type.Array(Type.Object({ id: Type.Number(), name: Type.String(), size: Type.Number() })),
 });
 
 /** One regular file in a release's download directory. */
@@ -56,7 +53,7 @@ export function releaseAssetDir(repo: string, tag: string): string {
   return join(homedir(), ".cache", "pi", "github", "releases", owner, name, safeTag);
 }
 
-/** Split the comma-separated `pattern` toolcall parameter into gh pattern values. */
+/** Split the comma-separated `pattern` toolcall parameter into glob values. */
 export function releasePatterns(pattern: string | undefined): string[] {
   if (pattern === undefined) {
     return [];
@@ -67,28 +64,19 @@ export function releasePatterns(pattern: string | undefined): string[] {
     .filter((value) => value !== "");
 }
 
-/**
- * The `gh release download` argv. `--skip-existing` is always on: the download
- * directory is a cache, and rewriting a file that is already there would pull
- * the ground out from under anything reading it.
- */
-export function releaseDownloadArgs(options: {
-  tag: string;
-  repo: string;
-  dir: string;
-  patterns: readonly string[];
-  archive?: "zip" | "tar.gz";
-}): string[] {
-  const { tag, repo, dir, patterns, archive } = options;
-  const args = ["release", "download", tag, ...repoArgs(repo)];
-  if (archive !== undefined) {
-    args.push("--archive", archive);
+/** 资产名是否命中任意一个 glob（`*` / `?` / `[...]` 都支持；无 glob 时取全部资产）。 */
+export function matchAsset(name: string, patterns: readonly string[]): boolean {
+  return patterns.length === 0 || patterns.some((pattern) => matchesGlob(name, pattern));
+}
+
+/** 文件大小；不存在（或读不到）时给 undefined，用来判断是否已下载完整。 */
+async function fileSize(path: string): Promise<number | undefined> {
+  try {
+    const info = await stat(path);
+    return info.size;
+  } catch {
+    return undefined;
   }
-  for (const pattern of patterns) {
-    args.push("--pattern", pattern);
-  }
-  args.push("--dir", dir, "--skip-existing");
-  return args;
 }
 
 /** Regular files directly inside `dir`, with their sizes, sorted by name. */
@@ -107,22 +95,15 @@ async function listReleaseFiles(dir: string): Promise<ReleaseFile[]> {
 }
 
 /**
- * `gh release download` answers this exact message when a `--pattern` matched no
- * asset. It is the only signal the CLI offers, so the enrichment below degrades
- * to gh's own error (still thrown) if the wording ever changes.
- */
-const GH_NO_ASSET_MATCH = "no assets match the file pattern";
-
-/**
- * `download-github-release-assets`: fetch a release's assets (or source archive)
- * into `releaseAssetDir` with the gh credentials, so private repositories work
- * and the shell sandbox's network limits do not apply.
+ * `download-github-release-assets`: 把一个 release 的资产（或源码归档）下载到
+ * `releaseAssetDir`，用 `gh auth token` 的凭据，因此私有仓库可用、也不受 shell 沙箱的网络
+ * 限制。
  *
- * The tag is resolved through `gh release view` before downloading: a tag that
- * does not exist and a pattern that matched nothing are different answers, and
- * the release's own asset names are what the model needs to fix the second one.
+ * 先解析 release（缺 tag 时取 latest）：tag 不存在与「glob 没匹配到资产」是两种不同的答案，
+ * 后者要把该 release 实际的可选资产名列出来，模型才知道下一步怎么改。
  */
 export async function downloadReleaseAssets(
+  gh: GhClient,
   call: ToolCall<ReleaseDownloadParams>,
 ): Promise<StructuredResultOf<typeof releaseDownloadSchema> | StructuredFailureResult> {
   const { params, ctx, signal } = call;
@@ -134,58 +115,55 @@ export async function downloadReleaseAssets(
   }
 
   const effectiveRepo = await resolveRepo(params.repo, signal, ctx.cwd, params);
+  const { owner, repo: repoName } = splitRepo(effectiveRepo);
   const view = Value.Parse(
     releaseViewSchema,
-    JSON.parse(
-      await ghExec(
-        [
-          "release",
-          "view",
-          ...(params.tag === undefined ? [] : [params.tag]),
-          ...repoArgs(effectiveRepo),
-          "--json",
-          "tagName,assets",
-        ],
-        { cwd: ctx.cwd, signal, input: params },
-      ),
-    ),
+    await gh.reads.release(owner, repoName, params.tag, signal),
   );
 
   const assetNames = view.assets.map((asset) => asset.name);
-  const dir = releaseAssetDir(effectiveRepo, view.tagName);
+  const dir = releaseAssetDir(effectiveRepo, view.tag_name);
   await mkdir(dir, { recursive: true });
-  try {
-    await ghExec(
-      releaseDownloadArgs({
-        tag: view.tagName,
-        repo: effectiveRepo,
-        dir,
-        patterns,
-        ...(params.archive !== undefined && { archive: params.archive }),
-      }),
-      { cwd: ctx.cwd, signal, input: params },
-    );
-  } catch (error) {
-    // gh names the fault but not the choices; the release's asset list turns a
-    // dead end into the next toolcall.
-    if (error instanceof GhError && error.stderr.includes(GH_NO_ASSET_MATCH)) {
+
+  if (params.archive === undefined) {
+    const selected = view.assets.filter((asset) => matchAsset(asset.name, patterns));
+    if (selected.length === 0 && patterns.length > 0) {
       throw new Error(
-        `no asset of ${effectiveRepo}@${view.tagName} matched ${JSON.stringify(patterns)}; the release has: ${assetNames.join(", ") || "(no assets)"}`,
-        { cause: error },
+        `no asset of ${effectiveRepo}@${view.tag_name} matched ${JSON.stringify(patterns)}; the release has: ${assetNames.join(", ") || "(no assets)"}`,
       );
     }
-    throw error;
+    for (const asset of selected) {
+      const destPath = join(dir, asset.name);
+      // 同名且大小一致视为已完成（缓存目录里的半截文件不该被当成结果）
+      const existing = await fileSize(destPath);
+      if (existing === asset.size) {
+        continue;
+      }
+      await gh.reads.downloadAssetTo(owner, repoName, asset.id, destPath, signal);
+    }
+  } else {
+    const extension = params.archive === "zip" ? "zip" : "tar.gz";
+    // 归档是仓库源码的 tarball / zipball，名字由我们定（gh 用的是 `<owner>-<repo>-<tag>`）
+    const destPath = join(dir, `${repoName}-${view.tag_name}.${extension}`);
+    await gh.reads.downloadArchiveTo(
+      owner,
+      repoName,
+      params.archive,
+      view.tag_name,
+      destPath,
+      signal,
+    );
   }
 
   const files = await listReleaseFiles(dir);
-  const payload = { repo: effectiveRepo, tag: view.tagName, dir, files };
+  const payload = { repo: effectiveRepo, tag: view.tag_name, dir, files };
   const pendant: ToolPendant | undefined = subtitlePendant(
-    { repo: effectiveRepo, tag: view.tagName },
+    { repo: effectiveRepo, tag: view.tag_name },
     "tag",
   );
 
   if (files.length === 0 && params.archive === undefined) {
-    const text = `Nothing to download from ${effectiveRepo}@${view.tagName}: the release has no assets (try archive for the source tarball)`;
+    const text = `Nothing to download from ${effectiveRepo}@${view.tag_name}: the release has no assets (try archive for the source tarball)`;
     return {
       content: [{ type: "text", text }],
       details: {
@@ -207,14 +185,14 @@ export async function downloadReleaseAssets(
   );
 }
 
-export function addDownloadReleaseAssetsTool(_gh: GhClient, bus: ToolBus) {
+export function addDownloadReleaseAssetsTool(gh: GhClient, bus: ToolBus) {
   bus.register(
     defineStructuredTool({
       name: "download-github-release-assets",
       label: "GitHub Release Download",
       description:
         "Download a GitHub release's assets (or its source archive) into " +
-        "~/.cache/pi/github/releases/<owner>/<repo>/<tag>/ using the gh CLI's credentials, " +
+        "~/.cache/pi/github/releases/<owner>/<repo>/<tag>/ using the GitHub credentials, " +
         "so private repositories and large binaries work where a plain HTTP fetch cannot. " +
         "Files already in that directory are kept, never re-fetched. The result is the JSON " +
         "summary {repo, tag, dir, files:[{name, path, bytes}]} listing everything now in the " +
@@ -239,7 +217,7 @@ export function addDownloadReleaseAssetsTool(_gh: GhClient, bus: ToolBus) {
       }),
       structuredSchema: releaseDownloadSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
-        return downloadReleaseAssets({ params, ctx, signal });
+        return downloadReleaseAssets(gh, { params, ctx, signal });
       },
     }),
   );

@@ -14,7 +14,6 @@ import { createSeqState } from "../../lib/seq-state.js";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  ghExec,
   resolveRepo,
   splitRepo,
   structuredFailure,
@@ -55,10 +54,9 @@ export function jobLogPath(repo: string, runId: string, jobId: number): string {
 }
 
 async function getJobLog(
+  gh: GhClient,
   job: RunJob,
   signal: AbortSignal | undefined,
-  cwd: string | undefined,
-  input?: unknown,
 ): Promise<string> {
   // The log download only accepts a job id, and the cache is keyed on the
   // canonical repo/run from the job itself, not on the caller's `repo` string.
@@ -76,21 +74,10 @@ async function getJobLog(
       // Not cached, fetch from GitHub
     }
 
-    // `gh api` refuses to print responses that contain terminal escape
-    // sequences unless `--allow-escape-sequences` is passed. Job logs carry
-    // ANSI color codes, so without this flag the download always fails with
-    // "the response contains terminal escape sequences; pass
-    // --allow-escape-sequences to output it anyway". The raw bytes are kept
-    // as-is (the file is the log exactly as GitHub delivers it); the tool never
-    // echoes them, and the TUI strips ANSI when rendering tool results.
-    const log = await ghExec(
-      ["api", "--allow-escape-sequences", `/repos/${repo}/actions/jobs/${job.id}/logs`],
-      {
-        cwd,
-        signal,
-        input,
-      },
-    );
+    // 日志原样落盘（GitHub 返回什么就是什么，含 ANSI 转义与 runner 时间戳）；工具从不回显
+    // 它，模型自己读文件，TUI 渲染工具结果时会自己剥 ANSI。
+    const { owner, repo: name } = splitRepo(repo);
+    const log = await gh.reads.jobLogs(owner, name, job.id, signal);
 
     // Write to cache
     await mkdir(cacheDir, { recursive: true });
@@ -420,7 +407,7 @@ async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<CiLogs
     details: {},
   });
 
-  const rawLog = await getJobLog(target, signal, ctx.cwd, params);
+  const rawLog = await getJobLog(gh, target, signal);
   const index = jobLogIndex(target, rawLog);
 
   return withStructuredResult(

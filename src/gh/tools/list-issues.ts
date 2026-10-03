@@ -26,7 +26,7 @@ async function listIssues(
   const { params, ctx, signal } = call;
   const { repo, hits } = params.keywords
     ? { repo: params.repo, hits: await gh.search.search("issue", params) }
-    : await browseList("issue", params, { cwd: ctx.cwd, signal, input: params });
+    : await browseList(gh, "issue", params, { cwd: ctx.cwd, signal, input: params });
   const text = renderHitList("issue", hits, { repo, fields: params.fields });
   const result = toToolResult(text, params);
   result.details.pendant = subtitlePendant(params);
@@ -52,14 +52,18 @@ export function addListIssuesTool(gh: GhClient, bus: ToolBus) {
           }),
         ),
         label: Type.Optional(Type.String({ description: "Filter by label" })),
-        // `@me` 由 GitHub 的搜索 / 过滤 API 解析：不带 keywords 时 gh 自行展开（GraphQL 过滤分支）
-        // 或按字面量转发（搜索分支），带 keywords 时我们直接把 `assignee:@me` 交给搜索 API。
-        // 两条传输都支持，因此本仓库不要再实现一次展开。
+        // `@me` 只在关键词搜索分支可用：搜索 API 自己把它解析成当前登录用户。浏览分支走
+        // REST 列表端点，`@me` 按字面量转发，不会匹配到当前用户（本仓库不做展开）。
         author: Type.Optional(
-          Type.String({ description: "Filter by author ('@me' for yourself)" }),
+          Type.String({
+            description: "Filter by author ('@me' works with keywords; browse takes it literally)",
+          }),
         ),
         assignee: Type.Optional(
-          Type.String({ description: "Filter by assignee ('@me' for yourself)" }),
+          Type.String({
+            description:
+              "Filter by assignee ('@me' works with keywords; browse takes it literally)",
+          }),
         ),
         milestone: Type.Optional(Type.String({ description: "Filter by milestone" })),
         limit: Type.Optional(Type.Number({ description: "Max results (default 30, max 100)" })),

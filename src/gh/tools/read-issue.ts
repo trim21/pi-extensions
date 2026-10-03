@@ -3,14 +3,14 @@ import { Type } from "typebox";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  ghExec,
-  repoArgs,
+  resolveRepo,
+  splitRepo,
   subtitlePendant,
   toStructuredJsonResult,
 } from "../base.js";
 import { issueViewSchema } from "../schemas.js";
 
-export function addReadIssueTool(_gh: GhClient, bus: ToolBus) {
+export function addReadIssueTool(gh: GhClient, bus: ToolBus) {
   bus.register(
     defineStructuredTool({
       name: "read-github-issue",
@@ -24,18 +24,14 @@ export function addReadIssueTool(_gh: GhClient, bus: ToolBus) {
       structuredSchema: issueViewSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const { number, repo } = params;
-        const out = await ghExec(
-          [
-            "issue",
-            "view",
-            String(number),
-            ...repoArgs(repo),
-            "--json",
-            "title,state,body,author,createdAt,updatedAt,closedAt,url,labels,assignees,comments,milestone,number",
-          ],
-          { cwd: ctx.cwd, signal, input: params },
+        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+        const { owner, repo: repoName } = splitRepo(effectiveRepo);
+        const data = await gh.reads.issue(owner, repoName, Number(number), signal);
+        const result = toStructuredJsonResult(
+          JSON.stringify(data, null, 2),
+          params,
+          issueViewSchema,
         );
-        const result = toStructuredJsonResult(out, params, issueViewSchema);
         result.details.pendant = subtitlePendant(params, "number");
         return result;
       },

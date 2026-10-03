@@ -4,8 +4,8 @@ import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  ghExec,
-  repoArgs,
+  resolveRepo,
+  splitRepo,
   subtitlePendant,
   toToolResult,
   withStructuredResult,
@@ -13,22 +13,7 @@ import {
 import { renderReleaseView } from "../render.js";
 import { ghReleaseViewPayloadSchema, ghReleaseViewSchema } from "../schemas.js";
 
-/** 我们向 gh 要的 release 字段，与渲染和载荷一一对应。 */
-const RELEASE_FIELDS = [
-  "tagName",
-  "name",
-  "body",
-  "url",
-  "isDraft",
-  "isPrerelease",
-  "createdAt",
-  "publishedAt",
-  "targetCommitish",
-  "author",
-  "assets",
-].join(",");
-
-export function addReadReleaseTool(_gh: GhClient, bus: ToolBus) {
+export function addReadReleaseTool(gh: GhClient, bus: ToolBus) {
   bus.register(
     defineStructuredTool({
       name: "read-github-release",
@@ -43,11 +28,10 @@ export function addReadReleaseTool(_gh: GhClient, bus: ToolBus) {
       structuredSchema: ghReleaseViewPayloadSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const { tag, repo } = params;
-        const stdout = await ghExec(
-          ["release", "view", tag, ...repoArgs(repo), "--json", RELEASE_FIELDS],
-          { cwd: ctx.cwd, signal, input: params },
-        );
-        const view = parseWithSchema(ghReleaseViewSchema, JSON.parse(stdout));
+        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+        const { owner, repo: repoName } = splitRepo(effectiveRepo);
+        const data = await gh.reads.release(owner, repoName, tag, signal);
+        const view = parseWithSchema(ghReleaseViewSchema, data);
         const text = renderReleaseView(view);
         const result = toToolResult(text, params);
         result.details.pendant = subtitlePendant(params, "tag");

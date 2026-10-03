@@ -1,16 +1,18 @@
 import { Type } from "typebox";
 
-import { runGh } from "../../lib/gh-process.js";
-import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
-import { type GhClient, ghExec, repoArgs, subtitlePendant } from "../base.js";
-import { ghRunPayloadSchema, ghRunSummarySchema } from "../schemas.js";
+import {
+  type GhClient,
+  renderRunStatus,
+  resolveRepo,
+  splitRepo,
+  subtitlePendant,
+  type ToolResult,
+  watchRun,
+} from "../base.js";
+import { ghRunPayloadSchema } from "../schemas.js";
 
-/** 收尾时查运行状态要的字段（`gh run watch` 自己没有 `--json`）。 */
-const RUN_FIELDS =
-  "databaseId,displayTitle,status,conclusion,workflowName,headBranch,event,createdAt,updatedAt,startedAt,url";
-
-export function addWatchRunTool(_gh: GhClient, bus: ToolBus) {
+export function addWatchRunTool(gh: GhClient, bus: ToolBus) {
   bus.register(
     defineStructuredTool({
       name: "watch-github-run",
@@ -28,33 +30,41 @@ export function addWatchRunTool(_gh: GhClient, bus: ToolBus) {
         const { run_id, repo } = params;
 
         const pendant = subtitlePendant(params, "run_id");
-        onUpdate?.({
+        const publish = (message: ToolResult) => onUpdate?.(message);
+        publish({
           content: [{ type: "text", text: `Watching workflow run ${run_id}...` }],
           details: {},
         });
 
-        const result = await runGh(["run", "watch", String(run_id), ...repoArgs(repo)], {
-          cwd: ctx.cwd,
-          signal,
-          timeout: 600_000,
+        // 轮询循环要求非空 signal（与两个 wait 工具一致：没有就自建一个）
+        const pollSignal = signal ?? new AbortController().signal;
+        const effectiveRepo = await resolveRepo(repo, pollSignal, ctx.cwd, params);
+        const { owner, repo: repoName } = splitRepo(effectiveRepo);
+        const outcome = await watchRun({
+          owner,
+          repo: repoName,
+          runId: Number(run_id),
+          reads: gh.reads,
+          signal: pollSignal,
+          onUpdate: publish,
         });
 
-        if (result.code !== 0) {
-          throw new Error(`gh run watch failed: ${result.stderr || `exit code ${result.code}`}`);
+        if (outcome.outcome === "timeout") {
+          throw new Error(
+            `workflow run ${run_id} did not finish within ${Math.round(outcome.elapsedMs / 1000)}s; last status: ${renderRunStatus(outcome.run)}`,
+          );
         }
 
-        const text = `## Workflow Run ${run_id} Completed\n\n${result.stdout}`;
-        // 监控的是状态变化，结论要另外查一次（watch 的文本里只有过程）
-        const stdout = await ghExec(
-          ["run", "view", String(run_id), ...repoArgs(repo), "--json", RUN_FIELDS],
-          { cwd: ctx.cwd, signal, input: params },
-        );
-        const run = parseWithSchema(ghRunSummarySchema, JSON.parse(stdout));
+        const heading =
+          outcome.run.conclusion === "success"
+            ? `## Workflow Run ${run_id} Completed`
+            : `## Workflow Run ${run_id} Finished (${outcome.run.conclusion ?? "unknown"})`;
+        const text = `${heading}\n\n${renderRunStatus(outcome.run)}`;
 
         return {
           content: [{ type: "text" as const, text }],
-          details: { exitCode: 0, input: params, ...(pendant && { pendant }) },
-          structuredResult: { ok: true as const, value: { text, run } },
+          details: { input: params, ...(pendant && { pendant }) },
+          structuredResult: { ok: true as const, value: { text, run: outcome.run } },
         };
       },
     }),

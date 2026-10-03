@@ -3,14 +3,14 @@ import { Type } from "typebox";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  ghExec,
-  repoArgs,
+  resolveRepo,
+  splitRepo,
   subtitlePendant,
   toStructuredJsonResult,
 } from "../base.js";
 import { prViewSchema } from "../schemas.js";
 
-export function addReadPrTool(_gh: GhClient, bus: ToolBus) {
+export function addReadPrTool(gh: GhClient, bus: ToolBus) {
   bus.register(
     defineStructuredTool({
       name: "read-github-pr",
@@ -24,18 +24,10 @@ export function addReadPrTool(_gh: GhClient, bus: ToolBus) {
       structuredSchema: prViewSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const { number, repo } = params;
-        const out = await ghExec(
-          [
-            "pr",
-            "view",
-            String(number),
-            ...repoArgs(repo),
-            "--json",
-            "title,state,body,author,createdAt,updatedAt,mergedAt,mergedBy,headRefName,baseRefName,url,additions,deletions,changedFiles,labels,assignees,reviewRequests,reviews,comments,number",
-          ],
-          { cwd: ctx.cwd, signal, input: params },
-        );
-        const result = toStructuredJsonResult(out, params, prViewSchema);
+        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+        const { owner, repo: repoName } = splitRepo(effectiveRepo);
+        const data = await gh.reads.pull(owner, repoName, Number(number), signal);
+        const result = toStructuredJsonResult(JSON.stringify(data, null, 2), params, prViewSchema);
         result.details.pendant = subtitlePendant(params, "number");
         return result;
       },

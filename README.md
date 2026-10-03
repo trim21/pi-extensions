@@ -16,7 +16,7 @@
 | [写保护（内置）](#写保护内置)             | 写工具内置：限制文件写入在 workspace 内，外部写入需审批                                       |
 | [LSP（内置）](#lsp内置)                   | 文件工具内置 LSP 诊断 + `lsp-rename`/`lsp-inspect`/`lsp-find-definition`/`lsp-find-reference` |
 | [aft](#aft)                               | AFT 只读代码感知：`aft_outline`/`aft_zoom`/`aft_callgraph`/`aft_search`                       |
-| [gh-readonly](#gh-readonly)               | GitHub 只读工具集（issue / PR / CI / release），基于 `gh` CLI                                 |
+| [gh-readonly](#gh-readonly)               | GitHub 只读工具集（issue / PR / CI / release），数据走 octokit REST                           |
 | [spawn-agent](#spawn-agent)               | 把任务委派给独立上下文窗口的子代理                                                            |
 | [system-prompt](#system-prompt)           | 完全替换 pi 默认 system prompt                                                                |
 | [vision-agent](#vision-agent)             | 视觉代理：主模型不支持视觉时提供 `describe_image`，调用视觉模型识别图片                       |
@@ -461,7 +461,7 @@ pi -e ./src/aft/index.ts
 
 ## gh-readonly
 
-GitHub 只读工具集，基于系统 [`gh`](https://cli.github.com/) CLI（关键词搜索与 checks 查询走 octokit REST）。`gh` 不在 PATH 时整组不注册并在 session_start 报错；Windows 禁用。
+GitHub 只读工具集。取数走 octokit REST（`src/lib/github-reads.ts`）；只有「当前仓库」解析（`gh repo view`）与 token 获取（`gh auth token`）还用系统 [`gh`](https://cli.github.com/)，因此 `gh` 不在 PATH 时整组不注册并在 session_start 报错；Windows 禁用。
 
 - **Issue / PR**：`read-github-issue`、`list-github-issues`、`read-github-issue-comments`、`read-github-pr`、`list-github-prs`、`read-github-pr-diff`、`read-github-pr-status`、`read-github-pr-comments`
 - **CI**：`read-github-ci-logs`、`list-github-workflow-runs`、`get-github-workflow-jobs`、`wait-github-pr-checks`、`wait-github-commit-checks`、`watch-github-run`

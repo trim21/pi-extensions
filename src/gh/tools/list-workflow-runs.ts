@@ -4,8 +4,8 @@ import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  ghExec,
-  repoArgs,
+  resolveRepo,
+  splitRepo,
   subtitlePendant,
   toToolResult,
   withStructuredResult,
@@ -13,11 +13,7 @@ import {
 import { renderRunList } from "../render.js";
 import { ghRunListPayloadSchema, ghRunSummarySchema } from "../schemas.js";
 
-/** 我们向 gh 要的运行字段，与渲染和载荷一一对应。 */
-const RUN_FIELDS =
-  "databaseId,displayTitle,status,conclusion,workflowName,headBranch,event,createdAt,url";
-
-export function addListWorkflowRunsTool(_gh: GhClient, bus: ToolBus) {
+export function addListWorkflowRunsTool(gh: GhClient, bus: ToolBus) {
   bus.register(
     defineStructuredTool({
       name: "list-github-workflow-runs",
@@ -36,18 +32,10 @@ export function addListWorkflowRunsTool(_gh: GhClient, bus: ToolBus) {
       structuredSchema: ghRunListPayloadSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const { repo, limit, status, workflow } = params;
-        const args = ["run", "list", ...repoArgs(repo), "--json", RUN_FIELDS];
-        if (limit) {
-          args.push("--limit", String(limit));
-        }
-        if (status) {
-          args.push("--status", status);
-        }
-        if (workflow) {
-          args.push("--workflow", workflow);
-        }
-        const stdout = await ghExec(args, { cwd: ctx.cwd, signal, input: params });
-        const runs = parseWithSchema(Type.Array(ghRunSummarySchema), JSON.parse(stdout));
+        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+        const { owner, repo: repoName } = splitRepo(effectiveRepo);
+        const items = await gh.reads.listRuns(owner, repoName, { workflow, status, limit }, signal);
+        const runs = parseWithSchema(Type.Array(ghRunSummarySchema), items);
         const text = renderRunList(runs);
         const result = toToolResult(text, params);
         result.details.pendant = subtitlePendant(params);

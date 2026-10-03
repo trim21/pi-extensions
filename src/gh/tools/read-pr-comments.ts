@@ -2,17 +2,15 @@ import { Type } from "typebox";
 
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
-  ghApiList,
   type GhClient,
-  ghExec,
-  repoArgs,
   resolveRepo,
+  splitRepo,
   subtitlePendant,
   toStructuredJsonResult,
 } from "../base.js";
 import { prCommentsSchema } from "../schemas.js";
 
-export function addReadPrCommentsTool(_gh: GhClient, bus: ToolBus) {
+export function addReadPrCommentsTool(gh: GhClient, bus: ToolBus) {
   bus.register(
     defineStructuredTool({
       name: "read-github-pr-comments",
@@ -33,42 +31,25 @@ export function addReadPrCommentsTool(_gh: GhClient, bus: ToolBus) {
       structuredSchema: prCommentsSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const { number, repo, reviews } = params;
-        let out: string;
-        if (reviews) {
-          const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+        const { owner, repo: repoName } = splitRepo(effectiveRepo);
+        const pullNumber = Number(number);
 
-          const [reviewComments, reviewSummaries] = await Promise.all([
-            ghApiList(`/repos/${effectiveRepo}/pulls/${String(number)}/comments`, {
-              cwd: ctx.cwd,
-              signal,
-              input: params,
-            }),
-            ghApiList(`/repos/${effectiveRepo}/pulls/${String(number)}/reviews`, {
-              cwd: ctx.cwd,
-              signal,
-              input: params,
-            }),
-          ]);
+        // reviews=true 给行内评审评论 + 评审摘要；缺省给 PR 上的普通（issue）评论
+        const payload = reviews
+          ? {
+              reviews: await gh.reads.pullReviews(owner, repoName, pullNumber, signal),
+              comments: await gh.reads.pullReviewComments(owner, repoName, pullNumber, signal),
+            }
+          : {
+              comments: await gh.reads.issueComments(owner, repoName, pullNumber, signal),
+            };
 
-          out = JSON.stringify(
-            {
-              reviews: reviewSummaries,
-              comments: reviewComments,
-            },
-            null,
-            2,
-          );
-        } else {
-          out = await ghExec(
-            ["pr", "view", String(number), ...repoArgs(repo), "--json", "comments"],
-            {
-              cwd: ctx.cwd,
-              signal,
-              input: params,
-            },
-          );
-        }
-        const result = toStructuredJsonResult(out, params, prCommentsSchema);
+        const result = toStructuredJsonResult(
+          JSON.stringify(payload, null, 2),
+          params,
+          prCommentsSchema,
+        );
         result.details.pendant = subtitlePendant(params, "number");
         return result;
       },

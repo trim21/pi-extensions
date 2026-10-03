@@ -20,14 +20,14 @@ import {
   type CommitStatus,
   createGithubChecks,
   createGithubSearch,
-  GH_LIST_FIELDS,
   type GithubChecksClient,
   type GithubClientOptions,
   type GithubSearch,
-  normalizeGhList,
+  normalizeRestList,
   renderHits,
   type SearchHit,
 } from "../lib/github.js";
+import { createGithubReads, type GithubReads } from "../lib/github-reads.js";
 import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { type ToolPendant } from "../lib/pendant.js";
 import { type StructuredResult } from "../lib/tool-bus.js";
@@ -141,24 +141,6 @@ export async function ghExec(
     throw new GhError(args, result, ctx.input);
   }
   return result.stdout;
-}
-
-export function repoArgs(repo?: string): string[] {
-  return repo ? ["--repo", repo] : [];
-}
-
-/**
- * `gh api` for a JSON-array endpoint, following pagination. The REST API pages
- * these lists at 30 items by default, so a single page silently drops the rest;
- * `--slurp` is required because `--paginate` alone prints the pages back to back
- * (not valid JSON), and the page arrays are flattened back into one list.
- */
-export async function ghApiList(
-  path: string,
-  ctx: { cwd?: string; signal?: AbortSignal; input?: unknown },
-): Promise<unknown[]> {
-  const out = await ghExec(["api", "--paginate", "--slurp", path], ctx);
-  return Value.Parse(Type.Array(Type.Array(Type.Unknown())), JSON.parse(out)).flat();
 }
 
 /** Split `OWNER/REPO`; throws when the name doesn't have exactly one slash. */
@@ -326,53 +308,30 @@ export interface ListFilters {
 }
 
 /**
- * Build the `gh` argv for browsing issues/PRs (no keyword search).
- *
- * Keyword searches no longer go through the `gh` CLI — the octokit-based client
- * in `../lib/github.ts` handles them with state values (`all`, and `merged` for
- * PRs) that `gh search` cannot express. Browse calls keep `gh issue list` /
- * `gh pr list` semantics: `state` is passed through verbatim, since `gh issue
- * list` accepts open/closed/all and `gh pr list` additionally accepts merged.
- */
-export function listGithubArgs(kind: "issue" | "pr", params: ListFilters): string[] {
-  const { repo, state, label, author, assignee, milestone, limit } = params;
-
-  const args = [kind, "list", ...repoArgs(repo)];
-  if (state) {
-    args.push("--state", state);
-  }
-  if (label) {
-    args.push("--label", label);
-  }
-  if (author) {
-    args.push("--author", author);
-  }
-  if (assignee) {
-    args.push("--assignee", assignee);
-  }
-  if (milestone) {
-    args.push("--milestone", milestone);
-  }
-  if (limit) {
-    args.push("--limit", String(limit));
-  }
-  return args;
-}
-
-/**
- * 浏览分支（`gh issue list` / `gh pr list`，不带 keywords）：直接要 `--json`，再归一到与
- * 搜索分支同一套 `SearchHit`。repo 缺省时先解析当前仓库——文本要据此决定是否带 repo 列，
- * 载荷里也必须有值。
+ * 浏览分支（不带 keywords）：走 octokit 的 REST 列表端点，再归一到与搜索分支同一套
+ * `SearchHit`。repo 缺省时先解析当前仓库——文本要据此决定是否带 repo 列，载荷里也必须有值。
  */
 export async function browseList(
+  gh: GhClient,
   kind: "issue" | "pr",
   params: ListFilters,
   ctx: { cwd?: string; signal?: AbortSignal; input?: unknown },
 ): Promise<{ repo: string; hits: SearchHit[] }> {
   const repo = params.repo ?? (await resolveRepo(undefined, ctx.signal, ctx.cwd, ctx.input));
-  const args = [...listGithubArgs(kind, params), "--json", GH_LIST_FIELDS];
-  const stdout = await ghExec(args, ctx);
-  return { repo, hits: normalizeGhList(stdout, repo) };
+  const { owner, repo: repoName } = splitRepo(repo);
+  const query = {
+    state: params.state,
+    label: params.label,
+    author: params.author,
+    assignee: params.assignee,
+    milestone: params.milestone,
+    limit: params.limit,
+  };
+  const items =
+    kind === "issue"
+      ? await gh.reads.listIssues(owner, repoName, query, ctx.signal)
+      : await gh.reads.listPulls(owner, repoName, query, ctx.signal);
+  return { repo, hits: normalizeRestList(items, repo) };
 }
 
 /** 行列表的文本：两条分支共用一套 TSV 渲染；空结果是成功结果。 */
@@ -400,6 +359,8 @@ export class GhClient {
   readonly fetch: typeof globalThis.fetch;
   readonly search: GithubSearch;
   readonly checks: GithubChecksClient;
+  /** REST 读取层：gh 工具的取数都走它（不再 spawn `gh` 取数据）。 */
+  readonly reads: GithubReads;
 
   constructor(
     fetchImpl: typeof globalThis.fetch = egress.fetch,
@@ -408,12 +369,31 @@ export class GhClient {
     this.fetch = fetchImpl;
     this.search = createGithubSearch({ fetch: fetchImpl, ...options });
     this.checks = createGithubChecks({ fetch: fetchImpl, ...options });
+    this.reads = createGithubReads({ fetch: fetchImpl, ...options });
   }
 }
 
 // ── checks watch (pure rendering + poll loop) ────────────────────────────────
 
 const CHECKS_POLL_INTERVAL_MS = 30_000;
+/** `watch-github-run` 的轮询间隔与上限。 */
+const RUN_WATCH_INTERVAL_MS = 30_000;
+const RUN_WATCH_DEADLINE_MS = 600_000;
+
+/** 运行快照：只声明我们渲染与载荷用到的字段，其余由 REST 原样带过。 */
+const runSnapshotSchema = Type.Object({
+  id: Type.Number(),
+  name: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  display_title: Type.Optional(Type.String()),
+  status: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  conclusion: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  head_branch: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  event: Type.Optional(Type.String()),
+  created_at: Type.Optional(Type.String()),
+  updated_at: Type.Optional(Type.String()),
+  run_started_at: Type.Optional(Type.String()),
+  html_url: Type.Optional(Type.String()),
+});
 const CHECKS_WATCH_DEADLINE_MS = 600_000;
 
 export type CheckBucket = "pass" | "skipped" | "fail" | "pending";
@@ -649,6 +629,81 @@ export async function pollPrChecks(options: PollPrChecksOptions): Promise<Checks
         throw new Error(`PR checks polling failed before any round succeeded: ${message}`);
       }
       return { outcome: "timeout", checks: lastChecks, elapsedMs: Date.now() - watchStart };
+    }
+    await sleepInterruptibly(intervalMs, signal);
+  }
+}
+
+/** One polled workflow run: the REST fields the watch loop reports and renders. */
+export interface RunSnapshot {
+  id: number;
+  name?: string | null;
+  display_title?: string;
+  status?: string | null;
+  conclusion?: string | null;
+  head_branch?: string | null;
+  event?: string;
+  created_at?: string;
+  updated_at?: string;
+  run_started_at?: string;
+  html_url?: string;
+}
+
+/** 一行运行状态：`工作流 · 事件 · 分支 — 状态`（附耗时与链接）。 */
+export function renderRunStatus(run: RunSnapshot, elapsedMs?: number): string {
+  const state = run.conclusion ?? run.status ?? "unknown";
+  const facts = [run.name, run.event, run.head_branch].filter(Boolean).join(" · ");
+  const elapsed = elapsedMs === undefined ? "" : ` (${Math.round(elapsedMs / 1000)}s)`;
+  return `${facts} — ${state}${elapsed}${run.html_url === undefined ? "" : `\n${run.html_url}`}`;
+}
+
+export interface WatchRunOptions {
+  owner: string;
+  repo: string;
+  runId: number;
+  reads: GithubReads;
+  /** Owned by the caller; the poll loop observes it but never aborts it. */
+  signal: AbortSignal;
+  /** Test overrides. */
+  intervalMs?: number;
+  deadlineMs?: number;
+  onUpdate?: (msg: ToolResult) => void;
+}
+
+export interface RunWatchResult {
+  outcome: "completed" | "timeout";
+  run: RunSnapshot;
+  elapsedMs: number;
+}
+
+/**
+ * 轮询 `getWorkflowRun` 直到运行结束（`gh run watch` 的替代）：固定间隔轮询，每轮通过
+ * onUpdate 报一次当前状态，超过上限以 timeout 结束（不挂住）。
+ */
+export async function watchRun(options: WatchRunOptions): Promise<RunWatchResult> {
+  const { owner, repo, runId, reads, signal, onUpdate } = options;
+  const intervalMs = options.intervalMs ?? RUN_WATCH_INTERVAL_MS;
+  const deadlineMs = options.deadlineMs ?? RUN_WATCH_DEADLINE_MS;
+
+  const watchStart = Date.now();
+  for (;;) {
+    signal.throwIfAborted();
+    const run = parseWithSchema(runSnapshotSchema, await reads.run(owner, repo, runId, signal));
+    const elapsedMs = Date.now() - watchStart;
+    onUpdate?.({
+      content: [
+        {
+          type: "text",
+          text: `Watching workflow run ${runId}...\n${renderRunStatus(run, elapsedMs)}`,
+        },
+      ],
+      details: {},
+    });
+    if (run.status === "completed") {
+      return { outcome: "completed", run, elapsedMs };
+    }
+    if (elapsedMs >= deadlineMs) {
+      return { outcome: "timeout", run, elapsedMs };
     }
     await sleepInterruptibly(intervalMs, signal);
   }

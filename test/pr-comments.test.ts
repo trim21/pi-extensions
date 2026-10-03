@@ -1,113 +1,68 @@
 /**
- * Regression tests for `read-github-pr-comments` with `reviews=true`: the two
- * REST list endpoints it reads page at 30 items by default, so they must be
- * requested with `--paginate --slurp` and the page arrays flattened — a single
- * page silently dropped every review comment past the first 30.
+ * Regression tests for `read-github-pr-comments` with `reviews=true`: 它读两个 REST 列表端点，
+ * REST 默认一页 30 条，所以必须真的翻页——只用第一页会静默丢掉第 30 条之后的所有评论。
+ *
+ * 取数已从 `gh api --paginate --slurp` 换成 octokit 的 `paginate`，所以这里用带分页 `link`
+ * 头的 cassette 喂两页响应，断言两页都被拼进来。
  *
  * Run: npx vitest run test/pr-comments.test.ts
  */
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it } from "vitest";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { GhClient } from "../src/gh/base.js";
+import { addReadPrCommentsTool } from "../src/gh/tools/read-pr-comments.js";
+import { createToolBus } from "../src/lib/tool-bus.js";
+import { type FixtureRoutes, githubCassette } from "./github-fixtures.js";
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
-
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
-
-import registerTools from "../src/gh/index.js";
-
-class FakeChildProcess extends EventEmitter {
-  stdout = new PassThrough();
-  stderr = new PassThrough();
-
-  kill(): boolean {
-    return true;
-  }
-
-  exit(code: number, stdout = ""): void {
-    if (stdout) {
-      this.stdout.write(stdout);
-    }
-    this.emit("close", code);
-  }
-}
-
-interface ToolDef {
-  name: string;
-  execute: (
-    _id: string,
-    params: { number: number | string; repo?: string; reviews?: boolean },
-    signal: AbortSignal | undefined,
-    _onUpdate: unknown,
-    ctx: { cwd?: string },
-  ) => Promise<{ content: { type: "text"; text: string }[] }>;
-}
-
-function getExecutor(): ToolDef["execute"] {
-  const tools: unknown[] = [];
-  const pi = {
-    on: (event: string, handler: (...args: never[]) => unknown) => {
-      if (event === "session_start") {
-        void handler(
-          { type: "session_start", reason: "startup" } as never,
-          { model: undefined, cwd: process.cwd(), ui: { notify: () => false } } as never,
-        );
-      }
-    },
-    registerTool: (t: unknown) => {
-      tools.push(t);
-      return tools.length;
+/** 第一页带 `link: rel="next"`，第二页没有。路由按子串匹配且先命中者胜，所以第二页在前。 */
+function pagedRoutes(base: string, first: unknown[], second: unknown[]): FixtureRoutes {
+  return {
+    [`${base}?per_page=100&page=2`]: { body: second },
+    [`${base}?per_page=100`]: {
+      body: first,
+      headers: { link: `<https://api.github.com${base}?per_page=100&page=2>; rel="next"` },
     },
   };
-  registerTools(pi as unknown as Parameters<typeof registerTools>[0]);
-  const tool = tools.find(
-    (t): t is ToolDef => (t as { name?: string }).name === "read-github-pr-comments",
-  );
-  if (!tool) {
-    throw new Error("read-github-pr-comments not registered");
-  }
-  return tool.execute;
 }
 
-const exec = process.platform === "win32" ? undefined : getExecutor();
+async function executeReadComments() {
+  const routes: FixtureRoutes = {
+    ...pagedRoutes("/repos/o/r/pulls/7/comments", [{ id: 1 }], [{ id: 31 }]),
+    ...pagedRoutes("/repos/o/r/pulls/7/reviews", [{ id: 2, state: "APPROVED" }], []),
+  };
+  const cassette = githubCassette(routes);
+  const gh = new GhClient(cassette.fetch, { token: async () => "test-token" });
+  const pi = { registerTool: () => {} } as unknown as ExtensionAPI;
+  const bus = createToolBus(pi);
+  addReadPrCommentsTool(gh, bus);
+  return bus.executeTool(
+    "read-github-pr-comments",
+    { number: 7, repo: "o/r", reviews: true },
+    { ctx: { cwd: "/tmp" } as never },
+  );
+}
 
-afterEach(() => {
-  spawnMock.mockReset();
-});
+/** 工具结果的文本（结果里只有文本内容）。 */
+function textOf(result: { content: { type: string; text?: string }[] }): string {
+  return result.content.map((part) => part.text ?? "").join("");
+}
 
-describe.skipIf(process.platform === "win32")("read-github-pr-comments (reviews=true)", () => {
+describe("read-github-pr-comments (reviews=true)", () => {
   it("pages both list endpoints and flattens their pages", async () => {
-    const procs: FakeChildProcess[] = [];
-    spawnMock.mockImplementation(() => {
-      const proc = new FakeChildProcess();
-      procs.push(proc);
-      return proc;
-    });
+    const result = await executeReadComments();
+    const text = textOf(result);
 
-    const promise = exec!("id", { number: 7, repo: "o/r", reviews: true }, undefined, undefined, {
-      cwd: undefined,
-    });
-    await vi.waitFor(() => {
-      expect(spawnMock).toHaveBeenCalledTimes(2);
-    });
-
-    const argvOf = (call: number): string[] => spawnMock.mock.calls[call]?.[1] as string[];
-    const commentsArgs = argvOf(0);
-    const reviewsArgs = argvOf(1);
-    expect(commentsArgs).toEqual(["api", "--paginate", "--slurp", "/repos/o/r/pulls/7/comments"]);
-    expect(reviewsArgs).toEqual(["api", "--paginate", "--slurp", "/repos/o/r/pulls/7/reviews"]);
-
-    // `--slurp` wraps the pages, so the output is an array of page arrays
-    procs[0].exit(0, JSON.stringify([[{ id: 1 }], [{ id: 31 }]]));
-    procs[1].exit(0, JSON.stringify([[{ id: 2, state: "APPROVED" }]]));
-
-    const result = await promise;
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    expect(JSON.parse(text)).toEqual({
       reviews: [{ id: 2, state: "APPROVED" }],
       comments: [{ id: 1 }, { id: 31 }],
+    });
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: {
+        reviews: [{ id: 2, state: "APPROVED" }],
+        comments: [{ id: 1 }, { id: 31 }],
+      },
     });
   });
 });
