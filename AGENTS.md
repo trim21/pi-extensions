@@ -40,13 +40,17 @@ src/
 ├── aft/          # AFT 只读代码感知工具（outline/zoom/callgraph/search）
 ├── bwrap/        # bubblewrap 沙箱执行层（被 claude-code / opencode 的 Bash 工具复用）
 ├── claude-code/  # Claude Code 风格工具集（files.ts 内含 LSP 诊断与 lsp-rename）
+├── codemode/     # QuickJS 沙箱工具（worker 线程执行脚本，嵌套调用走 tool bus）
+├── gh/           # GitHub 只读工具集（index.ts 注册、base.ts 共享层、tools/ 每工具一个文件）
 ├── lib/lsp/      # LSP 客户端层（连接、诊断、rename；服务器由 lsp.json 声明，kind 区分 language / linter）
 ├── opencode/     # opencode 风格工具集
-├── lib/          # 跨扩展共享工具（cli、path、pendant、ui、write-guard、tool-bus、tools-config、tool-registration、tool-services、tool-units）
-├── codemode/     # QuickJS 沙箱工具（worker 线程执行脚本，嵌套调用走 tool bus）
-├── talk/         # agent 间通信（SQLite 邮箱）
 ├── openai-cost/  # OpenAI Chat Completions，费用取自 usage.cost
-└── *.ts          # 单文件模块（gh-readonly、session-name、spawn-agent、vision-agent）
+├── skills/       # 随扩展注册的 skills（coding-style、github-ci-logs、lsp-config 等）
+├── system-prompt/# 系统提示词扩展
+├── talk/         # agent 间通信（SQLite 邮箱）
+├── web/          # web_fetch / web_search
+├── lib/          # 跨扩展共享工具（cli、path、pendant、ui、write-guard、tool-bus、tools-config、tool-registration、tool-services、tool-units、bash-tool、abort）
+└── *.ts          # 单文件模块（session-name、spawn-agent、vision-agent 等）
 test/             # Vitest 测试，文件与 src 对应
 ```
 

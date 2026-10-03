@@ -461,20 +461,20 @@ pi -e ./src/aft/index.ts
 
 ## gh-readonly
 
-GitHub 只读工具集。取数走 octokit REST（`src/lib/github-reads.ts`）；只有「当前仓库」解析（`gh repo view`）与 token 获取（`gh auth token`）还用系统 [`gh`](https://cli.github.com/)，因此 `gh` 不在 PATH 时整组不注册并在 session_start 报错；Windows 禁用。
+GitHub 只读工具集。取数全部走 octokit REST（`src/lib/github-reads.ts` 的读取层 + `src/lib/github.ts` 的 accessor）；只有「当前仓库」解析（`gh repo view`）与 token 获取（`gh auth token`）还用系统 [`gh`](https://cli.github.com/)，因此 `gh` 不在 PATH 时整组不注册并在 session_start 报错；Windows 禁用。一个会话只 spawn 一次 `gh auth token`：三个子客户端（search / checks / reads）共用同一个 accessor。
 
 - **Issue / PR**：`read-github-issue`、`list-github-issues`、`read-github-issue-comments`、`read-github-pr`、`list-github-prs`、`read-github-pr-diff`、`read-github-pr-status`、`read-github-pr-comments`
 - **CI**：`read-github-ci-logs`、`list-github-workflow-runs`、`get-github-workflow-jobs`、`wait-github-pr-checks`、`wait-github-commit-checks`、`watch-github-run`
 - **仓库 / 发布**：`read-github-repo`、`list-github-releases`、`read-github-release`、`download-github-release-assets`
 
-`list-github-issues` / `list-github-prs` 带 `keywords` 时走 GitHub search API（state 缺省只搜 open，`state: "all"` 不加 state qualifier 覆盖 open + closed），输出 TSV，默认列 `number,state,title,labels,updatedAt`，可用 `fields` 白名单指定列。`wait-github-pr-checks` / `wait-github-commit-checks` 30 秒轮询、600 秒截止：任一 fail 即返回，全部 pass / skipped 才算通过，超时返回快照不抛错。
+`list-github-issues` / `list-github-prs` 带 `keywords` 时走 GitHub search API，不带 `keywords` 时走 REST 列表端点（state 缺省只搜 open，`state: "all"` 不加 state qualifier 覆盖 open + closed），输出 TSV，默认列 `number,state,title,labels,updatedAt`，可用 `fields` 白名单指定列。`wait-github-pr-checks` / `wait-github-commit-checks` 30 秒轮询、600 秒截止：任一 fail 即返回，全部 pass / skipped 才算通过，超时返回快照不抛错。
 
 出网代理：`~/.pi/agent/proxy.json`（`{ "proxy": "http://127.0.0.1:7890", "noProxy": "localhost" }`），缺省字段回退 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `NO_PROXY` 环境变量。
 
 ### 使用
 
 ```bash
-pi -e ./src/gh-readonly.ts
+pi -e ./src/gh/index.ts
 ```
 
 ---
