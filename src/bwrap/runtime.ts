@@ -702,6 +702,18 @@ export class BwrapRuntime {
     };
   }
 
+  /**
+   * 子进程型工具（codemode）用的沙箱视图：本次调用生效的解析结果，以及 bwrap 二进制是否
+   * 可用（session_start 的探测结果）。配置解析、缓存与探测都留在 runtime 里，调用方不重复
+   * 实现；与 Bash 共用同一份 `ResolvedBwrap`，因此两者的读写与出网边界永远一致。
+   */
+  sandboxView(ctx: Pick<ExtensionContext, "cwd">): {
+    resolved: ResolvedBwrap;
+    bwrapUnavailable: boolean;
+  } {
+    return { resolved: this.resolve(ctx), bwrapUnavailable: this.bwrapUnavailable };
+  }
+
   private resolve(ctx: Pick<ExtensionContext, "cwd">): ResolvedBwrap {
     if (!this.resolved) {
       this.resolved = resolveBwrap(this.config ?? loadBwrapConfig(ctx.cwd));

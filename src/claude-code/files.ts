@@ -595,14 +595,8 @@ export function registerFileTools(
   // 它们由 manager 的 onEnabled 回调注册，不在这里注册。
 }
 
-/**
- * 会更新 reads state 并随 details 持久化快照的工具名。
- *
- * 含 `codemode`：脚本的 `fs.read` / `fs.write`（src/codemode/fs.ts）与本工具集共用
- * 同一个 ReadsState，脚本记下的已读落在 codemode 自己的工具结果里，重放分支时要一起
- * 收回来（见 `restoreReads`）。
- */
-const FILE_TOOL_NAMES = new Set(["Read", "Edit", "Write", "lsp-rename", "codemode"]);
+/** 会更新 reads state 并随 details 持久化快照的工具名（`restoreReads` 按它重放）。 */
+const FILE_TOOL_NAMES = new Set(["Read", "Edit", "Write", "lsp-rename"]);
 
 export interface ClaudeCodeFileToolOptions extends LspServiceOptions {
   /** 与 bash runtime 共享的非沙盒请求策略；独立入口不传，自建一份。 */
@@ -625,8 +619,6 @@ export interface FileToolset {
   register(bus: ToolBus): void;
   onLspEnabled(bus: ToolBus, service: LspService): void;
   restoreReads(ctx: ExtensionContext): void;
-  /** 与工具共用的已读记账：codemode 的 fs 原语拿它做 stale 保护（两边互通）。 */
-  readonly reads: ReadsState;
 }
 
 /**
@@ -676,8 +668,6 @@ export function createClaudeCodeFileTools(
     restoreReads(ctx) {
       restoreReads(state, ctx.sessionManager, FILE_TOOL_NAMES);
     },
-
-    reads: state,
   };
 
   // 独立入口没有注入 manager 时自建一份（入口共享的那份由入口创建）。

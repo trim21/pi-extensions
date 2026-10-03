@@ -11,7 +11,7 @@
 | [opencode 工具集](#opencode-工具集)       | 小写 `read`/`edit`/`write`/`grep`/`glob`/`bash`/`todowrite`/`question`                        |
 | [Claude Code 工具集](#claude-code-工具集) | 大写 `Read`/`Edit`/`Write`/`Grep`/`Glob`/`Bash`/`TodoWrite`/`AskUserQuestion`                 |
 | [工具启用配置](#工具启用配置)             | `personalExtensions`：按模型选文件 IO 工具集、通配禁用/启用工具                               |
-| [codemode](#codemode)                     | 模型写一段 JS，在 QuickJS 沙箱里批量/串行调用其它工具，只有脚本输出进上下文                   |
+| [codemode](#codemode)                     | 模型写一段 JS，在 bwrap 沙箱的 Node 子进程里批量/串行调用其它工具，只有脚本输出进上下文       |
 | [bwrap](#bwrap)                           | 基于 bubblewrap 的 OS 级沙箱（内置两套工具集）：文件系统隔离 + 多档网络策略                   |
 | [写保护（内置）](#写保护内置)             | 写工具内置：限制文件写入在 workspace 内，外部写入需审批                                       |
 | [LSP（内置）](#lsp内置)                   | 文件工具内置 LSP 诊断 + `lsp-rename`/`lsp-inspect`/`lsp-find-definition`/`lsp-find-reference` |
@@ -30,8 +30,8 @@
 ## codemode
 
 `codemode` 让模型写一段 JavaScript（作为 async 函数体，`await` 与 `return` 都可用），在
-进程内的 worker 线程里用 QuickJS wasm VM 执行。VM 里没有 node、文件系统、网络、timer
-或模块加载，脚本的出口只有 `call(name, args)` 与 `fs.read` / `fs.write` 两个文件原语。
+bwrap 沙箱里的 Node 子进程里执行（每次调用一个新进程）。脚本的出口是 `call(name, args)`
+与 Node 本身——能读写什么、能不能出网由沙箱配置决定（与 Bash 沙箱同一份）。
 
 - **嵌套调用经工具总线**：`call("Bash", { command })` 最终执行的是 `Bash` 工具自己的
   `execute`，所以工具的审批照常生效（Bash 沙箱外执行会弹自己的提权确认）。codemode
@@ -40,34 +40,37 @@
   以及两套文件工具集的 `Read`/`Edit`/`Write` 与 `read`/`edit`/`write`），执行时再与当前
   active 列表求交，所以 `personalExtensions.disabledTools`、pi 的 `defaultTools` /
   `--tools`、子代理的工具白名单都同样约束脚本。
-- **文件读写只有 `fs` 一条路**：`fs.read(path)` 返回文件全文的原始 UTF-8 文本（不加行号、
-  不截断、不设大小上限，只有内容不是合法 UTF-8 时报错），`fs.write(path, content)` 整体写入并自动创建
-  父目录，相对路径相对当前 cwd。`fs.write` 与写类工具共用同一套保护：写前要求「已读且读后
-  未变」（记账与文件工具共享，工具读过的文件脚本可以直接写），工作区外写入走 write-guard
-  的 diff 审批，headless / Windows / `/bwrap-deny-request` 下直接拒绝。文件读写工具本身
-  不在可调用集合里，脚本要改一行内容也走 `fs.read` + `fs.write`（行级替换用 `Edit` 工具
-  直接改，不进脚本）。
+- **脚本跑在沙箱里的真 Node 子进程**：能力边界与同一配置下 Bash 沙箱一致（fs 模式、可写
+  路径、只读保护、network 模式全部取自 `bwrap.json`），所以文件读写直接用 `node:fs`、
+  路径用 `node:path`，`process` / 计时器 / `fetch` 也都在；相对路径相对当前 cwd。脚本的
+  写入不受 write-guard 审批（与 Bash 一样，写不出去的地方由沙箱挂载直接拒绝），但工具侧
+  的保护仍然 fail-closed：脚本直接改过的文件，模型再调 `Write` / `Edit` 时会被
+  「未读」/「读后被改」拒绝。文件读写工具本身不在可调用集合里——脚本要改一行内容就用
+  `node:fs`（行级替换用 `Edit` 工具直接改，不进脚本）。bwrap 不可用时不会静默降级：先问
+  用户是否允许无沙箱执行，headless / Windows / `/bwrap-deny-request` 下直接拒绝。
 - **只有脚本输出进上下文**：`text(value)` / `console.log(...)` 与 `return` 值进入工具结果，
   中间的工具调用与它们的返回内容不会（也不在会话记录里留下工具调用条目）。
 - **返回值**：声明了 `structuredSchema` 的工具（如 gh-readonly 的读类工具）把结果放在
   `structuredResult` 里，`call()` 解包成对象给脚本；`{ ok: false, error }` 会 reject 成
   `CallFailedError`（脚本可按 `instanceof CallFailedError` 区分调用失败与自身运行期错误）。
   没有声明输出结构的工具回退成工具输出的文本。
-- **脚本接口**：`call` / `CallFailedError` / `ALL_TOOLS` / `fs.read` / `fs.write` /
-  `text` / `image` / `exit` / `console.*` / `store.set` / `store.get` / `store.list`
-  （会话内持久的键值表）；首行可选 `// @options: {"max_output_tokens": 10000}`。
-  脚本没有超时：死循环由调用方中止（Esc）结束，等嵌套调用返回（含用户审批弹窗）多久都不算超时。
+- **脚本接口**：`call` / `CallFailedError` / `ALL_TOOLS` / `text` / `image` / `exit` /
+  `console.*` / `store.set` / `store.get` / `store.list`（会话内持久的键值表）；首行可选
+  `// @options: {"max_output_tokens": 10000}`。脚本没有超时：死循环由调用方中止（Esc）
+  结束，等嵌套调用返回（含用户审批弹窗）多久都不算超时；脚本只等一个永远不会 settle 的
+  promise 时立刻失败（子进程自己按挂起的异步资源判定）。
 - **工具描述**里给出每个可调用工具的 `declare function call(name, args): Promise<T>` 重载，
   参数与返回类型都取自工具自己的 schema，所以模型在写脚本前就知道返回值形状。
 - **store** 记在每次成功调用工具结果的 `details.store` 上（与 `src/lib/file-reads.ts` 的
   已读记账同一套做法），下一次调用从当前分支的 toolResult 重放；输出超过 `max_output_tokens`
   时头尾截断并把全文落到 `$TMPDIR/pi-codemode-*.txt`。
-- **构建**：worker 入口是 esbuild 产物 `src/codemode/worker.js`（随仓库提交，
-  `pnpm run build:codemode-worker` 重新生成，pre-commit 会自动跑）；`quickjs-wasi` 的
-  wasm 在注册工具时编译一次，之后每次执行复用。产物必须**自包含**：它由 `new Worker(url)`
-  作为普通 Node 模块加载，不像主线程那样经 jiti 从 pi 的 `node_modules` 解析裸包名，所以
-  除了 `quickjs-wasi`（我们自己的 dependency）之外的依赖都要打包进去——否则用户装好包后
-  worker 会在启动时报 `Cannot find package`。
+- **协议与回收**：宿主与脚本子进程共用一条全双工专用 fd（spawn 建的 socketpair，magic +
+  长度分帧），stdin/stdout/stderr 全归脚本（stdout/stderr 收集成脚本输出项）。每次调用起
+  新进程、结束时杀掉整个进程组，因此脚本里的全局状态不跨调用保留（`store` 是唯一的持久机制）。
+- **构建**：子进程入口是 esbuild 产物 `src/codemode/bootstrap.js`（`bootstrap.ts` 转译，
+  随仓库提交，`pnpm run build:codemode-bootstrap` 重新生成，pre-commit 会自动跑）。它由
+  `node` 直接加载，不像主线程那样经 jiti 解析裸包名，所以源码只允许 `node:` 内置 import
+  与 `./protocol.js` 的类型导入，产物里只剩 `node:` 内置（回归测试在 `test/codemode.test.ts`）。
 
 ## 工具启用配置
 

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { type BwrapConfigFile, findBwrap } from "../src/bwrap/core.js";
-import { type BwrapInvocation, invocationArgv } from "../src/bwrap/exec.js";
+import { type BwrapInvocation, invocationArgv, shellCommandArgv } from "../src/bwrap/exec.js";
 import {
   HOLDER_PID_PLACEHOLDER,
   loadSandboxConfig,
@@ -335,8 +335,7 @@ describe("invocationArgv", () => {
   const invocation: BwrapInvocation = {
     file: "/usr/bin/bwrap",
     args: ["--ro-bind", "/", "/", "--unshare-net"],
-    shell: "/bin/bash",
-    command: "echo 1",
+    commandArgv: shellCommandArgv("echo 1"),
     env: {},
     needsNetworkStack: false,
   };
@@ -371,6 +370,27 @@ describe("invocationArgv", () => {
 
   it("传占位符字符串：原样嵌入（预览 holder 未启动时用）", () => {
     expect(invocationArgv(invocation, HOLDER_PID_PLACEHOLDER)[5]).toBe("<HOLDER_PID>");
+  });
+
+  it("argv 形态（codemode 的 node 子进程）：逐项追加，未经过 shell 转义", () => {
+    const node: BwrapInvocation = {
+      file: "/usr/bin/bwrap",
+      args: ["--ro-bind", "/", "/", "--unshare-net"],
+      commandArgv: ["/usr/bin/node", "/home/me/my scripts/bootstrap.mjs"],
+      env: {},
+      needsNetworkStack: false,
+    };
+
+    expect(invocationArgv(node)).toEqual([
+      "/usr/bin/bwrap",
+      "--ro-bind",
+      "/",
+      "/",
+      "--unshare-net",
+      "--",
+      "/usr/bin/node",
+      "/home/me/my scripts/bootstrap.mjs",
+    ]);
   });
 });
 

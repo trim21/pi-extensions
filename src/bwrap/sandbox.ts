@@ -10,6 +10,7 @@
  * slirp4netns 的原始日志——网络栈起不来时只有它们能说明原因。
  */
 
+import { type ChildProcess, spawn, type StdioOptions } from "node:child_process";
 import { existsSync } from "node:fs";
 
 import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
@@ -27,7 +28,13 @@ import {
   resolveBwrapPath,
   type ResolvedBwrap,
 } from "./core.js";
-import { buildBwrapInvocation, createBwrapBashOperations, invocationArgv } from "./exec.js";
+import {
+  buildBwrapInvocation,
+  createBwrapBashOperations,
+  invocationArgv,
+  sandboxEnv,
+  shellCommandArgv,
+} from "./exec.js";
 import type { NetworkStack } from "./network-stack.js";
 
 export interface SandboxConfigInput {
@@ -146,6 +153,76 @@ export async function runSandboxCommand(
   return runInSandbox(loadSandboxConfig(options), options);
 }
 
+export interface SandboxedProcessOptions {
+  /** 沙箱工作区（可写边界与只读保护的基准）。 */
+  workspace: string;
+  /** 沙箱内要跑的命令行，逐项给出（如 `[node, script]`；bash 形态见 `shellCommandArgv`）。 */
+  argv: readonly string[];
+  /** 进程执行目录。 */
+  cwd: string;
+  /** 调用方已决定不经沙箱（拿不到 bwrap 时的授权降级、Windows）。 */
+  unsandboxed?: boolean;
+  /** 子进程 stdio：调用方自己决定要不要额外的协议 fd。 */
+  stdio: StdioOptions;
+  /** 网络栈子进程输出转发，仅诊断用（默认丢弃）。 */
+  log?: NetworkStackLog;
+}
+
+export interface SandboxedProcess {
+  child: ChildProcess;
+  /** 沙箱内的完整命令行（诊断与错误文案用）。 */
+  argv: string[];
+  /** 停掉本次执行临时起的网络栈；不碰进程（进程由调用方管）。 */
+  close(): Promise<void>;
+}
+
+/**
+ * 在沙箱里起一个进程，返回句柄由调用方接管输入输出与生命周期（codemode 的脚本子进程走这里）。
+ *
+ * 与 `runInSandbox` 同一套组装与网络栈生命周期，区别只在形态：命令是现成 argv、
+ * stdio 由调用方给出（可能要额外的协议 fd），并且**不**加超时——超时与中止由调用方决定。
+ */
+export async function spawnSandboxed(
+  resolved: ResolvedBwrap,
+  options: SandboxedProcessOptions,
+): Promise<SandboxedProcess> {
+  const workspace = expandHome(options.workspace);
+  const cwd = expandHome(options.cwd);
+  const local = options.unsandboxed === true || !resolved.bwrapEnabled;
+  const stack = local ? undefined : await createNetworkStack(resolved, options.log);
+  try {
+    const invocation = local
+      ? undefined
+      : await buildBwrapInvocation(resolved, workspace, options.argv);
+    const argv =
+      invocation === undefined ? [...options.argv] : invocationArgv(invocation, stack?.holderPid);
+    // 独立进程组：中止时按组 kill，脚本起的子进程一起回收
+    const child = spawn(argv[0], argv.slice(1), {
+      cwd,
+      detached: true,
+      stdio: options.stdio,
+      // 沙箱内外都给出干净环境（不继承父进程 env，以免把凭据带进脚本）
+      env: invocation?.env ?? sandboxEnv(),
+    });
+    return {
+      child,
+      argv,
+      async close() {
+        try {
+          await stack?.stop();
+        } catch {
+          // best-effort：停栈失败不掩盖调用方自己关心的结果
+        }
+      },
+    };
+  } catch (error) {
+    await stack?.stop().catch(() => {
+      /* 网络栈可能已经退出，收尾失败不影响原始错误 */
+    });
+    throw error;
+  }
+}
+
 /** holder 尚未启动时，预览 argv 中标记 holder pid 位置的占位符。 */
 export const HOLDER_PID_PLACEHOLDER = "<HOLDER_PID>";
 
@@ -169,7 +246,11 @@ export async function previewSandboxCommand(
   },
 ): Promise<SandboxPreview> {
   const workspace = expandHome(options.workspace);
-  const invocation = await buildBwrapInvocation(resolved, workspace, options.command);
+  const invocation = await buildBwrapInvocation(
+    resolved,
+    workspace,
+    shellCommandArgv(options.command),
+  );
   if (!invocation.needsNetworkStack || options.unsandboxed === true) {
     return { argv: invocationArgv(invocation), env: invocation.env, needsNetworkStack: false };
   }

@@ -1,112 +1,34 @@
 /**
- * codemode 主线程 ↔ worker 线程的消息类型（结构化克隆，不是字符串协议）。
+ * codemode 宿主 ↔ 脚本子进程的协议：消息形状与分帧。
  *
- * 每次执行起一个新的 worker：主线程把注册时编好的 wasm 模块连同脚本、可调用工具、
- * 初始 store 一起发过去，worker 里建 QuickJS VM 跑脚本，脚本的嵌套调用与输出回传，
- * 主线程执行工具后把结果发回去。脚本没有超时，只有调用方的中止：中止时主线程直接
- * `worker.terminate()`，因此不需要取消消息。
+ * 两个方向共用**一条专用 fd**（见 `CHILD_FRAME_FD`）：它由 spawn 建成 socketpair，
+ * 本来就是全双工，读写都走它。stdin/stdout/stderr 于是全归脚本——脚本是模型写的普通
+ * Node 程序，它（或它用的库、原生模块）会往 stdio 写任意内容，包括刚好长得像协议帧的
+ * 文本；stdout/stderr 整体当脚本输出收集，协议因此不会被插进中间。
  *
- * worker 边界两侧都做 typebox 校验：worker 里跑的是模型写的代码，回传的消息同样
- * 当外部输入对待。
+ * 两个方向的分帧一致：magic + 十进制长度 + `:` + JSON 文本。
+ *
+ * 帧的校验：子进程回传的帧一律当外部输入用 typebox 校验（脚本能在子进程里往 fd 写东西，
+ * 这里防的是意外而不是攻击——解析不出就按协议损坏处理，由调用方杀掉子进程）。子进程侧
+ * 对宿主帧只做形状检查：宿主是可信方，且那边只能用 node: 内置模块。
  */
 
 import { type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
 
-// ── 资源上限 ─────────────────────────────────────────────────────────────────
+/** 协议 fd：stdin(0)/stdout(1)/stderr(2) 之外的第一条通道，全双工 socketpair。 */
+export const CHILD_FRAME_FD = 3;
 
 /**
- * QuickJS VM 的堆上限。它不是预留（创建 VM 只占几 MiB，按脚本实际分配增长），而是
- * 「超量分配变成脚本里可捕获的 InternalError，而不是拖垮宿主」的那条线。
- *
- * 文件读取没有单独的上限：读进来的内容不进模型上下文，所以不需要按上下文预算裁剪；
- * 真正放不下时（VM 堆不够、或超出宿主字符串/缓冲上限）会以错误回到脚本里，让它自己
- * 决定怎么办。
+ * 帧起始标记。用 ASCII 控制字符 0x1e 包住：脚本往协议 fd 写普通文本时几乎不可能凑出它，
+ * 因而不会把脚本文本当帧解析。写成 `fromCharCode` 是为了让转译产物里也不出现裸控制字符
+ * （子进程侧的 `bootstrap.ts` 用同一段构造，两边必须一致）。
  */
-export const MEMORY_LIMIT_BYTES = 2 * 1024 ** 3;
+const FRAME_MAGIC_BYTE = 0x1e;
+export const CHILD_FRAME_MAGIC = `${String.fromCodePoint(FRAME_MAGIC_BYTE)}PI_CODEMODE${String.fromCodePoint(FRAME_MAGIC_BYTE)}`;
 
-// ── 消息 schema ──────────────────────────────────────────────────────────────
-
-const outputItemSchema = Type.Union([
-  Type.Object({ type: Type.Literal("text"), text: Type.String() }),
-  Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String() }),
-]);
-
-const toolDeclSchema = Type.Object({
-  name: Type.String(),
-  description: Type.Optional(Type.String()),
-  /** 工具的 structuredSchema（TypeBox schema）：脚本侧据此渲染 call() 的返回类型。 */
-  structuredSchema: Type.Optional(Type.Unknown()),
-});
-
-const startSchema = Type.Object({
-  t: Type.Literal("start"),
-  code: Type.String(),
-  tools: Type.Array(toolDeclSchema),
-  store: Type.Record(Type.String(), Type.Unknown()),
-});
-
-const resultSchema = Type.Union([
-  Type.Object({
-    t: Type.Literal("result"),
-    id: Type.Number(),
-    ok: Type.Literal(true),
-    value: Type.Unknown(),
-  }),
-  Type.Object({
-    t: Type.Literal("result"),
-    id: Type.Number(),
-    ok: Type.Literal(false),
-    error: Type.String(),
-  }),
-]);
-
-const callSchema = Type.Object({
-  t: Type.Literal("call"),
-  id: Type.Number(),
-  name: Type.String(),
-  args: Type.Unknown(),
-});
-
-const outputFrameSchema = Type.Object({
-  t: Type.Literal("output"),
-  items: Type.Array(outputItemSchema),
-});
-
-const scriptErrorSchema = Type.Object({
-  kind: Type.Union([Type.Literal("script"), Type.Literal("aborted"), Type.Literal("sandbox")]),
-  name: Type.Optional(Type.String()),
-  message: Type.String(),
-  stack: Type.Optional(Type.String()),
-});
-
-const storeWritesSchema = Type.Object({
-  set: Type.Record(Type.String(), Type.Unknown()),
-  delete: Type.Array(Type.String()),
-});
-
-const doneSchema = Type.Union([
-  Type.Object({
-    t: Type.Literal("done"),
-    ok: Type.Literal(true),
-    value: Type.Unknown(),
-    writes: storeWritesSchema,
-  }),
-  Type.Object({
-    t: Type.Literal("done"),
-    ok: Type.Literal(false),
-    error: scriptErrorSchema,
-    writes: storeWritesSchema,
-  }),
-]);
-
-const hostMessageSchema = Type.Union([startSchema, resultSchema]);
-const workerMessageSchema = Type.Union([callSchema, outputFrameSchema, doneSchema]);
-
-/** worker 启动数据：注册时编译好的 wasm 模块（结构化克隆可以带它跨线程）。 */
-export interface WorkerBootstrap {
-  wasm: object;
-}
+/** 帧头的最大长度（magic 之后的十进制长度 + 冒号），超过即判定协议损坏。 */
+const MAX_HEADER_CHARS = 12;
 
 // ── 类型 ─────────────────────────────────────────────────────────────────────
 
@@ -122,7 +44,7 @@ export interface ScriptError {
   stack?: string;
 }
 
-/** 脚本侧的 store 写入：`set` 是覆写的键值，`delete` 是被删除的键。 */
+/** 脚本侧的 store 写入：`set` 是覆写的键值，`delete` 是被删除的键（`set(k, undefined)`）。 */
 export interface StoreWrites {
   set: Record<string, unknown>;
   delete: string[];
@@ -131,36 +53,186 @@ export interface StoreWrites {
 export interface ScriptTool {
   name: string;
   description?: string;
+  /** 工具的 structuredSchema（TypeBox schema）：脚本侧据此渲染 call() 的返回类型。 */
   structuredSchema?: unknown;
 }
 
+/** 宿主发给子进程的帧。 */
 export type HostMessage =
   | { t: "start"; code: string; tools: ScriptTool[]; store: Record<string, unknown> }
-  | { t: "result"; id: number; ok: true; value: unknown }
+  | { t: "result"; id: number; ok: true; value?: unknown }
   | { t: "result"; id: number; ok: false; error: string };
 
-export type WorkerMessage =
+/** 子进程回给宿主的帧。 */
+export type ChildMessage =
+  | { t: "ready" }
   | { t: "call"; id: number; name: string; args: unknown }
   | { t: "output"; items: CodemodeOutputItem[] }
-  | { t: "done"; ok: true; value: unknown; writes: StoreWrites }
+  | { t: "done"; ok: true; value?: unknown; writes: StoreWrites }
   | { t: "done"; ok: false; error: ScriptError; writes: StoreWrites };
+
+// ── schema ───────────────────────────────────────────────────────────────────
+
+const outputItemSchema = Type.Union([
+  Type.Object({ type: Type.Literal("text"), text: Type.String() }),
+  Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String() }),
+]);
+
+const storeWritesSchema = Type.Object({
+  set: Type.Record(Type.String(), Type.Unknown()),
+  delete: Type.Array(Type.String()),
+});
+
+const scriptErrorSchema = Type.Object({
+  kind: Type.Union([Type.Literal("script"), Type.Literal("aborted"), Type.Literal("sandbox")]),
+  name: Type.Optional(Type.String()),
+  message: Type.String(),
+  stack: Type.Optional(Type.String()),
+});
+
+const childMessageSchema = Type.Union([
+  Type.Object({ t: Type.Literal("ready") }),
+  Type.Object({
+    t: Type.Literal("call"),
+    id: Type.Number(),
+    name: Type.String(),
+    // 可以缺席：`call("Read")` 没有参数，JSON 序列化后 `args` 键不存在
+    args: Type.Optional(Type.Unknown()),
+  }),
+  Type.Object({ t: Type.Literal("output"), items: Type.Array(outputItemSchema) }),
+  Type.Object({
+    t: Type.Literal("done"),
+    ok: Type.Literal(true),
+    value: Type.Optional(Type.Unknown()),
+    writes: storeWritesSchema,
+  }),
+  Type.Object({
+    t: Type.Literal("done"),
+    ok: Type.Literal(false),
+    error: scriptErrorSchema,
+    writes: storeWritesSchema,
+  }),
+]);
+
+/** 校验子进程回传的帧。 */
+export function decodeChildMessage(value: unknown): DecodeResult<ChildMessage> {
+  return decode<ChildMessage>(childMessageSchema, value);
+}
 
 export type DecodeResult<T> = { ok: true; frame: T } | { ok: false; error: string };
 
 function decode<T>(schema: TSchema, value: unknown): DecodeResult<T> {
   if (!Value.Check(schema, value)) {
-    const preview = JSON.stringify(value).slice(0, 200);
+    const json = JSON.stringify(value) as string | undefined;
+    const preview = (json ?? String(value)).slice(0, 200);
     return { ok: false, error: `unexpected message shape: ${preview}` };
   }
   return { ok: true, frame: value as T };
 }
 
-/** 校验主线程发给 worker 的消息。 */
-export function decodeHostMessage(value: unknown): DecodeResult<HostMessage> {
-  return decode<HostMessage>(hostMessageSchema, value);
+// ── 分帧（两个方向一致） ─────────────────────────────────────────────────────
+
+export function encodeFrame(frame: HostMessage | ChildMessage): string {
+  const json = JSON.stringify(frame);
+  return `${CHILD_FRAME_MAGIC}${Buffer.byteLength(json, "utf8")}:${json}`;
 }
 
-/** 校验 worker 发回主线程的消息。 */
-export function decodeWorkerMessage(value: unknown): DecodeResult<WorkerMessage> {
-  return decode<WorkerMessage>(workerMessageSchema, value);
+export interface ChildFrameHandlers {
+  /** 解析出的一帧（未经 schema 校验，由调用方决定怎么校验）。 */
+  onFrame(frame: unknown): void;
+  /** magic 之前的杂散字节：子进程（或脚本）往协议 fd 写了别的东西。 */
+  onStray?(text: string): void;
+  /** 帧体不是合法 JSON、或头本身损坏。 */
+  onInvalid?(reason: string): void;
+}
+
+/**
+ * 增量帧解析器：喂进来的字节流可能任意切分，magic 之前允许有杂散字节（按 `onStray` 报出去，
+ * 解析器自行重新同步）。返回的 `finish()` 报告流结束时是否还有半帧残留。
+ */
+export function createFrameDecoder(handlers: ChildFrameHandlers): {
+  push(chunk: Buffer): void;
+  finish(): void;
+} {
+  let pending = Buffer.alloc(0);
+
+  function stray(bytes: Buffer): void {
+    if (bytes.length > 0) {
+      handlers.onStray?.(bytes.toString("utf8"));
+    }
+  }
+
+  function parse(): void {
+    for (;;) {
+      const magicAt = pending.indexOf(CHILD_FRAME_MAGIC);
+      if (magicAt === -1) {
+        // 保留末尾可能是半个 magic 的部分，其余当杂散字节报出去
+        const keep = CHILD_FRAME_MAGIC.length - 1;
+        if (pending.length > keep) {
+          stray(pending.subarray(0, pending.length - keep));
+          pending = pending.subarray(pending.length - keep);
+        }
+        return;
+      }
+      if (magicAt > 0) {
+        stray(pending.subarray(0, magicAt));
+        pending = pending.subarray(magicAt);
+      }
+
+      const afterMagic = pending.subarray(CHILD_FRAME_MAGIC.length);
+      const colonAt = afterMagic.indexOf(0x3a);
+      if (colonAt === -1) {
+        if (afterMagic.length > MAX_HEADER_CHARS) {
+          handlers.onInvalid?.("frame header is not a length prefix");
+          // 丢掉这一个 magic，继续往后找（重新同步）
+          pending = pending.subarray(CHILD_FRAME_MAGIC.length);
+          continue;
+        }
+        return;
+      }
+      const lengthText = afterMagic.subarray(0, colonAt).toString("ascii");
+      const length = /^\d+$/.test(lengthText) ? Number(lengthText) : NaN;
+      if (!Number.isSafeInteger(length)) {
+        handlers.onInvalid?.(`frame length is not a number: ${JSON.stringify(lengthText)}`);
+        pending = pending.subarray(CHILD_FRAME_MAGIC.length);
+        continue;
+      }
+
+      const bodyAt = CHILD_FRAME_MAGIC.length + colonAt + 1;
+      if (pending.length < bodyAt + length) {
+        return; // 帧还没收全
+      }
+      const body = pending.subarray(bodyAt, bodyAt + length).toString("utf8");
+      pending = pending.subarray(bodyAt + length);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch (error) {
+        handlers.onInvalid?.(
+          `frame body is not JSON: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        continue;
+      }
+      handlers.onFrame(parsed);
+    }
+  }
+
+  return {
+    push(chunk) {
+      pending = Buffer.concat([pending, chunk]);
+      parse();
+    },
+    finish() {
+      if (pending.length === 0) {
+        return;
+      }
+      // 带 magic 的残留 = 半帧（协议损坏）；不带的只能是杂散字节（当脚本输出报出去）
+      if (!pending.includes(CHILD_FRAME_MAGIC)) {
+        stray(pending);
+        pending = Buffer.alloc(0);
+        return;
+      }
+      handlers.onInvalid?.(`stream ended mid-frame (${pending.length} byte(s) left)`);
+    },
+  };
 }

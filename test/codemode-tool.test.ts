@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,8 +10,9 @@ import type {
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 
+import { resolveBwrap } from "../src/bwrap/core.js";
+import type { BwrapRuntime } from "../src/bwrap/runtime.js";
 import { createCodemodeTools } from "../src/codemode/tool.js";
-import { createReadsState } from "../src/lib/file-reads.js";
 import { createRequestPolicy } from "../src/lib/request-policy.js";
 import {
   createToolBus,
@@ -163,9 +164,11 @@ async function harness(options: { active?: string[] } = {}): Promise<Harness> {
     }),
   );
 
-  await createCodemodeTools(pi).register(bus, {
+  createCodemodeTools(pi).register(bus, {
     policy: createRequestPolicy(),
-    reads: createReadsState(),
+    // 这两个描述符/路由用例不需要真沙箱：fs 与 network 都 allow-all 时不进 bwrap，
+    // 脚本作为普通 Node 子进程执行（真实沙箱的语义由 test/codemode.test.ts 覆盖）
+    runtime: allowAllRuntime(),
   });
   const codemode = registered.get("codemode");
   if (!codemode) {
@@ -183,6 +186,25 @@ async function harness(options: { active?: string[] } = {}): Promise<Harness> {
     searchTool,
     brokenTool,
   };
+}
+
+/** 不经沙箱的 runtime 桩：fs 与 network 都 allow-all（与真实 runtime 的判定一致）。 */
+function allowAllRuntime(): BwrapRuntime {
+  return {
+    sandboxView: () => ({
+      resolved: resolveBwrap({
+        fs: {
+          mode: "allow-all",
+          writablePaths: ["."],
+          extraWritablePaths: [],
+          denyPaths: [],
+        },
+        network: { mode: "allow-all", allowlist: [] },
+        extraArgs: [],
+      }),
+      bwrapUnavailable: false,
+    }),
+  } as unknown as BwrapRuntime;
 }
 
 function context(select: ReturnType<typeof vi.fn>, branch: unknown[] = []): ExtensionContext {
@@ -304,24 +326,19 @@ describe("codemode 工具", () => {
     expect(h.codemode.description).toContain("declare class CallFailedError extends Error");
   });
 
-  it("描述里有 fs 原语的声明，但它们不是可调用工具", async () => {
+  it("描述说明脚本跑在 Node 运行时里，且没有把文件工具当可调用工具", async () => {
     const h = await harness();
 
-    expect(h.codemode.description).toContain(
-      [
-        "declare const fs: {",
-        "  read(path: string): Promise<string>;",
-        "  write(path: string, content: string): Promise<void>;",
-        "};",
-      ].join("\n"),
-    );
-    // fs 是内建能力：既不在 call 重载里，也不在 ALL_TOOLS 里
-    expect(h.codemode.description).not.toContain('declare function call(name: "fs.read"');
+    expect(h.codemode.description).toContain("real Node runtime");
+    expect(h.codemode.description).toContain("`node:fs`");
+    // 文件原语与旧 API 都不存在：没有 fs 对象，也没有 fs.* 的 call 重载
+    expect(h.codemode.description).not.toContain("declare const fs");
+    expect(h.codemode.description).not.toContain("fs.read");
     const result = await runScript(
       h,
-      `return [typeof fs.read, ALL_TOOLS.some((tool) => tool.name.startsWith("fs."))].join("|");`,
+      `return [typeof fs, ALL_TOOLS.some((tool) => tool.name === "Read"), typeof Store].join("|");`,
     );
-    expect(textOf(result)).toContain('"function|false"');
+    expect(textOf(result)).toContain('"undefined|false|undefined"');
   });
 
   it("描述里不列出 spawn-agent", async () => {
@@ -443,7 +460,7 @@ describe("codemode 工具", () => {
     expect(textOf(result)).toContain("does not match its structuredSchema");
   });
 
-  it("脚本里的 fs.read / fs.write 由宿主执行，已读记账随结果持久化", async () => {
+  it("脚本用 node:fs 直接读写文件（不经工具总线，也不产生调用记录）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "codemode-fs-e2e-"));
     try {
       const source = join(dir, "source.txt");
@@ -453,34 +470,45 @@ describe("codemode 工具", () => {
       const h = await harness();
       const result = await runScript(
         h,
-        `const content = await fs.read(${JSON.stringify(source)});
-         await fs.write(${JSON.stringify(target)}, content + " world");
+        `const fs = await import("node:fs/promises");
+         const content = await fs.readFile(${JSON.stringify(source)}, "utf8");
+         await fs.writeFile(${JSON.stringify(target)}, content + " world");
          return content;`,
       );
 
       expect(textOf(result)).toContain("hello");
       expect(result.isError).toBeUndefined();
       expect(await readFile(target, "utf8")).toBe("hello world");
-      // 读到的文件进同一份记账，并随工具结果持久化（重放分支时收回来）
-      const reads = (result.details as { reads?: Record<string, unknown> }).reads ?? {};
-      expect(Object.keys(reads)).toContain(await realpath(source));
+      // 文件操作不进工具总线：没有调用记录，也没有可重放的已读记账
+      expect((result.details as { calls?: unknown[] }).calls).toEqual([]);
+      expect((result.details as { reads?: unknown }).reads).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  it("fs 原语的失败在脚本里是 CallFailedError", async () => {
+  it("脚本自己的 Node 错误是原生错误，工具失败才是 CallFailedError", async () => {
     const h = await harness();
     const result = await runScript(
       h,
-      `try {
-         await fs.read(${JSON.stringify(join(tmpdir(), "codemode-missing-file.txt"))});
-         return "not reached";
+      `const fs = await import("node:fs/promises");
+       let fsError;
+       try {
+         await fs.readFile(${JSON.stringify(join(tmpdir(), "codemode-missing-file.txt"))}, "utf8");
        } catch (error) {
-         return [error instanceof CallFailedError, error.name].join("|");
-       }`,
+         fsError = [error instanceof CallFailedError, error.code].join("|");
+       }
+       let callError;
+       try {
+         await call("search", { query: "fail" });
+         callError = "resolved";
+       } catch (error) {
+         callError = [error instanceof CallFailedError, error.name].join("|");
+       }
+       return { fsError, callError };`,
     );
 
+    expect(textOf(result)).toContain('"false|ENOENT"');
     expect(textOf(result)).toContain('"true|CallFailedError"');
   });
 

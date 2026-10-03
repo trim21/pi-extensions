@@ -1,25 +1,99 @@
-import { readFile } from "node:fs/promises";
+/**
+ * codemode 沙箱（src/codemode/sandbox.ts）的语义：脚本跑在 bwrap 里的 Node 子进程，
+ * 协议走专用 fd，工具调用由宿主的 onCall 执行。
+ *
+ * 大部分用例需要真实 bwrap（先做一次最小探测，探测不过整组跳过——macOS、没有
+ * bubblewrap 或受限 CI 环境不应报假失败）。
+ */
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { createCodemodeSandbox, type SandboxRunOptions } from "../src/codemode/sandbox.js";
+import { type BwrapConfigFile, findBwrap } from "../src/bwrap/core.js";
+import { loadSandboxConfig } from "../src/bwrap/sandbox.js";
+import {
+  createCodemodeSandbox,
+  type SandboxOutcome,
+  type SandboxRunOptions,
+  type SandboxView,
+} from "../src/codemode/sandbox.js";
 
-/** 建沙箱 + 跑一段脚本；onCall 缺省把参数原样回给脚本。 */
+function bwrapUsable(): boolean {
+  if (process.platform !== "linux") {
+    return false;
+  }
+  let binary: string;
+  try {
+    binary = findBwrap();
+  } catch {
+    return false;
+  }
+  const probe = spawnSync(
+    binary,
+    [
+      "--ro-bind",
+      "/",
+      "/",
+      "--unshare-user",
+      "--dev",
+      "/dev",
+      "--proc",
+      "/proc",
+      "--",
+      "/bin/true",
+    ],
+    { timeout: 20000 },
+  );
+  return probe.status === 0;
+}
+
+const sandboxed = bwrapUsable();
+
+function workspace(): string {
+  return mkdtempSync(join(tmpdir(), "codemode-sandbox-"));
+}
+
+/** 沙箱视图：写一份临时配置再解析，fs / network 模式可覆盖。 */
+function view(
+  dir: string,
+  fsMode: "workspace-write" | "readonly" = "workspace-write",
+  network: "allow-all" | "block" = "allow-all",
+): SandboxView {
+  const path = join(dir, "codemode-sandbox.json");
+  const config: BwrapConfigFile = {
+    fs: { mode: fsMode },
+    // 缺省 allow-all：多数用例不需要网络栈（limited 的组装由 bwrap 层自己的用例覆盖）
+    network: { mode: network },
+  };
+  writeFileSync(path, JSON.stringify(config));
+  return {
+    resolved: loadSandboxConfig({ workspace: dir, configPath: path }),
+    bwrapUnavailable: false,
+  };
+}
+
+/** 跑一段脚本；onCall 缺省把参数原样回给脚本。 */
 async function run(
   code: string,
   overrides: Partial<SandboxRunOptions> = {},
-): Promise<Awaited<ReturnType<Awaited<ReturnType<typeof createCodemodeSandbox>>["run"]>>> {
-  const sandbox = await createCodemodeSandbox();
-  return await sandbox.run({
+): Promise<SandboxOutcome> {
+  const dir = overrides.workspace ?? workspace();
+  return await createCodemodeSandbox().run({
     code,
     tools: [{ name: "Read", description: "read a file" }],
     store: {},
+    workspace: dir,
+    sandbox: view(dir),
     onCall: async ({ args }) => ({ ok: true, value: { echoed: args } }),
     ...overrides,
   });
 }
 
-describe("codemode 沙箱", () => {
+describe.skipIf(!sandboxed)("codemode 沙箱", () => {
   it("工具调用、输出、返回值与 store 写入", async () => {
     const result = await run(
       `
@@ -176,7 +250,7 @@ describe("codemode 沙箱", () => {
 
   it("中止信号终止脚本", async () => {
     const controller = new AbortController();
-    // 用死循环而不是挂起的 promise：后者会被 stalled() 立刻判失败
+    // 用死循环而不是挂起的 promise：后者会被卡死检测立刻判失败
     const pending = run(`while (true) {}`, { signal: controller.signal });
     setTimeout(() => controller.abort(), 200);
 
@@ -214,14 +288,16 @@ describe("codemode 沙箱", () => {
     expect(result.output).toEqual([{ type: "text", text: "bye" }]);
   });
 
-  it("VM 里没有宿主能力，也没有旧的 tools 对象", async () => {
+  it("脚本是普通 Node 程序：内置模块可用，旧的 tools 对象不存在", async () => {
     const result = await run(`
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
       return {
         process: typeof process,
-        require: typeof require,
         fetch: typeof fetch,
         setTimeout: typeof setTimeout,
-        evaluate: typeof globalThis.eval,
+        fs: typeof fs.readFile,
+        path: typeof path.join,
         tools: typeof tools,
         call: typeof call,
         callFailedError: typeof CallFailedError,
@@ -231,17 +307,142 @@ describe("codemode 沙箱", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value).toEqual({
-        process: "undefined",
-        require: "undefined",
-        fetch: "undefined",
-        setTimeout: "undefined",
-        // eval 仍可用，但只能产出同一个 VM 里的代码
-        evaluate: "function",
+        process: "object",
+        fetch: "function",
+        setTimeout: "function",
+        fs: "function",
+        path: "function",
         tools: "undefined",
         call: "function",
         callFailedError: "function",
       });
     }
+  });
+
+  it("一次调用里同时用 node:fs、call() 与 store", async () => {
+    const dir = workspace();
+    const source = join(dir, "input.txt");
+    const target = join(dir, "output.txt");
+    await (await import("node:fs/promises")).writeFile(source, "input", "utf8");
+
+    const result = await run(
+      `
+      const fs = await import("node:fs/promises");
+      const input = await fs.readFile(${JSON.stringify(source)}, "utf8");
+      const echoed = await call("Read", { path: input });
+      await fs.writeFile(${JSON.stringify(target)}, echoed.echoed.path + "!");
+      store.set("lastInput", input);
+      return { input, tool: echoed.echoed.path, files: store.list() };
+    `,
+      { workspace: dir },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({ input: "input", tool: "input", files: ["lastInput"] });
+      expect(result.writes.set).toEqual({ lastInput: "input" });
+    }
+    expect(result.calls).toEqual([{ name: "Read", status: "ok", durationMs: expect.any(Number) }]);
+    expect(await readFile(target, "utf8")).toBe("input!");
+  });
+
+  it("network 模式为 block 时脚本出网失败（不是静默成功）", async () => {
+    const dir = workspace();
+    const result = await run(
+      `
+      const net = await import("node:net");
+      return await new Promise((resolve) => {
+        const socket = net.connect({ host: "1.1.1.1", port: 443 });
+        socket.on("connect", () => resolve("connected"));
+        socket.on("error", (error) => resolve(error.code ?? error.message));
+      });
+    `,
+      { workspace: dir, sandbox: view(dir, "workspace-write", "block") },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe("ENETUNREACH");
+    }
+  });
+
+  it("脚本用 node:fs 读写沙箱可写路径里的文件", async () => {
+    const dir = workspace();
+    const result = await run(
+      `
+      const fs = await import("node:fs/promises");
+      await fs.writeFile(${JSON.stringify(join(dir, "note.txt"))}, "written by the script");
+      return await fs.readFile(${JSON.stringify(join(dir, "note.txt"))}, "utf8");
+    `,
+      { workspace: dir },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe("written by the script");
+    }
+    expect(await readFile(join(dir, "note.txt"), "utf8")).toBe("written by the script");
+  });
+
+  it("只读沙箱：脚本写文件被拒绝（不是静默成功）", async () => {
+    const dir = workspace();
+    const result = await run(
+      `
+      const fs = await import("node:fs/promises");
+      try {
+        await fs.writeFile(${JSON.stringify(join(dir, "note.txt"))}, "nope");
+        return "write succeeded";
+      } catch (error) {
+        return error.code;
+      }
+    `,
+      { workspace: dir, sandbox: view(dir, "readonly") },
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe("EROFS");
+    }
+  });
+
+  it("脚本直接写 stdout / stderr 的内容也进输出，协议不受影响", async () => {
+    const result = await run(String.raw`
+      process.stdout.write("to stdout\n");
+      process.stderr.write("to stderr\n");
+      const value = await call("Read", { path: "a.txt" });
+      return value.echoed.path;
+    `);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe("a.txt");
+    }
+    const text = result.output
+      .filter((item): item is { type: "text"; text: string } => item.type === "text")
+      .map((item) => item.text)
+      .join("");
+    expect(text).toContain("to stdout");
+    expect(text).toContain("to stderr");
+    expect(result.calls).toEqual([{ name: "Read", status: "ok", durationMs: expect.any(Number) }]);
+  });
+
+  it("脚本往协议 fd 写垃圾字节不影响调用（当脚本输出报出去）", async () => {
+    const result = await run(`
+      const fs = await import("node:fs");
+      fs.writeSync(3, "not a frame at all");
+      const value = await call("Read", { path: "a.txt" });
+      return value.echoed.path;
+    `);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe("a.txt");
+    }
+    const text = result.output
+      .filter((item): item is { type: "text"; text: string } => item.type === "text")
+      .map((item) => item.text)
+      .join("");
+    expect(text).toContain("not a frame at all");
   });
 
   it("工具名里的非法标识符按字符串调用，且不同名字互不干扰", async () => {
@@ -267,21 +468,42 @@ describe("codemode 沙箱", () => {
       expect(result.value).toEqual({ echoed: undefined });
     }
   });
+
+  it("每次执行都是新进程：脚本里的全局状态不跨调用保留", async () => {
+    const first = await run(`globalThis.leak = "set"; return "ok";`);
+    expect(first.ok).toBe(true);
+
+    const second = await run(`return typeof globalThis.leak;`);
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(second.value).toBe("undefined");
+    }
+  });
+
+  it("执行结束后不留下脚本子进程", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "codemode-cleanup-"));
+    await run(`return process.pid;`, { workspace: dir });
+    // 子进程已被杀掉：它所在的进程组不再有进程
+    const { execFileSync } = await import("node:child_process");
+    const listing = execFileSync("ps", ["-eo", "args"], { encoding: "utf8" });
+    expect(listing).not.toContain("codemode/bootstrap.js");
+    expect(listing).not.toContain(join(dir, "bootstrap.mjs"));
+  });
 });
 
-describe("worker 产物", () => {
+describe("bootstrap 脚本产物", () => {
   /**
-   * `worker.js` 是 `new Worker(url)` 直接起的普通 Node 模块，不像主线程那样经 jiti 加载
-   * ——jiti 从 pi 自己的 node_modules 解析裸包名，所以 `typebox` 这类由 pi 提供的依赖在主线程
-   * 可用、在 worker 里却解析不到（发布后表现为 `Cannot find package "typebox"`）。
-   * 产物里出现除 node 内置与自身 dependencies 之外的裸导入，就是这个 bug 复发。
+   * `bootstrap.js` 由 `node` 直接加载（不经 pi 的 jiti），因此解析不到 pi 提供的依赖：
+   * 一旦引入第三方裸导入，用户装好包后就会报 `Cannot find package`（`worker.js` 的
+   * typebox 事故就是这样）。源码只允许 `node:` 内置与类型导入，产物里因此只剩 node: 内置。
    */
-  it("自包含：只裸导入 node 内置模块与 quickjs-wasi", async () => {
-    const source = await readFile(new URL("../src/codemode/worker.js", import.meta.url), "utf8");
-    const bare = [...source.matchAll(/^import\s[^"']*from\s*["']([^"']+)["']/gm)]
-      .map((match) => match[1])
-      .filter((specifier) => !specifier.startsWith("node:") && specifier !== "quickjs-wasi");
+  it("只 import node 内置模块", async () => {
+    const source = await readFile(new URL("../src/codemode/bootstrap.js", import.meta.url), "utf8");
+    const specifiers = [...source.matchAll(/^\s*import\s[^"'`]*from\s*["']([^"']+)["']/gm)].map(
+      (match) => match[1],
+    );
 
-    expect(bare).toEqual([]);
+    expect(specifiers).not.toEqual([]);
+    expect(specifiers.filter((specifier) => !specifier.startsWith("node:"))).toEqual([]);
   });
 });

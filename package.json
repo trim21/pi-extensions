@@ -27,8 +27,8 @@
     "sandbox": "jiti bin/sandbox.ts",
     "aft-search": "jiti bin/aft-search.ts",
     "build:holder": "esbuild src/bwrap/holder.ts --format=esm --target=node24 --outfile=src/bwrap/holder.js",
-    "prepare": "husky",
-    "build:codemode-worker": "esbuild src/codemode/worker.ts --bundle --platform=node --external:quickjs-wasi --format=esm --target=node24 --outfile=src/codemode/worker.js"
+    "build:codemode-bootstrap": "esbuild src/codemode/bootstrap.ts --format=esm --target=node24 --outfile=src/codemode/bootstrap.js",
+    "prepare": "husky"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.84.1",
@@ -97,7 +97,6 @@
     "lodash-es": "^4.18.1",
     "minimatch": "^10.2.6",
     "octokit": "^5.0.5",
-    "quickjs-wasi": "^3.6.2",
     "turndown": "^7.2.0",
     "undici": "^8.0.0",
     "vscode-languageserver-protocol": "^3.18.4",

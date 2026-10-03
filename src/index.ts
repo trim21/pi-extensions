@@ -73,15 +73,6 @@ export default function personalExtensions(pi: ExtensionAPI): void {
     }
   }
 
-  async function runModuleAsync<T>(name: string, run: () => Promise<T>): Promise<T | undefined> {
-    try {
-      return await run();
-    } catch (error) {
-      warnings.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
-      return undefined;
-    }
-  }
-
   registration.onSessionStart(async (bus, ctx) => {
     // 配置解析期的警告是稳定的，注册期的失败每个会话重新收集（避免跨会话重复上报）。
     warnings.length = 0;
@@ -120,10 +111,11 @@ export default function personalExtensions(pi: ExtensionAPI): void {
     for (const { name, module } of modules) {
       runModule(name, () => module.register(bus));
     }
-    // codemode 最后注册：它把总线上已有的工具写进自己的描述，并在注册时编译 wasm。
-    // 脚本的 fs 原语与文件工具共用请求策略与已读记账，所以这里把工具集那两份注入过去。
-    await runModuleAsync("codemode", () =>
-      codemode.register(bus, { policy: services.policy, reads: fileToolset.reads }),
+    // codemode 最后注册：它把总线上已有的工具写进自己的描述。脚本跑在 bwrap 沙箱里，
+    // 所以把 bash 的 sandbox runtime（同一份配置与探测结果）与请求策略注入过去——
+    // 拿不到 bwrap 时是否允许无沙箱执行由它决定。
+    runModule("codemode", () =>
+      codemode.register(bus, { runtime: services.runtime, policy: services.policy }),
     );
 
     for (const warning of warnings) {

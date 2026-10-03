@@ -7,4 +7,4 @@ test/fixtures/
 .vscode/
 .kilo/
 src/bwrap/holder.js
-src/codemode/worker.js
+src/codemode/bootstrap.js

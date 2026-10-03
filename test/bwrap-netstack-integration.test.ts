@@ -12,7 +12,12 @@ import {
   findSlirp4netns,
   resolveBwrap,
 } from "../src/bwrap/core.js";
-import { buildBwrapInvocation, execInvocation, invocationArgv } from "../src/bwrap/exec.js";
+import {
+  buildBwrapInvocation,
+  execInvocation,
+  invocationArgv,
+  shellCommandArgv,
+} from "../src/bwrap/exec.js";
 import {
   type NetworkStack,
   resolveDnsServers,
@@ -56,7 +61,7 @@ async function mihomoWorkDirs(): Promise<string[]> {
 /** 在既有栈里跑一条命令并收集输出（栈由调用方启动与停止）。 */
 async function execInStack(stack: NetworkStack, command: string): Promise<string> {
   let out = "";
-  const invocation = await buildBwrapInvocation(strategy, WORKSPACE, command);
+  const invocation = await buildBwrapInvocation(strategy, WORKSPACE, shellCommandArgv(command));
   await execInvocation(invocation, {
     cwd: WORKSPACE,
     holderPid: stack.holderPid,
@@ -202,7 +207,7 @@ describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack inte
       slirp4netnsPath: findSlirp4netns(),
     });
     try {
-      const invocation = await buildBwrapInvocation(fakeStrategy, dir, "echo 1");
+      const invocation = await buildBwrapInvocation(fakeStrategy, dir, shellCommandArgv("echo 1"));
       const previewArgv = invocationArgv(invocation, stack.holderPid);
       let out = "";
       await execInvocation(invocation, {

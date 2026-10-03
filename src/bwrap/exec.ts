@@ -29,16 +29,39 @@ export class TimeoutError extends Error {
 export interface BwrapInvocation {
   /** bwrap 可执行文件路径 */
   file: string;
-  /** bwrap 参数（不含结尾的 `-- shell -lc command`） */
+  /** bwrap 参数（不含结尾的 `-- <commandArgv>`） */
   args: string[];
-  /** 沙箱内 shell 的绝对路径 */
-  shell: string;
-  /** 交给 shell 的命令 */
-  command: string;
+  /**
+   * 沙箱内要执行的命令行（`--` 之后的部分，逐项给出）。
+   * 常见形态是 `bash -lc <命令>`（见 `shellCommandArgv`），codemode 则传 `node <脚本>`。
+   */
+  commandArgv: string[];
   /** 沙箱内环境（不继承父进程） */
   env: Record<string, string>;
   /** network limited 模式：命令需先经 nsenter 进入 holder 的 netns。 */
   needsNetworkStack: boolean;
+}
+
+/** bash 形态的命令行：`<shell> -lc <command>`。命令字符串只有这一条入口。 */
+export function shellCommandArgv(command: string): string[] {
+  // 沙箱内不透传 PATH，execvp 的默认路径可能找不到 bash（如 NixOS），故在父进程解析绝对路径
+  return [getShellConfig().shell, "-lc", command];
+}
+
+/** 沙箱内的干净环境：不继承父进程 env/PATH。bash 由 profile 重建 PATH，node 用给出的 PATH。 */
+export function sandboxEnv(): Record<string, string> {
+  const home = process.env.HOME;
+  if (home === undefined) {
+    throw new Error("HOME is not set; refusing to run in a clean environment");
+  }
+  return {
+    HOME: home,
+    SHELL: "/bin/bash",
+    TERM: "dumb",
+    LANG: "C.UTF-8",
+    // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
+    PATH: "/usr/local/bin:/usr/bin:/bin",
+  };
 }
 
 /**
@@ -48,16 +71,9 @@ export interface BwrapInvocation {
 export async function buildBwrapInvocation(
   resolved: ResolvedBwrap,
   workspace: string,
-  command: string,
+  commandArgv: readonly string[],
 ): Promise<BwrapInvocation> {
-  // 干净环境：不继承父进程 env/PATH，由 bash -lc 从 /etc/profile 与用户 profile 重建
-  const home = process.env.HOME;
-  if (home === undefined) {
-    throw new Error("HOME is not set; refusing to run bash in a clean environment");
-  }
   return {
-    // 沙箱内不透传 PATH，execvp 的默认路径可能找不到 bash（如 NixOS），故在父进程解析绝对路径
-    shell: getShellConfig().shell,
     file: findBwrap(resolved.bwrapPath),
     args: [
       "--ro-bind",
@@ -69,21 +85,14 @@ export async function buildBwrapInvocation(
       "--proc",
       "/proc",
     ],
-    command,
-    env: {
-      HOME: home,
-      SHELL: "/bin/bash",
-      TERM: "dumb",
-      LANG: "C.UTF-8",
-      // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
-      PATH: "/usr/local/bin:/usr/bin:/bin",
-    },
+    commandArgv: [...commandArgv],
+    env: sandboxEnv(),
     needsNetworkStack: resolved.network === "limited",
   };
 }
 
 /**
- * 完整命令行：`[bwrap, ...args, "--", shell, "-lc", command]`；传 `nsenterPid` 时
+ * 完整命令行：`[bwrap, ...args, "--", ...commandArgv]`；传 `nsenterPid` 时
  * 前置 `nsenter` 前缀进入该 holder 的 userns + netns。
  *
  * 预览与实际执行都调用这里——`nsenterPid` 传数字是真实 holder pid，传字符串是
@@ -93,14 +102,7 @@ export function invocationArgv(
   invocation: BwrapInvocation,
   nsenterPid?: number | string,
 ): string[] {
-  const argv = [
-    invocation.file,
-    ...invocation.args,
-    "--",
-    invocation.shell,
-    "-lc",
-    invocation.command,
-  ];
+  const argv = [invocation.file, ...invocation.args, "--", ...invocation.commandArgv];
   if (nsenterPid === undefined) {
     return argv;
   }
@@ -233,7 +235,7 @@ export function createBwrapBashOperations(
       // 已中断（signal.reason 是 name=AbortError 的 DOMException）：直接抛，不再执行
       signal?.throwIfAborted();
 
-      const invocation = await buildBwrapInvocation(resolved, workspace, command);
+      const invocation = await buildBwrapInvocation(resolved, workspace, shellCommandArgv(command));
       return execInvocation(invocation, {
         cwd,
         holderPid: networkStack?.holderPid,
