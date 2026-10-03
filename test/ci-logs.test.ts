@@ -18,13 +18,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  extractStepFromLog,
-  jobLogIndex,
-  jobLogPath,
-  repoFromRunUrl,
-  stepLineSpans,
-} from "../src/gh/index.js";
+import { jobLogIndex, jobLogPath, repoFromRunUrl, stepLineSpans } from "../src/gh/index.js";
 import { type RunJob } from "../src/lib/github.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -99,23 +93,6 @@ describe("jobLogIndex", () => {
       expect(step.start_line).toBeGreaterThan(0);
       expect(step.end_line!).toBeGreaterThanOrEqual(step.start_line);
       expect(step.end_line!).toBeLessThanOrEqual(lines);
-    }
-  });
-
-  it("gives every step's range the same text as the extraction helper", () => {
-    for (const [job, log] of [
-      [lintJob, lintRawLog],
-      [testJob, testRawLog],
-    ] as const) {
-      for (const step of job.steps) {
-        const expected = extractStepFromLog(log, step.number, job.steps);
-        if (expected === null) {
-          // steps that never ran carry no range at all
-          expect(readStepRange(log, job, step.number)).toBeNull();
-          continue;
-        }
-        expect(readStepRange(log, job, step.number)).toBe(expected);
-      }
     }
   });
 

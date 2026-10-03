@@ -7,7 +7,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createGithubSearch } from "../src/lib/github.js";
+import { createGithubApi, createGithubSearch } from "../src/lib/github.js";
 
 type FetchInput = Parameters<typeof globalThis.fetch>[0];
 
@@ -55,10 +55,12 @@ describe("createGithubSearch fetch injection", () => {
       return Promise.resolve(jsonResponse({ items: [RAW_ITEM] }));
     };
 
-    const hits = await createGithubSearch({
-      fetch: fetchImpl,
-      token: async () => "test-token",
-    }).search("pr", {
+    const hits = await createGithubSearch(
+      createGithubApi({
+        fetch: fetchImpl,
+        token: async () => "test-token",
+      }),
+    ).search("pr", {
       repo: "a/b",
       keywords: "proxy",
     });
@@ -75,7 +77,9 @@ describe("createGithubSearch fetch injection", () => {
   it("falls back to the global fetch when no fetch is injected", async () => {
     const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ items: [] }));
 
-    await createGithubSearch({ token: async () => "test-token" }).search("issue", { repo: "a/b" });
+    await createGithubSearch(createGithubApi({ token: async () => "test-token" })).search("issue", {
+      repo: "a/b",
+    });
 
     expect(spy).toHaveBeenCalledTimes(1);
     const [firstCall] = spy.mock.calls;

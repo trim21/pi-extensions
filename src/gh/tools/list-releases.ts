@@ -4,10 +4,9 @@ import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  resolveRepo,
-  splitRepo,
-  subtitlePendant,
+  resolveRepoTarget,
   toToolResult,
+  withPendant,
   withStructuredResult,
 } from "../base.js";
 import { renderReleaseList } from "../render.js";
@@ -27,10 +26,9 @@ export function addListReleasesTool(gh: GhClient, bus: ToolBus) {
       }),
       structuredSchema: ghReleaseListPayloadSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
-        const { repo, limit } = params;
-        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-        const { owner, repo: repoName } = splitRepo(effectiveRepo);
-        const items = await gh.reads.listReleases(owner, repoName, limit, signal);
+        const { limit } = params;
+        const { owner, name } = await resolveRepoTarget(params.repo, signal, ctx.cwd, params);
+        const items = await gh.reads.listReleases(owner, name, limit, signal);
         const releases = parseWithSchema(Type.Array(ghReleaseSummarySchema), items);
         // REST 没有 isLatest：按列表顺序取第一个非 draft / prerelease 的条目
         const latestIndex = releases.findIndex(
@@ -40,8 +38,7 @@ export function addListReleasesTool(gh: GhClient, bus: ToolBus) {
           releases.map((release, index) => ({ ...release, latest: index === latestIndex })),
         );
         const result = toToolResult(text, params);
-        result.details.pendant = subtitlePendant(params);
-        return withStructuredResult(result, { text, releases });
+        return withStructuredResult(withPendant(result, params), { text, releases });
       },
     }),
   );

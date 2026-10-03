@@ -4,8 +4,7 @@ import { Value } from "typebox/value";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  resolveRepo,
-  splitRepo,
+  resolveRepoTarget,
   type StructuredResultOf,
   subtitlePendant,
   type ToolCall,
@@ -36,8 +35,7 @@ async function waitPrChecks(
     details: {},
   });
 
-  const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-  const { owner, repo: repoName } = splitRepo(effectiveRepo);
+  const { owner, name: repoName } = await resolveRepoTarget(repo, signal, ctx.cwd, params);
 
   const pull = Value.Parse(
     pullHeadSchema,

@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { createGithubChecks } from "../src/lib/github.js";
+import { createGithubApi, createGithubChecks } from "../src/lib/github.js";
 import { githubCassette } from "./github-fixtures.js";
 
 const RUN_ID = 34773404718;
@@ -62,10 +62,12 @@ describe("createGithubChecks runJobs", () => {
       },
     });
 
-    const jobs = await createGithubChecks({
-      fetch: api.fetch,
-      token: async () => "test-token",
-    }).runJobs("trim21", "pi-extensions", RUN_ID, undefined);
+    const jobs = await createGithubChecks(
+      createGithubApi({
+        fetch: api.fetch,
+        token: async () => "test-token",
+      }),
+    ).runJobs("trim21", "pi-extensions", RUN_ID, undefined);
 
     expect(api.calls).toHaveLength(2);
     expect(api.calls[0]).toContain("per_page=100");
@@ -82,10 +84,12 @@ describe("createGithubChecks job", () => {
   it("returns one job by id, steps included", async () => {
     const api = githubCassette({ [JOB_ROUTE]: "job.json" });
 
-    const job = await createGithubChecks({
-      fetch: api.fetch,
-      token: async () => "test-token",
-    }).job("trim21", "pi-extensions", JOB_ID, undefined);
+    const job = await createGithubChecks(
+      createGithubApi({
+        fetch: api.fetch,
+        token: async () => "test-token",
+      }),
+    ).job("trim21", "pi-extensions", JOB_ID, undefined);
 
     expect(api.calls).toHaveLength(1);
     expect(api.calls[0]).toContain(`/repos/trim21/pi-extensions/actions/jobs/${String(JOB_ID)}`);

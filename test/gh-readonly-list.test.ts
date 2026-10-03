@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { createGithubApi } from "../src/lib/github.js";
 import { createGithubReads, type GithubReads } from "../src/lib/github-reads.js";
 import { githubCassette } from "./github-fixtures.js";
 
@@ -15,13 +16,15 @@ function capture(): { reads: GithubReads; urls: string[] } {
     "repos/a/b/issues": { body: [] },
     "repos/a/b/pulls": { body: [] },
   });
-  const reads = createGithubReads({
-    token: async () => "test-token",
-    fetch: async (input: string | URL | Request, init?: RequestInit) => {
-      urls.push(input instanceof Request ? input.url : String(input));
-      return cassette.fetch(input, init);
-    },
-  });
+  const reads = createGithubReads(
+    createGithubApi({
+      token: async () => "test-token",
+      fetch: async (input: string | URL | Request, init?: RequestInit) => {
+        urls.push(input instanceof Request ? input.url : String(input));
+        return cassette.fetch(input, init);
+      },
+    }),
+  );
   return { reads, urls };
 }
 
@@ -107,7 +110,9 @@ describe("浏览路径的 REST 查询映射", () => {
         ],
       },
     });
-    const reads = createGithubReads({ token: async () => "test-token", fetch: cassette.fetch });
+    const reads = createGithubReads(
+      createGithubApi({ token: async () => "test-token", fetch: cassette.fetch }),
+    );
 
     const items = await reads.listIssues("a", "b", {});
 
