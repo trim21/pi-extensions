@@ -1,6 +1,6 @@
 /**
  * codemode 工具：模型写一段 JavaScript，脚本在 QuickJS VM（worker 线程）里执行，脚本唯一
- * 的能力是调用 `tools.*`——每个嵌套调用都由主线程经本仓库的工具总线执行，因此工具实现
+ * 的能力是调用 `call(name, args)`——每个嵌套调用都由主线程经本仓库的工具总线执行，因此工具实现
  * 内部的审批（工作区外写入、Bash 沙箱提权等）照常生效；codemode 不再加自己的确认层。
  *
  * 可调用集合：总线上实际注册的工具减去 codemode 自身与 spawn-agent，执行时再与 active
@@ -45,6 +45,7 @@ interface CallableTool {
   name: string;
   description?: string;
   parameters?: unknown;
+  structuredSchema?: unknown;
 }
 
 /** 只在 pi 有 active 工具概念时才求交（子代理、`--tools` 等场景）。 */
@@ -66,6 +67,7 @@ function collectTools(bus: ToolBus, allowed: Set<string> | undefined): CallableT
       name: definition.name,
       description: definition.description,
       parameters: definition.parameters,
+      structuredSchema: definition.structuredSchema,
     }));
 }
 
@@ -73,8 +75,8 @@ function buildDescription(tools: readonly CallableTool[]): string {
   return [
     "Run JavaScript code that orchestrates tool calls in a QuickJS sandbox.",
     "- The code is the body of an async function: top-level `await` and `return` both work.",
-    "- Call tools with `await tools.<name>(args)`. Arguments and results make a JSON round trip,",
-    "  and a failing tool rejects with an `Error` you can catch.",
+    "- Call tools with `await call(name, args)`. Arguments and results make a JSON round trip,",
+    "  and a failing tool rejects with a `CallFailedError` you can catch.",
     "- Only what the script passes to `text(value)` / `console.log(...)` and its `return` value enter",
     "  this conversation; nested calls and their results stay out of it.",
     "- `store.set(key, value)`, `store.get(key)` and `store.list()` are a small key/value store that",
@@ -297,6 +299,11 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
                 return { ok: false, error: `Tool "${name}" is not available in codemode.` };
               }
               const result = await bus.executeTool(name, args, { ctx, signal });
+              if (result.structuredResult) {
+                return result.structuredResult.ok
+                  ? { ok: true, value: result.structuredResult.value }
+                  : { ok: false, error: result.structuredResult.error };
+              }
               const text = toolResultText(result);
               if (result.isError) {
                 return { ok: false, error: text };

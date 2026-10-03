@@ -31,9 +31,9 @@
 
 `codemode` 让模型写一段 JavaScript（作为 async 函数体，`await` 与 `return` 都可用），在
 进程内的 worker 线程里用 QuickJS wasm VM 执行。VM 里没有 node、文件系统、网络、timer
-或模块加载，脚本唯一的出口是 `tools.<name>(args)`。
+或模块加载，脚本唯一的出口是 `call(name, args)`。
 
-- **嵌套调用经工具总线**：`tools.Read({ file_path })` 最终执行的是 `Read` 工具自己的
+- **嵌套调用经工具总线**：`call("Read", { file_path })` 最终执行的是 `Read` 工具自己的
   `execute`，所以工具的审批照常生效（写工作区外会弹 write-guard，Bash 沙箱外执行会弹
   自己的提权确认）。codemode 不额外加确认层：脚本里连发十次写操作就是十次工具自己的
   审批（需要审批的那些）。
@@ -42,10 +42,16 @@
   子代理的工具白名单都同样约束脚本。
 - **只有脚本输出进上下文**：`text(value)` / `console.log(...)` 与 `return` 值进入工具结果，
   中间的工具调用与它们的返回内容不会（也不在会话记录里留下工具调用条目）。
-- **脚本接口**：`tools` / `ALL_TOOLS` / `text` / `image` / `exit` / `console.*` /
-  `store.set` / `store.get` / `store.list`（会话内持久的键值表）；首行可选
+- **返回值**：声明了 `structuredSchema` 的工具（如 gh-readonly 的读类工具）把结果放在
+  `structuredResult` 里，`call()` 解包成对象给脚本；`{ ok: false, error }` 会 reject 成
+  `CallFailedError`（脚本可按 `instanceof CallFailedError` 区分工具失败与自身运行期错误）。
+  没有声明输出结构的工具回退成工具输出的文本。
+- **脚本接口**：`call` / `CallFailedError` / `ALL_TOOLS` / `text` / `image` / `exit` /
+  `console.*` / `store.set` / `store.get` / `store.list`（会话内持久的键值表）；首行可选
   `// @options: {"max_output_tokens": 10000}`。
   脚本没有超时：死循环由调用方中止（Esc）结束，等嵌套调用返回（含用户审批弹窗）多久都不算超时。
+- **工具描述**里给出每个可调用工具的 `declare function call(name, args): Promise<T>` 重载，
+  参数与返回类型都取自工具自己的 schema，所以模型在写脚本前就知道返回值形状。
 - **store** 记在每次成功调用工具结果的 `details.store` 上（与 `src/lib/file-reads.ts` 的
   已读记账同一套做法），下一次调用从当前分支的 toolResult 重放；输出超过 `max_output_tokens`
   时头尾截断并把全文落到 `$TMPDIR/pi-codemode-*.txt`。

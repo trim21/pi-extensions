@@ -12,6 +12,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
@@ -20,7 +21,15 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
-import { ghExec, toToolResult, toToolResultJson, truncate } from "../src/gh/base.js";
+import {
+  ghExec,
+  structuredFailure,
+  toStructuredJsonResult,
+  toToolResult,
+  toToolResultJson,
+  truncate,
+  withStructuredResult,
+} from "../src/gh/base.js";
 
 class FakeChildProcess extends EventEmitter {
   stdout = new PassThrough();
@@ -81,5 +90,44 @@ describe("ghExec", () => {
     });
 
     await expect(ghExec(["pr", "view", "1"], {})).rejects.toThrow("exit code -1");
+  });
+});
+
+/** 结构化结果：文本与 details 保持原样，结构化载荷单独放在 structuredResult 里。 */
+const issueSchema = Type.Object({ number: Type.Number(), title: Type.String() });
+
+describe("toStructuredJsonResult", () => {
+  it("keeps the JSON text and details untouched, and parses the value", () => {
+    const json = JSON.stringify({ number: 142, title: "t", state: "OPEN" });
+    const result = toStructuredJsonResult(json, { number: 142 }, issueSchema);
+
+    expect(result.content[0].text).toBe(json);
+    expect(result.details).toEqual({ input: { number: 142 }, truncated: false });
+    // 额外字段保留：schema 只描述工具依赖的字段，不该削掉 GitHub 多给的字段
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: { number: 142, title: "t", state: "OPEN" },
+    });
+  });
+
+  it("fails loudly when the payload does not match the schema", () => {
+    const json = JSON.stringify({ number: "142", title: "t" });
+    expect(() => toStructuredJsonResult(json, undefined, issueSchema)).toThrow(/number/);
+  });
+});
+
+describe("withStructuredResult", () => {
+  it("attaches the success value without touching content or details", () => {
+    const base = toToolResult("some text");
+    expect(withStructuredResult(base, { files: [] })).toEqual({
+      ...base,
+      structuredResult: { ok: true, value: { files: [] } },
+    });
+  });
+});
+
+describe("structuredFailure", () => {
+  it("is the failure arm of a structured result", () => {
+    expect(structuredFailure("nothing here")).toEqual({ ok: false, error: "nothing here" });
   });
 });

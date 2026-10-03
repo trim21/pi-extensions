@@ -124,6 +124,9 @@ describe("read-github-pr-status", () => {
     expect(payload.checks.some((c) => c.event === "pull_request")).toBe(true);
 
     expect(api.unused()).toEqual([]);
+
+    // 结构化结果与文本同源：codemode 脚本直接拿 checks 数组
+    expect(result.structuredResult).toEqual({ ok: true, value: payload });
   });
 
   it("returns the snapshot immediately instead of polling", async () => {

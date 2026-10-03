@@ -13,6 +13,13 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 	const promiseThen = Promise.prototype.then;
 	const ErrorCtor = Error;
 	const TypeErrorCtor = TypeError;
+	// 嵌套调用失败统一用它 reject：脚本能按 instanceof 区分「工具失败」与自身运行期错误
+	class CallFailedError extends ErrorCtor {
+		constructor(message) {
+			super(message);
+			this.name = "CallFailedError";
+		}
+	}
 	const pending = new Map();
 	let nextId = 1;
 	let finished = false;
@@ -74,19 +81,25 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 			});
 	}
 
-	const tools = Object.create(null);
+	const callers = new Map();
 	const allTools = [];
-	for (const { name, jsName, description } of parse(toolsJson)) {
-		const fn = caller(name);
-		// 两个名字归一化成同一个标识符时，第一个赢
-		if (!(jsName in tools)) {
-			tools[jsName] = fn;
-			allTools.push(Object.freeze({ name: jsName, description }));
-		}
-		if (!(name in tools)) tools[name] = fn;
+	for (const { name, description } of parse(toolsJson)) {
+		if (callers.has(name)) continue;
+		callers.set(name, caller(name));
+		allTools.push(Object.freeze({ name, description }));
 	}
-	Object.freeze(tools);
 	Object.freeze(allTools);
+
+	function call(name, args) {
+		const fn = callers.get(name);
+		if (fn === undefined) {
+			return Promise.reject(
+				new CallFailedError('Tool "' + String(name) + '" is not available in codemode.'),
+			);
+		}
+		return fn(args);
+	}
+	Object.freeze(call);
 
 	// key -> JSON 文本；容量按 key 与 JSON 的字符数计
 	const stored = new Map();
@@ -227,7 +240,8 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 	}
 	Object.freeze(console);
 
-	Object.defineProperty(globalThis, "tools", { value: tools, enumerable: true });
+	Object.defineProperty(globalThis, "call", { value: call, enumerable: true });
+	Object.defineProperty(globalThis, "CallFailedError", { value: CallFailedError, enumerable: true });
 	Object.defineProperty(globalThis, "ALL_TOOLS", { value: allTools, enumerable: true });
 	Object.defineProperty(globalThis, "console", { value: console, enumerable: true });
 	Object.defineProperty(globalThis, "text", { value: text, enumerable: true });
@@ -240,7 +254,7 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 			if (!entry) return;
 			pending.delete(id);
 			if (!ok) {
-				entry.reject(new ErrorCtor(payload));
+				entry.reject(new CallFailedError(payload));
 				return;
 			}
 			let value;
@@ -255,7 +269,7 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 		run(fn) {
 			let promise;
 			try {
-				promise = fn(tools, console);
+				promise = fn();
 			} catch (error) {
 				done(false, describeError(error));
 				return;
@@ -301,7 +315,9 @@ var outputItemSchema = Type.Union([
 ]);
 var toolDeclSchema = Type.Object({
   name: Type.String(),
-  description: Type.Optional(Type.String())
+  description: Type.Optional(Type.String()),
+  /** 工具的 structuredSchema（TypeBox schema）：脚本侧据此渲染 call() 的返回类型。 */
+  structuredSchema: Type.Optional(Type.Unknown())
 });
 var startSchema = Type.Object({
   t: Type.Literal("start"),
@@ -329,7 +345,7 @@ var callSchema = Type.Object({
   name: Type.String(),
   args: Type.Unknown()
 });
-var outputSchema = Type.Object({
+var outputFrameSchema = Type.Object({
   t: Type.Literal("output"),
   items: Type.Array(outputItemSchema)
 });
@@ -358,7 +374,7 @@ var doneSchema = Type.Union([
   })
 ]);
 var hostMessageSchema = Type.Union([startSchema, resultSchema]);
-var workerMessageSchema = Type.Union([callSchema, outputSchema, doneSchema]);
+var workerMessageSchema = Type.Union([callSchema, outputFrameSchema, doneSchema]);
 function decode(schema, value) {
   if (!Value.Check(schema, value)) {
     const preview = JSON.stringify(value).slice(0, 200);
@@ -372,9 +388,6 @@ function decodeHostMessage(value) {
 
 // src/codemode/worker.ts
 var MEMORY_LIMIT_BYTES = 512 * 1024 * 1024;
-function toScriptIdentifier(name) {
-  return name.replaceAll(/[^A-Za-z0-9_$]/g, "_").replaceAll(/^\d/g, "_");
-}
 function discardOutput(memory) {
   return {
     fd_write(_fd, iovsPtr, iovsLen, nwrittenPtr) {
@@ -493,8 +506,8 @@ async function runScript(wasm, start) {
           JSON.stringify(
             start.tools.map((tool) => ({
               name: tool.name,
-              jsName: toScriptIdentifier(tool.name),
-              description: tool.description
+              description: tool.description,
+              structuredSchema: tool.structuredSchema
             }))
           )
         ),
@@ -530,11 +543,8 @@ async function runScript(wasm, start) {
     drain();
   });
   try {
-    const fn = vm.evalCode(
-      `(async (tools, console) => {${start.code}
-})`,
-      "codemode.js"
-    );
+    const fn = vm.evalCode(`(async () => {${start.code}
+})`, "codemode.js");
     vm.callFunction(run, api, fn).dispose();
     fn.dispose();
     drain();
@@ -580,6 +590,3 @@ function main() {
   });
 }
 main();
-export {
-  toScriptIdentifier
-};

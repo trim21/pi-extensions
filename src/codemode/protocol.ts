@@ -23,6 +23,8 @@ const outputItemSchema = Type.Union([
 const toolDeclSchema = Type.Object({
   name: Type.String(),
   description: Type.Optional(Type.String()),
+  /** 工具的 structuredSchema（TypeBox schema）：脚本侧据此渲染 call() 的返回类型。 */
+  structuredSchema: Type.Optional(Type.Unknown()),
 });
 
 const startSchema = Type.Object({
@@ -54,7 +56,7 @@ const callSchema = Type.Object({
   args: Type.Unknown(),
 });
 
-const outputSchema = Type.Object({
+const outputFrameSchema = Type.Object({
   t: Type.Literal("output"),
   items: Type.Array(outputItemSchema),
 });
@@ -87,7 +89,7 @@ const doneSchema = Type.Union([
 ]);
 
 const hostMessageSchema = Type.Union([startSchema, resultSchema]);
-const workerMessageSchema = Type.Union([callSchema, outputSchema, doneSchema]);
+const workerMessageSchema = Type.Union([callSchema, outputFrameSchema, doneSchema]);
 
 /** worker 启动数据：注册时编译好的 wasm 模块（结构化克隆可以带它跨线程）。 */
 export interface WorkerBootstrap {
@@ -117,6 +119,7 @@ export interface StoreWrites {
 export interface ScriptTool {
   name: string;
   description?: string;
+  structuredSchema?: unknown;
 }
 
 export type HostMessage =

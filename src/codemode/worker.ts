@@ -26,11 +26,6 @@ import {
 /** QuickJS VM 的堆上限：超量分配在脚本里变成 InternalError，而不是拖垮宿主。 */
 const MEMORY_LIMIT_BYTES = 512 * 1024 * 1024;
 
-/** 工具名到脚本标识符的归一化：非法字符换成 `_`，数字开头补 `_`。 */
-export function toScriptIdentifier(name: string): string {
-  return name.replaceAll(/[^A-Za-z0-9_$]/g, "_").replaceAll(/^\d/g, "_");
-}
-
 /**
  * QuickJS 把引擎诊断写到 fd 1 / 2，那会直接进 pi 的 TUI；按写入长度回报并丢弃内容，
  * 避免 libc 重试。
@@ -178,8 +173,8 @@ async function runScript(wasm: object, start: Extract<HostMessage, { t: "start" 
           JSON.stringify(
             start.tools.map((tool) => ({
               name: tool.name,
-              jsName: toScriptIdentifier(tool.name),
               description: tool.description,
+              structuredSchema: tool.structuredSchema,
             })),
           ),
         ),
@@ -225,10 +220,7 @@ async function runScript(wasm: object, start: Extract<HostMessage, { t: "start" 
 
   try {
     // 前缀与脚本首行共用一行，报错行号与用户写的脚本一致
-    const fn: JSValueHandle = vm.evalCode(
-      `(async (tools, console) => {${start.code}\n})`,
-      "codemode.js",
-    );
+    const fn: JSValueHandle = vm.evalCode(`(async () => {${start.code}\n})`, "codemode.js");
     vm.callFunction(run, api, fn).dispose();
     fn.dispose();
     drain();

@@ -1,10 +1,12 @@
 /**
  * codemode 脚本侧的 prelude：在 QuickJS VM 里先于脚本求值，构建脚本能看到的全部
- * 能力（`tools` / `ALL_TOOLS` / `text` / `image` / `exit` / `console` / `store`），
- * 并把宿主桥接封在闭包里——脚本拿不到 `bridge` 本身。
+ * 能力（`call` / `CallFailedError` / `ALL_TOOLS` / `text` / `image` / `exit` /
+ * `console` / `store`），并把宿主桥接封在闭包里——脚本拿不到 `bridge` 本身。
  *
  * 值与参数过桥时都是 JSON 文本，本侧负责 parse/stringify；异步调用用一个 pending
- * 表把 id 映射到 promise，由宿主在结果到达时 settle。
+ * 表把 id 映射到 promise，由宿主在结果到达时 settle。每次嵌套调用失败都由宿主以
+ * `ok: false` 回报，本侧统一 reject 成 `CallFailedError`（脚本可以按 instanceof 区分
+ * 「工具失败」与自己的运行期错误）。
  *
  * 求值结果是一个函数 `(bridge, toolsJson, storeJson) => { settle, run, stalled }`。
  * `bridge(kind, a, b, c)`：
@@ -28,6 +30,13 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 	const promiseThen = Promise.prototype.then;
 	const ErrorCtor = Error;
 	const TypeErrorCtor = TypeError;
+	// 嵌套调用失败统一用它 reject：脚本能按 instanceof 区分「工具失败」与自身运行期错误
+	class CallFailedError extends ErrorCtor {
+		constructor(message) {
+			super(message);
+			this.name = "CallFailedError";
+		}
+	}
 	const pending = new Map();
 	let nextId = 1;
 	let finished = false;
@@ -89,19 +98,25 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 			});
 	}
 
-	const tools = Object.create(null);
+	const callers = new Map();
 	const allTools = [];
-	for (const { name, jsName, description } of parse(toolsJson)) {
-		const fn = caller(name);
-		// 两个名字归一化成同一个标识符时，第一个赢
-		if (!(jsName in tools)) {
-			tools[jsName] = fn;
-			allTools.push(Object.freeze({ name: jsName, description }));
-		}
-		if (!(name in tools)) tools[name] = fn;
+	for (const { name, description } of parse(toolsJson)) {
+		if (callers.has(name)) continue;
+		callers.set(name, caller(name));
+		allTools.push(Object.freeze({ name, description }));
 	}
-	Object.freeze(tools);
 	Object.freeze(allTools);
+
+	function call(name, args) {
+		const fn = callers.get(name);
+		if (fn === undefined) {
+			return Promise.reject(
+				new CallFailedError('Tool "' + String(name) + '" is not available in codemode.'),
+			);
+		}
+		return fn(args);
+	}
+	Object.freeze(call);
 
 	// key -> JSON 文本；容量按 key 与 JSON 的字符数计
 	const stored = new Map();
@@ -242,7 +257,8 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 	}
 	Object.freeze(console);
 
-	Object.defineProperty(globalThis, "tools", { value: tools, enumerable: true });
+	Object.defineProperty(globalThis, "call", { value: call, enumerable: true });
+	Object.defineProperty(globalThis, "CallFailedError", { value: CallFailedError, enumerable: true });
 	Object.defineProperty(globalThis, "ALL_TOOLS", { value: allTools, enumerable: true });
 	Object.defineProperty(globalThis, "console", { value: console, enumerable: true });
 	Object.defineProperty(globalThis, "text", { value: text, enumerable: true });
@@ -255,7 +271,7 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 			if (!entry) return;
 			pending.delete(id);
 			if (!ok) {
-				entry.reject(new ErrorCtor(payload));
+				entry.reject(new CallFailedError(payload));
 				return;
 			}
 			let value;
@@ -270,7 +286,7 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 		run(fn) {
 			let promise;
 			try {
-				promise = fn(tools, console);
+				promise = fn();
 			} catch (error) {
 				done(false, describeError(error));
 				return;
