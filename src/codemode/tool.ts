@@ -36,7 +36,10 @@ export const CODEMODE_TOOL_NAME = "codemode";
  * - codemode 自身（防递归）；
  * - spawn-agent：它启动一个新的隔离会话，成本与运行时长都不适合放进脚本编排；
  * - 两套文件工具集的读写工具：脚本用 `fs.read` / `fs.write`（原文、不截断、按路径整体
- *   写入），不重复给一套为 LLM 上下文设计的行号/锚点语义。
+ *   写入），不重复给一套为 LLM 上下文设计的行号/锚点语义；
+ * - 两套工具集的搜索工具：脚本用 `call("Bash", { command })` 跑 `rg` / `grep` 更顺手——
+ *   退出码可用、能拼管道，而这两个工具是给模型看结果的（相对路径、分组渲染、分页尾巴），
+ *   声明块（尤其 Grep 的参数表与三选一输出）也白占 codemode 的描述篇幅。
  */
 const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set([
   CODEMODE_TOOL_NAME,
@@ -47,6 +50,10 @@ const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read",
   "edit",
   "write",
+  "Grep",
+  "Glob",
+  "grep",
+  "glob",
 ]);
 
 /** 估计 token 用的字符数（与 pi 一致）。 */

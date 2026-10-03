@@ -43,7 +43,9 @@ function noopUnsubscribe(): void {}
 
 const noopEvents = { on: () => noopUnsubscribe, emit: () => {} };
 
-async function harness(options: { active?: string[] } = {}): Promise<Harness> {
+async function harness(
+  options: { active?: string[]; register?: (bus: ToolBus, pi: ExtensionAPI) => void } = {},
+): Promise<Harness> {
   const registered = new Map<string, ToolDefinition>();
   const appended: { customType: string; data: unknown }[] = [];
   const active = options.active ?? ["Read", "Edit", "echo", "search", "broken"];
@@ -162,6 +164,9 @@ async function harness(options: { active?: string[] } = {}): Promise<Harness> {
       execute: brokenTool,
     }),
   );
+
+  // 额外注册的工具要在 codemode 之前进总线：可调用集合与描述在注册时确定
+  options.register?.(bus, pi);
 
   await createCodemodeTools(pi).register(bus, {
     policy: createRequestPolicy(),
@@ -597,5 +602,92 @@ describe("codemode 工具", () => {
     expect((result.details as { fullOutputPath?: string }).fullOutputPath).toMatch(
       /pi-codemode-.*\.txt$/,
     );
+  });
+});
+
+describe("Bash 的结构化结果与搜索工具的排除", () => {
+  it("脚本不可调用搜索工具，描述里也不出现它们", async () => {
+    const searchNames = ["Grep", "Glob", "grep", "glob"];
+    const searchTool = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "matches" }],
+      details: {},
+    }));
+    const h = await harness({
+      active: searchNames,
+      register: (bus) => {
+        for (const name of searchNames) {
+          bus.register({
+            name,
+            label: name,
+            description: `${name} files`,
+            parameters: Type.Object({ pattern: Type.String() }),
+            execute: searchTool,
+          });
+        }
+      },
+    });
+
+    for (const name of searchNames) {
+      expect(h.codemode.description).not.toContain(`declare function call(name: "${name}"`);
+    }
+
+    const result = await runScript(
+      h,
+      `try {
+         await call("Grep", { pattern: "x" });
+         return "called";
+       } catch (error) {
+         return [error instanceof CallFailedError, error.message].join("|");
+       }`,
+    );
+
+    expect(textOf(result)).toContain(
+      String.raw`"true|Tool \"Grep\" is not available in codemode."`,
+    );
+    expect(searchTool).not.toHaveBeenCalled();
+  });
+
+  it("脚本用 Bash 拿退出码并据它分支", async () => {
+    // 桩 Bash：载荷形状与真实工具一致（{ exitCode, output }，非零退出也是成功结果）
+    const bashTool = vi.fn(async (_id: string, params: { command: string }) => ({
+      content: [{ type: "text" as const, text: "Exit code 1" }],
+      details: {},
+      structuredResult: {
+        ok: true as const,
+        value: { exitCode: params.command === "rg needle" ? 1 : 0, output: "boom\n" },
+      },
+    }));
+    const h = await harness({
+      active: ["Bash"],
+      register: (bus) => {
+        bus.register(
+          defineStructuredTool({
+            name: "Bash",
+            label: "Bash",
+            description: "run a command",
+            parameters: Type.Object({ command: Type.String() }),
+            structuredSchema: Type.Object({
+              exitCode: Type.Union([Type.Number(), Type.Null()]),
+              output: Type.String(),
+            }),
+            execute: bashTool,
+          }),
+        );
+      },
+    });
+
+    // 描述里按 schema 渲染返回类型
+    expect(h.codemode.description).toContain('declare function call(name: "Bash"');
+    expect(h.codemode.description).toContain("exitCode: number | null");
+
+    const result = await runScript(
+      h,
+      `const { exitCode, output } = await call("Bash", { command: "rg needle" });
+       return exitCode === 1 ? "no match: " + output.trim() : "other";`,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain("no match: boom");
+    expect(bashTool).toHaveBeenCalledTimes(1);
   });
 });

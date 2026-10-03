@@ -1,5 +1,5 @@
 import { mkdtempSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -75,6 +75,10 @@ describe("opencode bash", () => {
       "done",
       "Command exited with code 0.",
     ]);
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: 0, output: "done" },
+    });
   });
 
   it("does not throw on non-zero exit: returns output plus exit code text", async () => {
@@ -91,6 +95,11 @@ describe("opencode bash", () => {
       "Command exited with code 4.",
     ]);
     expect(result.details).toMatchObject({ exitCode: 4, truncated: false });
+    // 非零退出是成功的结构化结果：脚本直接读 exitCode 分支，不需要 try/catch
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: 4, output: "boom\n" },
+    });
   });
 
   it("appends the sandbox status as an extra content block for failures inside the sandbox", async () => {
@@ -291,6 +300,57 @@ describe("opencode bash", () => {
       "timeout",
       "dangerouslyDisableSandbox",
     ]);
+  });
+
+  it("returns the full output in the structured result when the text is truncated", async () => {
+    const { tool } = loadBashTool();
+    const result = await tool.execute(
+      "id",
+      { command: "seq 1 10000", timeout: 5_000 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+    const value = (
+      result.structuredResult as { value: { exitCode: number | null; output: string } }
+    ).value;
+    expect(result.details.truncated).toBe(true);
+    // 文本是截断的，载荷是全文（且不含工具追加的截断提示）
+    expect(result.content[0].text).toContain("[output capture truncated");
+    expect(value.exitCode).toBe(0);
+    expect(value.output).not.toContain("[output capture truncated");
+    expect(value.output.split("\n").filter(Boolean)).toHaveLength(10_000);
+    // 清理本次留下的落盘全文，后面的用例会数这个目录里的文件
+    await rm(join(getAgentDir(), "tmp", SESSION_ID), { recursive: true, force: true });
+  });
+
+  it("returns a null exit code with the partial output on timeout and abort", async () => {
+    const timeout = await loadBashTool().tool.execute(
+      "id",
+      { command: "printf partial; sleep 5", timeout: 300 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+    expect(timeout.structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: null, output: "partial" },
+    });
+
+    const controller = new AbortController();
+    const aborted = loadBashTool().tool.execute(
+      "id",
+      { command: "printf partial; sleep 5", timeout: 5_000 },
+      controller.signal,
+      undefined,
+      context(process.cwd()),
+    );
+    setTimeout(() => controller.abort(), 300);
+    expect((await aborted).structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: null, output: "partial" },
+    });
+    await rm(join(getAgentDir(), "tmp", SESSION_ID), { recursive: true, force: true });
   });
 
   it("deletes the temp file when output is not truncated", async () => {

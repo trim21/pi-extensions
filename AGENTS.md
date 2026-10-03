@@ -58,7 +58,7 @@ test/             # Vitest 测试，文件与 src 对应
 - 注册时机是**每次会话启动**（`session_start`）：pi 在启动 / `/new` / `resume` / `/fork` / `/reload` 时重建扩展；模型只在事件上下文里（`ctx.model`），加载期读不到，所以「按模型判定」必须放在 `session_start` 里。同一会话内 `/model` 切换不重新判定。
 - spawn-agent 的子代理用 inline 扩展工厂（`subagentToolsExtension`）注册声明的工具，不再走 `-e` 路径加载。
 - skills 在 `pi.skills` 中注册；`src/bwrap/` 不单独注册。
-- `aft` 只注册只读感知工具（outline / zoom / callgraph / search）。引擎自带的回滚面（`aft_safety` 的 undo / history / checkpoint / restore）、OS 级文件操作（`aft_delete` / `aft_move`）与写类命令不暴露给模型——模型只负责感知与改，恢复由用户用 git 完成；prompt 里也不要提「快照」「撤销」这类模型用不了的概念。`aft_search` 只走外部 embedding 后端（`openai_compatible` / `ollama`），本地 ONNX 的 `fastembed` 不注册。
+- `aft` 只注册只读感知工具（outline / zoom / callgraph / search）。引擎自带的回滚面（`aft_safety` 的 undo / history / checkpoint / restore）、OS 级文件操作（`aft_delete` / `aft_move`）与写类命令不暴露给模型——模型只负责感知与改，恢复由用户用 git 完成；prompt 里也不要提「快照」「撤销」这类模型用不了的概念。codemode 的可调用集合排除 `Grep` / `Glob` / `grep` / `glob`（脚本搜索走 `Bash` + `rg`，见 `src/codemode/tool.ts` 的 `EXCLUDED_TOOL_NAMES`）。`aft_search` 只走外部 embedding 后端（`openai_compatible` / `ollama`），本地 ONNX 的 `fastembed` 不注册。
 - `lsp-rename` 与 LSP inspect 族工具注册在 `claude-code/files.ts` / `opencode/files.ts`（与文件工具并列），由选中的工具集在 LSP manager 触发 `onLspEnabled` 时注册，基于 `src/lib/lsp/` 的 LSP 客户端做符号重命名；只面向 lsp.json 里 `kind: "language"` 的服务器，`linter` 类（如 ruff）只参与诊断。
 
 ## pi 扩展约定

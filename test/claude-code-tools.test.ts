@@ -1311,6 +1311,10 @@ describe("Bash", () => {
       context(process.cwd()),
     );
     expect(result.content[0].text).toBe("done");
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: 0, output: "done" },
+    });
   });
 
   // Git Bash 的 pwd 输出 POSIX 风格路径（/c/...），与 Windows 绝对路径断言
@@ -1371,6 +1375,10 @@ describe("Bash", () => {
     );
     expect(result.content[0].text).toBe("partial\n\nCommand timed out after 20 milliseconds");
     expect(result.details).toBeUndefined();
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: null, output: "partial" },
+    });
   });
 
   it("returns partial output with an abort status when aborted", async () => {
@@ -1387,6 +1395,10 @@ describe("Bash", () => {
     expect(result.content[0].text).toMatch(
       /^partial\n\nCommand aborted by user after \d+\.\d seconds$/,
     );
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: null, output: "partial" },
+    });
   });
 
   it("returns Exit code N for any non-zero exit, without command semantics", async () => {
@@ -1398,6 +1410,11 @@ describe("Bash", () => {
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual(["Exit code 1"]);
     expect(result.details).toBeUndefined();
+    // 非零退出是成功的结构化结果：脚本直接读 exitCode 分支，不把它当调用失败
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: 1, output: "" },
+    });
   });
 
   it("includes the full output for failed commands", async () => {
@@ -1526,6 +1543,13 @@ describe("Bash", () => {
     expect(fileLines[0]).toBe("1");
     expect(fileLines[2999]).toBe("3000");
     expect(result.details?.fullOutputPath).toBe(path);
+    // 载荷里的输出是完整输出（读回落盘文件），不含工具追加的截断提示
+    const value = (
+      result.structuredResult as { value: { exitCode: number | null; output: string } }
+    ).value;
+    expect(value.exitCode).toBe(0);
+    expect(value.output).toBe(fileContent);
+    expect(value.output).not.toContain("[Showing lines");
   });
 });
 
