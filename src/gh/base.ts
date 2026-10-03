@@ -18,6 +18,7 @@ import {
   type ActionJob,
   type CheckRun,
   type CommitStatus,
+  createGithubApi,
   createGithubChecks,
   createGithubSearch,
   type GithubChecksClient,
@@ -31,7 +32,7 @@ import { createGithubReads, type GithubReads } from "../lib/github-reads.js";
 import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { type ToolPendant } from "../lib/pendant.js";
 import { type StructuredResult } from "../lib/tool-bus.js";
-import type { checksVerdictSchema } from "./schemas.js";
+import { type checksVerdictSchema, ghRunSummarySchema } from "./schemas.js";
 
 /** A tool result: what the model sees plus the structured details payload. */
 export interface ToolResult {
@@ -178,6 +179,29 @@ export async function resolveRepo(
   return nameWithOwner;
 }
 
+/** 工具操作的仓库：`OWNER/REPO` 全名加拆分后的两段。 */
+export interface RepoTarget {
+  /** 规范化的 `OWNER/REPO`（参数缺省时来自当前目录解析）。 */
+  readonly fullName: string;
+  readonly owner: string;
+  readonly name: string;
+}
+
+/**
+ * 解析工具该操作的仓库并拆开 `OWNER/REPO`。取数工具都要走这一步，收成一个调用
+ * 后每个工具只剩一行，也不再需要各自 import `splitRepo`。
+ */
+export async function resolveRepoTarget(
+  repo: string | undefined,
+  signal: AbortSignal | undefined,
+  cwd: string | undefined,
+  input?: unknown,
+): Promise<RepoTarget> {
+  const fullName = await resolveRepo(repo, signal, cwd, input);
+  const { owner, repo: name } = splitRepo(fullName);
+  return { fullName, owner, name };
+}
+
 export function truncate(
   text: string,
   maxLines = 2000,
@@ -294,6 +318,58 @@ export function subtitlePendant<IdKey extends string = never>(
   return { subtitle: parts.join(" ") };
 }
 
+/**
+ * 给结果挂上 pendant subtitle 后原样返回：取数工具的固定收尾，省掉每个工具重复的
+ * `result.details.pendant = ...; return result;` 两行。
+ */
+export function withPendant<T extends ToolResult, IdKey extends string = never>(
+  result: T,
+  params: { repo?: string } & Partial<Record<IdKey, string | number>>,
+  idKey?: IdKey,
+): T {
+  result.details.pendant = subtitlePendant(params, idKey);
+  return result;
+}
+
+/**
+ * `list-github-issues` / `list-github-prs` 共用的一套过滤参数，只有 `state` 与 `fields`
+ * 的说明文案按 kind 不同。
+ */
+export function listFilterParameters(kind: "issue" | "pr") {
+  const isPr = kind === "pr";
+  return Type.Object({
+    repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
+    keywords: Type.Optional(Type.String({ description: "Search keywords (free text)" })),
+    state: Type.Optional(
+      Type.String({
+        description: isPr
+          ? "open, closed, merged, all (default: open; all applies to keyword search and covers open + closed + merged)"
+          : "open, closed, all (default: open; all applies to keyword search and covers closed too)",
+      }),
+    ),
+    label: Type.Optional(Type.String({ description: "Filter by label" })),
+    // `@me` 只在关键词搜索分支可用：搜索 API 自己把它解析成当前登录用户。浏览分支走
+    // REST 列表端点，`@me` 按字面量转发，不会匹配到当前用户（本仓库不做展开）。
+    author: Type.Optional(
+      Type.String({
+        description: "Filter by author ('@me' works with keywords; browse takes it literally)",
+      }),
+    ),
+    assignee: Type.Optional(
+      Type.String({
+        description: "Filter by assignee ('@me' works with keywords; browse takes it literally)",
+      }),
+    ),
+    milestone: Type.Optional(Type.String({ description: "Filter by milestone" })),
+    limit: Type.Optional(Type.Number({ description: "Max results (default 30, max 100)" })),
+    fields: Type.Optional(
+      Type.String({
+        description: `Comma-separated columns for the rows (default: number,state,title,labels,updatedAt; adds repo when no repo given). Valid: number,state,title,url,author,labels,milestone,assignees,comments,repo,createdAt,updatedAt,closedAt${isPr ? ",mergedAt" : ""}`,
+      }),
+    ),
+  });
+}
+
 export interface ListFilters {
   repo?: string;
   keywords?: string;
@@ -317,8 +393,11 @@ export async function browseList(
   params: ListFilters,
   ctx: { cwd?: string; signal?: AbortSignal; input?: unknown },
 ): Promise<{ repo: string; hits: SearchHit[] }> {
-  const repo = params.repo ?? (await resolveRepo(undefined, ctx.signal, ctx.cwd, ctx.input));
-  const { owner, repo: repoName } = splitRepo(repo);
+  const {
+    fullName: repo,
+    owner,
+    name,
+  } = await resolveRepoTarget(params.repo, ctx.signal, ctx.cwd, ctx.input);
   const query = {
     state: params.state,
     label: params.label,
@@ -329,8 +408,8 @@ export async function browseList(
   };
   const items =
     kind === "issue"
-      ? await gh.reads.listIssues(owner, repoName, query, ctx.signal)
-      : await gh.reads.listPulls(owner, repoName, query, ctx.signal);
+      ? await gh.reads.listIssues(owner, name, query, ctx.signal)
+      : await gh.reads.listPulls(owner, name, query, ctx.signal);
   return { repo, hits: normalizeRestList(items, repo) };
 }
 
@@ -367,9 +446,12 @@ export class GhClient {
     options: Pick<GithubClientOptions, "token"> = {},
   ) {
     this.fetch = fetchImpl;
-    this.search = createGithubSearch({ fetch: fetchImpl, ...options });
-    this.checks = createGithubChecks({ fetch: fetchImpl, ...options });
-    this.reads = createGithubReads({ fetch: fetchImpl, ...options });
+    // 三个子客户端共用同一个 accessor，因此也共用同一份 octokit 与 token 缓存
+    // （各自 createGithubApi 会让一个会话最多 spawn 三次 `gh auth token`）。
+    const api = createGithubApi({ fetch: fetchImpl, ...options });
+    this.search = createGithubSearch(api);
+    this.checks = createGithubChecks(api);
+    this.reads = createGithubReads(api);
   }
 }
 
@@ -380,20 +462,6 @@ const CHECKS_POLL_INTERVAL_MS = 30_000;
 const RUN_WATCH_INTERVAL_MS = 30_000;
 const RUN_WATCH_DEADLINE_MS = 600_000;
 
-/** 运行快照：只声明我们渲染与载荷用到的字段，其余由 REST 原样带过。 */
-const runSnapshotSchema = Type.Object({
-  id: Type.Number(),
-  name: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  display_title: Type.Optional(Type.String()),
-  status: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  conclusion: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  head_branch: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  event: Type.Optional(Type.String()),
-  created_at: Type.Optional(Type.String()),
-  updated_at: Type.Optional(Type.String()),
-  run_started_at: Type.Optional(Type.String()),
-  html_url: Type.Optional(Type.String()),
-});
 const CHECKS_WATCH_DEADLINE_MS = 600_000;
 
 export type CheckBucket = "pass" | "skipped" | "fail" | "pending";
@@ -688,7 +756,7 @@ export async function watchRun(options: WatchRunOptions): Promise<RunWatchResult
   const watchStart = Date.now();
   for (;;) {
     signal.throwIfAborted();
-    const run = parseWithSchema(runSnapshotSchema, await reads.run(owner, repo, runId, signal));
+    const run = parseWithSchema(ghRunSummarySchema, await reads.run(owner, repo, runId, signal));
     const elapsedMs = Date.now() - watchStart;
     onUpdate?.({
       content: [

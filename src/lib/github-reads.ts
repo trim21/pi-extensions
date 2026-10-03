@@ -15,7 +15,7 @@ import { pipeline } from "node:stream/promises";
 
 import type { Octokit } from "octokit";
 
-import { createGithubApi, type GithubClientOptions } from "./github.js";
+import { type GithubApi } from "./github.js";
 
 /** `actions.listWorkflowRuns*` 的 `status` 取值（octokit 是字面量联合，工具参数是 string）。 */
 type WorkflowRunParams = NonNullable<
@@ -146,23 +146,6 @@ function limitOf(limit: number | undefined, fallback: number): number {
   return Math.min(Math.max(limit ?? fallback, 1), 100);
 }
 
-/** 响应体不是 2xx 时抛错（状态、URL 与 GitHub 的 message 都在里面）。 */
-async function ensureOk(response: Response): Promise<Response> {
-  if (response.ok) {
-    return response;
-  }
-  let detail: string | undefined;
-  try {
-    const body = await response.text();
-    detail = (JSON.parse(body) as { message?: string }).message ?? body.slice(0, 200);
-  } catch {
-    detail = undefined;
-  }
-  throw new Error(
-    `GitHub API error (HTTP ${response.status}) at ${response.url}${detail === undefined || detail === "" ? "" : `: ${detail}`}`,
-  );
-}
-
 function octokitRequest(signal: AbortSignal | undefined): { signal?: AbortSignal } {
   return signal === undefined ? {} : { signal };
 }
@@ -172,9 +155,7 @@ function asJson(value: unknown): unknown {
   return value;
 }
 
-export function createGithubReads(options: GithubClientOptions = {}): GithubReads {
-  const api = createGithubApi(options);
-
+export function createGithubReads(api: GithubApi): GithubReads {
   return {
     async issue(owner, repo, number, signal) {
       const { data } = await api.call((octokit) =>
@@ -373,11 +354,11 @@ export function createGithubReads(options: GithubClientOptions = {}): GithubRead
     },
 
     async downloadAssetTo(owner, repo, assetId, destPath, signal) {
+      // rawFetch 非 2xx 直接抛 GithubApiError；这里只需流式落盘
       const response = await api.rawFetch(
         `https://api.github.com/repos/${owner}/${repo}/releases/assets/${assetId}`,
         { headers: { accept: "application/octet-stream" }, ...(signal && { signal }) },
       );
-      await ensureOk(response);
       await streamToFile(response, destPath);
     },
 
@@ -388,7 +369,6 @@ export function createGithubReads(options: GithubClientOptions = {}): GithubRead
         `https://api.github.com/repos/${owner}/${repo}/${kind}${suffix}`,
         { ...(signal && { signal }) },
       );
-      await ensureOk(response);
       await streamToFile(response, destPath);
     },
   };

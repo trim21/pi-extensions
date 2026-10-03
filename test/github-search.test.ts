@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildSearchQuery,
+  createGithubApi,
   createGithubSearch,
   renderHits,
   SEARCH_FIELDS,
@@ -189,7 +190,9 @@ describe("search 的请求路径", () => {
       { status: 401, body: { message: "Bad credentials" } },
       { status: 200, body: searchBody() },
     ]);
-    const search = createGithubSearch({ fetch: api.fetch, token: async () => "test-token" });
+    const search = createGithubSearch(
+      createGithubApi({ fetch: api.fetch, token: async () => "test-token" }),
+    );
 
     const hits = await search.search("issue", { repo: "a/b" });
 
@@ -200,7 +203,9 @@ describe("search 的请求路径", () => {
   // `@me` 是 gh CLI 的简写：octokit 路径不展开，也不额外发 users.getAuthenticated
   it("带关键词的搜索不展开 @me", async () => {
     const api = stubFetch([{ status: 200, body: searchBody() }]);
-    const search = createGithubSearch({ fetch: api.fetch, token: async () => "test-token" });
+    const search = createGithubSearch(
+      createGithubApi({ fetch: api.fetch, token: async () => "test-token" }),
+    );
 
     await search.search("issue", { repo: "a/b", assignee: "@me" });
 

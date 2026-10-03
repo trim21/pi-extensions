@@ -3,8 +3,7 @@ import { Type } from "typebox";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  resolveRepo,
-  splitRepo,
+  resolveRepoTarget,
   type StructuredResultOf,
   subtitlePendant,
   type ToolCall,
@@ -33,8 +32,7 @@ async function waitCommitChecks(
     details: {},
   });
 
-  const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-  const { owner, repo: repoName } = splitRepo(effectiveRepo);
+  const { owner, name: repoName } = await resolveRepoTarget(repo, signal, ctx.cwd, params);
 
   const pollSignal = signal ?? new AbortController().signal;
   const sha = await gh.checks.headSha(owner, repoName, String(commit), pollSignal);

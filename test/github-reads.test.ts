@@ -9,6 +9,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { createGithubApi } from "../src/lib/github.js";
 import { createGithubReads, type GithubReads } from "../src/lib/github-reads.js";
 import { type FixtureRoutes, githubCassette } from "./github-fixtures.js";
 
@@ -21,7 +22,9 @@ afterEach(async () => {
 function setup(routes: FixtureRoutes): { reads: GithubReads; calls: string[] } {
   const cassette = githubCassette(routes);
   return {
-    reads: createGithubReads({ fetch: cassette.fetch, token: async () => "test-token" }),
+    reads: createGithubReads(
+      createGithubApi({ fetch: cassette.fetch, token: async () => "test-token" }),
+    ),
     calls: cassette.calls,
   };
 }

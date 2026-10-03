@@ -4,8 +4,7 @@ import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   renderRunStatus,
-  resolveRepo,
-  splitRepo,
+  resolveRepoTarget,
   subtitlePendant,
   type ToolResult,
   watchRun,
@@ -38,8 +37,12 @@ export function addWatchRunTool(gh: GhClient, bus: ToolBus) {
 
         // 轮询循环要求非空 signal（与两个 wait 工具一致：没有就自建一个）
         const pollSignal = signal ?? new AbortController().signal;
-        const effectiveRepo = await resolveRepo(repo, pollSignal, ctx.cwd, params);
-        const { owner, repo: repoName } = splitRepo(effectiveRepo);
+        const { owner, name: repoName } = await resolveRepoTarget(
+          repo,
+          pollSignal,
+          ctx.cwd,
+          params,
+        );
         const outcome = await watchRun({
           owner,
           repo: repoName,

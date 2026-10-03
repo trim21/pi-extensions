@@ -1,6 +1,7 @@
 /**
- * Test for extractStepFromLog — reproduces the off-by-one bug
- * caused by composite actions producing extra "Run " groups.
+ * `jobLogIndex` 对 fuzz-download-2 这个 job 的 step 行范围断言：该 job 的 step 3 是
+ * 复合 action，会在日志里额外产出 depth-1 的 "Run " 组；紧接着的 step 4、5、6 必须
+ * 各自落到正确的块（step 5 / 6 被跳过，根本没有块）。
  *
  * Run: npx vitest run test/extract-step.test.ts
  */
@@ -10,73 +11,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { extractStepFromLog } from "../src/gh/index.js";
+import { jobLogIndex } from "../src/gh/index.js";
+import { type RunJob } from "../src/lib/github.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, "fixtures");
-
-// ── types ───────────────────────────────────────────────────────────────────
-
-interface StepInfo {
-  name: string;
-  number: number;
-  status: string;
-  conclusion: string | null;
-}
-
-// ── current (buggy) implementation ──────────────────────────────────────────
-
-function extractStepFromLog_current(
-  stepNumber: number,
-  apiSteps: { number: number; name: string }[],
-): string | null {
-  const sorted = [...apiSteps].toSorted((a, b) => a.number - b.number);
-  const stepIdx = sorted.findIndex((s) => s.number === stepNumber);
-  if (stepIdx === -1) {
-    return null;
-  }
-
-  const lines = log.split("\n");
-  const runStarts: number[] = [];
-  let depth = 0;
-
-  for (const [i, line] of lines.entries()) {
-    if (line.includes("##[endgroup]")) {
-      if (depth > 0) {
-        depth--;
-      }
-      continue;
-    }
-    if (!line.includes("##[group]")) {
-      continue;
-    }
-
-    if (depth === 0) {
-      const m = /##\[group\](.*)/.exec(line);
-      const name = m ? m[1].trim() : "";
-      if (name.startsWith("Run ")) {
-        runStarts.push(i);
-      }
-    }
-    depth++;
-  }
-
-  if (stepIdx === 0) {
-    const end = runStarts.length > 0 ? runStarts[0] : lines.length;
-    return lines.slice(0, end).join("\n").trimEnd();
-  }
-
-  const runIdx = stepIdx - 1;
-  if (runIdx < 0 || runIdx >= runStarts.length) {
-    return null;
-  }
-
-  const start = runStarts[runIdx];
-  const end = runIdx + 1 < runStarts.length ? runStarts[runIdx + 1] : lines.length;
-  return lines.slice(start, end).join("\n").trimEnd();
-}
-
-// ── helpers ─────────────────────────────────────────────────────────────────
 
 function loadFixture(name: string): string {
   return readFileSync(join(fixturesDir, name), "utf8");
@@ -87,111 +26,78 @@ function firstLine(text: string): string {
   return m ? m[0].trim() : "";
 }
 
-// ── tests ───────────────────────────────────────────────────────────────────
-
-const job: {
-  id: number;
-  name: string;
-  conclusion: string | null;
-  steps: StepInfo[];
-} = JSON.parse(loadFixture("fuzz-download-2-job.json"));
+const job = JSON.parse(loadFixture("fuzz-download-2-job.json")) as RunJob;
 const log = loadFixture("fuzz-download-2-raw.log");
+const index = jobLogIndex(job, log);
 
-describe("extractStepFromLog — fuzz-download-2 job", () => {
+/** 模型读到的内容：按 jobLogIndex 给出的行范围从原始日志里切出该 step。 */
+function stepText(stepNumber: number): string | null {
+  const step = index.steps.find((s) => s.number === stepNumber);
+  if (step?.start_line === undefined || step.end_line === undefined) {
+    return null;
+  }
+  return log
+    .split("\n")
+    .slice(step.start_line - 1, step.end_line)
+    .join("\n")
+    .trimEnd();
+}
+
+describe("jobLogIndex — fuzz-download-2 job", () => {
   it("job has expected step 4", () => {
     const step4 = job.steps.find((s) => s.number === 4);
     expect(step4).toBeDefined();
     expect(step4!.name).toContain("FuzzPickerDownloadIntegration");
   });
 
-  // ── Step 1: "Set up job" ──────────────────────────────────────────────
   describe("step 1 (Set up job)", () => {
-    it("both implementations agree", () => {
-      const cur = extractStepFromLog_current(1, job.steps);
-      const fix = extractStepFromLog(log, 1, job.steps);
-      expect(cur).toBe(fix);
-      expect(cur).toContain("Runner Image Provisioner");
-      // Step 1 should not contain any "Run " groups
-      expect(cur).not.toMatch(/##\[group\]Run /);
+    it("covers the runner preamble and no Run group", () => {
+      const text = stepText(1);
+      expect(text).toContain("Runner Image Provisioner");
+      expect(text).not.toMatch(/##\[group\]Run /);
     });
   });
 
-  // ── Step 2: checkout ──────────────────────────────────────────────────
   describe("step 2 (Run actions/checkout@v7.0.0)", () => {
-    it("both implementations agree", () => {
-      const cur = extractStepFromLog_current(2, job.steps);
-      const fix = extractStepFromLog(log, 2, job.steps);
-      expect(cur).toBe(fix);
-      expect(cur).toContain("##[group]Run actions/checkout@v7.0.0");
+    it("starts at the checkout group", () => {
+      expect(stepText(2)).toContain("##[group]Run actions/checkout@v7.0.0");
     });
   });
 
-  // ── Step 3: composite action ──────────────────────────────────────────
   describe("step 3 (Run trim21/actions/setup-go@master)", () => {
-    it("fixed matches the composite action wrapper group", () => {
-      const fix = extractStepFromLog(log, 3, job.steps);
-      expect(fix).toBeTruthy();
-      expect(fix).toContain("##[group]Run trim21/actions/setup-go@master");
+    it("matches the composite action wrapper group", () => {
+      const text = stepText(3);
+      expect(text).toBeTruthy();
+      expect(text).toContain("##[group]Run trim21/actions/setup-go@master");
     });
   });
 
-  // ── Step 4: THE BUG ──────────────────────────────────────────────────
   describe("step 4 (Run go test -race -fuzz=FuzzPickerDownloadIntegration)", () => {
-    it("BUG: current returns wrong content (setup-go, not go test)", () => {
-      const cur = extractStepFromLog_current(4, job.steps);
-      expect(cur).toBeTruthy();
-      expect(firstLine(cur!)).toContain("Run actions/setup-go@v6");
+    it("starts at the go test group, not a composite internal group", () => {
+      const text = stepText(4);
+      expect(text).toBeTruthy();
+      expect(firstLine(text!)).toContain("Run go test -race -fuzz=FuzzPickerDownloadIntegration");
     });
 
-    it("fixed returns correct go test content", () => {
-      const fix = extractStepFromLog(log, 4, job.steps);
-      expect(fix).toBeTruthy();
-      expect(firstLine(fix!)).toContain("Run go test -race -fuzz=FuzzPickerDownloadIntegration");
+    it("contains the FAIL output from the test run", () => {
+      expect(stepText(4)).toMatch(/FAIL/);
     });
 
-    it("fixed contains FAIL output from the test run", () => {
-      const fix = extractStepFromLog(log, 4, job.steps);
-      expect(fix).toMatch(/FAIL/);
-    });
-
-    it("fixed does NOT contain setup-go output", () => {
-      const fix = extractStepFromLog(log, 4, job.steps);
-      // setup-go prints "go version go1.26.5" — should not appear in step 4
-      expect(fix).not.toMatch(/go version go1\./);
+    it("does not contain setup-go output", () => {
+      // setup-go prints "go version go1.26.5" — that belongs to step 3
+      expect(stepText(4)).not.toMatch(/go version go1\./);
     });
   });
 
-  // ── Steps 5 & 6: skipped (no log group because step 4 failed) ────────
-  // Both steps were skipped — their "Run " groups never appear in the log.
-  // The fixed implementation correctly returns null.
-  // The current (buggy) index-based approach returns composite action internals.
-  describe("step 5 (Run go test -race -fuzz=FuzzStaleRequest)", () => {
-    it("fixed returns null — step was skipped, not in log", () => {
-      const fix = extractStepFromLog(log, 5, job.steps);
-      expect(fix).toBeNull();
+  // Steps 5 & 6 were skipped, so their "Run " groups never appear in the log and
+  // they must get no range at all — not one stolen from a composite internal group.
+  describe("skipped steps", () => {
+    it("step 5 (Run go test -race -fuzz=FuzzStaleRequest) has no range", () => {
+      expect(stepText(5)).toBeNull();
     });
 
-    it("BUG: current returns wrong content (composite action internals)", () => {
-      const cur = extractStepFromLog_current(5, job.steps);
-      expect(cur).toBeTruthy();
-      // Wrongly returns "Run actions/cache@v6" — an internal step of the composite action
-      expect(firstLine(cur!)).toContain("Run actions/cache@v6");
-      expect(cur).not.toContain("FuzzStaleRequest");
-    });
-  });
-
-  describe("step 6 (Run go test -race -tags assert -fuzz=^FuzzFullDownload$)", () => {
-    it("fixed returns null — step was skipped, not in log", () => {
-      const fix = extractStepFromLog(log, 6, job.steps);
-      expect(fix).toBeNull();
-    });
-
-    it("BUG: current returns wrong content (composite action internals)", () => {
-      const cur = extractStepFromLog_current(6, job.steps);
-      expect(cur).toBeTruthy();
-      // Wrongly returns "Run go get ./..." — an internal step of the composite action
-      expect(firstLine(cur!)).toContain("Run go get ./...");
-      expect(cur).not.toContain("FuzzFullDownload");
+    it("step 6 (Run go test -race -tags assert -fuzz=^FuzzFullDownload$) has no range", () => {
+      expect(stepText(6)).toBeNull();
     });
   });
 });

@@ -1,13 +1,7 @@
 import { Type } from "typebox";
 
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
-import {
-  type GhClient,
-  resolveRepo,
-  splitRepo,
-  subtitlePendant,
-  toStructuredJsonResult,
-} from "../base.js";
+import { type GhClient, resolveRepoTarget, toStructuredJsonResult, withPendant } from "../base.js";
 import { prViewSchema } from "../schemas.js";
 
 export function addReadPrTool(gh: GhClient, bus: ToolBus) {
@@ -24,12 +18,10 @@ export function addReadPrTool(gh: GhClient, bus: ToolBus) {
       structuredSchema: prViewSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const { number, repo } = params;
-        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-        const { owner, repo: repoName } = splitRepo(effectiveRepo);
-        const data = await gh.reads.pull(owner, repoName, Number(number), signal);
+        const { owner, name } = await resolveRepoTarget(repo, signal, ctx.cwd, params);
+        const data = await gh.reads.pull(owner, name, Number(number), signal);
         const result = toStructuredJsonResult(JSON.stringify(data, null, 2), params, prViewSchema);
-        result.details.pendant = subtitlePendant(params, "number");
-        return result;
+        return withPendant(result, params, "number");
       },
     }),
   );

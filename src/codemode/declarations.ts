@@ -6,6 +6,7 @@
  * const / union / enum），其余退化成 `unknown`——宁可少给类型，也不要编出错类型。
  */
 
+import { isRecord } from "../lib/narrow.js";
 import type { ScriptTool } from "./protocol.js";
 
 interface ToolLike {
@@ -14,12 +15,6 @@ interface ToolLike {
   parameters?: unknown;
   /** 只有声明了它的工具才可调用（见 `tool.ts` 的准入条件），因此这里是必需的。 */
   structuredSchema: unknown;
-}
-
-type JsonSchema = Record<string, unknown>;
-
-function isSchema(value: unknown): value is JsonSchema {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function literal(value: unknown): string {
@@ -32,7 +27,7 @@ function propertyName(name: string): string {
 }
 
 function renderType(schema: unknown, indent: string): string {
-  if (!isSchema(schema)) {
+  if (!isRecord(schema)) {
     return "unknown";
   }
   // TypeBox 的 Type.Literal / StringEnum 产出 const，而不是 enum
@@ -64,7 +59,7 @@ function renderType(schema: unknown, indent: string): string {
       return `Array<${renderType(schema.items, indent)}>`;
     }
     case "object": {
-      const properties = isSchema(schema.properties) ? schema.properties : {};
+      const properties = isRecord(schema.properties) ? schema.properties : {};
       const required = new Set(Array.isArray(schema.required) ? (schema.required as string[]) : []);
       const entries = Object.entries(properties);
       if (entries.length === 0) {

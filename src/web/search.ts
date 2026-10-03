@@ -11,6 +11,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { withTimeoutSignal } from "../lib/abort.js";
 import { egress } from "../lib/egress.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
@@ -143,11 +144,6 @@ function mapHits(
 }
 
 /** 合并调用方 signal 与超时；调用方未传时仍有超时兜底 */
-function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const timeout = AbortSignal.timeout(ms);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
 export async function searchWeb(
   query: string,
   apiKey: string,
@@ -160,7 +156,7 @@ export async function searchWeb(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(buildSearchBody(query, options)),
-    signal: withTimeout(options.signal, TIMEOUT_MS),
+    signal: withTimeoutSignal(options.signal, TIMEOUT_MS),
   });
 
   const raw = await response.text();

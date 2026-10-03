@@ -4,8 +4,7 @@ import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   mergeChecks,
-  resolveRepo,
-  splitRepo,
+  resolveRepoTarget,
   type StructuredResultOf,
   subtitlePendant,
   type ToolCall,
@@ -32,8 +31,11 @@ export async function prStatus(
   const { number, repo } = params;
   const pullNumber = toPositiveId(number, "number");
   const pendant = subtitlePendant(params, "number");
-  const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-  const { owner, repo: name } = splitRepo(effectiveRepo);
+  const {
+    fullName: effectiveRepo,
+    owner,
+    name,
+  } = await resolveRepoTarget(repo, signal, ctx.cwd, params);
 
   const pollSignal = signal ?? new AbortController().signal;
   const headSha = await gh.checks.pullHead(owner, name, pullNumber, pollSignal);

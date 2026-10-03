@@ -21,18 +21,13 @@ import { Type } from "typebox";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { didYouMean } from "./files.js";
-import { RIPGREP_RESULT_LIMIT, runRipgrep } from "./ripgrep.js";
+import { normalizeRipgrepPath, RIPGREP_RESULT_LIMIT, runRipgrep } from "./ripgrep.js";
 
 /** Tool guidance, kept in markdown so it reads like documentation. */
 const GLOB_PROMPT = readFileSync(fileURLToPath(new URL("glob.md", import.meta.url)), "utf8").trim();
 
 export function buildGlobArgs(pattern: string): string[] {
   return ["--no-config", "--files", `--glob=${pattern}`, "--glob=!**/.git/**", "."];
-}
-
-/** rg --files 输出的路径：去掉前导 `./`，分隔符统一成 `/`。 */
-function normalizeRipgrepPath(text: string): string {
-  return text.replace(/^(?:\.[\\/])+/u, "").replaceAll("\\", "/");
 }
 
 export function renderGlobOutput(files: readonly string[], truncated: boolean): string {

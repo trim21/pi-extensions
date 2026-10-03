@@ -1,11 +1,14 @@
 /**
  * GitHub Read-Only Tools Extension
  *
- * Provides individual read-only tools for GitHub operations using the system's `gh` CLI.
+ * Provides individual read-only tools for GitHub operations. 取数走 octokit REST；
+ * 只有「当前仓库」解析（`gh repo view`）与 token 获取（`gh auth token`）用系统 `gh`。
  *
  * Layout:
- *   - `base.ts`            shared helpers (gh subprocess, result shaping, REST client, checks watch)
- *   - `tools/<name>.ts`    one tool per file, each exporting `add<Name>Tool(gh, pi)`
+ *   - `base.ts`            shared helpers (result shaping, GhClient, repo resolution, checks watch)
+ *   - `schemas.ts`         structured-output schemas
+ *   - `render.ts`          text rendering of REST responses
+ *   - `tools/<name>.ts`    one tool per file, each exporting `add<Name>Tool(gh, bus)`
  *   - `index.ts`           this file: availability checks + tool registration
  *
  * Tools:
@@ -28,10 +31,10 @@
  *   - wait-github-commit-checks: Watch CI checks of a commit (no PR required)
  *   - watch-github-run: Watch a workflow run
  *
- * Proxy (for the gh CLI and for the octokit-backed search/checks requests):
+ * Proxy (shared by the `gh` subprocess and the octokit requests):
  *   ~/.pi/agent/proxy.json: { "proxy": "http://127.0.0.1:7890", "noProxy": "localhost" }
  *   HTTPS_PROXY / HTTP_PROXY / ALL_PROXY and NO_PROXY are used instead for the
- *   fields the config file leaves out. The config is read once per process.
+ *   fields the config file leaves out; the config is read through `src/lib/egress.ts`.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

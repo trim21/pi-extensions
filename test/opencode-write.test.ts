@@ -7,10 +7,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createToolBus } from "../src/lib/tool-bus.js";
 import { createOpencodeFileTools, resolveBom } from "../src/opencode/files.js";
+import { createToolRecorder, requireTool } from "./opencode-harness.js";
 
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
@@ -74,18 +74,11 @@ interface Harness {
 }
 
 function loadTool(): Harness {
-  const tools = new Map<string, Tool>();
-  const pi = {
-    registerTool: (def: Tool) => {
-      tools.set(def.name, def);
-    },
-    on: vi.fn(),
-    registerCommand: vi.fn(),
-  } as never;
-  createOpencodeFileTools(pi).register(createToolBus(pi));
-  const read = tools.get("read")!;
+  const recorder = createToolRecorder<Tool>();
+  createOpencodeFileTools(recorder.pi).register(recorder.bus);
+  const read = requireTool(recorder, "read");
   return {
-    write: tools.get("write")!,
+    write: requireTool(recorder, "write"),
     readFirst: async (filePath: string) => {
       await read.execute("id", { filePath } as never, undefined, undefined, ctx);
     },

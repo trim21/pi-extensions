@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI, TruncationResult } from "@earendil-works/pi-coding-agent";
@@ -12,52 +11,22 @@ import {
   formatElapsedSeconds,
   sandboxHintBlock,
 } from "../bwrap/runtime.js";
+import {
+  BASH_DEFAULT_TIMEOUT_MS,
+  BASH_MAX_TIMEOUT_MS,
+  bashStructuredSchema,
+  spilledOutput,
+} from "../lib/bash-tool.js";
 import { resolveWorkdir } from "../lib/path.js";
 import { createRequestPolicy } from "../lib/request-policy.js";
 import { defineStructuredTool, type ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
-
-const DEFAULT_TIMEOUT_MS = 120_000;
-const MAX_TIMEOUT_MS = 7_200_000;
 
 /** 对齐上游 opencode 的截断提示文案（tools/BashTool/bash.ts）。 */
 const CAPTURE_TRUNCATED_NOTICE = "[output capture truncated at the in-memory safety limit]";
 
 /** Bash tool guidance, kept in markdown so it reads like documentation. */
 const BASH_PROMPT = readFileSync(fileURLToPath(new URL("bash.md", import.meta.url)), "utf8").trim();
-
-/**
- * `bash` 的结构化结果：只有退出码与完整输出——命令非零退出不是失败，所以载荷里没有成败
- * 标志，脚本直接读 `exitCode` 分支；超时/中止时 `exitCode` 为 `null`（原因在模型侧文本里）。
- */
-const bashStructuredSchema = Type.Object({
-  exitCode: Type.Union([Type.Number(), Type.Null()], {
-    description: "Exit code of the command; null when it was killed (timeout or abort)",
-  }),
-  output: Type.String({
-    description:
-      "Complete output of the command (stdout and stderr merged). Never truncated, never mixed with tool-added notices.",
-  }),
-});
-
-/**
- * 载荷里的输出：文本被截断时读回落盘的完整输出（读不到就退回那份截断文本），
- * 因此脚本拿到的永远是命令真正输出的内容。
- */
-async function fullOutput(
-  output: string,
-  truncation: TruncationResult,
-  spillPath: string | undefined,
-): Promise<string> {
-  if (spillPath === undefined || !truncation.truncated) {
-    return output;
-  }
-  try {
-    return await readFile(spillPath, "utf8");
-  } catch {
-    return output;
-  }
-}
 
 /** opencode 风格截断提示（成功、超时、中断路径共用）。 */
 function appendTruncationNotice(
@@ -127,9 +96,9 @@ export function registerBashTool(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapR
         { additionalProperties: false },
       ),
       async execute(id, params, signal, onUpdate, ctx) {
-        const timeout = params.timeout ?? DEFAULT_TIMEOUT_MS;
-        if (!Number.isFinite(timeout) || timeout <= 0 || timeout > MAX_TIMEOUT_MS) {
-          throw new Error(`timeout must be between 1 and ${MAX_TIMEOUT_MS} milliseconds`);
+        const timeout = params.timeout ?? BASH_DEFAULT_TIMEOUT_MS;
+        if (!Number.isFinite(timeout) || timeout <= 0 || timeout > BASH_MAX_TIMEOUT_MS) {
+          throw new Error(`timeout must be between 1 and ${BASH_MAX_TIMEOUT_MS} milliseconds`);
         }
 
         const cwd = params.workdir ? await resolveWorkdir(params.workdir, ctx.cwd) : ctx.cwd;
@@ -175,7 +144,7 @@ export function registerBashTool(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapR
                 ok: true as const,
                 value: {
                   exitCode: null,
-                  output: await fullOutput(
+                  output: await spilledOutput(
                     error.partial.output,
                     error.partial.truncation,
                     error.partial.fullOutputPath,
@@ -208,7 +177,7 @@ export function registerBashTool(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapR
             ok: true as const,
             value: {
               exitCode: result.exitCode,
-              output: await fullOutput(result.output, result.truncation, result.fullOutputPath),
+              output: await spilledOutput(result.output, result.truncation, result.fullOutputPath),
             },
           },
         };

@@ -7,6 +7,8 @@
  */
 import { spawn } from "node:child_process";
 
+import { escapeHtml } from "./html.js";
+
 /** `dcg test --format json` 输出中我们关心的字段。 */
 interface DcgTestOutput {
   decision?: "allow" | "deny" | "indeterminate";
@@ -29,14 +31,6 @@ export type DcgScanOutcome =
 
 /** dcg 扫描的超时预算：超时视为无建议，不让审批弹窗被拖住。 */
 const DCG_SCAN_TIMEOUT_MS = 2000;
-
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
 
 /**
  * 对命令做 dcg 扫描。返回三种结果：

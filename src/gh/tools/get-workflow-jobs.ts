@@ -3,13 +3,12 @@ import { Type } from "typebox";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  resolveRepo,
-  splitRepo,
+  resolveRepoTarget,
   type StructuredResultOf,
-  subtitlePendant,
   type ToolCall,
   toPositiveId,
   toStructuredJsonResult,
+  withPendant,
 } from "../base.js";
 import { workflowJobsSchema } from "../schemas.js";
 
@@ -25,8 +24,7 @@ async function workflowJobs(
 ): Promise<StructuredResultOf<typeof workflowJobsSchema>> {
   const { params, ctx, signal } = call;
   const runId = toPositiveId(params.run_id, "run_id");
-  const effectiveRepo = await resolveRepo(params.repo, signal, ctx.cwd, params);
-  const { owner, repo: name } = splitRepo(effectiveRepo);
+  const { owner, name } = await resolveRepoTarget(params.repo, signal, ctx.cwd, params);
 
   const jobs = await gh.checks.runJobs(owner, name, runId, signal);
   const result = toStructuredJsonResult(
@@ -34,8 +32,7 @@ async function workflowJobs(
     params,
     workflowJobsSchema,
   );
-  result.details.pendant = subtitlePendant(params, "run_id");
-  return result;
+  return withPendant(result, params, "run_id");
 }
 
 export function addGetWorkflowJobsTool(gh: GhClient, bus: ToolBus) {
