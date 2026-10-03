@@ -17,7 +17,7 @@ import {
   sandboxHintBlock,
 } from "../bwrap/runtime.js";
 import { resolveWorkdir } from "../lib/path.js";
-import type { ToolBus } from "../lib/tool-bus.js";
+import { defineStructuredTool, type ToolBus } from "../lib/tool-bus.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 7_200_000;
@@ -67,6 +67,39 @@ function appendTruncationNotice(
 }
 
 /**
+ * `Bash` 的结构化结果：只有退出码与完整输出——命令非零退出不是失败，所以载荷里没有成败
+ * 标志，脚本直接读 `exitCode` 分支；超时/中止时 `exitCode` 为 `null`（原因在模型侧文本里）。
+ */
+const bashStructuredSchema = Type.Object({
+  exitCode: Type.Union([Type.Number(), Type.Null()], {
+    description: "Exit code of the command; null when it was killed (timeout or abort)",
+  }),
+  output: Type.String({
+    description:
+      "Complete output of the command (stdout and stderr merged). Never truncated, never mixed with tool-added notices.",
+  }),
+});
+
+/**
+ * 载荷里的输出：文本被截断时读回落盘的完整输出（读不到就退回那份截断文本），
+ * 因此脚本拿到的永远是命令真正输出的内容。
+ */
+async function fullOutput(
+  output: string,
+  truncation: TruncationResult,
+  spillPath: string | undefined,
+): Promise<string> {
+  if (spillPath === undefined || !truncation.truncated) {
+    return output;
+  }
+  try {
+    return await readFile(spillPath, "utf8");
+  } catch {
+    return output;
+  }
+}
+
+/**
  * 成功路径：消费 runtime 的截断结果（输出已由 runtime 截断并落盘），
  * 截断时追加 `[Showing lines X-Y of N. Full output: path]` 提示。
  * opencode 套件的 bash 工具复用同一逻辑。
@@ -88,116 +121,154 @@ function formatBashSuccess(result: Awaited<ReturnType<BwrapRuntime["execute"]>>)
  * 测试可注入预置模式的实例。状态随扩展实例生命周期，session 切换重建即重置。
  */
 export function registerShellTools(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapRuntime): void {
-  bus.register({
-    name: "Bash",
-    promptSnippet: "execute command",
-    promptGuidelines: [BASH_PROMPT],
-    label: "Bash",
-    description: [
-      "Executes a given bash command synchronously and returns its output.",
-      "timeout is in milliseconds, defaults to 120000, and may not exceed 7200000.",
-      "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
-    ].join("\n"),
-    parameters: Type.Object(
-      {
-        command: Type.String({ description: "The command to execute" }),
-        timeout: Type.Optional(
-          Type.Number({ description: "Optional timeout in milliseconds (max 7200000)" }),
-        ),
-        description: Type.Optional(
-          Type.String({ description: "Clear, concise description of the command" }),
-        ),
-        workdir: Type.Optional(
-          Type.String({
-            description:
-              "Working directory to execute the command in. Defaults to the current directory; relative paths resolve from there.",
-          }),
-        ),
-        dangerouslyDisableSandbox: Type.Optional(
-          Type.Boolean({
-            description:
-              "Request one-time unsandboxed execution. The user must approve this request.",
-          }),
-        ),
-      },
-      { additionalProperties: false },
-    ),
-    async execute(id, params, signal, onUpdate, ctx) {
-      const timeout = params.timeout ?? DEFAULT_TIMEOUT_MS;
-      if (!Number.isFinite(timeout) || timeout <= 0 || timeout > MAX_TIMEOUT_MS) {
-        throw new Error(`timeout must be between 1 and ${MAX_TIMEOUT_MS} milliseconds`);
-      }
-
-      const cwd = params.workdir ? await resolveWorkdir(params.workdir, ctx.cwd) : ctx.cwd;
-
-      let result: Awaited<ReturnType<BwrapRuntime["execute"]>>;
-      try {
-        result = await runtime.execute({
-          ctx,
-          cwd,
-          toolCallId: id,
-          command: params.command,
-          timeout: timeout / 1000,
-          requestFullAccess: params.dangerouslyDisableSandbox,
-          description: params.description,
-          signal,
-          onUpdate,
-        });
-      } catch (error) {
-        if (!(error instanceof Error)) {
-          throw error;
+  bus.register(
+    defineStructuredTool({
+      name: "Bash",
+      promptSnippet: "execute command",
+      promptGuidelines: [BASH_PROMPT],
+      label: "Bash",
+      description: [
+        "Executes a given bash command synchronously and returns its output.",
+        "timeout is in milliseconds, defaults to 120000, and may not exceed 7200000.",
+        "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
+      ].join("\n"),
+      parameters: Type.Object(
+        {
+          command: Type.String({ description: "The command to execute" }),
+          timeout: Type.Optional(
+            Type.Number({ description: "Optional timeout in milliseconds (max 7200000)" }),
+          ),
+          description: Type.Optional(
+            Type.String({ description: "Clear, concise description of the command" }),
+          ),
+          workdir: Type.Optional(
+            Type.String({
+              description:
+                "Working directory to execute the command in. Defaults to the current directory; relative paths resolve from there.",
+            }),
+          ),
+          dangerouslyDisableSandbox: Type.Optional(
+            Type.Boolean({
+              description:
+                "Request one-time unsandboxed execution. The user must approve this request.",
+            }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      async execute(id, params, signal, onUpdate, ctx) {
+        const timeout = params.timeout ?? DEFAULT_TIMEOUT_MS;
+        if (!Number.isFinite(timeout) || timeout <= 0 || timeout > MAX_TIMEOUT_MS) {
+          throw new Error(`timeout must be between 1 and ${MAX_TIMEOUT_MS} milliseconds`);
         }
-        if (error instanceof BashInterruptedError) {
-          // 输出在前（必要时带截断提示），状态文本在最后
-          const text = appendTruncationNotice(
-            error.partial.output || "",
-            error.partial.truncation,
-            error.partial.fullOutputPath,
-          );
-          if (error.kind === "aborted") {
-            // 用户取消：直接返回已捕获的输出，不抛错；时长只算命令真正运行的时间，
-            // 不含审批弹窗等 UI 交互
-            const status = `Command aborted by user after ${formatElapsedSeconds(error.elapsedMs)}`;
+
+        const cwd = params.workdir ? await resolveWorkdir(params.workdir, ctx.cwd) : ctx.cwd;
+
+        let result: Awaited<ReturnType<BwrapRuntime["execute"]>>;
+        try {
+          result = await runtime.execute({
+            ctx,
+            cwd,
+            toolCallId: id,
+            command: params.command,
+            timeout: timeout / 1000,
+            requestFullAccess: params.dangerouslyDisableSandbox,
+            description: params.description,
+            signal,
+            onUpdate,
+          });
+        } catch (error) {
+          if (!(error instanceof Error)) {
+            throw error;
+          }
+          if (error instanceof BashInterruptedError) {
+            // 输出在前（必要时带截断提示），状态文本在最后
+            const text = appendTruncationNotice(
+              error.partial.output || "",
+              error.partial.truncation,
+              error.partial.fullOutputPath,
+            );
+            if (error.kind === "aborted") {
+              // 用户取消：直接返回已捕获的输出，不抛错；时长只算命令真正运行的时间，
+              // 不含审批弹窗等 UI 交互
+              const status = `Command aborted by user after ${formatElapsedSeconds(error.elapsedMs)}`;
+              return {
+                content: [
+                  { type: "text" as const, text: text ? `${text}\n\n${status}` : status },
+                  ...sandboxHintBlock(error.sandboxReminder),
+                ],
+                details: undefined,
+                structuredResult: {
+                  ok: true as const,
+                  value: {
+                    exitCode: null,
+                    output: await fullOutput(
+                      error.partial.output,
+                      error.partial.truncation,
+                      error.partial.fullOutputPath,
+                    ),
+                  },
+                },
+              };
+            }
+            const full = text
+              ? `${text}\n\nCommand timed out after ${timeout} milliseconds`
+              : `Command timed out after ${timeout} milliseconds`;
             return {
               content: [
-                { type: "text", text: text ? `${text}\n\n${status}` : status },
+                { type: "text" as const, text: full },
+                ...sandboxHintBlock(error.sandboxHint),
                 ...sandboxHintBlock(error.sandboxReminder),
               ],
               details: undefined,
+              structuredResult: {
+                ok: true as const,
+                value: {
+                  exitCode: null,
+                  output: await fullOutput(
+                    error.partial.output,
+                    error.partial.truncation,
+                    error.partial.fullOutputPath,
+                  ),
+                },
+              },
             };
           }
-          const full = text
-            ? `${text}\n\nCommand timed out after ${timeout} milliseconds`
-            : `Command timed out after ${timeout} milliseconds`;
+          throw error;
+        }
+
+        // 对齐 Claude Code：非 0 退出码都算失败（不做 grep/find 等命令语义化特判）。
+        // 失败是命令的正常结果而不是异常：与成功一样 return，文本用完整输出
+        // （从落盘文件读取，必要时头尾截断），沙箱状态另行附一块
+        if (result.exitCode !== 0 && result.exitCode !== null) {
+          const full = result.fullOutputPath
+            ? await readFile(result.fullOutputPath, "utf8")
+            : result.output;
           return {
             content: [
-              { type: "text", text: full },
-              ...sandboxHintBlock(error.sandboxHint),
-              ...sandboxHintBlock(error.sandboxReminder),
+              { type: "text" as const, text: formatBashError(result.exitCode, full) },
+              ...sandboxHintBlock(result.sandboxHint),
+              ...sandboxHintBlock(result.sandboxReminder),
             ],
             details: undefined,
+            structuredResult: {
+              ok: true as const,
+              value: { exitCode: result.exitCode, output: full },
+            },
           };
         }
-        throw error;
-      }
-
-      // 对齐 Claude Code：非 0 退出码都算失败（不做 grep/find 等命令语义化特判）。
-      // 失败是命令的正常结果而不是异常：与成功一样 return，文本用完整输出
-      // （从落盘文件读取，必要时头尾截断），沙箱状态另行附一块
-      if (result.exitCode !== 0 && result.exitCode !== null) {
-        const full = result.fullOutputPath
-          ? await readFile(result.fullOutputPath, "utf8")
-          : result.output;
         return {
-          content: [
-            { type: "text", text: formatBashError(result.exitCode, full) },
-            ...sandboxHintBlock(result.sandboxHint),
-            ...sandboxHintBlock(result.sandboxReminder),
-          ],
-          details: undefined,
+          ...formatBashSuccess(result),
+          structuredResult: {
+            ok: true as const,
+            value: {
+              exitCode: result.exitCode,
+              output: await fullOutput(result.output, result.truncation, result.fullOutputPath),
+            },
+          },
         };
-      }
-      return formatBashSuccess(result);
-    },
-  });
+      },
+      structuredSchema: bashStructuredSchema,
+    }),
+  );
 }

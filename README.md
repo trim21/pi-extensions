@@ -36,10 +36,12 @@
 - **嵌套调用经工具总线**：`call("Bash", { command })` 最终执行的是 `Bash` 工具自己的
   `execute`，所以工具的审批照常生效（Bash 沙箱外执行会弹自己的提权确认）。codemode
   不额外加确认层：脚本里连发十次调用就是十次工具自己的审批（需要审批的那些）。
-- **可调用集合** = 总线上实际注册的工具减去排除名单（`codemode` 自身、`spawn-agent`、
-  以及两套文件工具集的 `Read`/`Edit`/`Write` 与 `read`/`edit`/`write`），执行时再与当前
-  active 列表求交，所以 `personalExtensions.disabledTools`、pi 的 `defaultTools` /
-  `--tools`、子代理的工具白名单都同样约束脚本。
+- **可调用集合** = 总线上实际注册的工具减去排除名单，执行时再与当前 active 列表求交，
+  所以 `personalExtensions.disabledTools`、pi 的 `defaultTools` / `--tools`、子代理的工具
+  白名单都同样约束脚本。排除名单：`codemode` 自身与 `spawn-agent`；两套文件工具集的
+  读写工具（`Read`/`Edit`/`Write` 与 `read`/`edit`/`write`）；两套工具集的搜索工具
+  （`Grep`/`Glob` 与 `grep`/`glob`）——脚本搜文件用 `call("Bash", { command: "rg …" })`，
+  走同一个沙箱、拿得到退出码，还能拼管道，而那两个工具是给模型看结果的。
 - **文件读写只有 `fs` 一条路**：`fs.read(path)` 返回文件全文的原始 UTF-8 文本（不加行号、
   不截断、不设大小上限，只有内容不是合法 UTF-8 时报错），`fs.write(path, content)` 整体写入并自动创建
   父目录，相对路径相对当前 cwd。`fs.write` 与写类工具共用同一套保护：写前要求「已读且读后
@@ -49,10 +51,12 @@
   直接改，不进脚本）。
 - **只有脚本输出进上下文**：`text(value)` / `console.log(...)` 与 `return` 值进入工具结果，
   中间的工具调用与它们的返回内容不会（也不在会话记录里留下工具调用条目）。
-- **返回值**：声明了 `structuredSchema` 的工具（如 gh-readonly 的读类工具）把结果放在
-  `structuredResult` 里，`call()` 解包成对象给脚本；`{ ok: false, error }` 会 reject 成
-  `CallFailedError`（脚本可按 `instanceof CallFailedError` 区分调用失败与自身运行期错误）。
-  没有声明输出结构的工具回退成工具输出的文本。
+- **返回值**：声明了 `structuredSchema` 的工具把结果放在 `structuredResult` 里，`call()`
+  解包成对象给脚本——gh-readonly 的读类工具给解析后的 JSON，`Bash` / `bash` 给
+  `{ exitCode, output }`（`exitCode` 为 `null` 表示命令被超时/中止杀掉；命令非零退出是正常
+  结果，直接读 `exitCode` 分支即可）。`{ ok: false, error }` 会 reject 成 `CallFailedError`
+  （脚本可按 `instanceof CallFailedError` 区分调用失败与自身运行期错误）。没有声明输出
+  结构的工具回退成工具输出的文本。
 - **脚本接口**：`call` / `CallFailedError` / `ALL_TOOLS` / `fs.read` / `fs.write` /
   `text` / `image` / `exit` / `console.*` / `store.set` / `store.get` / `store.list`
   （会话内持久的键值表）；首行可选 `// @options: {"max_output_tokens": 10000}`。
@@ -425,7 +429,7 @@ Claude Code 风格工具集：`Read` / `Edit` / `Write` / `Grep` / `Glob` / `Bas
 
 - **`Read` / `Edit` / `Write`**：与 opencode 风格共享 read-before-write 记账与文案（`File has not been read yet...` / `File has been modified since read...`），差异是三者都要求先 `Read`（`Edit` 用空 `old_string` 创建新文件、`Write` 创建新文件例外）。`Read` 支持 offset / limit 分页与 PDF `pages`
 - **`Grep` / `Glob`**：ripgrep 实现，行为跟随 Claude Code（`Glob` 带 `--no-ignore` / `--hidden` / `--sort=modified`，与 opencode 风格 `glob` 的差异是各自跟随上游）
-- **`Bash`**：与 opencode 风格 `bash` 共享 bwrap 运行时与 `dangerouslyDisableSandbox` 提权，默认超时 120 秒，只支持同步执行
+- **`Bash`**：与 opencode 风格 `bash` 共享 bwrap 运行时与 `dangerouslyDisableSandbox` 提权，默认超时 120 秒，只支持同步执行。结构化结果给 `{ exitCode, output }`：`output` 是命令的**完整**输出（文本该截断还截断，载荷里是全文），`exitCode` 为 `null` 表示被超时/中止杀掉；命令非零退出不是失败，脚本直接读 `exitCode` 分支
 - **`TodoWrite`**：任务列表工具（`merge` 语义），与 opencode 风格 `todowrite` 的完整替换语义不同，不要混用
 - **`AskUserQuestion`**：阻塞式向用户提问
 
