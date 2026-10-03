@@ -9,9 +9,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createToolBus } from "../src/lib/tool-bus.js";
 import { buildGlobArgs, registerGlobTool, renderGlobOutput } from "../src/opencode/glob.js";
 import {
   buildGrepArgs,
@@ -19,6 +18,7 @@ import {
   registerGrepTool,
   renderGrepOutput,
 } from "../src/opencode/grep.js";
+import { createToolRecorder } from "./opencode-harness.js";
 
 interface Tool {
   name: string;
@@ -32,18 +32,10 @@ interface Tool {
 }
 
 function loadTools(): Map<string, Tool> {
-  const tools = new Map<string, Tool>();
-  const pi = {
-    registerTool: (def: Tool) => {
-      tools.set(def.name, def);
-    },
-    on: vi.fn(),
-    registerCommand: vi.fn(),
-  } as never;
-  const bus = createToolBus(pi);
-  registerGrepTool(bus);
-  registerGlobTool(bus);
-  return tools;
+  const recorder = createToolRecorder<Tool>();
+  registerGrepTool(recorder.bus);
+  registerGlobTool(recorder.bus);
+  return recorder.tools;
 }
 
 const jsonMatch = (path: string, line: number, text: string) =>

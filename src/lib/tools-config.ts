@@ -25,6 +25,8 @@ import { minimatch } from "minimatch";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { isRecord } from "./narrow.js";
+
 // ── schema ───────────────────────────────────────────────────────────────────
 
 const fileIoSchema = Type.Union([Type.Literal("claude-code"), Type.Literal("opencode")]);
@@ -87,10 +89,6 @@ export interface ToolAvailability {
 export const DEFAULT_FILE_IO: FileIoToolset = "claude-code";
 
 // ── 读取与解析 ───────────────────────────────────────────────────────────────
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function parseFileIo(value: unknown, field: string, warnings: string[]): FileIoToolset | undefined {
   if (value === undefined) {

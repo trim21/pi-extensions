@@ -43,6 +43,7 @@ import {
   type ResolvedBwrap,
 } from "./core.js";
 import { dcgSuggestion } from "./dcg-scan.js";
+import { escapeHtml } from "./html.js";
 import { loadSandboxConfig, runInSandbox } from "./sandbox.js";
 
 /** 全权限审批对话框的选项 label（也作为 switch 匹配键与测试引用）。 */
@@ -153,14 +154,6 @@ export class BashInterruptedError extends Error {
 /** 命令运行时长的展示文案（秒，一位小数），超时/中断状态文本共用。 */
 export function formatElapsedSeconds(elapsedMs: number): string {
   return `${(elapsedMs / 1000).toFixed(1)} seconds`;
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
 }
 
 /** 进度推送的节流间隔（对齐 pi 内置 bash 工具的 100ms）。 */

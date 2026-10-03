@@ -25,6 +25,8 @@ import {
   type UserMessage,
 } from "@earendil-works/pi-ai";
 
+import { withTimeoutSignal } from "./abort.js";
+
 /**
  * 模型注册表操作：扩展传 `ctx.modelRegistry`，测试传 mock。
  * 结构化类型（duck typing），只声明用到的两个方法。
@@ -58,12 +60,6 @@ export interface CompleteTextResult {
   usage: Usage;
 }
 
-/** 合并调用方 signal 与本地超时；调用方未传时仍然有超时兜底 */
-function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const timeout = AbortSignal.timeout(ms);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
 /**
  * 用给定模型生成正文。`registry.complete` 抛出的错误原样向上抛（含
  * `AbortError`），取消与失败的区分由调用方决定。
@@ -79,7 +75,7 @@ export async function completeText(options: CompleteTextOptions): Promise<Comple
     },
     {
       maxTokens: options.maxTokens ?? options.model.maxTokens,
-      signal: withTimeout(options.signal, options.timeoutMs),
+      signal: withTimeoutSignal(options.signal, options.timeoutMs),
     },
   );
   const text = contentText(result.content).trim();

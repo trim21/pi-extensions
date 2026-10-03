@@ -7,7 +7,6 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { createToolBus } from "../src/lib/tool-bus.js";
 import {
   buildTodoMarkdown,
   buildTodoWidgetLines,
@@ -18,6 +17,7 @@ import {
   type TodoInfo,
   TOOL_NAME,
 } from "../src/opencode/todo.js";
+import { createToolRecorder, requireTool } from "./opencode-harness.js";
 
 interface MockCtx {
   ui: { setWidget: (key: string, lines: string[] | undefined) => void };
@@ -41,14 +41,9 @@ interface Tool {
 }
 
 function loadTool(): { tool: Tool } {
-  let tool: Tool | undefined;
-  const pi = {
-    registerTool: (def: Tool) => {
-      tool = def;
-    },
-  } as never;
-  registerTodoTool(createToolBus(pi));
-  return { tool: tool! };
+  const recorder = createToolRecorder<Tool>();
+  registerTodoTool(recorder.bus);
+  return { tool: requireTool(recorder, TOOL_NAME) };
 }
 
 const todo = (over: Partial<TodoInfo>): TodoInfo => ({

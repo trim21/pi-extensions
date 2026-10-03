@@ -21,6 +21,7 @@ import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 import { Type } from "typebox";
 
+import { withTimeoutSignal } from "../lib/abort.js";
 import { egress } from "../lib/egress.js";
 import { resolvePathArg } from "../lib/path.js";
 import { createRequestPolicy } from "../lib/request-policy.js";
@@ -120,11 +121,6 @@ export async function assertPublicHostname(
   }
 }
 
-function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const timeout = AbortSignal.timeout(ms);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
-
 interface FetchedPage {
   url: string;
   title: string;
@@ -150,7 +146,7 @@ async function fetchWithRedirects(
     await assertPublicHostname(current.hostname);
     const response = await fetchFn(current, {
       redirect: "manual",
-      signal: withTimeout(signal, TIMEOUT_MS),
+      signal: withTimeoutSignal(signal, TIMEOUT_MS),
       headers: { "user-agent": "Mozilla/5.0 (compatible; pi-web-fetch/1.0)" },
     });
     const location = response.headers.get("location");
