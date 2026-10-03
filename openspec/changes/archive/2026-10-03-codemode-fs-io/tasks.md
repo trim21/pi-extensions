@@ -21,4 +21,4 @@
 
 - [x] 3.1 `README.md` 的 codemode 段落补 `fs.read` / `fs.write`（原文读写、写入走 write-guard、与文件工具共享已读记账）与「脚本不能调用文件读写工具」
 - [x] 3.2 `pnpm check`、`pnpm lint`、`pnpm test`（1359 passed / 6 skipped）全绿，`openspec validate codemode-fs-io --strict` 通过
-- [ ] 3.3 归档顺序：先归档 `codemode-call-structured-results`，再归档本变更（两者改同一条 requirement，见 design D7）
+- [x] 3.3 归档顺序：先归档 `codemode-call-structured-results`，再归档本变更（两者改同一条 requirement，见 design D7）

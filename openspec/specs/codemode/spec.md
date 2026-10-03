@@ -8,12 +8,17 @@
 
 ### Requirement: 工具注册与可调用工具集合
 
-扩展 MUST 注册名为 `codemode` 的工具，并 MUST 在注册时把脚本可调用的工具集合渲染进工具描述（每个工具的名字、说明与参数类型声明）。该集合 MUST 等于本仓库工具总线上实际注册的工具减去 `codemode` 自身与 `spawn-agent`；执行时 MUST 再与当前 active 工具列表求交（取不到 active 列表时不过滤）。脚本 MUST NOT 能调用 `codemode` 自身，也 MUST NOT 能调用 `spawn-agent`。
+扩展 MUST 注册名为 `codemode` 的工具，并 MUST 在注册时把脚本可调用的工具集合渲染进工具描述，为每个工具给出名字、说明、参数类型与返回类型。返回类型 MUST 由工具声明的输出结构推导：声明了 `structuredSchema` 的工具按该 schema 渲染，未声明的工具渲染为文本（`string`）。该集合 MUST 等于本仓库工具总线上实际注册的工具减去排除名单，排除名单为 `codemode` 自身、`spawn-agent`，以及两套文件工具集的读写工具（`Read` / `Edit` / `Write` 与 `read` / `edit` / `write`）；执行时 MUST 再与当前 active 工具列表求交（取不到 active 列表时不过滤）。脚本 MUST NOT 能调用排除名单里的任何工具名。
 
 #### Scenario: 描述列出可调用工具
 
 - **WHEN** 获取 `codemode` 的工具描述
-- **THEN** 描述包含总线上除 `codemode` 与 `spawn-agent` 外每个工具的名字、说明与参数类型声明
+- **THEN** 描述包含总线上除排除名单外每个工具的名字、说明与参数类型声明
+
+#### Scenario: 描述给出每个工具的返回类型
+
+- **WHEN** 某工具声明了输出结构，另一个工具没有
+- **THEN** 描述里前者的返回类型按该结构渲染，后者的返回类型为文本（`string`）
 
 #### Scenario: 集合外的工具不可调用
 
@@ -34,6 +39,11 @@
 
 - **WHEN** 脚本尝试调用 `spawn-agent`（即使该工具已注册且 active）
 - **THEN** 该调用在脚本内以错误失败，不启动任何子代理，`codemode` 的工具描述里也不出现它的参数声明
+
+#### Scenario: 脚本不可调用文件读写工具
+
+- **WHEN** 脚本尝试调用 `Read` / `Edit` / `Write`（或小写的 `read` / `edit` / `write`），无论它们是否已注册且 active
+- **THEN** 该调用在脚本内以错误失败，工具 MUST NOT 被执行，`codemode` 的工具描述里也不出现它们的参数声明；脚本要碰文件只能用 `fs.read` / `fs.write`
 
 ### Requirement: 脚本执行隔离
 
@@ -56,17 +66,32 @@
 
 ### Requirement: 嵌套调用的执行
 
-脚本发起的每次嵌套调用 MUST 经本仓库工具总线的 `executeTool` 执行（参数校验与错误归一化由总线负责），因此工具实现内部的审批 MUST 照常生效；`codemode` MUST NOT 在工具自身审批之外再加确认层。本次调用的宿主上下文与调用方中止信号 MUST 传递给工具。工具失败（含参数校验失败）时 MUST 在脚本内以错误失败，脚本可以选择继续执行。
+脚本发起的每次嵌套调用 MUST 经本仓库工具总线的 `executeTool` 执行（参数校验与错误归一化由总线负责），因此工具实现内部的审批 MUST 照常生效；`codemode` MUST NOT 在工具自身审批之外再加确认层。本次调用的宿主上下文与调用方中止信号 MUST 传递给工具。工具结果的 `structuredResult.ok === true` 时，调用 MUST 在脚本内 resolve 为该结果的 `value`（解包后的结构化数据）；`ok === false` 时 MUST 在脚本内以 `CallFailedError` 失败，其 message 取自该结果的 `error`。结果不带 `structuredResult` 时 MUST resolve 为现有的文本（工具输出拍平）。调用失败 MUST 统一是 `CallFailedError`：工具抛出的异常、参数校验失败、结构化失败、工具名不可调用都走同一类型，脚本据此把「工具失败」与自身的运行期错误区分开。脚本可以选择捕获后继续执行。`structuredResult` MUST NOT 改变工具面向模型的文本输出、既有 `details` 或 `isError` 语义。
 
 #### Scenario: 写类工具照常弹审批
 
 - **WHEN** 脚本调用一个需要审批的工具（例如 `Bash` 的沙箱外执行、写工作区外文件的 `Edit`）
 - **THEN** 该工具自己的审批界面照常出现，用户的选择决定本次调用成功还是失败
 
+#### Scenario: 结构化成功结果解包给脚本
+
+- **WHEN** 脚本调用一个结果的 `structuredResult.ok === true` 的工具
+- **THEN** 调用 resolve 为该结果的 `value`，脚本可以直接读取字段而不必解析文本
+
+#### Scenario: 结构化失败结果让调用失败
+
+- **WHEN** 脚本调用一个结果的 `structuredResult.ok === false` 的工具
+- **THEN** 调用在脚本内以 `CallFailedError` reject，message 取自该结果的 `error`
+
+#### Scenario: 不带结构化结果的工具返回文本
+
+- **WHEN** 脚本调用一个结果不带 `structuredResult` 的工具并成功
+- **THEN** 调用 resolve 为该工具输出的文本
+
 #### Scenario: 工具失败在脚本内可捕获
 
-- **WHEN** 脚本调用的工具返回错误
-- **THEN** 该调用在脚本内 reject，脚本捕获后可以继续执行
+- **WHEN** 脚本调用的工具抛出异常或参数校验失败
+- **THEN** 该调用在脚本内以 `CallFailedError` reject，脚本捕获后可以继续执行
 
 #### Scenario: 不额外增加确认
 
@@ -94,7 +119,7 @@
 
 ### Requirement: 脚本接口
 
-脚本 MUST 提供：`tools.<name>(args)`（返回 promise）、`ALL_TOOLS`、`text(value)`、`image(value)`、`exit()`、`console.*`、`store.set(key, value)`、`store.get(key)`、`store.list()`，MUST 支持顶层 `await` 与 `return`，首行 MAY 为 `// @options:` 行（`max_output_tokens`；未知字段 MUST 报错）。脚本未调用任何工具却停在一个永远不会 settle 的 promise 上时 MUST 立刻失败，而不是挂住。
+脚本 MUST 提供：`call(name, args)`（按工具名调用，返回 promise）、`CallFailedError`（工具调用失败的错误类型，脚本可按 `instanceof` 判别）、`ALL_TOOLS`、`text(value)`、`image(value)`、`exit()`、`console.*`、`store.set(key, value)`、`store.get(key)`、`store.list()`，MUST 支持顶层 `await` 与 `return`，首行 MAY 为 `// @options:` 行（`max_output_tokens`；未知字段 MUST 报错）。脚本 MUST NOT 能访问 `tools` 对象或任何按属性名分发的调用入口。脚本未调用任何工具却停在一个永远不会 settle 的 promise 上时 MUST 立刻失败，而不是挂住。
 
 `store` 是持久的键值表：`store.set(key, value)` 写入一个 JSON 可序列化的值，`store.set(key, undefined)` MUST 删除该键；`store.get(key)` MUST 返回该值（未命中返回 `undefined`）；`store.list()` MUST 返回当前所有键（升序）。
 
@@ -102,6 +127,16 @@
 
 - **WHEN** 脚本同时使用 `text()` 与 `return`
 - **THEN** 工具输出包含脚本追加的文本与返回值的文本表示
+
+#### Scenario: 按名字调用工具
+
+- **WHEN** 脚本 `call("Read", { file_path })` 调用一个可调用集合内的工具
+- **THEN** 该工具被执行，结果按该工具的返回语义交给脚本
+
+#### Scenario: 调用未知工具名
+
+- **WHEN** 脚本 `call("NoSuchTool", {})`
+- **THEN** 该调用在脚本内以 `CallFailedError` 失败，不产生任何宿主副作用
 
 #### Scenario: store 跨调用保留
 
@@ -146,3 +181,68 @@
 
 - **WHEN** 脚本调用若干工具后结束
 - **THEN** 工具结果的 `details` 里能看到每次调用的名字、状态与耗时
+
+### Requirement: 脚本文件原语
+
+脚本 MUST 提供 `fs` 对象，含 `read(path)` 与 `write(path, content)` 两个方法，由宿主用 `node:fs/promises` 直接实现。`fs` MUST NOT 是工具：它 MUST NOT 出现在工具列表、`ALL_TOOLS` 或工具描述的工具重载里，也 MUST NOT 参与 `disabledTools` 与当前 active 工具的求交。相对路径 MUST 相对本次调用的 cwd 解析。两个方法的失败 MUST 在脚本内以 `CallFailedError` reject（与嵌套调用同一条失败通道），message MUST 保留底层错误说明。
+
+`fs.read` MUST 返回文件全文的 UTF-8 文本，MUST NOT 加行号、MUST NOT 截断、MUST NOT 按大小设限（读到的内容不进模型上下文，放不下时以错误失败即可）；内容不是合法 UTF-8 时 MUST 以错误失败，MUST NOT 静默替换。读取成功 MUST 记入已读记账。
+
+`fs.write` MUST 只接受字符串内容、MUST 创建缺失的父目录。写入前 MUST 要求目标文件处于「已读且读后未变」状态（复用 `src/lib/file-reads.ts` 的记账，且与文件工具共用同一份 state：任一侧读过的文件另一侧都算已读），未读或读后内容被改 MUST 以错误失败；目标文件不存在时 MUST 允许直接写入。写入前的路径审批 MUST 复用 write-guard 的既有行为：工作区内与 `/tmp` 自动放行，工作区外弹审批并在预览里给出变更前后的 diff，headless 会话、Windows 与 `/bwrap-deny-request` 生效时 MUST 直接拒绝。写入成功后 MUST 把新内容记成已读，且脚本产生的已读 MUST 随 codemode 的工具结果持久化，使其在分支重放后仍然有效。
+
+`fs` 的声明 MUST 渲染进 codemode 的工具描述，使模型在写脚本前能看到这两个方法。
+
+#### Scenario: 读到原始内容
+
+- **WHEN** 脚本 `await fs.read(path)` 读一个文本文件
+- **THEN** 得到文件全文，没有行号前缀、没有被截断
+
+#### Scenario: 相对路径按 cwd 解析
+
+- **WHEN** 脚本用相对路径调用 `fs.read` / `fs.write`
+- **THEN** 路径相对本次调用的 cwd 解析
+
+#### Scenario: 大文件不截断
+
+- **WHEN** 脚本 `fs.read` 一个体积远大于「模型能看的内容」的文件（例如几十 MiB）
+- **THEN** 得到完整内容，不按大小裁剪；只有真的放不下（VM 堆不够）时才以错误失败
+
+#### Scenario: 非 UTF-8 内容报错
+
+- **WHEN** 脚本 `fs.read` 一个不是合法 UTF-8 的文件
+- **THEN** 调用以错误失败
+
+#### Scenario: 未读就写被拒
+
+- **WHEN** 脚本对一个已存在但本次会话没有读过的文件调用 `fs.write`
+- **THEN** 调用以错误失败，提示需要先读，文件 MUST NOT 被修改
+
+#### Scenario: 读后文件被改动再写被拒
+
+- **WHEN** 脚本 `fs.read` 之后文件被外部改动，脚本再对同一路径 `fs.write`
+- **THEN** 调用以错误失败，提示文件已被修改、需要重读，文件 MUST NOT 被覆盖
+
+#### Scenario: 新建文件无需先读
+
+- **WHEN** 脚本 `fs.write` 一个不存在的路径
+- **THEN** 文件被创建，缺失的父目录一并创建，不要求先读
+
+#### Scenario: 写入沿用 write-guard 审批
+
+- **WHEN** 脚本 `fs.write` 一个工作区外的路径
+- **THEN** 与写类工具一致地弹出审批（预览包含变更前后的 diff），用户不批准时调用失败且文件不变
+
+#### Scenario: 受策略与平台约束
+
+- **WHEN** headless 会话、Windows 或 `/bwrap-deny-request` 生效时脚本 `fs.write` 一个工作区外的路径
+- **THEN** 调用被直接拒绝，不弹审批、不写文件
+
+#### Scenario: 脚本读与工具读互通
+
+- **WHEN** 文件由 `Read` 工具读过（或由 `fs.read` 读过），随后任一侧对同一文件写入
+- **THEN** 两侧共用同一份已读记账：`fs.write` 认工具的读，写类工具也认脚本的读，不需要重新读一遍
+
+#### Scenario: 出现在工具描述里
+
+- **WHEN** 读取 codemode 的工具描述
+- **THEN** 描述里有 `fs.read` / `fs.write` 的声明，且 `ALL_TOOLS` 与工具重载列表里没有它们
