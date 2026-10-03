@@ -4,10 +4,9 @@ import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  resolveRepo,
-  splitRepo,
-  subtitlePendant,
+  resolveRepoTarget,
   toToolResult,
+  withPendant,
   withStructuredResult,
 } from "../base.js";
 import { renderRunList } from "../render.js";
@@ -31,15 +30,13 @@ export function addListWorkflowRunsTool(gh: GhClient, bus: ToolBus) {
       }),
       structuredSchema: ghRunListPayloadSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
-        const { repo, limit, status, workflow } = params;
-        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-        const { owner, repo: repoName } = splitRepo(effectiveRepo);
-        const items = await gh.reads.listRuns(owner, repoName, { workflow, status, limit }, signal);
+        const { limit, status, workflow } = params;
+        const { owner, name } = await resolveRepoTarget(params.repo, signal, ctx.cwd, params);
+        const items = await gh.reads.listRuns(owner, name, { workflow, status, limit }, signal);
         const runs = parseWithSchema(Type.Array(ghRunSummarySchema), items);
         const text = renderRunList(runs);
         const result = toToolResult(text, params);
-        result.details.pendant = subtitlePendant(params);
-        return withStructuredResult(result, { text, runs });
+        return withStructuredResult(withPendant(result, params), { text, runs });
       },
     }),
   );

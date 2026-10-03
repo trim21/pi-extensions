@@ -9,12 +9,12 @@ import { dirname, join } from "node:path";
 
 import { Type } from "typebox";
 
-import type { RunJob } from "../../lib/github.js";
+import { isNotFound, type RunJob } from "../../lib/github.js";
 import { createSeqState } from "../../lib/seq-state.js";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  resolveRepo,
+  resolveRepoTarget,
   splitRepo,
   structuredFailure,
   type StructuredFailureResult,
@@ -299,19 +299,6 @@ export function stepLineSpans(log: string, apiSteps: readonly StepRef[]): Map<nu
   return spans;
 }
 
-/** Text of `stepNumber` in its raw log, or null when the step never ran. */
-export function extractStepFromLog(
-  log: string,
-  stepNumber: number,
-  apiSteps: readonly { number: number; name: string }[],
-): string | null {
-  const span = stepLineSpans(log, apiSteps).get(stepNumber);
-  if (span === undefined) {
-    return null;
-  }
-  return log.split("\n").slice(span.start, span.end).join("\n").trimEnd();
-}
-
 /** One step of a job, indexed into the job's raw log file. */
 export interface CiLogsStepIndex {
   number: number;
@@ -374,8 +361,11 @@ async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<CiLogs
   const jobId = toPositiveId(job_id, "job_id");
 
   const pendant = subtitlePendant(params, "job_id");
-  const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-  const { owner, repo: name } = splitRepo(effectiveRepo);
+  const {
+    fullName: effectiveRepo,
+    owner,
+    name,
+  } = await resolveRepoTarget(repo, signal, ctx.cwd, params);
 
   const failure = (text: string): StructuredFailureResult => ({
     content: [{ type: "text", text }],
@@ -387,8 +377,7 @@ async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<CiLogs
   try {
     target = await gh.checks.job(owner, name, jobId, signal);
   } catch (error) {
-    const status = (error as { status?: number }).status;
-    if (status !== 404) {
+    if (!isNotFound(error)) {
       throw error;
     }
     return failure(

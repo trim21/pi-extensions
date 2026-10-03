@@ -3,10 +3,9 @@ import { Type } from "typebox";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  resolveRepo,
-  splitRepo,
-  subtitlePendant,
+  resolveRepoTarget,
   toToolResult,
+  withPendant,
   withStructuredResult,
 } from "../base.js";
 import { parseDiffStats } from "../render.js";
@@ -26,13 +25,14 @@ export function addReadPrDiffTool(gh: GhClient, bus: ToolBus) {
       structuredSchema: ghDiffPayloadSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const { number, repo } = params;
-        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-        const { owner, repo: repoName } = splitRepo(effectiveRepo);
-        const diff = await gh.reads.pullDiff(owner, repoName, Number(number), signal);
+        const { owner, name } = await resolveRepoTarget(repo, signal, ctx.cwd, params);
+        const diff = await gh.reads.pullDiff(owner, name, Number(number), signal);
         const result = toToolResult(diff, params);
-        result.details.pendant = subtitlePendant(params, "number");
         // 文本是原始 diff（没有 JSON 形式），载荷从同一份 diff 解析出变更统计
-        return withStructuredResult(result, { text: diff, ...parseDiffStats(diff) });
+        return withStructuredResult(withPendant(result, params, "number"), {
+          text: diff,
+          ...parseDiffStats(diff),
+        });
       },
     }),
   );

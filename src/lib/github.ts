@@ -270,20 +270,40 @@ export function normalizeRestList(items: unknown, repo: string): SearchHit[] {
 }
 
 /**
- * Error thrown when the GitHub search API rejects the request. Carries the
- * original toolcall params so the model can see the exact input.
+ * GitHub 请求失败：octokit 调用与非 JSON 的原始下载共用这一个类型，调用方据此区分
+ * 「不存在」（`isNotFound`）与真失败，不用再各自去剥错误对象上的 status。
+ *
+ * `input` 是触发该请求的工具参数；带上它，模型才能在报错里看到自己给的输入。
  */
-class GithubSearchError extends Error {
-  readonly params: SearchParams;
+export class GithubApiError extends Error {
+  /** HTTP 状态；连响应都没拿到（网络错误）时为 undefined。 */
   readonly status: number | undefined;
+  readonly input: unknown;
 
-  constructor(message: string, params: SearchParams, status?: number) {
-    super(`${message} (input: ${JSON.stringify(params)})`);
-    this.name = "GithubSearchError";
-    this.params = params;
-    this.status = status;
+  constructor(
+    message: string,
+    options: { status?: number; input?: unknown; cause?: unknown } = {},
+  ) {
+    const inputText =
+      options.input === undefined ? "" : ` (input: ${JSON.stringify(options.input)})`;
+    super(
+      `${message}${inputText}`,
+      options.cause === undefined ? undefined : { cause: options.cause },
+    );
+    this.name = "GithubApiError";
+    this.status = options.status;
+    this.input = options.input;
   }
 }
+
+/** 404：资源不存在或 token 没有访问权限——与网络/限流错误分开处理。 */
+export function isNotFound(error: unknown): boolean {
+  return error instanceof GithubApiError && error.status === 404;
+}
+
+const errorStatus = (error: unknown): number | undefined => (error as { status?: number }).status;
+const errorMessage = (error: unknown): string =>
+  (error as { message?: string }).message ?? String(error);
 
 function describeHttpError(status: number | undefined): string {
   if (status === 401) {
@@ -298,12 +318,35 @@ function describeHttpError(status: number | undefined): string {
   return `GitHub API error${status === undefined ? "" : ` (HTTP ${status})`}`;
 }
 
+/** 非 2xx 的原始响应（二进制下载）转成错误：状态、URL 与 GitHub 的 message 一起给出。 */
+async function ensureOk(response: Response): Promise<Response> {
+  if (response.ok) {
+    return response;
+  }
+  let detail: string | undefined;
+  try {
+    const body = await response.text();
+    detail = (JSON.parse(body) as { message?: string }).message ?? body.slice(0, 200);
+  } catch {
+    detail = undefined;
+  }
+  throw new GithubApiError(
+    `GitHub API error (HTTP ${response.status}) at ${response.url}${detail === undefined || detail === "" ? "" : `: ${detail}`}`,
+    { status: response.status },
+  );
+}
+
 export interface GithubApi {
-  /** Run an octokit request; retries once with a fresh token on 401. */
-  call<T>(fn: (octokit: Octokit) => Promise<T>): Promise<T>;
+  /**
+   * Run an octokit request; retries once with a fresh token on 401. Failures
+   * are rethrown as `GithubApiError`; `input` (the toolcall params behind the
+   * request) is attached to that error when given.
+   */
+  call<T>(fn: (octokit: Octokit) => Promise<T>, input?: unknown): Promise<T>;
   /**
    * 用同一个 token 直接 fetch（二进制资产、源码归档这类要走原始响应体、不能经 octokit
-   * 的 JSON 解析的请求）。重定向自动跟随，401 同样丢缓存重试一次。
+   * 的 JSON 解析的请求）。重定向自动跟随，401 同样丢缓存重试一次；非 2xx 抛
+   * `GithubApiError`（状态、URL 与 GitHub 的 message 都在里面）。
    */
   rawFetch(url: string, init?: RequestInit): Promise<Response>;
 }
@@ -361,18 +404,26 @@ export function createGithubApi(options: GithubClientOptions = {}): GithubApi {
   }
 
   return {
-    async call(fn) {
+    async call(fn, input) {
       for (let attempt = 0; ; attempt += 1) {
         try {
           return await fn(await getClient());
         } catch (error) {
-          const status = (error as { status?: number }).status;
+          const status = errorStatus(error);
           if (status === 401 && attempt === 0 && client) {
             token = undefined;
             client = undefined;
             continue;
           }
-          throw error;
+          // 统一在这里成 GithubApiError：调用方（工具、诊断）拿到的是同一种错误形态，
+          // 不必各自去剥 status / message。
+          throw error instanceof GithubApiError
+            ? error
+            : new GithubApiError(`${describeHttpError(status)}: ${errorMessage(error)}`, {
+                status,
+                input,
+                cause: error,
+              });
         }
       }
     },
@@ -381,7 +432,7 @@ export function createGithubApi(options: GithubClientOptions = {}): GithubApi {
       for (let attempt = 0; ; attempt += 1) {
         const response = await rawFetchOnce(url, init);
         if (response.status !== 401 || attempt > 0) {
-          return response;
+          return ensureOk(response);
         }
         await response.body?.cancel();
       }
@@ -394,31 +445,22 @@ export interface GithubSearch {
 }
 
 /**
- * Create a search client backed by a cached octokit instance.
+ * Create a search client on top of a shared API accessor (见 `createGithubApi`)：
+ * 一个会话只应有一个 accessor，搜索 / checks / reads 共用同一份 octokit 与 token 缓存。
  */
-export function createGithubSearch(options: GithubClientOptions = {}): GithubSearch {
-  const api = createGithubApi(options);
-
+export function createGithubSearch(api: GithubApi): GithubSearch {
   return {
     async search(kind, params) {
       const limit = Math.min(Math.max(params.limit ?? 30, 1), 100);
-
-      try {
-        // `@me` 是 gh CLI 的简写，REST 搜索不认识：这里不展开，带关键词时它按字面量
-        // 进入查询串（无关键词的列表走 gh CLI，由 gh 自己展开）。
-        const q = buildSearchQuery(kind, { ...params, limit });
-        return await api.call(async (client) => {
-          const { data } = await client.rest.search.issuesAndPullRequests({
-            q,
-            per_page: limit,
-          });
-          return data.items.map((item) => normalize(parseWithSchema(searchItemSchema, item)));
+      // `@me` 是 gh CLI 的简写，REST 搜索不认识：这里不展开，它按字面量进入查询串。
+      const q = buildSearchQuery(kind, { ...params, limit });
+      return await api.call(async (client) => {
+        const { data } = await client.rest.search.issuesAndPullRequests({
+          q,
+          per_page: limit,
         });
-      } catch (error) {
-        const status = (error as { status?: number }).status;
-        const message = (error as { message?: string }).message ?? String(error);
-        throw new GithubSearchError(`${describeHttpError(status)}: ${message}`, params, status);
-      }
+        return data.items.map((item) => normalize(parseWithSchema(searchItemSchema, item)));
+      }, params);
     },
   };
 }
@@ -522,7 +564,7 @@ export interface GithubChecksClient {
 }
 
 /**
- * Create a client for PR CI checks, backed by a cached octokit instance.
+ * Create a client for PR CI checks on top of a shared API accessor.
  * Covers both check sources GitHub exposes for a commit — classic commit
  * statuses (Azure DevOps, Jenkins, ...) and check runs (GitHub Actions,
  * GitHub Apps) — so external CI is visible to the caller.
@@ -553,9 +595,7 @@ function toRunJob(job: ApiJob): RunJob {
   };
 }
 
-export function createGithubChecks(options: GithubClientOptions = {}): GithubChecksClient {
-  const api = createGithubApi(options);
-
+export function createGithubChecks(api: GithubApi): GithubChecksClient {
   return {
     async statuses(owner, repo, ref, signal) {
       const { data } = await api.call((octokit) =>

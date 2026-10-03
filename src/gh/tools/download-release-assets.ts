@@ -9,7 +9,7 @@ import { type ToolPendant } from "../../lib/pendant.js";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  resolveRepo,
+  resolveRepoTarget,
   splitRepo,
   structuredFailure,
   type StructuredFailureResult,
@@ -114,8 +114,11 @@ export async function downloadReleaseAssets(
     );
   }
 
-  const effectiveRepo = await resolveRepo(params.repo, signal, ctx.cwd, params);
-  const { owner, repo: repoName } = splitRepo(effectiveRepo);
+  const {
+    fullName: effectiveRepo,
+    owner,
+    name: repoName,
+  } = await resolveRepoTarget(params.repo, signal, ctx.cwd, params);
   const view = Value.Parse(
     releaseViewSchema,
     await gh.reads.release(owner, repoName, params.tag, signal),

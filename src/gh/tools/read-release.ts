@@ -4,10 +4,9 @@ import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
-  resolveRepo,
-  splitRepo,
-  subtitlePendant,
+  resolveRepoTarget,
   toToolResult,
+  withPendant,
   withStructuredResult,
 } from "../base.js";
 import { renderReleaseView } from "../render.js";
@@ -28,14 +27,12 @@ export function addReadReleaseTool(gh: GhClient, bus: ToolBus) {
       structuredSchema: ghReleaseViewPayloadSchema,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const { tag, repo } = params;
-        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-        const { owner, repo: repoName } = splitRepo(effectiveRepo);
-        const data = await gh.reads.release(owner, repoName, tag, signal);
+        const { owner, name } = await resolveRepoTarget(repo, signal, ctx.cwd, params);
+        const data = await gh.reads.release(owner, name, tag, signal);
         const view = parseWithSchema(ghReleaseViewSchema, data);
         const text = renderReleaseView(view);
         const result = toToolResult(text, params);
-        result.details.pendant = subtitlePendant(params, "tag");
-        return withStructuredResult(result, { text, release: view });
+        return withStructuredResult(withPendant(result, params, "tag"), { text, release: view });
       },
     }),
   );
