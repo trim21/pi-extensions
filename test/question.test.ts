@@ -7,7 +7,6 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { createToolBus } from "../src/lib/tool-bus.js";
 import {
   CUSTOM_LABEL,
   DONE_LABEL,
@@ -17,6 +16,7 @@ import {
   registerQuestionTool,
   TOOL_NAME,
 } from "../src/opencode/question.js";
+import { createToolRecorder, requireTool } from "./opencode-harness.js";
 
 interface Tool {
   name: string;
@@ -42,14 +42,9 @@ interface Tool {
 }
 
 function loadTool(): { tool: Tool } {
-  let tool: Tool | undefined;
-  const pi = {
-    registerTool: (def: Tool) => {
-      tool = def;
-    },
-  } as never;
-  registerQuestionTool(createToolBus(pi));
-  return { tool: tool! };
+  const recorder = createToolRecorder<Tool>();
+  registerQuestionTool(recorder.bus);
+  return { tool: requireTool(recorder, TOOL_NAME) };
 }
 
 const q = (over: Partial<Question>): Question => ({

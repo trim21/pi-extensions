@@ -12,6 +12,11 @@ import { spawn } from "node:child_process";
 /** 单次搜索最多返回的结果数（上游 limit = 100）。 */
 export const RIPGREP_RESULT_LIMIT = 100;
 
+/** rg 输出的路径：去掉前导 `./`，分隔符统一成 `/`。 */
+export function normalizeRipgrepPath(text: string): string {
+  return text.replace(/^(?:\.[\\/])+/u, "").replaceAll("\\", "/");
+}
+
 /** stderr 最多保留的字节数（上游 ERROR_BYTES）。 */
 const ERROR_BYTES = 8 * 1024;
 

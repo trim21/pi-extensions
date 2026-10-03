@@ -15,8 +15,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deserializeReads } from "../src/lib/file-reads.js";
-import { createToolBus } from "../src/lib/tool-bus.js";
 import { createOpencodeFileTools } from "../src/opencode/files.js";
+import { createToolRecorder, requireTool } from "./opencode-harness.js";
 
 // 包一层只是为了观察写保护拿到的内容；行为仍走真实实现。
 vi.mock("../src/lib/write-guard.js", async (importOriginal) => {
@@ -53,33 +53,23 @@ interface Harness {
 }
 
 function loadTool(): Harness {
-  const tools = new Map<string, Tool>();
-  const handlers = new Map<string, ((...args: unknown[]) => unknown)[]>();
-  const pi = {
-    registerTool: (def: Tool) => {
-      tools.set(def.name, def);
-    },
-    on(event: string, handler: (...args: unknown[]) => unknown) {
-      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
-    },
-    registerCommand: vi.fn(),
-  } as never;
-  const toolset = createOpencodeFileTools(pi);
-  toolset.register(createToolBus(pi));
-  handlers.set("session_start", [
+  const recorder = createToolRecorder<Tool>();
+  const toolset = createOpencodeFileTools(recorder.pi);
+  toolset.register(recorder.bus);
+  recorder.handlers.set("session_start", [
     (_event: unknown, ctx: unknown) => toolset.restoreReads(ctx as never),
   ]);
-  const read = tools.get("read")!;
+  const read = requireTool(recorder, "read");
   return {
-    tool: tools.get("edit")!,
-    write: tools.get("write")!,
+    tool: requireTool(recorder, "edit"),
+    write: requireTool(recorder, "write"),
     readFirst: async (filePath: string) => {
       const result = await read.execute("id", { filePath }, undefined, undefined, ctx);
       expect(result.details.reads).toBeDefined();
       return result.details;
     },
     emitSessionStart: async (branch: unknown[]) => {
-      for (const handler of handlers.get("session_start") ?? []) {
+      for (const handler of recorder.handlers.get("session_start") ?? []) {
         await handler(
           { type: "session_start", reason: "startup" },
           {

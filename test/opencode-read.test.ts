@@ -12,8 +12,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createToolBus } from "../src/lib/tool-bus.js";
 import opencodeFileTools, { createOpencodeFileTools, readLines } from "../src/opencode/files.js";
+import { createToolRecorder, requireTool } from "./opencode-harness.js";
 
 const MAX_LINE_LENGTH = 2000;
 const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`;
@@ -173,19 +173,10 @@ interface Tool {
 }
 
 function loadTool(): Tool {
-  let tool: Tool | undefined;
-  const pi = {
-    registerTool: (def: Tool) => {
-      if (def.name === "read") {
-        tool = def;
-      }
-    },
-    on: vi.fn(),
-    registerCommand: vi.fn(),
-  } as never;
+  const recorder = createToolRecorder<Tool>();
   // 工具在 session_start 里注册：这里直接调用返回的注册函数
-  createOpencodeFileTools(pi).register(createToolBus(pi));
-  return tool!;
+  createOpencodeFileTools(recorder.pi).register(recorder.bus);
+  return requireTool(recorder, "read");
 }
 
 let dir: string;
@@ -471,20 +462,9 @@ describe("opencode read reports LSP diagnostics", () => {
     const filePath = join(lspDir, "x.py");
     await writeFile(filePath, "x = 1\n", "utf8");
 
-    let tool: Tool | undefined;
-    const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
+    const recorder = createToolRecorder<Tool>();
     opencodeFileTools(
-      {
-        registerTool: (def: Tool) => {
-          if (def.name === "read") {
-            tool = def;
-          }
-        },
-        on(event: string, handler: (...args: any[]) => unknown) {
-          handlers.set(event, [...(handlers.get(event) ?? []), handler]);
-        },
-        registerCommand: vi.fn(),
-      } as never,
+      recorder.pi,
       // globalConfigPath 指向临时配置，隔离真实全局 lsp.json
       { globalConfigPath: configPath },
     );
@@ -495,17 +475,23 @@ describe("opencode read reports LSP diagnostics", () => {
       sessionManager: { getBranch: () => [] },
     };
     try {
-      for (const handler of handlers.get("session_start") ?? []) {
+      for (const handler of recorder.handlers.get("session_start") ?? []) {
         await handler({ type: "session_start", reason: "startup" }, lspCtx);
       }
 
-      const result = await tool!.execute("id", { filePath }, undefined, undefined, lspCtx);
+      const result = await requireTool(recorder, "read").execute(
+        "id",
+        { filePath },
+        undefined,
+        undefined,
+        lspCtx,
+      );
       const text = result.content[0].text;
       expect(text).toContain("1: x = 1");
       expect(text).toContain("LSP diagnostics detected in this file\n<diagnostics file=");
       expect(text).toContain("mock error message");
     } finally {
-      for (const handler of handlers.get("session_shutdown") ?? []) {
+      for (const handler of recorder.handlers.get("session_shutdown") ?? []) {
         await handler({ type: "session_shutdown", reason: "quit" }, lspCtx);
       }
       await rm(lspDir, { recursive: true, force: true });
