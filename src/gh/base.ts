@@ -9,7 +9,7 @@
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
-import { Type } from "typebox";
+import { type Static, type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { egress } from "../lib/egress.js";
@@ -25,13 +25,34 @@ import {
   type GithubSearch,
   renderHits,
 } from "../lib/github.js";
+import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { type ToolPendant } from "../lib/pendant.js";
+import { type StructuredResult } from "../lib/tool-bus.js";
+import type { checksVerdictSchema } from "./schemas.js";
 
 /** A tool result: what the model sees plus the structured details payload. */
 export interface ToolResult {
   content: { type: "text"; text: string }[];
   details: Record<string, unknown>;
 }
+
+/**
+ * 带结构化结果的结果：`structuredResult` 的成功支类型由 `T` 决定。声明了 structuredSchema
+ * 的工具用它，交给 codemode 脚本按名字调用时解包。它不改变 `content` 与 `details`。
+ */
+export type WithStructured<T> = ToolResult & { structuredResult: StructuredResult<T> };
+
+/** 某个 `structuredSchema` 对应的工具结果：成功支与 schema 的静态类型对齐。 */
+export type StructuredResultOf<TSchema_ extends TSchema> = WithStructured<Static<TSchema_>>;
+
+/** 结构化失败（Result 的失败支）：与具体的输出类型无关，任何结构化工具都能用。 */
+export interface StructuredFailure {
+  ok: false;
+  error: string;
+}
+
+/** 结构化失败的结果：不必抛异常就能把「没找到」这类结果告诉脚本。 */
+export type StructuredFailureResult = ToolResult & { structuredResult: StructuredFailure };
 
 /** What a toolcall handler receives from the framework. */
 export interface ToolCall<Params> {
@@ -237,6 +258,32 @@ export function toToolResultJson(json: string, input?: unknown): ToolResult {
     content: [{ type: "text", text: json }],
     details: { ...(input !== undefined && { input }), truncated: false },
   };
+}
+
+/** 给结果附上结构化结果（成功支）：`value` 就是脚本解包后拿到的东西。 */
+export function withStructuredResult<T>(result: ToolResult, value: T): WithStructured<T> {
+  return { ...result, structuredResult: { ok: true, value } };
+}
+
+/**
+ * 透传型工具的成功结果：`gh --json` 的原始输出既是给模型的文本（整段 JSON，不经行
+ * 截断），也按 `schema` 解析成结构化结果。解析失败会抛错——schema 与 GitHub 实际返回
+ * 漂移时必须显式失败，不能悄悄少给字段。
+ */
+export function toStructuredJsonResult<T extends TSchema>(
+  json: string,
+  input: unknown,
+  schema: T,
+): StructuredResultOf<T> {
+  return withStructuredResult(
+    toToolResultJson(json, input),
+    parseWithSchema(schema, JSON.parse(json)),
+  );
+}
+
+/** 结构化失败（Result 的失败支）：不必抛异常就能把「没找到」这类结果告诉脚本。 */
+export function structuredFailure(error: string): StructuredFailure {
+  return { ok: false, error };
 }
 
 /**
@@ -747,7 +794,7 @@ export async function waitChecksReport(options: {
   onUpdate: ((msg: ToolResult) => void) | undefined;
   params: unknown;
   pendant?: ToolPendant;
-}): Promise<ToolResult> {
+}): Promise<StructuredResultOf<typeof checksVerdictSchema>> {
   const { subject, owner, repo, headSha, failFast, event, signal, onUpdate, params, pendant } =
     options;
 
@@ -779,15 +826,18 @@ export async function waitChecksReport(options: {
   }
 
   const verdict = renderChecksVerdict({ subject, poll, actionJobs, enrichmentError });
-  return {
-    content: [{ type: "text", text: verdict.text }],
-    details: {
-      status: verdict.status,
-      totalChecks: poll.checks.length,
-      checks: poll.checks,
-      failedJobs: verdict.failedJobs,
-      input: params,
-      ...(pendant && { pendant }),
-    },
+  const payload = {
+    status: verdict.status,
+    totalChecks: poll.checks.length,
+    // 复制成可变数组：结构化结果的类型要与 structuredSchema 的静态类型一致
+    checks: [...poll.checks],
+    failedJobs: [...verdict.failedJobs],
   };
+  return withStructuredResult(
+    {
+      content: [{ type: "text", text: verdict.text }],
+      details: { ...payload, input: params, ...(pendant && { pendant }) },
+    },
+    payload,
+  );
 }

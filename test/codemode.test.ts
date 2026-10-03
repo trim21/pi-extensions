@@ -21,7 +21,7 @@ describe("codemode 沙箱", () => {
   it("工具调用、输出、返回值与 store 写入", async () => {
     const result = await run(
       `
-      const file = await tools.Read({ path: "a.txt" });
+      const file = await call("Read", { path: "a.txt" });
       text("read " + file.echoed.path);
       store.set("last", file.echoed.path);
       console.log("done");
@@ -91,14 +91,14 @@ describe("codemode 沙箱", () => {
     }
   });
 
-  it("工具报错以 Error 回到脚本，脚本可以捕获", async () => {
+  it("工具报错以 CallFailedError 回到脚本，脚本可以捕获", async () => {
     const result = await run(
       `
       try {
-        await tools.Read({ path: "missing" });
+        await call("Read", { path: "missing" });
         return "not reached";
       } catch (error) {
-        return "caught: " + error.message;
+        return [error instanceof CallFailedError, error.name, error.message].join(" | ");
       }
       `,
       { onCall: async () => ({ ok: false, error: "ENOENT: no such file" }) },
@@ -106,21 +106,20 @@ describe("codemode 沙箱", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value).toBe("caught: ENOENT: no such file");
+      expect(result.value).toBe("true | CallFailedError | ENOENT: no such file");
     }
     expect(result.calls[0]?.status).toBe("error");
   });
 
-  it("不存在的工具是脚本错误", async () => {
-    const result = await run(`return await tools.Nope();`);
+  it("不存在的工具名以 CallFailedError 失败", async () => {
+    const result = await run(`return await call("Nope");`);
     expect(result.ok).toBe(false);
     if (result.ok) {
       return;
     }
 
     expect(result.error.kind).toBe("script");
-    // QuickJS 的报错文案与 V8 不同，只断言「调用不存在的东西」这一事实
-    expect(result.error.message).toContain("not a function");
+    expect(result.error.message).toContain('Tool "Nope" is not available in codemode.');
   });
 
   it("脚本抛错带 kind script", async () => {
@@ -160,7 +159,7 @@ describe("codemode 沙箱", () => {
 
   it("等嵌套调用的时间不受任何时限约束", async () => {
     // 写类工具的确认框、Bash 提权都要人等；脚本没有超时，等多久都照常返回
-    const result = await run(`return await tools.Read({ path: "slow" });`, {
+    const result = await run(`return await call("Read", { path: "slow" });`, {
       onCall: async () => {
         await new Promise((resolve) => setTimeout(resolve, 1_000));
         return { ok: true, value: "slow result" };
@@ -213,7 +212,7 @@ describe("codemode 沙箱", () => {
     expect(result.output).toEqual([{ type: "text", text: "bye" }]);
   });
 
-  it("VM 里没有宿主能力", async () => {
+  it("VM 里没有宿主能力，也没有旧的 tools 对象", async () => {
     const result = await run(`
       return {
         process: typeof process,
@@ -221,6 +220,9 @@ describe("codemode 沙箱", () => {
         fetch: typeof fetch,
         setTimeout: typeof setTimeout,
         evaluate: typeof globalThis.eval,
+        tools: typeof tools,
+        call: typeof call,
+        callFailedError: typeof CallFailedError,
       };
     `);
 
@@ -233,23 +235,34 @@ describe("codemode 沙箱", () => {
         setTimeout: "undefined",
         // eval 仍可用，但只能产出同一个 VM 里的代码
         evaluate: "function",
+        tools: "undefined",
+        call: "function",
+        callFailedError: "function",
       });
     }
   });
 
-  it("工具名里的非法标识符也能调用", async () => {
+  it("工具名里的非法标识符按字符串调用，且不同名字互不干扰", async () => {
     const result = await run(
       `
-      const a = await tools["read-github-pr"]({ number: 1 });
-      const b = await tools.read_github_pr({ number: 2 });
-      return [a.echoed.number, b.echoed.number].join(",");
+      const a = await call("read-github-pr", { number: 1 });
+      const b = await call("Read", { number: 2 });
+      return [a.echoed.number, b.echoed.number, ALL_TOOLS.map((t) => t.name).join("+")].join(",");
       `,
-      { tools: [{ name: "read-github-pr" }] },
+      { tools: [{ name: "read-github-pr" }, { name: "Read" }] },
     );
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value).toBe("1,2");
+      expect(result.value).toBe("1,2,read-github-pr+Read");
+    }
+  });
+
+  it("动态工具名与未提供的参数", async () => {
+    const result = await run(`return await call("Read");`);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({ echoed: undefined });
     }
   });
 });

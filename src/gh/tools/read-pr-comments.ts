@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 
-import type { ToolBus } from "../../lib/tool-bus.js";
+import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   ghApiList,
   type GhClient,
@@ -8,66 +8,70 @@ import {
   repoArgs,
   resolveRepo,
   subtitlePendant,
-  toToolResultJson,
+  toStructuredJsonResult,
 } from "../base.js";
+import { prCommentsSchema } from "../schemas.js";
 
 export function addReadPrCommentsTool(_gh: GhClient, bus: ToolBus) {
-  bus.register({
-    name: "read-github-pr-comments",
-    label: "GitHub PR Comments",
-    description:
-      "Get review comments on a GitHub pull request. Set reviews=true for inline code review comments with diff_hunk.",
-    promptSnippet: "Read GitHub PR comments",
-    parameters: Type.Object({
-      number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-      reviews: Type.Optional(
-        Type.Boolean({
-          description:
-            "If true, returns inline code review comments (with diff_hunk, path, line) via API. Default: false (returns issue comments).",
-        }),
-      ),
+  bus.register(
+    defineStructuredTool({
+      name: "read-github-pr-comments",
+      label: "GitHub PR Comments",
+      description:
+        "Get review comments on a GitHub pull request. Set reviews=true for inline code review comments with diff_hunk.",
+      promptSnippet: "Read GitHub PR comments",
+      parameters: Type.Object({
+        number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
+        repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+        reviews: Type.Optional(
+          Type.Boolean({
+            description:
+              "If true, returns inline code review comments (with diff_hunk, path, line) via API. Default: false (returns issue comments).",
+          }),
+        ),
+      }),
+      structuredSchema: prCommentsSchema,
+      async execute(_id, params, signal, _onUpdate, ctx) {
+        const { number, repo, reviews } = params;
+        let out: string;
+        if (reviews) {
+          const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
+
+          const [reviewComments, reviewSummaries] = await Promise.all([
+            ghApiList(`/repos/${effectiveRepo}/pulls/${String(number)}/comments`, {
+              cwd: ctx.cwd,
+              signal,
+              input: params,
+            }),
+            ghApiList(`/repos/${effectiveRepo}/pulls/${String(number)}/reviews`, {
+              cwd: ctx.cwd,
+              signal,
+              input: params,
+            }),
+          ]);
+
+          out = JSON.stringify(
+            {
+              reviews: reviewSummaries,
+              comments: reviewComments,
+            },
+            null,
+            2,
+          );
+        } else {
+          out = await ghExec(
+            ["pr", "view", String(number), ...repoArgs(repo), "--json", "comments"],
+            {
+              cwd: ctx.cwd,
+              signal,
+              input: params,
+            },
+          );
+        }
+        const result = toStructuredJsonResult(out, params, prCommentsSchema);
+        result.details.pendant = subtitlePendant(params, "number");
+        return result;
+      },
     }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      const { number, repo, reviews } = params;
-      let out: string;
-      if (reviews) {
-        const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
-
-        const [reviewComments, reviewSummaries] = await Promise.all([
-          ghApiList(`/repos/${effectiveRepo}/pulls/${String(number)}/comments`, {
-            cwd: ctx.cwd,
-            signal,
-            input: params,
-          }),
-          ghApiList(`/repos/${effectiveRepo}/pulls/${String(number)}/reviews`, {
-            cwd: ctx.cwd,
-            signal,
-            input: params,
-          }),
-        ]);
-
-        out = JSON.stringify(
-          {
-            reviews: reviewSummaries,
-            comments: reviewComments,
-          },
-          null,
-          2,
-        );
-      } else {
-        out = await ghExec(
-          ["pr", "view", String(number), ...repoArgs(repo), "--json", "comments"],
-          {
-            cwd: ctx.cwd,
-            signal,
-            input: params,
-          },
-        );
-      }
-      const result = toToolResultJson(out, params);
-      result.details.pendant = subtitlePendant(params, "number");
-      return result;
-    },
-  });
+  );
 }

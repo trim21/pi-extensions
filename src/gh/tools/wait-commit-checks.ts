@@ -1,15 +1,16 @@
 import { Type } from "typebox";
 
-import type { ToolBus } from "../../lib/tool-bus.js";
+import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   resolveRepo,
   splitRepo,
+  type StructuredResultOf,
   subtitlePendant,
   type ToolCall,
-  type ToolResult,
   waitChecksReport,
 } from "../base.js";
+import { checksVerdictSchema } from "../schemas.js";
 
 interface CommitChecksWaitParams {
   commit: number | string;
@@ -22,7 +23,7 @@ interface CommitChecksWaitParams {
 async function waitCommitChecks(
   gh: GhClient,
   call: ToolCall<CommitChecksWaitParams>,
-): Promise<ToolResult> {
+): Promise<StructuredResultOf<typeof checksVerdictSchema>> {
   const { params, ctx, signal, onUpdate } = call;
   const { commit, repo, event, fail_fast } = params;
 
@@ -54,35 +55,38 @@ async function waitCommitChecks(
 }
 
 export function addWaitCommitChecksTool(gh: GhClient, bus: ToolBus) {
-  bus.register({
-    name: "wait-github-commit-checks",
-    label: "Watch GitHub Commit Checks",
-    description:
-      "Watch CI status checks for a commit until they complete — no pull request required. " +
-      "Same semantics as wait-github-pr-checks: returns when any check fails (immediately under fail_fast) " +
-      "or all checks pass/skip; on timeout the still-in-flight snapshot is returned. " +
-      "With `event`, only check runs triggered by that workflow event (e.g. push) are judged; " +
-      "commit statuses have an unknown trigger event and are excluded under a filter. " +
-      "Use this to wait for the runs a commit's push triggered, or for checks on an arbitrary ref.",
-    promptSnippet: "Watch and wait for GitHub commit CI checks to complete",
-    parameters: Type.Object({
-      commit: Type.Union([Type.Number(), Type.String()], {
-        description:
-          "Commit to wait for: full or partial SHA, branch name, or tag name (resolved to the commit's SHA)",
-      }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-      event: Type.Optional(
-        Type.String({
+  bus.register(
+    defineStructuredTool({
+      name: "wait-github-commit-checks",
+      label: "Watch GitHub Commit Checks",
+      description:
+        "Watch CI status checks for a commit until they complete — no pull request required. " +
+        "Same semantics as wait-github-pr-checks: returns when any check fails (immediately under fail_fast) " +
+        "or all checks pass/skip; on timeout the still-in-flight snapshot is returned. " +
+        "With `event`, only check runs triggered by that workflow event (e.g. push) are judged; " +
+        "commit statuses have an unknown trigger event and are excluded under a filter. " +
+        "Use this to wait for the runs a commit's push triggered, or for checks on an arbitrary ref.",
+      promptSnippet: "Watch and wait for GitHub commit CI checks to complete",
+      parameters: Type.Object({
+        commit: Type.Union([Type.Number(), Type.String()], {
           description:
-            "Only judge check runs triggered by this workflow event (e.g. push, pull_request)",
+            "Commit to wait for: full or partial SHA, branch name, or tag name (resolved to the commit's SHA)",
         }),
-      ),
-      fail_fast: Type.Optional(
-        Type.Boolean({ description: "Exit immediately when any check fails (default: false)" }),
-      ),
+        repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+        event: Type.Optional(
+          Type.String({
+            description:
+              "Only judge check runs triggered by this workflow event (e.g. push, pull_request)",
+          }),
+        ),
+        fail_fast: Type.Optional(
+          Type.Boolean({ description: "Exit immediately when any check fails (default: false)" }),
+        ),
+      }),
+      structuredSchema: checksVerdictSchema,
+      async execute(_id, params, signal, onUpdate, ctx) {
+        return waitCommitChecks(gh, { params, ctx, signal, onUpdate });
+      },
     }),
-    async execute(_id, params, signal, onUpdate, ctx) {
-      return waitCommitChecks(gh, { params, ctx, signal, onUpdate });
-    },
-  });
+  );
 }

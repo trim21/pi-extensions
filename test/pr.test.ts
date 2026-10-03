@@ -47,6 +47,7 @@ interface ToolDef {
   ) => Promise<{
     content: { type: "text"; text: string }[];
     details: Record<string, unknown>;
+    structuredResult?: { ok: boolean; value?: unknown };
   }>;
 }
 
@@ -82,7 +83,13 @@ afterEach(() => {
 
 describe.skipIf(process.platform === "win32")("read-github-pr", () => {
   it("returns a >50KB single-line JSON payload through whole", async () => {
-    const json = JSON.stringify({ number: 142, body: "x".repeat(80 * 1024), comments: [] });
+    const json = JSON.stringify({
+      number: 142,
+      title: "big PR",
+      state: "OPEN",
+      body: "x".repeat(80 * 1024),
+      comments: [],
+    });
     const procs: FakeChildProcess[] = [];
     spawnMock.mockImplementation(() => {
       const proc = new FakeChildProcess();
@@ -102,5 +109,16 @@ describe.skipIf(process.platform === "win32")("read-github-pr", () => {
     const result = await promise;
     expect(result.content[0].text).toBe(json);
     expect(result.details.truncated).toBe(false);
+    // 结构化结果与文本同源：codemode 脚本拿它就不必再解析 JSON 文本
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: {
+        number: 142,
+        title: "big PR",
+        state: "OPEN",
+        body: "x".repeat(80 * 1024),
+        comments: [],
+      },
+    });
   });
 });

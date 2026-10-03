@@ -6,7 +6,7 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { type ToolPendant } from "../../lib/pendant.js";
-import type { ToolBus } from "../../lib/tool-bus.js";
+import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   GhError,
@@ -14,10 +14,14 @@ import {
   repoArgs,
   resolveRepo,
   splitRepo,
+  structuredFailure,
+  type StructuredFailureResult,
+  type StructuredResultOf,
   subtitlePendant,
   type ToolCall,
-  type ToolResult,
+  withStructuredResult,
 } from "../base.js";
+import { releaseDownloadSchema } from "../schemas.js";
 
 interface ReleaseDownloadParams {
   repo?: string;
@@ -120,7 +124,7 @@ const GH_NO_ASSET_MATCH = "no assets match the file pattern";
  */
 export async function downloadReleaseAssets(
   call: ToolCall<ReleaseDownloadParams>,
-): Promise<ToolResult> {
+): Promise<StructuredResultOf<typeof releaseDownloadSchema> | StructuredFailureResult> {
   const { params, ctx, signal } = call;
   const patterns = releasePatterns(params.pattern);
   if (params.archive !== undefined && patterns.length > 0) {
@@ -181,59 +185,62 @@ export async function downloadReleaseAssets(
   );
 
   if (files.length === 0 && params.archive === undefined) {
+    const text = `Nothing to download from ${effectiveRepo}@${view.tagName}: the release has no assets (try archive for the source tarball)`;
     return {
-      content: [
-        {
-          type: "text",
-          text: `Nothing to download from ${effectiveRepo}@${view.tagName}: the release has no assets (try archive for the source tarball)`,
-        },
-      ],
+      content: [{ type: "text", text }],
       details: {
         ...payload,
         available_assets: assetNames,
         input: params,
         ...(pendant && { pendant }),
       },
+      structuredResult: structuredFailure(text),
     };
   }
 
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-    details: { ...payload, input: params, ...(pendant && { pendant }) },
-  };
+  return withStructuredResult(
+    {
+      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+      details: { ...payload, input: params, ...(pendant && { pendant }) },
+    },
+    payload,
+  );
 }
 
 export function addDownloadReleaseAssetsTool(_gh: GhClient, bus: ToolBus) {
-  bus.register({
-    name: "download-github-release-assets",
-    label: "GitHub Release Download",
-    description:
-      "Download a GitHub release's assets (or its source archive) into " +
-      "~/.cache/pi/github/releases/<owner>/<repo>/<tag>/ using the gh CLI's credentials, " +
-      "so private repositories and large binaries work where a plain HTTP fetch cannot. " +
-      "Files already in that directory are kept, never re-fetched. The result is the JSON " +
-      "summary {repo, tag, dir, files:[{name, path, bytes}]} listing everything now in the " +
-      "directory; file contents are not echoed. Read the entries you need from `path`.",
-    promptSnippet: "Download GitHub release assets",
-    parameters: Type.Object({
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
-      tag: Type.Optional(
-        Type.String({ description: "Release tag (defaults to the latest release)" }),
-      ),
-      pattern: Type.Optional(
-        Type.String({
-          description:
-            'Comma-separated glob patterns for asset names, e.g. "*.tar.gz,*.deb" (default: every asset)',
-        }),
-      ),
-      archive: Type.Optional(
-        Type.Union([Type.Literal("zip"), Type.Literal("tar.gz")], {
-          description: "Download the release's source archive instead of its assets",
-        }),
-      ),
+  bus.register(
+    defineStructuredTool({
+      name: "download-github-release-assets",
+      label: "GitHub Release Download",
+      description:
+        "Download a GitHub release's assets (or its source archive) into " +
+        "~/.cache/pi/github/releases/<owner>/<repo>/<tag>/ using the gh CLI's credentials, " +
+        "so private repositories and large binaries work where a plain HTTP fetch cannot. " +
+        "Files already in that directory are kept, never re-fetched. The result is the JSON " +
+        "summary {repo, tag, dir, files:[{name, path, bytes}]} listing everything now in the " +
+        "directory; file contents are not echoed. Read the entries you need from `path`.",
+      promptSnippet: "Download GitHub release assets",
+      parameters: Type.Object({
+        repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
+        tag: Type.Optional(
+          Type.String({ description: "Release tag (defaults to the latest release)" }),
+        ),
+        pattern: Type.Optional(
+          Type.String({
+            description:
+              'Comma-separated glob patterns for asset names, e.g. "*.tar.gz,*.deb" (default: every asset)',
+          }),
+        ),
+        archive: Type.Optional(
+          Type.Union([Type.Literal("zip"), Type.Literal("tar.gz")], {
+            description: "Download the release's source archive instead of its assets",
+          }),
+        ),
+      }),
+      structuredSchema: releaseDownloadSchema,
+      async execute(_id, params, signal, _onUpdate, ctx) {
+        return downloadReleaseAssets({ params, ctx, signal });
+      },
     }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      return downloadReleaseAssets({ params, ctx, signal });
-    },
-  });
+  );
 }

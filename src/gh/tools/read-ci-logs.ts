@@ -11,17 +11,21 @@ import { Type } from "typebox";
 
 import type { RunJob } from "../../lib/github.js";
 import { createSeqState } from "../../lib/seq-state.js";
-import type { ToolBus } from "../../lib/tool-bus.js";
+import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   ghExec,
   resolveRepo,
   splitRepo,
+  structuredFailure,
+  type StructuredFailureResult,
+  type StructuredResultOf,
   subtitlePendant,
   type ToolCall,
-  type ToolResult,
   toPositiveId,
+  withStructuredResult,
 } from "../base.js";
+import { ciLogsSchema } from "../schemas.js";
 
 // 模块级串行状态：同一资源（如 CI 日志）的请求排队执行，配合函数内部的
 // 缓存检查避免重复网络请求。闭包状态不与其他扩展共享，key 无需全局前缀。
@@ -373,8 +377,11 @@ interface JobIdParams {
   repo?: string;
 }
 
+/** 「没找到 / 还没日志」是结构化失败，不是异常：脚本能按 ok === false 分辨。 */
+type CiLogsResult = StructuredResultOf<typeof ciLogsSchema> | StructuredFailureResult;
+
 /** The toolcall handler behind `read-github-ci-logs`. */
-async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<ToolResult> {
+async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<CiLogsResult> {
   const { params, ctx, signal, onUpdate } = call;
   const { job_id, repo } = params;
   const jobId = toPositiveId(job_id, "job_id");
@@ -383,9 +390,10 @@ async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<ToolRe
   const effectiveRepo = await resolveRepo(repo, signal, ctx.cwd, params);
   const { owner, repo: name } = splitRepo(effectiveRepo);
 
-  const failure = (text: string): ToolResult => ({
+  const failure = (text: string): StructuredFailureResult => ({
     content: [{ type: "text", text }],
     details: { input: params, ...(pendant && { pendant }) },
+    structuredResult: structuredFailure(text),
   });
 
   let target: RunJob;
@@ -415,28 +423,34 @@ async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<ToolRe
   const rawLog = await getJobLog(target, signal, ctx.cwd, params);
   const index = jobLogIndex(target, rawLog);
 
-  return {
-    content: [{ type: "text", text: JSON.stringify(index, null, 2) }],
-    details: { ...index, input: params, ...(pendant && { pendant }) },
-  };
+  return withStructuredResult(
+    {
+      content: [{ type: "text", text: JSON.stringify(index, null, 2) }],
+      details: { ...index, input: params, ...(pendant && { pendant }) },
+    },
+    index,
+  );
 }
 
 export function addReadCiLogsTool(gh: GhClient, bus: ToolBus) {
-  bus.register({
-    name: "read-github-ci-logs",
-    label: "GitHub CI Logs",
-    description:
-      "Download one GitHub Actions job's CI log by job ID and index its steps. Returns JSON {name, id, status, conclusion, log_file, steps:[{number, name, conclusion, start_line?, end_line?}]}: `log_file` is the job's complete raw log on disk (runner timestamps and ANSI kept, exactly as GitHub delivers it) and each step carries the 1-based inclusive line range of its block inside that file. Read the content out of the file yourself (read/grep with offset/limit) — it is not echoed back. Get the job IDs from get-github-workflow-jobs, then call this once per job you need." +
-      " Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
-    promptSnippet: "Read GitHub CI logs",
-    parameters: Type.Object({
-      job_id: Type.Union([Type.Number(), Type.String()], {
-        description: "Job ID, from get-github-workflow-jobs.",
+  bus.register(
+    defineStructuredTool({
+      name: "read-github-ci-logs",
+      label: "GitHub CI Logs",
+      description:
+        "Download one GitHub Actions job's CI log by job ID and index its steps. Returns JSON {name, id, status, conclusion, log_file, steps:[{number, name, conclusion, start_line?, end_line?}]}: `log_file` is the job's complete raw log on disk (runner timestamps and ANSI kept, exactly as GitHub delivers it) and each step carries the 1-based inclusive line range of its block inside that file. Read the content out of the file yourself (read/grep with offset/limit) — it is not echoed back. Get the job IDs from get-github-workflow-jobs, then call this once per job you need." +
+        " Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
+      promptSnippet: "Read GitHub CI logs",
+      parameters: Type.Object({
+        job_id: Type.Union([Type.Number(), Type.String()], {
+          description: "Job ID, from get-github-workflow-jobs.",
+        }),
+        repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
       }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+      structuredSchema: ciLogsSchema,
+      async execute(_id, params, signal, onUpdate, ctx) {
+        return ciLogs(gh, { params, ctx, signal, onUpdate });
+      },
     }),
-    async execute(_id, params, signal, onUpdate, ctx) {
-      return ciLogs(gh, { params, ctx, signal, onUpdate });
-    },
-  });
+  );
 }
