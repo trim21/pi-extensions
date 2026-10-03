@@ -14,6 +14,7 @@ import { addListReleasesTool } from "../src/gh/tools/list-releases.js";
 import { addListWorkflowRunsTool } from "../src/gh/tools/list-workflow-runs.js";
 import { addReadIssueTool } from "../src/gh/tools/read-issue.js";
 import { addReadIssueCommentsTool } from "../src/gh/tools/read-issue-comments.js";
+import { addReadPrTool } from "../src/gh/tools/read-pr.js";
 import { addReadPrDiffTool } from "../src/gh/tools/read-pr-diff.js";
 import { addReadReleaseTool } from "../src/gh/tools/read-release.js";
 import { addReadRepoTool } from "../src/gh/tools/read-repo.js";
@@ -57,6 +58,48 @@ describe("REST 接线的工具", () => {
 
     expect(JSON.parse(textOf(result))).toEqual(issue);
     expect(result.structuredResult).toEqual({ ok: true, value: issue });
+  });
+
+  it("label 的 description 为 null 时仍然是成功结果", async () => {
+    // GitHub 对没有描述的 label 给 `"description": null`（不是缺字段），schema 必须放行
+    const issue = {
+      number: 7,
+      title: "bug",
+      state: "open",
+      labels: [
+        { name: "bug", color: "d73a4a", description: null },
+        { name: "dependencies", color: "0366d6", description: null },
+      ],
+    };
+    const { bus } = busWith({ "repos/o/r/issues/7": { body: issue } }, addReadIssueTool);
+
+    const result = await bus.executeTool("read-github-issue", { number: 7, repo: "o/r" }, { ctx });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredResult).toMatchObject({
+      ok: true,
+      value: { labels: [{ description: null }, { description: null }] },
+    });
+  });
+
+  it("read-github-pr 的 label 与 REST 原物一致", async () => {
+    const pull = {
+      number: 177,
+      title: "chore(deps): update eslint",
+      state: "open",
+      html_url: "https://github.com/o/r/pull/177",
+      user: { login: "app/renovate", name: null },
+      labels: [{ name: "dependencies", color: "0366d6", description: null }],
+      created_at: "2026-10-03T00:00:00Z",
+      merged_at: null,
+    };
+    const { bus } = busWith({ "repos/o/r/pulls/177": { body: pull } }, addReadPrTool);
+
+    const result = await bus.executeTool("read-github-pr", { number: 177, repo: "o/r" }, { ctx });
+
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(textOf(result))).toEqual(pull);
+    expect(result.structuredResult).toEqual({ ok: true, value: pull });
   });
 
   it("read-github-issue-comments 给出 comments 数组", async () => {
