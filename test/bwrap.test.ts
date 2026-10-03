@@ -252,13 +252,13 @@ describe("buildBwrapArgs", () => {
 
     // 目录条目 → --tmpfs 挂空；文件条目 → --ro-bind-try /dev/null 覆盖
     const tmpfsTargets = args
-      .flatMap((value, index) => (value === "--tmpfs" ? [args[index + 1]] : []))
+      .flatMap((value, index) => (value === "--tmpfs" ? args[index + 1] : []))
       .filter((path): path is string => path !== undefined);
     expect(tmpfsTargets).toEqual(["/etc/secret/"]);
 
     const devNullTargets = args
       .flatMap((value, index) =>
-        value === "--ro-bind-try" && args[index + 1] === "/dev/null" ? [args[index + 2]] : [],
+        value === "--ro-bind-try" && args[index + 1] === "/dev/null" ? args[index + 2] : [],
       )
       .filter((path): path is string => path !== undefined);
     expect(devNullTargets).toEqual(["/home/user/.git-credentials"]);
@@ -291,7 +291,7 @@ describe("buildBwrapArgs", () => {
     );
 
     const tmpfsTargets = args
-      .flatMap((value, index) => (value === "--tmpfs" ? [args[index + 1]] : []))
+      .flatMap((value, index) => (value === "--tmpfs" ? args[index + 1] : []))
       .filter((path): path is string => path !== undefined);
     expect(tmpfsTargets).toEqual([join(root, "real-target", "secret")]);
   });
@@ -303,7 +303,7 @@ describe("buildBwrapArgs", () => {
 
     // 只保护 workspace 下的 dot dirs；exec cwd（/outside）不在保护列表
     const roBindTargets = args.flatMap((value, index) =>
-      value === "--ro-bind-try" ? [args[index + 1]] : [],
+      value === "--ro-bind-try" ? args[index + 1] : [],
     );
     expect(roBindTargets).toEqual([
       join(workspace, ".pi"),
@@ -322,7 +322,7 @@ describe("buildBwrapArgs", () => {
 
     expect(args).toEqual(expect.arrayContaining(["--bind-try", "/", "/"]));
     const roBindTargets = args.flatMap((value, index) =>
-      value === "--ro-bind-try" ? [args[index + 1]] : [],
+      value === "--ro-bind-try" ? args[index + 1] : [],
     );
     expect(roBindTargets).toEqual([]);
   });
@@ -335,7 +335,7 @@ describe("buildBwrapArgs", () => {
 
     // 根 .git 存在：不递归扫描，嵌套仓库不在保护列表
     const gitTargets = args
-      .flatMap((value, index) => (value === "--ro-bind-try" ? [args[index + 1]] : []))
+      .flatMap((value, index) => (value === "--ro-bind-try" ? args[index + 1] : []))
       .filter((path) => path.endsWith(".git"));
     expect(gitTargets).toEqual([join(workspace, ".git")]);
   });
@@ -346,7 +346,7 @@ describe("buildBwrapArgs", () => {
     const args = await buildBwrapArgs(base, workspace);
 
     const gitTargets = args
-      .flatMap((value, index) => (value === "--ro-bind-try" ? [args[index + 1]] : []))
+      .flatMap((value, index) => (value === "--ro-bind-try" ? args[index + 1] : []))
       .filter((path) => path.endsWith(".git"));
     expect(gitTargets).toEqual([join(workspace, "sub", ".git")]);
   });

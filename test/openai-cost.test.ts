@@ -36,10 +36,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function tempFile(content: string, name = "openai-cost.json"): string {
+function tempFile(content: string): string {
   const dir = mkdtempSync(join(tmpdir(), "openai-cost-test-"));
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, name);
+  const path = join(dir, "openai-cost.json");
   writeFileSync(path, content, "utf8");
   return path;
 }

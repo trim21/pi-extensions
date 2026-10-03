@@ -8903,15 +8903,20 @@ function parseWrites(json) {
     return emptyWrites();
   }
 }
-function scriptError(payload, kind) {
+function scriptError(payload) {
   if (payload === void 0) {
-    return { kind, message: "the script failed without an error message" };
+    return { kind: "script", message: "the script failed without an error message" };
   }
   try {
     const parsed = JSON.parse(payload);
-    return { kind, name: parsed.name, message: parsed.message ?? payload, stack: parsed.stack };
+    return {
+      kind: "script",
+      name: parsed.name,
+      message: parsed.message ?? payload,
+      stack: parsed.stack
+    };
   } catch {
-    return { kind, message: payload };
+    return { kind: "script", message: payload };
   }
 }
 async function runScript(wasm, start) {
@@ -8966,7 +8971,7 @@ async function runScript(wasm, start) {
             post({
               t: "done",
               ok: false,
-              error: scriptError(b === void 0 ? void 0 : b.toString(), "script"),
+              error: scriptError(b === void 0 ? void 0 : b.toString()),
               writes
             });
           }
@@ -9034,8 +9039,7 @@ async function runScript(wasm, start) {
         t: "done",
         ok: false,
         error: scriptError(
-          JSON.stringify({ name: error.name, message: error.message, stack: error.stack }),
-          "script"
+          JSON.stringify({ name: error.name, message: error.message, stack: error.stack })
         ),
         writes: emptyWrites()
       });

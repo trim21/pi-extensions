@@ -19,10 +19,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * 轮询等待条件成立。parcel 的 inotify 后端分块投递、CI 负载下块间隔可达数百毫秒，
  * 固定 sleep 会让迟到的块落在 stop() 之后被丢掉（历史 flaky 来源）。
  */
-async function waitFor(
-  predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 3_000,
-): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
+  const timeoutMs = 3_000;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) {

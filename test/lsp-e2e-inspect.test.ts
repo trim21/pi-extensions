@@ -127,8 +127,8 @@ async function setupProject(): Promise<{ directory: string; cleanup: () => Promi
 async function retryUntil(
   run: () => Promise<{ content: { text: string }[] }>,
   until: (text: string) => boolean,
-  timeoutMs = 30_000,
 ): Promise<string> {
+  const timeoutMs = 30_000;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const result = await run();

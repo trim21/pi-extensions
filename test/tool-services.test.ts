@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LspServerAdapter } from "../src/lib/lsp/adapter.js";
 import { createToolServices } from "../src/lib/tool-services.js";
 
-function plainAdapter(id: string): LspServerAdapter {
+function plainAdapter(): LspServerAdapter {
   return {
-    id,
+    id: "rust",
     extensions: [],
     spawn: async () => {
       return;
@@ -80,7 +80,7 @@ describe("createToolServices 的 LSP 启用回调", () => {
   it("回调晚于 session_start 设置时，仍能收到已启用的服务", async () => {
     const { pi, emitSessionStart } = createFakePi();
     const services = createToolServices(pi, {
-      adapters: [plainAdapter("rust")],
+      adapters: [plainAdapter()],
       globalConfigPath: join(dir, "lsp.json"),
     });
 
@@ -97,7 +97,7 @@ describe("createToolServices 的 LSP 启用回调", () => {
   it("回调先设置时，后续 session_start 直接派发", async () => {
     const { pi, emitSessionStart } = createFakePi();
     const services = createToolServices(pi, {
-      adapters: [plainAdapter("rust")],
+      adapters: [plainAdapter()],
       globalConfigPath: join(dir, "lsp.json"),
     });
 

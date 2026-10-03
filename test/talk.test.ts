@@ -848,7 +848,7 @@ describe("groups", () => {
 
 // ── Core integration ─────────────────────────────────────────────────────
 
-function makeCore(storage: TalkStorage, delivered: Letter[], now?: () => number): TalkCore {
+function makeCore(storage: TalkStorage, delivered: Letter[]): TalkCore {
   const core = new TalkCore({
     storage,
     events: {
@@ -860,7 +860,6 @@ function makeCore(storage: TalkStorage, delivered: Letter[], now?: () => number)
         // presence notifications are not asserted in these tests
       },
     },
-    now,
   });
   cores.push(core);
   return core;

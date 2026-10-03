@@ -446,6 +446,7 @@ function registerReadTool(bus: ToolBus, getService: () => LspService, state: Rea
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
 
+      // eslint-disable-next-line unicorn/prefer-default-parameters -- params.offset || 1：0 视为 1，默认参数只覆盖 undefined
       const { filePath: rawPath, offset, limit } = params;
 
       const absolutePath = isAbsolute(rawPath) ? rawPath : resolvePath(ctx.cwd, rawPath);

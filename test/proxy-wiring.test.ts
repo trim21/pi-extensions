@@ -48,8 +48,8 @@ afterEach(() => {
   spawnMock.mockClear();
 });
 
-function childEnv(call = 0): NodeJS.ProcessEnv {
-  return (spawnMock.mock.calls[call]?.[2] as { env: NodeJS.ProcessEnv }).env;
+function childEnv(): NodeJS.ProcessEnv {
+  return (spawnMock.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv }).env;
 }
 
 describe("runGh proxy env", () => {

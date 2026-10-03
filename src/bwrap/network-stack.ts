@@ -85,7 +85,8 @@ function killHolder(pid: number | undefined): void {
 }
 
 /** 轮询等待进程退出（进程消失即返回）。 */
-async function waitForExit(pid: number, timeoutMs = 2000): Promise<void> {
+async function waitForExit(pid: number): Promise<void> {
+  const timeoutMs = 2000;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
