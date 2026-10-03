@@ -23,7 +23,7 @@
 ## 3. 文档与 schema
 
 - [x] 3.1 `src/gh/schemas.ts`：注释与并集字段收窄（GraphQL 形状的字段可以删）
-- [ ] 3.2 `openspec/specs/gh-readonly/spec.md` 的 Implementation 段（归档时合）
+- [x] 3.2 `openspec/specs/gh-readonly/spec.md` 的 Implementation 段（归档时合）
 - [x] 3.3 README / AGENTS 里关于 gh CLI 的措辞
 
 ## 4. 测试

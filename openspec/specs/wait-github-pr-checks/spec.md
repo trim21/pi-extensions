@@ -76,7 +76,7 @@ Actions jobs 详情只服务于 FAILED 报告的可读性；判定 MUST 只来�
 ## Implementation
 
 - 分层（均在 `src/gh/base.ts`，后两层为纯函数、可独立单测）：`mergeChecks` 合并与 bucket 映射 → `pollPrChecks` 等待循环（返回 `completed / fail_fast / timeout` 与最终快照、`elapsedMs`）→ `renderChecksVerdict` 终判与报告渲染；工具入口在 `src/gh/tools/wait-pr-checks.ts`，与 `wait-commit-checks.ts` 共享 `waitChecksReport` 编排核心。
-- API 客户端：`src/lib/github.ts` 的 `createGithubChecks()`（octokit，token 每次 `gh auth token` 获取并闭包缓存，401 时丢弃缓存重试一次），提供 `statuses` / `checkRuns`（`octokit.paginate` 分页，per_page=100）/ `actionJobs`。
+- API 客户端：`src/lib/github.ts` 的 `createGithubChecks(api)`（octokit；`api` 是与 search / reads 共用的 `createGithubApi` accessor，token 只取一次并闭包缓存，401 时丢弃缓存重试一次），提供 `statuses` / `checkRuns`（`octokit.paginate` 分页，per_page=100）/ `actionJobs`。
 - signal 由调用方构造并持有，轮询层只观察不取消；工具侧 `signal ?? new AbortController().signal`。
 - 单轮失败不终止轮询；截止时若从未成功取得任何一轮则抛出最后的错误。
 - 测试：`test/wait-pr-checks.test.ts`，不 mock API 客户端层，直接单测合并映射、等待循环与终判渲染。
