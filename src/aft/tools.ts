@@ -20,18 +20,24 @@ import {
   type StatusSnapshot,
 } from "@cortexkit/aft-bridge";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Static, Type } from "typebox";
+import { type Static, type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { formatDisplayPath, formatSubtitlePath, resolvePathArg } from "../lib/path.js";
 import { type ToolPendant } from "../lib/pendant.js";
-import type { ToolBus } from "../lib/tool-bus.js";
+import { defineStructuredTool, type StructuredResult, type ToolBus } from "../lib/tool-bus.js";
 import {
   type AftState,
   callAftTool,
   resolveSessionId,
   SEMANTIC_INDEX_WAIT_TIMEOUT_MS,
 } from "./bridge.js";
+import {
+  aftCallgraphStructuredSchema,
+  aftOutlineStructuredSchema,
+  aftSearchStructuredSchema,
+  aftZoomStructuredSchema,
+} from "./schemas.js";
 
 /** 工具使用指南，以 markdown 形式维护，读起来像文档。 */
 const OUTLINE_PROMPT = readFileSync(
@@ -77,6 +83,24 @@ export function compactArgs(args: Record<string, unknown>): Record<string, unkno
       ([, value]) => value !== undefined && !(typeof value === "string" && value.trim() === ""),
     ),
   );
+}
+
+/**
+ * 结构化载荷：引擎自己的响应字段（去掉 envelope 的 request id）原样给脚本，外加我们
+ * 渲染的文本。引擎的 `success` / `code` 保留在载荷里——软失败（symbol_not_found、
+ * callgraph_building、search_lanes_unavailable）是「工具跑成了、引擎给出否定答案」，
+ * 脚本据 `code` 分支，而不是被当成调用异常。
+ */
+function aftPayload<TOutput extends TSchema>(
+  response: Record<string, unknown>,
+  text: string,
+): StructuredResult<Static<TOutput>> {
+  const value: Record<string, unknown> = { ...response, text };
+  // envelope 的 request id 是传输层的事，不进载荷
+  delete value.id;
+  // 载荷是引擎响应的原样透传（schema 只声明我们确证过的字段，其余允许通过），所以
+  // 编译期只能断言；类型正确性由脚本侧的声明与总线运行期的 Value.Parse 复核共同保证。
+  return { ok: true, value: value as Static<TOutput> };
 }
 
 /** 人类视角的调用记录：input params + 与 LLM 相同的输出结果。 */
@@ -127,60 +151,64 @@ const OutlineParams = Type.Object(
 );
 
 export function registerOutlineTool(bus: ToolBus, ctx: AftToolContext): void {
-  bus.register({
-    name: "aft_outline",
-    label: "aft_outline",
-    description: [
-      "输出代码文件、目录的结构化大纲：函数/类/类型等符号及其行号范围；Markdown/HTML 返回标题层级。",
-      "用它在读取具体内容之前先了解文件结构。",
-      "深入了解某个符号用 aft_zoom；看跨文件调用关系用 aft_callgraph。",
-      "target 支持：文件路径（带签名的符号大纲）、目录路径（递归最多 200 文件）。只接受单个 target。",
-      "target 为目录时默认返回扁平文件树（语言、顶层符号数、字节大小）；传 files: false 可改回符号大纲。",
-    ].join("\n"),
-    promptSnippet: "Output structural outline of a file/directory",
-    promptGuidelines: [OUTLINE_PROMPT, AFT_GUIDELINES],
-    parameters: OutlineParams,
-    async execute(_id, params, signal, _onUpdate, extCtx) {
-      const target = coerceTargetParam(params.target);
-      if (typeof target !== "string" || target.length === 0) {
-        throw new Error("'target' must be a single path (array targets are not supported)");
-      }
-      const resolved = resolvePathArg(extCtx.cwd, target);
-      let filesMode = coerceBoolean(params.files);
-      if (params.files === undefined) {
-        const stats = await stat(resolved).catch(() => null);
-        filesMode = stats?.isDirectory() ?? false;
-      }
-      const rawArgs = compactArgs({
-        target: resolved,
-        files: filesMode || undefined,
-        includeTests: params.includeTests,
-      });
+  bus.register(
+    defineStructuredTool({
+      name: "aft_outline",
+      label: "aft_outline",
+      description: [
+        "输出代码文件、目录的结构化大纲：函数/类/类型等符号及其行号范围；Markdown/HTML 返回标题层级。",
+        "用它在读取具体内容之前先了解文件结构。",
+        "深入了解某个符号用 aft_zoom；看跨文件调用关系用 aft_callgraph。",
+        "target 支持：文件路径（带签名的符号大纲）、目录路径（递归最多 200 文件）。只接受单个 target。",
+        "target 为目录时默认返回扁平文件树（语言、顶层符号数、字节大小）；传 files: false 可改回符号大纲。",
+      ].join("\n"),
+      promptSnippet: "Output structural outline of a file/directory",
+      promptGuidelines: [OUTLINE_PROMPT, AFT_GUIDELINES],
+      parameters: OutlineParams,
+      structuredSchema: aftOutlineStructuredSchema,
+      async execute(_id, params, signal, _onUpdate, extCtx) {
+        const target = coerceTargetParam(params.target);
+        if (typeof target !== "string" || target.length === 0) {
+          throw new Error("'target' must be a single path (array targets are not supported)");
+        }
+        const resolved = resolvePathArg(extCtx.cwd, target);
+        let filesMode = coerceBoolean(params.files);
+        if (params.files === undefined) {
+          const stats = await stat(resolved).catch(() => null);
+          filesMode = stats?.isDirectory() ?? false;
+        }
+        const rawArgs = compactArgs({
+          target: resolved,
+          files: filesMode || undefined,
+          includeTests: params.includeTests,
+        });
 
-      const subtitle = buildOutlineSubtitle(extCtx.cwd, target);
+        const subtitle = buildOutlineSubtitle(extCtx.cwd, target);
 
-      const { text, response } = await callAftTool(
-        bridgeFor(ctx),
-        "outline",
-        rawArgs,
-        resolveSessionId(extCtx),
-        undefined,
-        undefined,
-        signal,
-      );
-      const truncated = response.truncated === true;
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          truncated,
-          params,
-          pendant: {
-            subtitle,
-          } satisfies ToolPendant,
-        },
-      };
-    },
-  });
+        const { text, response } = await callAftTool(
+          bridgeFor(ctx),
+          "outline",
+          rawArgs,
+          resolveSessionId(extCtx),
+          undefined,
+          undefined,
+          signal,
+        );
+        const truncated = response.truncated === true;
+        return {
+          content: [{ type: "text", text }],
+          details: {
+            truncated,
+            params,
+            pendant: {
+              subtitle,
+            } satisfies ToolPendant,
+          },
+          structuredResult: aftPayload<typeof aftOutlineStructuredSchema>(response, text),
+        };
+      },
+    }),
+  );
 }
 
 /** 构建 aft_outline pendant 的 subtitle：`target="…"`（路径过长时显示上一级目录加文件名）。 */
@@ -211,61 +239,65 @@ const ZoomParams = Type.Object(
 );
 
 export function registerZoomTool(bus: ToolBus, ctx: AftToolContext): void {
-  bus.register({
-    name: "aft_zoom",
-    label: "aft_zoom",
-    description: [
-      "查看命名符号（函数/类/类型）的完整源码，或 Markdown/HTML 的标题段落内容。",
-      "需要理解某个具体符号时用它（读整个文件用 read）。",
-      "callgraph: true 时附带同文件内的调用关系标注。",
-      "同文件多符号用 `symbols` 数组。",
-    ].join("\n"),
-    promptSnippet: "Inspect the full source of a named symbol",
-    promptGuidelines: [ZOOM_PROMPT],
-    parameters: ZoomParams,
-    async execute(_id, params, signal, _onUpdate, extCtx) {
-      const rawArgs = compactArgs({
-        filePath: resolvePathArg(extCtx.cwd, params.path),
-        symbols: params.symbols,
-        contextLines: coerceOptionalInt(
-          params.contextLines,
-          "contextLines",
-          1,
-          Number.MAX_SAFE_INTEGER,
-        ),
-        callgraph: coerceBoolean(params.callgraph) || undefined,
-      });
+  bus.register(
+    defineStructuredTool({
+      name: "aft_zoom",
+      label: "aft_zoom",
+      description: [
+        "查看命名符号（函数/类/类型）的完整源码，或 Markdown/HTML 的标题段落内容。",
+        "需要理解某个具体符号时用它（读整个文件用 read）。",
+        "callgraph: true 时附带同文件内的调用关系标注。",
+        "同文件多符号用 `symbols` 数组。",
+      ].join("\n"),
+      promptSnippet: "Inspect the full source of a named symbol",
+      promptGuidelines: [ZOOM_PROMPT],
+      parameters: ZoomParams,
+      structuredSchema: aftZoomStructuredSchema,
+      async execute(_id, params, signal, _onUpdate, extCtx) {
+        const rawArgs = compactArgs({
+          filePath: resolvePathArg(extCtx.cwd, params.path),
+          symbols: params.symbols,
+          contextLines: coerceOptionalInt(
+            params.contextLines,
+            "contextLines",
+            1,
+            Number.MAX_SAFE_INTEGER,
+          ),
+          callgraph: coerceBoolean(params.callgraph) || undefined,
+        });
 
-      const subtitle = buildZoomSubtitle(extCtx.cwd, params);
+        const subtitle = buildZoomSubtitle(extCtx.cwd, params);
 
-      const { text, response } = await callAftTool(
-        bridgeFor(ctx),
-        "zoom",
-        rawArgs,
-        resolveSessionId(extCtx),
-        undefined,
-        undefined,
-        signal,
-      );
-      const truncated = response.truncated === true;
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          truncated,
-          params,
-          pendant: {
-            subtitle,
-            markdown: buildPendantMarkdown({
-              title: "aft_zoom",
-              input: params,
-              output: text,
-              truncated,
-            }),
-          } satisfies ToolPendant,
-        },
-      };
-    },
-  });
+        const { text, response } = await callAftTool(
+          bridgeFor(ctx),
+          "zoom",
+          rawArgs,
+          resolveSessionId(extCtx),
+          undefined,
+          undefined,
+          signal,
+        );
+        const truncated = response.truncated === true;
+        return {
+          content: [{ type: "text", text }],
+          details: {
+            truncated,
+            params,
+            pendant: {
+              subtitle,
+              markdown: buildPendantMarkdown({
+                title: "aft_zoom",
+                input: params,
+                output: text,
+                truncated,
+              }),
+            } satisfies ToolPendant,
+          },
+          structuredResult: aftPayload<typeof aftZoomStructuredSchema>(response, text),
+        };
+      },
+    }),
+  );
 }
 
 /** 构建 aft_zoom pendant 的 subtitle：`path="…" symbol="…"`。 */
@@ -363,60 +395,64 @@ export async function callCallgraphWithBuildRetry(
 }
 
 export function registerCallgraphTool(bus: ToolBus, ctx: AftToolContext): void {
-  bus.register({
-    name: "aft_callgraph",
-    label: "aft_callgraph",
-    description: [
-      "基于真实调用图回答代码关系问题（谁调用我、影响面、调用链），替代 grep + read 的链条式排查。",
-      "op 语义：callers=调用点（改名/改签名前用）；impact=影响面（改一个符号会波及谁）；",
-      "call_tree=该函数调用了什么；trace_to=从入口如何执行到某符号；",
-      "trace_to_symbol=两符号间最短路径（需 toSymbol，歧义时需 toPath）；trace_data=追踪值在参数/赋值间的流转（需 expression）。",
-      "标记：~ = 仅按名字解析的边（可能指向同名符号）；[unresolved] = 未解析到定义的调用点。",
-    ].join("\n"),
-    promptSnippet: "Call graph and data-flow navigation",
-    promptGuidelines: [CALLGRAPH_PROMPT],
-    parameters: CallgraphParams,
-    async execute(_id, params, signal, _onUpdate, extCtx) {
-      const rawArgs = compactArgs({
-        op: params.op,
-        filePath: resolvePathArg(extCtx.cwd, params.path),
-        symbol: params.symbol,
-        depth: coerceOptionalInt(params.depth, "depth", 1, Number.MAX_SAFE_INTEGER),
-        expression: params.expression,
-        toSymbol: params.toSymbol,
-        toFile: params.toPath ? resolvePathArg(extCtx.cwd, params.toPath) : undefined,
-        includeTests: params.includeTests,
-        includeUnresolved: params.includeUnresolved,
-      });
+  bus.register(
+    defineStructuredTool({
+      name: "aft_callgraph",
+      label: "aft_callgraph",
+      description: [
+        "基于真实调用图回答代码关系问题（谁调用我、影响面、调用链），替代 grep + read 的链条式排查。",
+        "op 语义：callers=调用点（改名/改签名前用）；impact=影响面（改一个符号会波及谁）；",
+        "call_tree=该函数调用了什么；trace_to=从入口如何执行到某符号；",
+        "trace_to_symbol=两符号间最短路径（需 toSymbol，歧义时需 toPath）；trace_data=追踪值在参数/赋值间的流转（需 expression）。",
+        "标记：~ = 仅按名字解析的边（可能指向同名符号）；[unresolved] = 未解析到定义的调用点。",
+      ].join("\n"),
+      promptSnippet: "Call graph and data-flow navigation",
+      promptGuidelines: [CALLGRAPH_PROMPT],
+      parameters: CallgraphParams,
+      structuredSchema: aftCallgraphStructuredSchema,
+      async execute(_id, params, signal, _onUpdate, extCtx) {
+        const rawArgs = compactArgs({
+          op: params.op,
+          filePath: resolvePathArg(extCtx.cwd, params.path),
+          symbol: params.symbol,
+          depth: coerceOptionalInt(params.depth, "depth", 1, Number.MAX_SAFE_INTEGER),
+          expression: params.expression,
+          toSymbol: params.toSymbol,
+          toFile: params.toPath ? resolvePathArg(extCtx.cwd, params.toPath) : undefined,
+          includeTests: params.includeTests,
+          includeUnresolved: params.includeUnresolved,
+        });
 
-      const { text, response } = await callCallgraphWithBuildRetry(
-        bridgeFor(ctx),
-        rawArgs,
-        extCtx,
-        signal,
-      );
-      const out =
-        text ||
-        formatCallgraphSections(params.op, response, PLAIN_CALLGRAPH_THEME, {
-          includeUnresolved: coerceBoolean(params.includeUnresolved),
-        }).join("\n");
-      const truncated = response.truncated === true;
-      return {
-        content: [{ type: "text", text: out }],
-        details: {
-          truncated,
-          pendant: {
-            markdown: buildPendantMarkdown({
-              title: "aft_callgraph",
-              input: params,
-              output: out,
-              truncated,
-            }),
-          } satisfies ToolPendant,
-        },
-      };
-    },
-  });
+        const { text, response } = await callCallgraphWithBuildRetry(
+          bridgeFor(ctx),
+          rawArgs,
+          extCtx,
+          signal,
+        );
+        const out =
+          text ||
+          formatCallgraphSections(params.op, response, PLAIN_CALLGRAPH_THEME, {
+            includeUnresolved: coerceBoolean(params.includeUnresolved),
+          }).join("\n");
+        const truncated = response.truncated === true;
+        return {
+          content: [{ type: "text", text: out }],
+          details: {
+            truncated,
+            pendant: {
+              markdown: buildPendantMarkdown({
+                title: "aft_callgraph",
+                input: params,
+                output: out,
+                truncated,
+              }),
+            } satisfies ToolPendant,
+          },
+          structuredResult: aftPayload<typeof aftCallgraphStructuredSchema>(response, out),
+        };
+      },
+    }),
+  );
 }
 
 /**
@@ -612,75 +648,79 @@ const SearchParams = Type.Object(
 );
 
 export function registerSearchTool(bus: ToolBus, ctx: AftToolContext): void {
-  bus.register({
-    name: "aft_search",
-    label: "aft_search",
-    description: [
-      "一个工具完成代码搜索：概念、标识符、错误串、正则、字面量、文件名自动路由到合适的引擎并按相关度排序。",
-      "概念类查询（'ORM 如何构建并执行查询'）用自然语言整句——语义通道理解意图并匹配 docstring 和注释；",
-      "精确名字、字符串、正则保持简短（'^export'、'Cargo.lock'）。",
-      "索引首次构建时本调用会阻塞到构建完成，避免返回部分结果。",
-    ].join("\n"),
-    promptSnippet: "Search code by meaning or exact text",
-    promptGuidelines: [SEARCH_PROMPT],
-    parameters: SearchParams,
-    async execute(_id, params, signal, onUpdate, extCtx) {
-      if (typeof params.query !== "string" || params.query.trim().length === 0) {
-        throw new Error("'query' must be a non-empty string");
-      }
-      const rawArgs = compactArgs({
-        query: params.query,
-        topK: params.topK,
-        includeTests: params.includeTests,
-      });
+  bus.register(
+    defineStructuredTool({
+      name: "aft_search",
+      label: "aft_search",
+      description: [
+        "一个工具完成代码搜索：概念、标识符、错误串、正则、字面量、文件名自动路由到合适的引擎并按相关度排序。",
+        "概念类查询（'ORM 如何构建并执行查询'）用自然语言整句——语义通道理解意图并匹配 docstring 和注释；",
+        "精确名字、字符串、正则保持简短（'^export'、'Cargo.lock'）。",
+        "索引首次构建时本调用会阻塞到构建完成，避免返回部分结果。",
+      ].join("\n"),
+      promptSnippet: "Search code by meaning or exact text",
+      promptGuidelines: [SEARCH_PROMPT],
+      parameters: SearchParams,
+      structuredSchema: aftSearchStructuredSchema,
+      async execute(_id, params, signal, onUpdate, extCtx) {
+        if (typeof params.query !== "string" || params.query.trim().length === 0) {
+          throw new Error("'query' must be a non-empty string");
+        }
+        const rawArgs = compactArgs({
+          query: params.query,
+          topK: params.topK,
+          includeTests: params.includeTests,
+        });
 
-      const bridge = bridgeFor(ctx);
-      const formatProgress = createSemanticIndexProgressFormatter();
-      const stopProgress =
-        onUpdate === undefined
-          ? undefined
-          : subscribeBridgeStatus(bridge, (snapshot) => {
-              const text = formatProgress(snapshot);
-              if (text !== undefined) {
-                onUpdate({ content: [{ type: "text", text }], details: undefined });
-              }
-            });
-      let response: Record<string, unknown>;
-      let text: string;
-      try {
-        ({ text, response } = await callAftTool(
-          bridge,
-          "search",
-          rawArgs,
-          resolveSessionId(extCtx),
-          {
-            // 默认 search 传输超时仅 60s，会早于索引等待（600s）触发；覆盖为等待
-            // 上限 + 常规执行预算。超时只说明响应被挤掉而非 bridge 挂死，保留
-            // 常驻的语义索引/LSP 状态。
-            transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
-            keepBridgeOnTimeout: true,
+        const bridge = bridgeFor(ctx);
+        const formatProgress = createSemanticIndexProgressFormatter();
+        const stopProgress =
+          onUpdate === undefined
+            ? undefined
+            : subscribeBridgeStatus(bridge, (snapshot) => {
+                const text = formatProgress(snapshot);
+                if (text !== undefined) {
+                  onUpdate({ content: [{ type: "text", text }], details: undefined });
+                }
+              });
+        let response: Record<string, unknown>;
+        let text: string;
+        try {
+          ({ text, response } = await callAftTool(
+            bridge,
+            "search",
+            rawArgs,
+            resolveSessionId(extCtx),
+            {
+              // 默认 search 传输超时仅 60s，会早于索引等待（600s）触发；覆盖为等待
+              // 上限 + 常规执行预算。超时只说明响应被挤掉而非 bridge 挂死，保留
+              // 常驻的语义索引/LSP 状态。
+              transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
+              keepBridgeOnTimeout: true,
+            },
+            undefined,
+            signal,
+          ));
+        } finally {
+          stopProgress?.();
+        }
+        const truncated = response.truncated === true;
+        return {
+          content: [{ type: "text", text }],
+          details: {
+            truncated,
+            pendant: {
+              markdown: buildPendantMarkdown({
+                title: "aft_search",
+                input: params,
+                output: text,
+                truncated,
+              }),
+            } satisfies ToolPendant,
           },
-          undefined,
-          signal,
-        ));
-      } finally {
-        stopProgress?.();
-      }
-      const truncated = response.truncated === true;
-      return {
-        content: [{ type: "text", text }],
-        details: {
-          truncated,
-          pendant: {
-            markdown: buildPendantMarkdown({
-              title: "aft_search",
-              input: params,
-              output: text,
-              truncated,
-            }),
-          } satisfies ToolPendant,
-        },
-      };
-    },
-  });
+          structuredResult: aftPayload<typeof aftSearchStructuredSchema>(response, text),
+        };
+      },
+    }),
+  );
 }

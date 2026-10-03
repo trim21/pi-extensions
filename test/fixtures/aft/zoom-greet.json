@@ -1,0 +1,24 @@
+{
+  "id": "z1",
+  "success": true,
+  "name": "greet",
+  "kind": "function",
+  "range": {
+    "start_line": 1,
+    "start_col": 1,
+    "end_line": 3,
+    "end_col": 2
+  },
+  "content": "export function greet(name) {\n  return \"hi \" + name;\n}",
+  "context_before": [],
+  "context_after": [
+    "export function main() {",
+    "  return greet(\"x\");",
+    "}"
+  ],
+  "annotations": {
+    "calls_out": [],
+    "called_by": []
+  },
+  "text": "/tmp/aftprobe/a.ts:1-3 [function greet]\n\n1: export function greet(name) {\n2:   return \"hi \" + name;\n3: }"
+}

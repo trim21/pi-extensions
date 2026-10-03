@@ -1,0 +1,39 @@
+{
+  "id": "s1",
+  "success": true,
+  "query": "greet",
+  "interpreted_as": "hybrid",
+  "query_kind": "Identifier",
+  "complete": true,
+  "result_count": 2,
+  "more_available": false,
+  "engine_capped": false,
+  "fully_degraded": false,
+  "semantic_status": "external",
+  "results": [
+    {
+      "file": "src/a.ts",
+      "name": "greet",
+      "kind": "function",
+      "start_line": 1,
+      "end_line": 3,
+      "location": "line range",
+      "score": 0.97,
+      "source": "semantic",
+      "semantic_score": 0.97,
+      "lexical_score": null,
+      "exact": false,
+      "snippet": "export function greet(name)"
+    },
+    {
+      "kind": "GrepLine",
+      "source": "literal",
+      "file": "docs/a.md",
+      "line": 12,
+      "column": 3,
+      "line_text": "call greet here",
+      "match_text": "greet"
+    }
+  ],
+  "text": "Found 2 result(s)."
+}

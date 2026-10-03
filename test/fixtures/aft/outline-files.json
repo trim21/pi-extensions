@@ -1,0 +1,22 @@
+{
+  "id": "o2",
+  "success": true,
+  "text": "a.ts  typescript     2 syms       6 lines\n",
+  "files": [
+    {
+      "path": "a.ts",
+      "language": "typescript",
+      "symbols": 2,
+      "lines": 6
+    }
+  ],
+  "complete": true,
+  "line_count_gaps": [],
+  "entries_examined": 1,
+  "walk_truncated": false,
+  "walk_limit": 10000,
+  "collection_truncated": false,
+  "skipped_foreign_mounts": 0,
+  "unchecked_files": [],
+  "rollup_count": 0
+}

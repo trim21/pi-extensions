@@ -1,0 +1,20 @@
+{
+  "id": "c2",
+  "success": true,
+  "name": "resolvePathArg",
+  "file": "src/lib/path.ts",
+  "line": 12,
+  "resolved": true,
+  "children": [
+    {
+      "name": "resolve",
+      "file": "src/lib/path.ts",
+      "line": 20,
+      "resolved": false,
+      "children": []
+    }
+  ],
+  "depth_limited": false,
+  "truncated": 0,
+  "text": "resolvePathArg\n  resolve [unresolved]"
+}
