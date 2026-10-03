@@ -16,14 +16,16 @@ import { Type } from "typebox";
 /** GitHub 的 actor（author / assignee / mergedBy / review 作者）。 */
 export const ghActorSchema = Type.Object({
   login: Type.Optional(Type.String()),
-  name: Type.Optional(Type.String()),
+  // `user.name` 是 `string | null`：没有显示名的账号返回 null
+  name: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   is_bot: Type.Optional(Type.Boolean()),
 });
 
 export const ghLabelSchema = Type.Object({
   name: Type.String(),
   color: Type.Optional(Type.String()),
-  description: Type.Optional(Type.String()),
+  // 没有描述的 label 是 `"description": null`（不是缺字段），所以既要 optional 也要 nullable
+  description: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 });
 
 export const ghMilestoneSchema = Type.Object({
