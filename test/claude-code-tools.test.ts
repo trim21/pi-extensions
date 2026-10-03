@@ -11,7 +11,7 @@ beforeAll(() => {
   process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "cc-tools-agent-dir-"));
 });
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = () => new Promise((resolve) => setTimeout(resolve, 50));
 
 import {
   BashInterruptedError,
@@ -150,11 +150,8 @@ async function emitSessionStart(
  * 同步触发 session_start。工具注册本身是同步的，只有 LSP 装配是异步的；
  * 只关心「工具是否注册」的用例用这个，避免把测试改成 async。
  */
-function emitSessionStartSync(
-  handlers: Map<string, ((...args: any[]) => unknown)[]>,
-  ctx: Record<string, unknown> = {},
-): void {
-  const fullCtx = sessionStartCtx(ctx);
+function emitSessionStartSync(handlers: Map<string, ((...args: any[]) => unknown)[]>): void {
+  const fullCtx = sessionStartCtx({});
   for (const handler of handlers.get("session_start") ?? []) {
     void handler({ type: "session_start", reason: "startup" }, fullCtx);
   }
@@ -1231,9 +1228,9 @@ describe("Glob and Grep", () => {
     await utimes(older, new Date(2020, 0, 1), new Date(2020, 0, 1));
     // 连续 writeFile 的 mtime 可能落在同一时间片，rg 对并列 mtime 的排序不稳定；
     // 创建时错开时间，保证 mtime 严格递增：older < dot < newer
-    await sleep(50);
+    await sleep();
     await writeFile(dot, "x");
-    await sleep(50);
+    await sleep();
     await writeFile(newer, "x");
 
     // 最旧在前（rg --sort=modified 升序）

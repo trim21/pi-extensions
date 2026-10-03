@@ -27,7 +27,6 @@ interface StepInfo {
 // ── current (buggy) implementation ──────────────────────────────────────────
 
 function extractStepFromLog_current(
-  log: string,
   stepNumber: number,
   apiSteps: { number: number; name: string }[],
 ): string | null {
@@ -108,7 +107,7 @@ describe("extractStepFromLog — fuzz-download-2 job", () => {
   // ── Step 1: "Set up job" ──────────────────────────────────────────────
   describe("step 1 (Set up job)", () => {
     it("both implementations agree", () => {
-      const cur = extractStepFromLog_current(log, 1, job.steps);
+      const cur = extractStepFromLog_current(1, job.steps);
       const fix = extractStepFromLog(log, 1, job.steps);
       expect(cur).toBe(fix);
       expect(cur).toContain("Runner Image Provisioner");
@@ -120,7 +119,7 @@ describe("extractStepFromLog — fuzz-download-2 job", () => {
   // ── Step 2: checkout ──────────────────────────────────────────────────
   describe("step 2 (Run actions/checkout@v7.0.0)", () => {
     it("both implementations agree", () => {
-      const cur = extractStepFromLog_current(log, 2, job.steps);
+      const cur = extractStepFromLog_current(2, job.steps);
       const fix = extractStepFromLog(log, 2, job.steps);
       expect(cur).toBe(fix);
       expect(cur).toContain("##[group]Run actions/checkout@v7.0.0");
@@ -139,7 +138,7 @@ describe("extractStepFromLog — fuzz-download-2 job", () => {
   // ── Step 4: THE BUG ──────────────────────────────────────────────────
   describe("step 4 (Run go test -race -fuzz=FuzzPickerDownloadIntegration)", () => {
     it("BUG: current returns wrong content (setup-go, not go test)", () => {
-      const cur = extractStepFromLog_current(log, 4, job.steps);
+      const cur = extractStepFromLog_current(4, job.steps);
       expect(cur).toBeTruthy();
       expect(firstLine(cur!)).toContain("Run actions/setup-go@v6");
     });
@@ -173,7 +172,7 @@ describe("extractStepFromLog — fuzz-download-2 job", () => {
     });
 
     it("BUG: current returns wrong content (composite action internals)", () => {
-      const cur = extractStepFromLog_current(log, 5, job.steps);
+      const cur = extractStepFromLog_current(5, job.steps);
       expect(cur).toBeTruthy();
       // Wrongly returns "Run actions/cache@v6" — an internal step of the composite action
       expect(firstLine(cur!)).toContain("Run actions/cache@v6");
@@ -188,7 +187,7 @@ describe("extractStepFromLog — fuzz-download-2 job", () => {
     });
 
     it("BUG: current returns wrong content (composite action internals)", () => {
-      const cur = extractStepFromLog_current(log, 6, job.steps);
+      const cur = extractStepFromLog_current(6, job.steps);
       expect(cur).toBeTruthy();
       // Wrongly returns "Run go get ./..." — an internal step of the composite action
       expect(firstLine(cur!)).toContain("Run go get ./...");

@@ -69,15 +69,20 @@ function parseWrites(json: string): StoreWrites {
 }
 
 /** 把 prelude 的 error 描述 JSON 转成可上报的错误。 */
-function scriptError(payload: string | undefined, kind: ScriptError["kind"]): ScriptError {
+function scriptError(payload: string | undefined): ScriptError {
   if (payload === undefined) {
-    return { kind, message: "the script failed without an error message" };
+    return { kind: "script", message: "the script failed without an error message" };
   }
   try {
     const parsed = JSON.parse(payload) as { name?: string; message?: string; stack?: string };
-    return { kind, name: parsed.name, message: parsed.message ?? payload, stack: parsed.stack };
+    return {
+      kind: "script",
+      name: parsed.name,
+      message: parsed.message ?? payload,
+      stack: parsed.stack,
+    };
   } catch {
-    return { kind, message: payload };
+    return { kind: "script", message: payload };
   }
 }
 
@@ -150,7 +155,7 @@ async function runScript(wasm: object, start: Extract<HostMessage, { t: "start" 
             post({
               t: "done",
               ok: false,
-              error: scriptError(b === undefined ? undefined : b.toString(), "script"),
+              error: scriptError(b === undefined ? undefined : b.toString()),
               writes,
             });
           }
@@ -229,7 +234,6 @@ async function runScript(wasm: object, start: Extract<HostMessage, { t: "start" 
         ok: false,
         error: scriptError(
           JSON.stringify({ name: error.name, message: error.message, stack: error.stack }),
-          "script",
         ),
         writes: emptyWrites(),
       });

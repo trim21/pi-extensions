@@ -30,7 +30,7 @@ export class OutboundPolicy {
    * definition worked through what it was handed). `target` scopes the
    * identical-body dedupe to a single peer (loop-breaking).
    */
-  check(body: string, unreadBacklog: number, target?: string): OutboundVerdict {
+  check(body: string, unreadBacklog: number, target = ""): OutboundVerdict {
     if (body.length > MAX_BODY_CHARS) {
       return {
         ok: false,
@@ -44,7 +44,7 @@ export class OutboundPolicy {
       };
     }
     const now = this.now();
-    const dedupeKey = `${body}\u0000${target ?? ""}`;
+    const dedupeKey = `${body}\u0000${target}`;
     const lastSame = this.recentBodies.get(dedupeKey);
     if (lastSame !== undefined && now - lastSame < DEDUPE_WINDOW_MS) {
       return {
@@ -66,9 +66,9 @@ export class OutboundPolicy {
   }
 
   /** Record a successful send so dedupe/rate state stays current. */
-  recordSend(body: string, target?: string): void {
+  recordSend(body: string, target = ""): void {
     this.sentAt.push(this.now());
-    this.recentBodies.set(`${body}\u0000${target ?? ""}`, this.now());
+    this.recentBodies.set(`${body}\u0000${target}`, this.now());
     // bound the dedupe map
     if (this.recentBodies.size <= 200) {
       return;

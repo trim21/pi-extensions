@@ -235,20 +235,16 @@ interface GuardCtx {
   abort?: () => void;
 }
 
-/** writeOptions 的附加字段（目前只有 signal）。 */
-type WriteOptionsOverrides = Partial<{ signal: AbortSignal }>;
-
 function ctxWith(over: Partial<GuardCtx>): GuardCtx {
   return { cwd: WS_DIR, hasUI: true, ...over };
 }
 
-function writeOptions(absolutePath: string, over: WriteOptionsOverrides = {}) {
+function writeOptions(absolutePath: string) {
   return {
     toolName: "write",
     absolutePath,
     mutation: { contentOld: "", contentNew: "x" } satisfies FileMutation,
     policy,
-    ...over,
   };
 }
 

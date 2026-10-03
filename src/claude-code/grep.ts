@@ -36,7 +36,8 @@ const VCS_DIRECTORIES_TO_EXCLUDE = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"]
  */
 const DEFAULT_HEAD_LIMIT = 250;
 
-function truncateOutput(output: string, maxCharacters = 30_000): string {
+function truncateOutput(output: string): string {
+  const maxCharacters = 30_000;
   if (output.length <= maxCharacters) {
     return output;
   }

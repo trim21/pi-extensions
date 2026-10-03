@@ -108,6 +108,7 @@ function formatBashSuccess(result: Awaited<ReturnType<BwrapRuntime["execute"]>>)
   content: { type: "text"; text: string }[];
   details: BashToolDetails | undefined;
 } {
+  // eslint-disable-next-line unicorn/prefer-default-parameters -- output 是 string，空输出需显示 "(no output)"，默认参数只覆盖 undefined
   const { output, truncation, fullOutputPath } = result;
   const text = appendTruncationNotice(output || "(no output)", truncation, fullOutputPath);
   return {

@@ -126,7 +126,8 @@ async function runBwrapCommand(
 }
 
 /** 命令 handler 的 ctx：只用到 cwd / hasUI / ui（notify + setStatus + theme）。 */
-function commandContext(cwd = process.cwd()) {
+function commandContext() {
+  const cwd = process.cwd();
   const ui = {
     notify: vi.fn(),
     setStatus: vi.fn(),
@@ -136,7 +137,8 @@ function commandContext(cwd = process.cwd()) {
 }
 
 /** 调用 before_agent_start 处理器并返回注入后的 system prompt。 */
-function beforeAgentStart(pi: { on: ReturnType<typeof vi.fn> }, cwd = process.cwd()): string {
+function beforeAgentStart(pi: { on: ReturnType<typeof vi.fn> }): string {
+  const cwd = process.cwd();
   const call = pi.on.mock.calls.find((c) => c[0] === "before_agent_start");
   const handler = call?.[1] as (
     event: { systemPrompt: string },

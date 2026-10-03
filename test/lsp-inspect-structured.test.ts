@@ -73,15 +73,10 @@ function payloadOf(result: StructuredExecuteResult): Record<string, unknown> {
   return result.structuredResult.value as Record<string, unknown>;
 }
 
-async function execute(
-  bus: ToolBus,
-  name: string,
-  cwd: string,
-  params: Record<string, unknown> = {},
-): Promise<StructuredExecuteResult> {
+async function execute(bus: ToolBus, name: string, cwd: string): Promise<StructuredExecuteResult> {
   const result = await bus.executeTool(
     name,
-    { file_path: join(cwd, "a.ts"), line: 2, symbol: "greet", ...params },
+    { file_path: join(cwd, "a.ts"), line: 2, symbol: "greet" },
     { ctx: context(cwd) },
   );
   return result;

@@ -37,7 +37,8 @@ function parse(config: unknown) {
   return Value.Parse(serverConfigSchema, config);
 }
 
-async function waitForLog(logFile: string, needle: string, timeoutMs = 2_000): Promise<string> {
+async function waitForLog(logFile: string, needle: string): Promise<string> {
+  const timeoutMs = 2_000;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const content = await readFile(logFile, "utf8").catch(() => "");

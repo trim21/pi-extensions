@@ -256,10 +256,7 @@ describe("renderPrChecksList", () => {
   });
 });
 
-function pollOptions(
-  client: ReturnType<typeof fakeClient>,
-  overrides: Partial<Parameters<typeof pollPrChecks>[0]> = {},
-): Parameters<typeof pollPrChecks>[0] {
+function pollOptions(client: ReturnType<typeof fakeClient>): Parameters<typeof pollPrChecks>[0] {
   return {
     subject: "PR #1",
     owner: "owner",
@@ -269,7 +266,6 @@ function pollOptions(
     checks: client as unknown as Parameters<typeof pollPrChecks>[0]["checks"],
     signal: new AbortController().signal,
     intervalMs: 1,
-    ...overrides,
   };
 }
 

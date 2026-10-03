@@ -110,6 +110,11 @@ export default defineConfig(
       "unicorn/require-array-sort-compare": "off",
       "unicorn/no-unreadable-for-of-expression": "off",
       "unicorn/prefer-includes-over-repeated-comparisons": "off",
+      // v77 把该规则放进 recommended：它要求 JSDoc 不写 ` * ` 前缀，与仓库统一的
+      // JSDoc 风格冲突，autofix 会把全部文档注释重写成无星号样式。
+      "unicorn/no-asterisk-prefix-in-documentation-comments": "off",
+      // 把 `\u0000` 改写成 `\0` 这类「更短转义」纯属无意义改写，禁用。
+      "unicorn/prefer-short-escape-sequences": "off",
       // 合并相邻 guard 会把多分支判断并成超长条件（如 web/fetch.ts 的 mime 分支），
       // 且 autofix 后的条件顺序还会连带触发 prefer-simple-condition-first。
       "unicorn/prefer-combined-guards": "off",

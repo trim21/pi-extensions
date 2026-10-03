@@ -36,10 +36,10 @@ vi.mock("../src/lib/lsp/watcher.js", () => ({
 
 const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
 
-function plainAdapter(id: string, extensions: readonly string[] = []): LspServerAdapter {
+function plainAdapter(id: string): LspServerAdapter {
   return {
     id,
-    extensions,
+    extensions: [],
     spawn: async () => {
       return;
     },

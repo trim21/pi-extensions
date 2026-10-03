@@ -29,10 +29,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function withTempFile(content: unknown, fn: (path: string) => void, name = "settings.json") {
+function withTempFile(content: unknown, fn: (path: string) => void) {
   const dir = mkdtempSync(join(tmpdir(), "session-name-test-"));
   try {
-    const path = join(dir, name);
+    const path = join(dir, "settings.json");
     writeFileSync(path, JSON.stringify(content), "utf8");
     fn(path);
   } finally {

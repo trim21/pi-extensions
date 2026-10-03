@@ -1466,7 +1466,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
       const toPaths = (locations: { uri: string }[] | null): Set<string> =>
         new Set(
           (locations ?? []).flatMap((location) =>
-            location.uri.startsWith("file:") ? [normalize(fileURLToPath(location.uri))] : [],
+            location.uri.startsWith("file:") ? normalize(fileURLToPath(location.uri)) : [],
           ),
         );
 

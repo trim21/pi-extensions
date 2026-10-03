@@ -67,8 +67,8 @@ describe("createAftPool", () => {
     });
     readConfigTiers.mockReturnValue([{ tier: "user", source: "aft.jsonc", doc: "{}" }]);
     inlineUserConfigTier.mockImplementation(
-      (config: Record<string, unknown>, source?: string) =>
-        [{ tier: "user", source: source ?? "inline", doc: JSON.stringify(config) }] as ConfigTier[],
+      (config: Record<string, unknown>, source = "inline") =>
+        [{ tier: "user", source, doc: JSON.stringify(config) }] as ConfigTier[],
     );
   });
 

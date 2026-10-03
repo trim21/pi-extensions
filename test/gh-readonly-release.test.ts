@@ -70,8 +70,8 @@ function stubGh(options: {
 }) {
   return {
     reads: {
-      release: vi.fn(async (_owner: string, _repo: string, tag: string | undefined) => ({
-        tag_name: tag ?? "v1.2.3",
+      release: vi.fn(async (_owner: string, _repo: string, tag = "v1.2.3") => ({
+        tag_name: tag,
         assets: options.assets,
       })),
       downloadAssetTo: vi.fn(

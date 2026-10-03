@@ -53,10 +53,11 @@ function makeContext(options: ContextOptions = {}): ExtensionContext {
   } as unknown as ExtensionContext;
 }
 
-function createFs(state = createReadsState(), requestPolicy = policy) {
+function createFs() {
+  const state = createReadsState();
   return {
     state,
-    fs: createCodemodeFs({ policy: requestPolicy, reads: state }),
+    fs: createCodemodeFs({ policy, reads: state }),
   };
 }
 
