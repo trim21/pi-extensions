@@ -15,7 +15,8 @@
     },
     {
       "matchPackageNames": ["pnpm"],
-      "groupName": "pnpm"
+      "groupName": "pnpm",
+      "allowedVersions": "<12"
     }
   ]
 }
