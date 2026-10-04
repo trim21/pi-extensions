@@ -7,7 +7,8 @@
  *     "fileIo": "claude-code",
  *     "fileIoByModel": [{ "models": ["glm-*"], "fileIo": "opencode" }],
  *     "disabledTools": ["talk-*", { "tools": ["web_*"], "models": ["gpt-*"] }],
- *     "enabledTools": [{ "tools": ["web_search"], "models": ["glm-*"] }]
+ *     "enabledTools": [{ "tools": ["web_search"], "models": ["glm-*"] }],
+ *     "codemodeOnlyTools": [{ "tools": ["read-github-*"], "models": ["glm-*"] }]
  *   }
  * }
  * ```
@@ -15,6 +16,9 @@
  * 工具名与模型名都用 minimatch 通配模式匹配；模型名同时试 `model.id` 与
  * `provider/model` 两种写法。带 `models` 的条目只在当前模型命中时才参与判定。
  * 非法字段/条目被忽略并产出警告，不影响其余配置生效。
+ *
+ * `codemodeOnlyTools` 只表示曝光方式：命中它的工具由总线决定是否按 codemode-only
+ * 注册（还要看工具有没有声明 `structuredSchema`，见 `tool-bus.ts`）。
  */
 
 import { readFileSync } from "node:fs";
@@ -45,7 +49,7 @@ const toolRuleSchema = Type.Object({
 
 export type FileIoToolset = "claude-code" | "opencode";
 
-export type ToolRuleField = "disabledTools" | "enabledTools";
+export type ToolRuleField = "disabledTools" | "enabledTools" | "codemodeOnlyTools";
 
 export interface FileIoByModelEntry {
   models: readonly string[];
@@ -65,6 +69,8 @@ export interface ToolsConfig {
   fileIoByModel: readonly FileIoByModelEntry[];
   disabledTools: readonly ToolPatternRule[];
   enabledTools: readonly ToolPatternRule[];
+  /** 命中且声明了 `structuredSchema` 的工具只进 codemode、不交给 pi。 */
+  codemodeOnlyTools: readonly ToolPatternRule[];
   /** 解析阶段发现的问题，由调用方在能提示用户时上报。 */
   warnings: readonly string[];
 }
@@ -82,6 +88,8 @@ export interface UnmatchedPattern {
 export interface ToolAvailability {
   /** 该工具名是否被禁用（命中 disabledTools 且未命中 enabledTools）。 */
   isDisabled(name: string): boolean;
+  /** 该工具名是否命中 codemodeOnlyTools（是否真的按 codemode-only 注册还要看它有没有结构化输出）。 */
+  isCodemodeOnly(name: string): boolean;
   /** 哪些模式没匹配到任何工具（含被规则禁用的工具）。 */
   unmatchedPatterns(declaredNames: readonly string[]): UnmatchedPattern[];
 }
@@ -165,6 +173,7 @@ export function parseToolsConfig(section: unknown, source = "personalExtensions"
       fileIoByModel: [],
       disabledTools: [],
       enabledTools: [],
+      codemodeOnlyTools: [],
       warnings,
     };
   }
@@ -175,6 +184,7 @@ export function parseToolsConfig(section: unknown, source = "personalExtensions"
       fileIoByModel: [],
       disabledTools: [],
       enabledTools: [],
+      codemodeOnlyTools: [],
       warnings,
     };
   }
@@ -184,6 +194,11 @@ export function parseToolsConfig(section: unknown, source = "personalExtensions"
     fileIoByModel: parseFileIoByModel(section.fileIoByModel, `${source}.fileIoByModel`, warnings),
     disabledTools: parseToolRules(section.disabledTools, `${source}.disabledTools`, warnings),
     enabledTools: parseToolRules(section.enabledTools, `${source}.enabledTools`, warnings),
+    codemodeOnlyTools: parseToolRules(
+      section.codemodeOnlyTools,
+      `${source}.codemodeOnlyTools`,
+      warnings,
+    ),
     warnings,
   };
 }
@@ -258,9 +273,13 @@ export function resolveToolAvailability(
       return config.enabledTools.every((rule) => !ruleMatches(rule, name, model));
     },
 
+    isCodemodeOnly(name) {
+      return config.codemodeOnlyTools.some((rule) => ruleMatches(rule, name, model));
+    },
+
     unmatchedPatterns(declaredNames) {
       const unmatched: UnmatchedPattern[] = [];
-      for (const field of ["disabledTools", "enabledTools"] as const) {
+      for (const field of ["disabledTools", "enabledTools", "codemodeOnlyTools"] as const) {
         for (const rule of config[field]) {
           for (const pattern of rule.tools) {
             if (declaredNames.every((name) => !matchesPattern(pattern, name))) {

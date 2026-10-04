@@ -126,6 +126,9 @@ export default function personalExtensions(pi: ExtensionAPI): void {
       codemode.register(bus, { policy: services.policy, reads: fileToolset.reads }),
     );
 
+    // 注册期的可诊断问题（例如 codemode-only 命中但没有结构化输出的工具）与其它警告一起上报。
+    warnings.push(...registration.diagnostics());
+
     for (const warning of warnings) {
       ctx.ui.notify(warning, "warning");
     }

@@ -93,6 +93,8 @@
     // 工具可用性规则：条目是工具名模式，或 { tools, models }
     "disabledTools": ["talk-*", { "tools": ["web_*"], "models": ["gpt-*"] }],
     "enabledTools": [{ "tools": ["web_search"], "models": ["glm-*"] }],
+    // 只进 codemode、不交给模型的工具（须声明结构化输出才会生效）
+    "codemodeOnlyTools": [{ "tools": ["read-github-*"], "models": ["deepseek-*"] }],
   },
 }
 ```
@@ -100,6 +102,12 @@
 规则：**命中 `disabledTools` 且未命中 `enabledTools` 的工具不注册**。带 `models` 的
 条目只在当前模型命中时参与判定。未配置该 section 时用 `fileIo: "claude-code"` 且不
 禁用任何工具。
+
+`codemodeOnlyTools` 把工具从模型可见列表移进 `codemode`：命中它、未被禁用、且声明了
+`structuredSchema` 的工具只登记在工具总线上、不交给 pi，模型只能在 codemode 脚本里用
+`call(...)` 调用它（`codemode` 的工具描述里仍有它的参数与返回类型声明）。没有结构化输出
+的工具进不了 codemode，因此会被忽略、保持直接可用，并在会话启动时给出一条 warning——
+想真正移除工具用 `disabledTools`。
 
 **判定时机是每个会话启动**：pi 在启动 / `/new` / `resume` / `/fork` / `/reload` 时重建
 扩展，注册就发生在 `session_start` 里（模型在扩展加载期读不到），因此新会话按自己的

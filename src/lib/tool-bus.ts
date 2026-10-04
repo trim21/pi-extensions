@@ -3,7 +3,9 @@
  * （按名执行，不必绕回模型）。
  *
  * - `register`：按配置过滤（被禁用时跳过并返回 false）后交给 `pi.registerTool`，
- *   并保留通过的定义供 `list` / `get` 查询。
+ *   并保留通过的定义供 `list` / `get` 查询。命中 codemode-only 且声明了
+ *   `structuredSchema` 的工具只保留在总线上、不交给 pi（标 `codemodeOnly: true`）；
+ *   命中但没有 schema 的工具照常注册，并在 `diagnostics` 里留一条说明。
  * - `executeTool`：先用工具自身的参数 schema 校验参数，再调用定义的 `execute`；
  *   参数校验失败与工具抛出的异常都归一化成错误结果返回，不向调用方抛异常。
  *
@@ -85,9 +87,10 @@ export interface ExecuteToolOptions {
   toolCallId?: string;
 }
 
-/** 注册后的定义：多出的 `structuredSchema` 供 codemode 渲染脚本侧返回类型。 */
+/** 注册后的定义：多出的 `structuredSchema` 供 codemode 渲染脚本侧返回类型，`codemodeOnly` 标出未交给 pi 的只读脚本工具。 */
 export type RegisteredToolDefinition = ToolDefinition<TSchema, unknown, unknown> & {
   structuredSchema?: TSchema;
+  codemodeOnly?: boolean;
 };
 
 export interface ToolBus {
@@ -99,6 +102,8 @@ export interface ToolBus {
   list(): readonly RegisteredToolDefinition[];
   /** 所有尝试注册过的工具名（含被禁用而跳过的），用于校验配置里的模式是否有效。 */
   declaredNames(): readonly string[];
+  /** 注册期发现的可诊断问题（去重），由调用方在能提示用户时上报。 */
+  diagnostics(): readonly string[];
   get(name: string): RegisteredToolDefinition | undefined;
   /** 按名执行一个已注册工具；任何失败都以 `isError` 结果返回，不抛异常。 */
   executeTool(
@@ -111,6 +116,8 @@ export interface ToolBus {
 export interface ToolBusOptions {
   /** 返回 true 表示该工具被禁用、不注册。 */
   isDisabled?: (name: string) => boolean;
+  /** 返回 true 表示该工具应只进 codemode（是否真的如此还要看它有没有声明 `structuredSchema`）。 */
+  isCodemodeOnly?: (name: string) => boolean;
 }
 
 function errorResult(text: string): ToolExecutionResult {
@@ -180,6 +187,7 @@ function checkStructuredResult(
 export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): ToolBus {
   const registered = new Map<string, RegisteredToolDefinition>();
   const declared = new Set<string>();
+  const diagnostics = new Set<string>();
   let callCounter = 0;
 
   return {
@@ -187,6 +195,22 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
       declared.add(definition.name);
       if (options.isDisabled?.(definition.name) === true) {
         return false;
+      }
+      if (options.isCodemodeOnly?.(definition.name) === true) {
+        // schema 门控：进不了 codemode 的工具照常直接注册，只留一条可诊断的说明，
+        // 避免配置把工具从模型面前静默移除（见 openspec design.md）。
+        if ((definition as { structuredSchema?: unknown }).structuredSchema === undefined) {
+          diagnostics.add(
+            `personalExtensions.codemodeOnlyTools: tool "${definition.name}" declares no structuredSchema; it stays directly available.`,
+          );
+        } else {
+          const codemodeStored = {
+            ...(definition as unknown as RegisteredToolDefinition),
+            codemodeOnly: true,
+          };
+          registered.set(codemodeStored.name, codemodeStored);
+          return true;
+        }
       }
       const stored = definition as unknown as RegisteredToolDefinition;
       pi.registerTool(stored);
@@ -200,6 +224,10 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
 
     declaredNames() {
       return [...declared];
+    },
+
+    diagnostics() {
+      return [...diagnostics];
     },
 
     get(name) {

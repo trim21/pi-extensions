@@ -55,14 +55,14 @@ test/             # Vitest 测试，文件与 src 对应
 ```
 
 - **所有工具由 `src/index.ts` 一个入口注册**（`pi.extensions` 只列它 + `session-name` + `system-prompt`）：pi 给每个扩展入口单独的模块图，集中在一处才有唯一的配置求值点，也才能让同入口的模块直接调用别的工具。
-- 注册流程：`personalExtensions` 配置（`src/lib/tools-config.ts`）→ 总线（`src/lib/tool-bus.ts`，`register` / `list` / `get` / `executeTool`）→ 各模块的 `registerXxx(bus, ...)`。**工具一律经 `bus.register(def)` 注册，不要再直接调 `pi.registerTool`**（否则 `disabledTools` 过滤会漏掉它）。
+- 注册流程：`personalExtensions` 配置（`src/lib/tools-config.ts`）→ 总线（`src/lib/tool-bus.ts`，`register` / `list` / `get` / `executeTool` / `diagnostics`）→ 各模块的 `registerXxx(bus, ...)`。**工具一律经 `bus.register(def)` 注册，不要再直接调 `pi.registerTool`**（否则 `disabledTools` 过滤会漏掉它）。命中 `codemodeOnlyTools` 且声明了 `structuredSchema` 的工具由总线标成 `codemodeOnly`、只留在总线上不交给 pi；命中但没有 schema 的照常注册并在 `diagnostics` 里留下说明。
 - `ToolUnit` 表（`src/lib/tool-units.ts`）描述「哪些工具名由哪个单元提供」，主入口与 spawn-agent 的子代理共用它。
 - `codemode`（`src/codemode/`）在注册时编译 `quickjs-wasi` 的 wasm 一次，每次调用起一个 worker 线程跑脚本；脚本里的工具调用经 `bus.executeTool` 执行，因此审批由各工具自己负责（codemode 不加确认层）。worker 入口是 esbuild 产物 `src/codemode/worker.js`，由 `pnpm run build:codemode-worker` 生成（pre-commit 会跑），因为它需要是单文件才能作为 worker 路径启动；该产物必须**自包含**（`--bundle --platform=node --external:quickjs-wasi`），它由 `new Worker(url)` 当普通 Node 模块加载，不走 jiti，解析不到 pi 提供的依赖（typebox 就是这样在发布后报 `Cannot find package` 的），回归测试见 `test/codemode.test.ts` 的「worker 产物」。
 - `claude-code` 与 `opencode` 是两套平行的文件 IO 工具集，由 `personalExtensions.fileIo`（可带 `fileIoByModel` 按模型覆盖）**二选一**；两者在行为、命名上的差异与冲突是符合预期的，不要试图统一。共享部件（请求策略、bwrap runtime、LSP manager、reads 恢复）由 `src/lib/tool-services.ts` 持有并注入，模块自己不要再建一份（会重复注册 `/bwrap*`、`/lsp-*` 命令）。
 - 注册时机是**每次会话启动**（`session_start`）：pi 在启动 / `/new` / `resume` / `/fork` / `/reload` 时重建扩展；模型只在事件上下文里（`ctx.model`），加载期读不到，所以「按模型判定」必须放在 `session_start` 里。同一会话内 `/model` 切换不重新判定。
 - spawn-agent 的子代理用 inline 扩展工厂（`subagentToolsExtension`）注册声明的工具，不再走 `-e` 路径加载。
 - skills 在 `pi.skills` 中注册；`src/bwrap/` 不单独注册。
-- `aft` 只注册只读感知工具（outline / zoom / callgraph / search）。引擎自带的回滚面（`aft_safety` 的 undo / history / checkpoint / restore）、OS 级文件操作（`aft_delete` / `aft_move`）与写类命令不暴露给模型——模型只负责感知与改，恢复由用户用 git 完成；prompt 里也不要提「快照」「撤销」这类模型用不了的概念。codemode 的可调用集合只收**声明了 `structuredSchema`** 的工具（`src/codemode/tool.ts` 的准入条件）：没有结构化输出的工具不进集合，脚本搜文件走 `Bash` + `rg`，读文件走 `fs` 原语。`aft_search` 只走外部 embedding 后端（`openai_compatible` / `ollama`），本地 ONNX 的 `fastembed` 不注册。
+- `aft` 只注册只读感知工具（outline / zoom / callgraph / search）。引擎自带的回滚面（`aft_safety` 的 undo / history / checkpoint / restore）、OS 级文件操作（`aft_delete` / `aft_move`）与写类命令不暴露给模型——模型只负责感知与改，恢复由用户用 git 完成；prompt 里也不要提「快照」「撤销」这类模型用不了的概念。codemode 的可调用集合只收**声明了 `structuredSchema`** 的工具（`src/codemode/tool.ts` 的准入条件）：没有结构化输出的工具不进集合，脚本搜文件走 `Bash` + `rg`，读文件走 `fs` 原语。命中 `personalExtensions.codemodeOnlyTools` 的工具没有交给 pi、不在 active 列表里，因此不受 active 求交约束，直接进集合。`aft_search` 只走外部 embedding 后端（`openai_compatible` / `ollama`），本地 ONNX 的 `fastembed` 不注册。
 - `lsp-rename` 与 LSP inspect 族工具注册在 `claude-code/files.ts` / `opencode/files.ts`（与文件工具并列），由选中的工具集在 LSP manager 触发 `onLspEnabled` 时注册，基于 `src/lib/lsp/` 的 LSP 客户端做符号重命名；只面向 lsp.json 里 `kind: "language"` 的服务器，`linter` 类（如 ruff）只参与诊断。
 
 ## pi 扩展约定

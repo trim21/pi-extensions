@@ -29,6 +29,7 @@ describe("personalExtensions 解析", () => {
     expect(parsed.fileIo).toBe("claude-code");
     expect(parsed.fileIoByModel).toEqual([]);
     expect(parsed.disabledTools).toEqual([]);
+    expect(parsed.codemodeOnlyTools).toEqual([]);
     expect(parsed.warnings).toEqual([]);
   });
 
@@ -67,6 +68,7 @@ describe("personalExtensions 解析", () => {
     const parsed = config({
       disabledTools: ["talk-*", { tools: ["web_*"], models: ["gpt-*"] }],
       enabledTools: [{ tools: ["web_search"], models: ["glm-*"] }],
+      codemodeOnlyTools: ["read-github-*"],
     });
 
     expect(parsed.disabledTools).toEqual([
@@ -74,6 +76,7 @@ describe("personalExtensions 解析", () => {
       { tools: ["web_*"], models: ["gpt-*"] },
     ]);
     expect(parsed.enabledTools).toEqual([{ tools: ["web_search"], models: ["glm-*"] }]);
+    expect(parsed.codemodeOnlyTools).toEqual([{ tools: ["read-github-*"], models: [] }]);
     expect(parsed.warnings).toEqual([]);
   });
 
@@ -141,6 +144,19 @@ describe("工具集与工具可用性判定", () => {
     expect(resolveToolAvailability(parsed, undefined).isDisabled("web_fetch")).toBe(false);
   });
 
+  it("codemodeOnlyTools 按模型与工具名判定", () => {
+    const parsed = config({
+      codemodeOnlyTools: [{ tools: ["read-github-*"], models: ["deepseek-*"] }],
+    });
+
+    const onDeepseek = resolveToolAvailability(parsed, { id: "deepseek-v4.1-flash" });
+    const onGlm = resolveToolAvailability(parsed, { id: "glm-4.6" });
+
+    expect(onDeepseek.isCodemodeOnly("read-github-repo")).toBe(true);
+    expect(onDeepseek.isCodemodeOnly("Read")).toBe(false);
+    expect(onGlm.isCodemodeOnly("read-github-repo")).toBe(false);
+  });
+
   it("报告匹配不到任何工具的模式（含被禁用的工具名）", () => {
     const parsed = config({
       disabledTools: ["talk-*", "web_*"],
@@ -156,6 +172,17 @@ describe("工具集与工具可用性判定", () => {
     expect(availability.unmatchedPatterns(["Read", "talk-send", "web_search"])).toEqual([
       { field: "enabledTools", pattern: "nope_*" },
     ]);
+  });
+
+  it("报告匹配不到任何工具的 codemodeOnlyTools 模式", () => {
+    const parsed = config({ codemodeOnlyTools: ["read-github-*"] });
+
+    expect(
+      resolveToolAvailability(parsed, { id: "gpt-5" }).unmatchedPatterns(["Read", "echo"]),
+    ).toEqual([{ field: "codemodeOnlyTools", pattern: "read-github-*" }]);
+    expect(
+      resolveToolAvailability(parsed, { id: "gpt-5" }).unmatchedPatterns(["read-github-repo"]),
+    ).toEqual([]);
   });
 });
 
