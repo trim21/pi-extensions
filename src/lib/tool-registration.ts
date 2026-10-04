@@ -41,6 +41,8 @@ export interface ToolRegistration {
   onSessionStart(register: (bus: ToolBus, ctx: ExtensionContext) => void | Promise<void>): void;
   /** 哪些配置模式没命中过任何工具（在注册完成后调用）。 */
   unmatchedPatterns(): UnmatchedPattern[];
+  /** 注册期发现的可诊断问题（去重），与 unmatchedPatterns 一样在注册完成后上报。 */
+  diagnostics(): readonly string[];
 }
 
 /**
@@ -62,6 +64,7 @@ export function createToolRegistration(pi: ExtensionAPI, settingsPath?: string):
     // 每次注册都按当前模型重新判定：工具在 session_start 里注册，模型由下面
     // 的 handler 更新，二者在同一个会话内保持一致。
     isDisabled: (name) => resolveToolAvailability(config, model).isDisabled(name),
+    isCodemodeOnly: (name) => resolveToolAvailability(config, model).isCodemodeOnly(name),
   });
 
   pi.on("session_start", (_event, ctx) => {
@@ -78,6 +81,9 @@ export function createToolRegistration(pi: ExtensionAPI, settingsPath?: string):
     },
     unmatchedPatterns() {
       return resolveToolAvailability(config, model).unmatchedPatterns(bus.declaredNames());
+    },
+    diagnostics() {
+      return bus.diagnostics();
     },
   };
 }

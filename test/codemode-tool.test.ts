@@ -46,7 +46,11 @@ function noopUnsubscribe(): void {}
 const noopEvents = { on: () => noopUnsubscribe, emit: () => {} };
 
 async function harness(
-  options: { active?: string[]; register?: (bus: ToolBus, pi: ExtensionAPI) => void } = {},
+  options: {
+    active?: string[];
+    codemodeOnly?: string[];
+    register?: (bus: ToolBus, pi: ExtensionAPI) => void;
+  } = {},
 ): Promise<Harness> {
   const registered = new Map<string, ToolDefinition>();
   const appended: { customType: string; data: unknown }[] = [];
@@ -117,7 +121,9 @@ async function harness(
     } as unknown as StructuredResult<{ files: string[] }>,
   }));
 
-  const bus = createToolBus(pi);
+  const bus = createToolBus(pi, {
+    isCodemodeOnly: (name) => options.codemodeOnly?.includes(name) ?? false,
+  });
   bus.register({
     name: "Read",
     label: "Read",
@@ -457,6 +463,38 @@ describe("codemode 工具", () => {
 
     expect(result.isError).toBe(true);
     expect(h.echoTool).not.toHaveBeenCalled();
+  });
+
+  it("codemode-only 工具不在 active 列表里也进描述并可调用", async () => {
+    const githubTool = vi.fn(async (_id: string, params: { repo?: string }) => ({
+      content: [{ type: "text" as const, text: "repo info" }],
+      details: {},
+      structuredResult: { ok: true as const, value: { name: params.repo ?? "demo" } },
+    }));
+    const h = await harness({
+      active: ["echo"],
+      codemodeOnly: ["read-github-repo"],
+      register: (bus) => {
+        bus.register(
+          defineStructuredTool({
+            name: "read-github-repo",
+            label: "GitHub Repo",
+            description: "get repo info",
+            parameters: Type.Object({ repo: Type.Optional(Type.String()) }),
+            structuredSchema: Type.Object({ name: Type.String() }),
+            execute: githubTool,
+          }),
+        );
+      },
+    });
+
+    expect(h.codemode.description).toContain('declare function call(name: "read-github-repo"');
+
+    const result = await runScript(h, `return await call("read-github-repo", { repo: "pi" });`);
+
+    expect(result.isError).toBeFalsy();
+    expect(githubTool).toHaveBeenCalledOnce();
+    expect(textOf(result)).toContain('"name": "pi"');
   });
 
   it("脚本调用 codemode 自身被拒", async () => {

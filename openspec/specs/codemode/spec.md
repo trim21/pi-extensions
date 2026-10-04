@@ -10,7 +10,7 @@
 
 扩展 MUST 注册名为 `codemode` 的工具，并 MUST 在注册时把脚本可调用的工具集合渲染进工具描述，为每个工具给出名字、说明、参数类型与返回类型。返回类型 MUST 按该工具的 `structuredSchema` 渲染——可调用集合里每个工具都声明了它，因此每个条目都有确定的返回类型。
 
-可调用集合 MUST 只包含本仓库工具总线上**声明了 `structuredSchema`** 的工具，执行时 MUST 再与当前 active 工具列表求交（取不到 active 列表时不过滤）。这条准入条件 MUST 是唯一的集合规则：MUST NOT 再维护手工的工具名单（黑名单会随工具增减而漂移）。理由是脚本拿到的返回值必须有确定的形状：只给文本的工具在脚本里既不能当数据用（得解析文本），也没有返回类型能写进声明。
+可调用集合 MUST 只包含本仓库工具总线上**声明了 `structuredSchema`** 的工具；在此之上，MUST 包含所有 codemode-only 工具，且对非 codemode-only 的工具 MUST 再与当前 active 工具列表求交（取不到 active 列表时不过滤）。codemode-only 工具不在 active 列表里是常态，MUST NOT 因此把它排除。这条准入条件 MUST 是唯一的集合规则：MUST NOT 再维护手工的工具名单（黑名单会随工具增减而漂移）。理由是脚本拿到的返回值必须有确定的形状：只给文本的工具在脚本里既不能当数据用（得解析文本），也没有返回类型能写进声明。
 
 由此天然不在集合里、且各自理由独立成立的例子：`codemode` 自身与 `spawn-agent`（没有结构化输出）、两套文件工具集的读写工具（脚本用 `fs.read` / `fs.write`，不重复一套为 LLM 上下文设计的行号/锚点语义）、两套工具集的搜索工具（脚本用 `call("Bash", { command })` 跑 `rg` / `grep`，走同一个沙箱、拿得到退出码，还能拼管道）、`lsp-rename`（写工具）、talk 工具与会话工具（会把执行时间交给用户或另一个 agent 的回答）。这些工具 MUST NOT 需要写进特殊名单：它们没有声明结构化输出，因此自然不在集合里。
 
@@ -19,7 +19,7 @@
 #### Scenario: 描述列出可调用工具
 
 - **WHEN** 获取 `codemode` 的工具描述
-- **THEN** 描述包含总线上每个声明了 `structuredSchema` 且当前 active 的工具的名字、说明与参数类型声明，且不含其它任何工具名
+- **THEN** 描述包含总线上每个声明了 `structuredSchema` 且（属于 codemode-only 或当前 active）的工具的名字、说明与参数类型声明，且不含其它任何工具名
 
 #### Scenario: 描述给出每个工具的返回类型
 
@@ -33,8 +33,18 @@
 
 #### Scenario: 未启用的工具不可调用
 
-- **WHEN** 脚本调用一个已注册、已声明结构化输出但当前不 active 的工具（例如子代理工具白名单之外的工具）
+- **WHEN** 脚本调用一个已注册、已声明结构化输出但不是 codemode-only 的工具，而它当前不 active（例如子代理工具白名单之外的工具）
 - **THEN** 该调用失败，不执行该工具
+
+#### Scenario: codemode-only 工具可调用
+
+- **WHEN** 脚本调用一个已注册为 codemode-only 的工具
+- **THEN** 该调用执行该工具，即使它不在模型可见的工具清单与 active 列表里
+
+#### Scenario: codemode-only 工具出现在描述里
+
+- **WHEN** 某个已注册工具是 codemode-only 且声明了 `structuredSchema`
+- **THEN** `codemode` 的工具描述里有它的名字、说明、参数类型与返回类型
 
 #### Scenario: 脚本自身不可再调用 codemode
 

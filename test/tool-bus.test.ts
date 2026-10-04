@@ -2,7 +2,11 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 
-import { createToolBus, type ToolExecutionResult } from "../src/lib/tool-bus.js";
+import {
+  createToolBus,
+  defineStructuredTool,
+  type ToolExecutionResult,
+} from "../src/lib/tool-bus.js";
 
 const ctx = { cwd: "/tmp" } as unknown as ExtensionContext;
 
@@ -63,6 +67,54 @@ describe("tool bus 注册", () => {
     expect(registered.size).toBe(0);
     expect(bus.list()).toEqual([]);
     expect(bus.declaredNames()).toEqual(["echo"]);
+  });
+
+  it("codemode-only 工具只留在总线，不交给 pi", () => {
+    const { pi, registered } = createFakePi();
+    const bus = createToolBus(pi, { isCodemodeOnly: (name) => name === "echo" });
+    const tool = defineStructuredTool({
+      name: "echo",
+      label: "Echo",
+      description: "echo text back",
+      parameters: echoParameters,
+      structuredSchema: Type.Object({ text: Type.String() }),
+      execute: async (_id, params) => ({
+        content: [{ type: "text", text: params.text }],
+        details: {},
+        structuredResult: { ok: true, value: { text: params.text } },
+      }),
+    });
+
+    expect(bus.register(tool)).toBe(true);
+    expect(registered.has("echo")).toBe(false);
+    expect(bus.list().map((item) => item.name)).toEqual(["echo"]);
+    expect(bus.get("echo")?.codemodeOnly).toBe(true);
+    expect(bus.diagnostics()).toEqual([]);
+  });
+
+  it("codemode-only 命中但没有结构化输出时照常交给 pi，并给出诊断", () => {
+    const { pi, registered } = createFakePi();
+    const bus = createToolBus(pi, { isCodemodeOnly: (name) => name === "echo" });
+
+    expect(bus.register(echoTool())).toBe(true);
+    expect(registered.has("echo")).toBe(true);
+    expect(bus.get("echo")?.codemodeOnly).toBeUndefined();
+    expect(bus.diagnostics()).toEqual([
+      'personalExtensions.codemodeOnlyTools: tool "echo" declares no structuredSchema; it stays directly available.',
+    ]);
+  });
+
+  it("禁用优先于 codemode-only：两端都不注册且无诊断", () => {
+    const { pi, registered } = createFakePi();
+    const bus = createToolBus(pi, {
+      isDisabled: (name) => name === "echo",
+      isCodemodeOnly: (name) => name === "echo",
+    });
+
+    expect(bus.register(echoTool())).toBe(false);
+    expect(registered.size).toBe(0);
+    expect(bus.list()).toEqual([]);
+    expect(bus.diagnostics()).toEqual([]);
   });
 });
 
@@ -164,5 +216,30 @@ describe("tool bus 执行", () => {
 
     expect(result.isError).toBe(false);
     expect(result.content).toEqual([{ type: "text", text: "7" }]);
+  });
+
+  it("executeTool 能执行 codemode-only 工具", async () => {
+    const { pi, registered } = createFakePi();
+    const bus = createToolBus(pi, { isCodemodeOnly: (name) => name === "echo" });
+    bus.register(
+      defineStructuredTool({
+        name: "echo",
+        label: "Echo",
+        description: "echo text back",
+        parameters: echoParameters,
+        structuredSchema: Type.Object({ text: Type.String() }),
+        execute: async (_id, params) => ({
+          content: [{ type: "text", text: params.text }],
+          details: {},
+          structuredResult: { ok: true, value: { text: params.text } },
+        }),
+      }),
+    );
+
+    const result = await bus.executeTool("echo", { text: "hi" }, { ctx });
+
+    expect(result.isError).toBe(false);
+    expect(result.structuredResult).toEqual({ ok: true, value: { text: "hi" } });
+    expect(registered.has("echo")).toBe(false);
   });
 });

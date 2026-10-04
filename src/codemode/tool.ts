@@ -7,6 +7,8 @@
  *
  * 可调用集合：总线上实际注册的、**声明了 `structuredSchema`** 的工具，执行时再与 active
  * 列表求交——pi 自己的 `defaultTools` / `--tools` / 子代理白名单的排除因此同样生效。
+ * codemode-only 工具（`codemodeOnlyTools` 命中且声明了 schema，因而没有交给 pi 注册）不在
+ * active 列表里是常态，直接进集合、不求交。
  *
  * wasm 在注册这个工具时编译一次（`createCodemodeSandbox`），worker 复用编译结果。
  */
@@ -36,11 +38,15 @@ export const CODEMODE_TOOL_NAME = "codemode";
  *
  * 脚本拿到的返回值必须有确定的形状——只给文本的工具在脚本里既没法当数据用（得解析文本），
  * 也没有返回类型能写进声明。用「有没有结构化输出」当门槛，这条规则自己会维持一致：不给工具
- * 加 schema 就不进集合，不需要维护一份会随工具增减而漂移的黑名单。因此下列工具天然不在集合
- * 里，理由各自成立：`codemode` 自身与 `spawn-agent`（没有 schema）、文件读写工具（脚本用
- * `fs.read` / `fs.write`，不重复一套为 LLM 上下文设计的行号/锚点语义）、搜索工具（脚本用
- * `call("Bash", { command })` 跑 `rg`，退出码可用、能拼管道）、`lsp-rename`（写工具）以及
- * talk / 会话工具（会把执行时间交给外部输入）。
+ * 加 schema 就不进集合，不需要维护一份会随工具增减而漂移的黑名单。
+ *
+ * active 求交只作用于直接工具；命中了 `codemodeOnlyTools` 的工具（声明了 schema、因而没有
+ * 交给 pi 注册）不在 active 列表里是常态，直接进集合。
+ *
+ * 下列工具天然不在集合里，理由各自成立：`codemode` 自身与 `spawn-agent`（没有 schema）、
+ * 文件读写工具（脚本用 `fs.read` / `fs.write`，不重复一套为 LLM 上下文设计的行号/锚点
+ * 语义）、搜索工具（脚本用 `call("Bash", { command })` 跑 `rg`，退出码可用、能拼管道）、
+ * `lsp-rename`（写工具）以及 talk / 会话工具（会把执行时间交给外部输入）。
  */
 /** 估计 token 用的字符数（与 pi 一致）。 */
 const CHARS_PER_TOKEN = 4;
@@ -82,7 +88,10 @@ function collectTools(bus: ToolBus, allowed: Set<string> | undefined): CallableT
   return bus
     .list()
     .filter((definition) => definition.structuredSchema !== undefined)
-    .filter((definition) => allowed === undefined || allowed.has(definition.name))
+    .filter(
+      (definition) =>
+        definition.codemodeOnly === true || allowed === undefined || allowed.has(definition.name),
+    )
     .map((definition) => ({
       name: definition.name,
       description: definition.description,
