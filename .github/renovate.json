@@ -5,7 +5,12 @@
   "rebaseWhen": "conflicted",
   "packageRules": [
     {
-      "matchPackageNames": ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "typebox"],
+      "matchPackageNames": [
+        "@earendil-works/pi-agent-core",
+        "@earendil-works/pi-ai",
+        "@earendil-works/pi-coding-agent",
+        "typebox"
+      ],
       "enabled": false
     },
     {
