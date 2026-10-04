@@ -108,6 +108,8 @@ function buildDescription(tools: readonly CallableTool[]): string {
     "  and a failing tool rejects with a `CallFailedError` you can catch.",
     "- Only what the script passes to `text(value)` / `console.log(...)` and its `return` value enter",
     "  this conversation; nested calls and their results stay out of it.",
+    "- Pass only necessary content to `text(value)`: print the content the next step needs, not whole",
+    "  tool results or data you will not use.",
     "- `store.set(key, value)`, `store.get(key)` and `store.list()` are a small key/value store that",
     "  persists across codemode calls in this session; `store.set(key, undefined)` removes a key.",
     "- The sandbox has no file system, network, timers or Node APIs: calling tools is its only",
@@ -272,6 +274,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
         promptSnippet: "codemode: run JavaScript that calls tools in parallel",
         promptGuidelines: [
           "Use codemode to batch or chain several tool calls, or to filter large tool output down to what matters, instead of issuing many individual tool calls.",
+          "Keep codemode output minimal: pass only the content the next step needs to `text(value)`, not whole tool results or data you will not use.",
         ],
         parameters: Type.Object({
           code: Type.String({
