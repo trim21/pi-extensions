@@ -163,9 +163,30 @@ typescript-language-server **不内置 TypeScript**（零依赖）。启动时�
 
 `tsserver.path` 必须指向 **`typescript/lib/tsserver.js` 或 `typescript/lib/` 目录的绝对路径**（或 PATH 可执行名）；因为初始化字符串不支持 `{root}` 模板，无法用相对 workspace 的表达式。
 
-**alias 依赖坑**：当项目把 typescript 写成 `npm:@typescript/typescript6`（alias stub）时，`node_modules/typescript/lib/` 下只有转发 stub（`typescript.js`/`tsserverlibrary.js`/`tsc.js`），**没有 `tsserver.js`** → workspace 探测失效；实体 tsserver 在 pnpm 虚拟 store：`node_modules/.pnpm/typescript@<真实版本>/node_modules/typescript/lib/tsserver.js`（目录名无 peer 后缀、相对稳定；**升级 typescript 版本后要同步更新路径**）。依赖为标准 `typescript` 包时 `node_modules/typescript` 直接是完整包，workspace 探测即命中、无需配 path。
+**alias 依赖坑**：当项目把 typescript 写成 `npm:@typescript/typescript6`（alias stub）时，`node_modules/typescript/lib/` 下只有转发 stub（`typescript.js`/`tsserverlibrary.js`/`tsc.js`），**没有 `tsserver.js`** → workspace 探测失效。真实 tsserver 在哪取决于包管理器与链接方式：
 
-这种项目里把路径写死会随 typescript 升级失效，用 `initializationOptionsCommand` 让脚本现算更稳。因为 servers 按 id 整条覆盖，本地 `.pi/lsp.json` 要写完整条目：
+| 布局                    | 真实 tsserver 位置                                                                                                                                    |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 标准 typescript 依赖    | `<root>/node_modules/typescript/lib/tsserver.js`（workspace 探测即命中，不需要任何配置）                                                              |
+| npm 提升 / pnpm hoisted | `node_modules/@typescript/<包>/lib/tsserver.js`（如 `@typescript/old`，是 shim 自己的依赖被提到顶层）                                                 |
+| npm 嵌套                | `node_modules/typescript/node_modules/@typescript/<包>/lib/tsserver.js`（顶层放不下时 shim 的依赖嵌在它下面）                                         |
+| pnpm store              | `node_modules/.pnpm/{typescript@<版本>,@typescript+<包>@<版本>}/node_modules/{typescript,@typescript/<包>}/lib/tsserver.js`（含带 peer 后缀的目录名） |
+
+`@typescript/native`（typescript@7）是 native 包、**没有 `tsserver.js`**，不能当候选；TS6 项目要的是 `@typescript/old` 里的那份。
+
+不用自己写脚本：扩展随包提供 `bin/typescript-options.mjs`（纯 node 内置模块、无依赖、无需构建），它按上表的布局现算路径，标准依赖命中时输出 `{}`（不覆盖，版本随项目走），找不到也输出 `{}`。把它复制到本机固定位置，然后在 server 上配一行：
+
+```bash
+cp <package>/bin/typescript-options.mjs ~/.pi/agent/lsp/typescript-options.mjs
+```
+
+```json
+"initializationOptionsCommand": ["node", "/home/<user>/.pi/agent/lsp/typescript-options.mjs"]
+```
+
+命令的 argv 只支持 `{root}` / `{cwd}` 模板与 `${VAR}` 插值，没有指向包内路径的模板，所以这里写绝对路径；脚本升级后重新复制一次。
+
+因为 servers 按 id 整条覆盖，本地 `.pi/lsp.json` 里写 `typescript` 要写完整条目（否则全局那条被整体替换）：
 
 ```json
 {
@@ -180,52 +201,10 @@ typescript-language-server **不内置 TypeScript**（零依赖）。启动时�
         ".js": "javascript",
         ".jsx": "javascriptreact"
       },
-      "initializationOptionsCommand": ["node", "{root}/.pi/lsp/ts-options.mjs"]
+      "initializationOptionsCommand": ["node", "/home/<user>/.pi/agent/lsp/typescript-options.mjs"]
     }
   }
 }
-```
-
-```js
-// .pi/lsp/ts-options.mjs：项目能解析到 typescript/lib/tsserver.js（标准依赖 / hoisted）时输出 {}，
-// 让服务器按 workspace 解析、版本随项目走；只有 alias shim（解析不到）才去 pnpm store 里找真实 tsserver。
-import { existsSync, readdirSync } from "node:fs";
-import { createRequire } from "node:module";
-import { join } from "node:path";
-
-const requireFromProject = createRequire(join(process.cwd(), "package.json"));
-
-// workspace 里可用的 tsserver：解析得到就不干预（hoisted 的依赖也能解析到）
-function workspaceHasTsserver() {
-  try {
-    requireFromProject.resolve("typescript/lib/tsserver.js");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// store 里带 tsserver.js 的最高版本：typescript@7 是 native 包、没有 tsserver.js，会被筛掉
-function storeTsserver() {
-  const store = join(process.cwd(), "node_modules/.pnpm");
-  let entries;
-  try {
-    entries = readdirSync(store);
-  } catch {
-    return undefined;
-  }
-  return entries
-    .map((name) => /^typescript@(\d[^/]*)$/.exec(name)?.[1])
-    .filter(Boolean)
-    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
-    .map((version) =>
-      join(store, `typescript@${version}`, "node_modules/typescript/lib/tsserver.js"),
-    )
-    .find((path) => existsSync(path));
-}
-
-const path = workspaceHasTsserver() ? undefined : storeTsserver();
-console.log(JSON.stringify(path ? { tsserver: { path } } : {}));
 ```
 
 只在某台机器上临时用、路径不常变时，也可以直接写静态值（同样要整条覆盖）：
@@ -249,10 +228,10 @@ console.log(JSON.stringify(path ? { tsserver: { path } } : {}));
 
 ## 常见排查
 
-| 现象                                                                          | 原因与修法                                                                                                                                                                              |
-| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| notify `failed to start …: binary not found`                                  | `bin` 不在 PATH（测试场景二进制缺失时整组跳过）                                                                                                                                         |
-| `… provides no tsserver.js. No other valid TypeScript installation was found` | workspace 的 `node_modules/typescript` 是 alias stub：用 `initializationOptionsCommand` 算 `.pnpm` 里的实体路径、写静态 `initializationOptions.tsserver.path`，或换标准 typescript 依赖 |
-| notify `failed to start …: initializationOptions command …`                   | 脚本非零退出 / 空输出 / stdout 不是 JSON 对象（报错里带具体命令、退出码与 stderr）                                                                                                      |
-| 诊断一直为空且无任何报错                                                      | 服务器没匹配到文件（`include`/扩展名）、在 broken 冷却中、或文件在调用 cwd 之外（LSP 只在工作目录内启用）                                                                               |
-| 读取配置直接抛错                                                              | typebox 严格校验拒绝：字段类型不符 / 非法时长格式（未知字段只是 warning，不拒绝）                                                                                                       |
+| 现象                                                                          | 原因与修法                                                                                                                                                                                                                  |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| notify `failed to start …: binary not found`                                  | `bin` 不在 PATH（测试场景二进制缺失时整组跳过）                                                                                                                                                                             |
+| `… provides no tsserver.js. No other valid TypeScript installation was found` | workspace 的 `node_modules/typescript` 是 alias stub：复制随包脚本 `bin/typescript-options.mjs` 到 `~/.pi/agent/lsp/` 并在该 server 上配 `initializationOptionsCommand`，或直接写静态 `initializationOptions.tsserver.path` |
+| notify `failed to start …: initializationOptions command …`                   | 脚本非零退出 / 空输出 / stdout 不是 JSON 对象（报错里带具体命令、退出码与 stderr）                                                                                                                                          |
+| 诊断一直为空且无任何报错                                                      | 服务器没匹配到文件（`include`/扩展名）、在 broken 冷却中、或文件在调用 cwd 之外（LSP 只在工作目录内启用）                                                                                                                   |
+| 读取配置直接抛错                                                              | typebox 严格校验拒绝：字段类型不符 / 非法时长格式（未知字段只是 warning，不拒绝）                                                                                                                                           |

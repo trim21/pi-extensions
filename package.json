@@ -13,6 +13,7 @@
   },
   "files": [
     "src",
+    "bin/typescript-options.mjs",
     "README.md"
   ],
   "publishConfig": {

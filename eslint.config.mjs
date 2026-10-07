@@ -50,7 +50,13 @@ export default defineConfig(
       parserOptions: {
         projectService: {
           defaultProject: "tsconfig.json",
-          allowDefaultProject: ["vitest.config.ts", "eslint.config.mjs"],
+          // tsconfig 只收 `bin/**/*.ts`；`bin/typescript-options.mjs` 是给 `node` 直接执行的
+          // 独立脚本（不经编译），要显式纳入 project service 才能 lint 到它。
+          allowDefaultProject: [
+            "vitest.config.ts",
+            "eslint.config.mjs",
+            "bin/typescript-options.mjs",
+          ],
         },
         tsconfigRootDir: import.meta.dirname,
       },
@@ -223,7 +229,8 @@ export default defineConfig(
     },
   },
   {
-    files: ["scripts/*.js", "scripts/*.mjs"],
+    // 独立脚本的输出就是 stdout（`bin/typescript-options.mjs` 打印初始化参数 JSON）。
+    files: ["bin/*.mjs", "scripts/*.js", "scripts/*.mjs"],
     rules: {
       "no-console": "off",
     },

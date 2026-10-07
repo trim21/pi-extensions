@@ -330,7 +330,7 @@ bwrap 已集成进 bash 工具实现（opencode 风格 `bash` 位于 `src/openco
 
 命令失败（`gh` 未登录 / 不在 PATH）时该服务器启动失败并报错。
 
-启动时才能算出的值（例如项目把 `typescript` alias 成 `@typescript/typescript6` 时，要去 pnpm store 里找真实的 `tsserver.js`）用 `initializationOptionsCommand`，避免把绝对路径写死在配置里：
+启动时才能算出的值（例如项目把 `typescript` alias 成 `@typescript/typescript6` 时，要去 pnpm store 或 `@typescript/*` 里找真实的 `tsserver.js`）用 `initializationOptionsCommand`，避免把绝对路径写死在配置里。这类现算脚本随包提供了一个：`bin/typescript-options.mjs`（复制到 `~/.pi/agent/lsp/` 后由下面这行调用，标准 typescript 依赖的项目输出空对象、不做覆盖）：
 
 ```jsonc
 {
@@ -340,7 +340,7 @@ bwrap 已集成进 bash 工具实现（opencode 风格 `bash` 位于 `src/openco
       "args": ["--stdio"],
       "initializationOptions": { "tsserver": { "logVerbosity": "verbose" } },
       // 脚本 stdout 的 JSON 对象与上面的静态值深合并（命令优先）
-      "initializationOptionsCommand": ["node", "{root}/.pi/lsp/ts-options.mjs"],
+      "initializationOptionsCommand": ["node", "/home/<user>/.pi/agent/lsp/typescript-options.mjs"],
     },
   },
 }
