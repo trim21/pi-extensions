@@ -235,17 +235,27 @@ async function truncateOutput(
   };
 }
 
-/**
- * TUI 面板：脚本原文放在 js 代码块里，用比脚本里最长反引号串更长的围栏包住，
- * 免得脚本里的 ``` 把面板截断。
- */
-function scriptPendant(code: string, subtitle: string): ToolPendant {
-  const longest = (code.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0);
+/** 代码块围栏比内容里最长的反引号串更长，免得内容里的 ``` 把面板截断。 */
+function codeBlock(content: string, language: string): string {
+  const longest = (content.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0);
   const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}${language}\n${content.trimEnd()}\n${fence}`;
+}
+
+/**
+ * TUI 面板：`## Input` 是脚本原文，`## Output` 是脚本经 `text()` / `console.log`
+ * 产生的文本（没有输出就没有这一段；返回值与图片只进工具结果正文）。
+ * 副标题在 `detail` 后带上输出字符数，不展开面板也能看出这次产出了多少文本。
+ */
+function scriptPendant(code: string, detail: string, output: string): ToolPendant {
+  const sections = [`## Input\n${codeBlock(code, "js")}`];
+  if (output.trim() !== "") {
+    sections.push(`## Output\n${codeBlock(output, "")}`);
+  }
   return {
     title: CODEMODE_TOOL_NAME,
-    subtitle,
-    markdown: `${fence}js\n${code.trimEnd()}\n${fence}`,
+    subtitle: `${detail} · ${output.length} chars output`,
+    markdown: sections.join("\n\n"),
   };
 }
 
@@ -302,13 +312,15 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
               content: [{ type: "text", text: message }],
               details: {
                 error: message,
-                pendant: scriptPendant(params.code, "invalid @options"),
+                pendant: scriptPendant(params.code, "invalid @options", ""),
               },
             };
           }
 
           // 脚本的 fs 原语读到的文件也进同一份记账，随结果持久化（与 details.store 同一处）
           const recordedReads: Record<string, FileSnapshot> = {};
+          // 脚本流式输出的文本累计：进度面板与结果面板的 Output 段是同一段文本
+          let streamedText = "";
 
           const outcome = await sandbox.run({
             code,
@@ -317,12 +329,14 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
             signal,
             onOutput: (items) => {
               const text = textOf(items);
-              if (text) {
-                onUpdate?.({
-                  content: [{ type: "text", text }],
-                  details: { pendant: scriptPendant(code, text.slice(0, 80)) },
-                });
+              if (text === "") {
+                return;
               }
+              streamedText = streamedText === "" ? text : `${streamedText}\n${text}`;
+              onUpdate?.({
+                content: [{ type: "text", text }],
+                details: { pendant: scriptPendant(code, text.slice(0, 80), streamedText) },
+              });
             },
             onCallProgress: ({ phase, name, args }) => {
               const detail =
@@ -332,7 +346,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
               const line = `${phase === "start" ? "→" : "←"} ${name}${detail}`;
               onUpdate?.({
                 content: [{ type: "text", text: line }],
-                details: { pendant: scriptPendant(code, line.slice(0, 120)) },
+                details: { pendant: scriptPendant(code, line.slice(0, 120), streamedText) },
               });
             },
             onCall: async ({ name, args }) => {
@@ -371,13 +385,10 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
           if (outcome.ok) {
             const writes = outcome.writes;
             const hasWrites = Object.keys(writes.set).length > 0 || writes.delete.length > 0;
+            const outputText = textOf(outcome.output);
             const value =
               outcome.value === undefined ? "" : `\n\n${JSON.stringify(outcome.value, null, 2)}`;
-            const truncated = await truncateOutput(
-              textOf(outcome.output) + value,
-              images,
-              maxOutputTokens,
-            );
+            const truncated = await truncateOutput(outputText + value, images, maxOutputTokens);
             return {
               content: [
                 { type: "text" as const, text: truncated.text },
@@ -392,7 +403,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
                 // store 的写入随工具结果持久化，下一次调用从这里重放恢复
                 ...(hasWrites && { store: writes }),
                 ...(hasReads(recordedReads) && { reads: recordedReads }),
-                pendant: scriptPendant(code, `${outcome.calls.length} tool call(s)`),
+                pendant: scriptPendant(code, `${outcome.calls.length} tool call(s)`, outputText),
                 ...(truncated.fullOutputPath && { fullOutputPath: truncated.fullOutputPath }),
               },
             };
@@ -413,7 +424,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
               calls: outcome.calls,
               error: outcome.error.kind,
               ...(hasReads(recordedReads) && { reads: recordedReads }),
-              pendant: scriptPendant(code, `failed (${outcome.error.kind})`),
+              pendant: scriptPendant(code, `failed (${outcome.error.kind})`, body),
             },
           };
         },

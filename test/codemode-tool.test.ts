@@ -257,43 +257,135 @@ interface ToolResultShape {
   isError?: boolean;
 }
 
+interface PendantShape {
+  title?: string;
+  subtitle?: string;
+  markdown?: string;
+}
+
+/** 一次 toolcall 进度更新：content 的文本与面板。 */
+interface ProgressUpdate {
+  text: string;
+  pendant?: PendantShape;
+}
+
+function pendantOf(result: ToolResultShape): PendantShape {
+  return (result.details as { pendant: PendantShape }).pendant;
+}
+
 async function runScript(
   h: Harness,
   code: string,
   branch: unknown[] = [],
   signal?: AbortSignal,
-  onUpdate?: (text: string) => void,
+  onUpdate?: (update: ProgressUpdate) => void,
 ): Promise<ToolResultShape> {
   const result = await h.codemode.execute(
     "call-1",
     { code },
     signal,
-    onUpdate ? (update: { content: unknown }) => onUpdate(textOf(update)) : undefined,
+    onUpdate
+      ? (update: { content: unknown; details?: unknown }) =>
+          onUpdate({
+            text: textOf(update),
+            pendant: (update.details as { pendant?: PendantShape } | undefined)?.pendant,
+          })
+      : undefined,
     context(h.select, branch),
   );
   return result;
 }
 
 describe("codemode 工具", () => {
-  it("面板正文是脚本原文，包在 js 代码块里", async () => {
+  it("面板同时给出脚本输入与文本输出", async () => {
     const h = await harness();
     const result = await runScript(h, `text("hi");\nreturn 1;`);
-    const pendant = (
-      result.details as { pendant: { title: string; subtitle: string; markdown: string } }
-    ).pendant;
+    const pendant = pendantOf(result);
 
     expect(pendant.title).toBe("codemode");
-    expect(pendant.markdown).toBe('```js\ntext("hi");\nreturn 1;\n```');
+    expect(pendant.markdown).toBe(
+      '## Input\n```js\ntext("hi");\nreturn 1;\n```\n\n## Output\n```\nhi\n```',
+    );
+    expect(pendant.subtitle).toBe("0 tool call(s) · 2 chars output");
   });
 
-  it("脚本里有反引号时用更长的围栏", async () => {
+  it("没有文本输出时省略 Output 段，字符数为 0", async () => {
     const h = await harness();
-    const fence = "`".repeat(3);
-    const result = await runScript(h, `const s = ${JSON.stringify(fence)};\nreturn s;`);
-    const markdown = (result.details as { pendant: { markdown: string } }).pendant.markdown;
+    const result = await runScript(h, "return 1;");
+    const pendant = pendantOf(result);
 
-    expect(markdown.startsWith("````js\n")).toBe(true);
-    expect(markdown.endsWith("\n````")).toBe(true);
+    expect(pendant.markdown).toBe("## Input\n```js\nreturn 1;\n```");
+    expect(pendant.subtitle).toBe("0 tool call(s) · 0 chars output");
+  });
+
+  it("脚本与输出里有反引号时各段用自己的围栏", async () => {
+    const h = await harness();
+    const backticks = "`".repeat(3);
+    const result = await runScript(h, `const s = ${JSON.stringify(backticks)};\ntext(s);`);
+    const pendant = pendantOf(result);
+
+    expect(pendant.markdown?.startsWith("## Input\n````js\n")).toBe(true);
+    expect(
+      pendant.markdown?.endsWith(`## Output\n${"`".repeat(4)}\n${backticks}\n${"`".repeat(4)}`),
+    ).toBe(true);
+    expect(pendant.subtitle).toBe("0 tool call(s) · 3 chars output");
+  });
+
+  it("输出超过结果预算时面板仍给完整文本", async () => {
+    const h = await harness();
+    const result = await runScript(h, 'text("x".repeat(45000));');
+
+    expect(textOf(result)).toContain("Warning: truncated output");
+    expect(pendantOf(result).markdown?.endsWith(`${"x".repeat(45000)}\n\`\`\``)).toBe(true);
+    expect(pendantOf(result).subtitle).toBe("0 tool call(s) · 45000 chars output");
+  });
+
+  it("进度更新里输出段累计、副标题带累计字符数", async () => {
+    const h = await harness();
+    const updates: ProgressUpdate[] = [];
+    const result = await runScript(
+      h,
+      `text("a");\nawait call("echo", { message: "x" });\ntext("b");`,
+      [],
+      undefined,
+      (update) => {
+        updates.push(update);
+      },
+    );
+
+    const first = updates.find((update) => update.text === "a");
+    expect(first?.pendant?.markdown?.endsWith("## Output\n```\na\n```")).toBe(true);
+    expect(first?.pendant?.subtitle).toBe("a · 1 chars output");
+
+    const started = updates.find((update) => update.text.startsWith("→ echo"));
+    expect(started?.pendant?.subtitle).toContain("→ echo");
+    expect(started?.pendant?.subtitle).toContain("1 chars output");
+
+    const second = updates.find((update) => update.text === "b");
+    expect(second?.pendant?.markdown?.endsWith("## Output\n```\na\nb\n```")).toBe(true);
+    expect(second?.pendant?.subtitle).toBe("b · 3 chars output");
+
+    expect(pendantOf(result).subtitle).toBe("1 tool call(s) · 3 chars output");
+  });
+
+  it("失败脚本的面板保留已产生的输出与字符数", async () => {
+    const h = await harness();
+    const result = await runScript(h, `text("partial");\nthrow new Error("boom");`);
+
+    expect(result.isError).toBe(true);
+    expect(pendantOf(result).subtitle).toBe("failed (script) · 7 chars output");
+    expect(pendantOf(result).markdown?.endsWith("## Output\n```\npartial\n```")).toBe(true);
+  });
+
+  it("非法 @options 的面板只有输入段、字符数为 0", async () => {
+    const h = await harness();
+    const result = await runScript(h, `// @options: {"nope": 1}\ntext("hi");`);
+
+    expect(result.isError).toBe(true);
+    expect(pendantOf(result).subtitle).toBe("invalid @options · 0 chars output");
+    expect(pendantOf(result).markdown).toBe(
+      '## Input\n```js\n// @options: {"nope": 1}\ntext("hi");\n```',
+    );
   });
 
   it("描述里只列出声明了结构化输出的工具", async () => {
@@ -664,7 +756,7 @@ describe("codemode 工具", () => {
       [],
       controller.signal,
       (progress) => {
-        if (progress.includes("hi")) {
+        if (progress.text.includes("hi")) {
           controller.abort();
         }
       },
