@@ -50,10 +50,9 @@ const searchItemSchema = Type.Object({
   created_at: Type.String(),
   updated_at: Type.String(),
   closed_at: Type.Union([Type.String(), Type.Null()]),
-  pull_request: Type.Union([
-    Type.Object({ merged_at: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
-    Type.Null(),
-  ]),
+  // 搜索 API 只在条目是 PR 时才带这个键（纯 issue 条目压根没有它）；PR 条目一定带
+  // `merged_at`，未合并为 null、已合并为时间戳
+  pull_request: Type.Optional(Type.Object({ merged_at: Type.Union([Type.String(), Type.Null()]) })),
 });
 
 type SearchItem = Static<typeof searchItemSchema>;

@@ -154,7 +154,10 @@ function stubFetch(responses: { status: number; body: unknown }[]): {
   return { fetch: fetchStub, calls };
 }
 
-/** Minimal `/search/issues` item that satisfies the client's response schema. */
+/**
+ * Minimal `/search/issues` item that satisfies the client's response schema.
+ * 纯 issue 条目在真实响应里没有 `pull_request` 键（只有 PR 条目才有）。
+ */
 const SEARCH_ITEM = {
   number: 12,
   state: "open",
@@ -169,7 +172,6 @@ const SEARCH_ITEM = {
   created_at: "2024-11-01T00:00:00Z",
   updated_at: "2024-11-02T00:00:00Z",
   closed_at: null,
-  pull_request: null,
 };
 
 function searchBody(): { total_count: number; incomplete_results: boolean; items: unknown[] } {

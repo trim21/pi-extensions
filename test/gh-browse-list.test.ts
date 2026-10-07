@@ -177,7 +177,8 @@ describe("list-github-issues 的浏览分支", () => {
 });
 
 describe("list-github-issues 的搜索分支", () => {
-  it("搜索命中同样进载荷", async () => {
+  // 纯 issue 条目在真实响应里没有 pull_request 键（只有 PR 条目才有）
+  it("搜索命中的纯 issue 条目没有 pull_request 键也照常进载荷", async () => {
     const { bus } = setupBus({
       "/search/issues": {
         body: {
@@ -197,7 +198,6 @@ describe("list-github-issues 的搜索分支", () => {
               created_at: "2026-01-01T00:00:00Z",
               updated_at: "2026-01-02T00:00:00Z",
               closed_at: "2026-01-02T00:00:00Z",
-              pull_request: null,
             },
           ],
         },
@@ -235,5 +235,60 @@ describe("list-github-issues 的搜索分支", () => {
         ],
       },
     });
+  });
+
+  // PR 条目一定带 pull_request：未合并为 merged_at: null，已合并为时间戳
+  it("搜索命中的 PR 条目按 merged_at 推断 merged（null 视为未合并）", async () => {
+    const { bus } = setupBus({
+      "/search/issues": {
+        body: {
+          total_count: 2,
+          items: [
+            {
+              number: 12,
+              state: "closed",
+              title: "merged pr",
+              html_url: "https://example.test/pull/12",
+              repository_url: "https://api.github.com/repos/other/repo",
+              user: { login: "someone" },
+              labels: [],
+              milestone: null,
+              assignees: [],
+              comments: 1,
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-02T00:00:00Z",
+              closed_at: "2026-01-02T00:00:00Z",
+              pull_request: { merged_at: "2026-01-02T00:00:00Z" },
+            },
+            {
+              number: 13,
+              state: "open",
+              title: "open pr",
+              html_url: "https://example.test/pull/13",
+              repository_url: "https://api.github.com/repos/other/repo",
+              user: { login: "someone" },
+              labels: [],
+              milestone: null,
+              assignees: [],
+              comments: 0,
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-03T00:00:00Z",
+              closed_at: null,
+              pull_request: { merged_at: null },
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await bus.executeTool(
+      "list-github-issues",
+      { keywords: "pr", state: "all" },
+      { ctx },
+    );
+
+    expect(textOf(result)).toBe(
+      "other/repo\t12\tmerged\tmerged pr\t\t2026-01-02\nother/repo\t13\topen\topen pr\t\t2026-01-03",
+    );
   });
 });
