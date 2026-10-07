@@ -1,6 +1,6 @@
 {
   "name": "@trim21/personal-pi-extensions",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "type": "module",
   "description": "Custom pi coding-agent extensions: bwrap sandbox, workspace guard, opencode edit, and more",
   "keywords": [
