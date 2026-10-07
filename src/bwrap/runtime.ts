@@ -42,7 +42,6 @@ import {
   resolveBwrapPath,
   type ResolvedBwrap,
 } from "./core.js";
-import { dcgSuggestion } from "./dcg-scan.js";
 import { escapeHtml } from "./html.js";
 import { loadSandboxConfig, runInSandbox } from "./sandbox.js";
 
@@ -774,25 +773,15 @@ export class BwrapRuntime {
     // 子菜单只列出未命中 allow 规则的 pattern：已提前允许的部分自动放行，
     // 无需再展示或重复勾选持久化（deny 命中的命令在 evaluate 阶段已被拒绝）。
     const unallowedPatterns = await ruleSet.pendingPatterns(command);
-    // dcg 扫描建议是可选的参考文本：未安装时静默跳过；已安装但扫描失败
-    // 时 notify 提示，弹窗本身与无 dcg 时一致
-    const outcome = await dcgSuggestion(command);
-    if (outcome.kind === "failed") {
-      ctx.ui.notify(`dcg 扫描失败，本次无破坏性命令建议: ${outcome.detail}`, "warning");
-    }
-    // 弹框主体按行组织（'\n' join），便于 review；suggestion 块带前导空行 +
-    // 尾部 "---" 分隔。
+    // 弹框主体按行组织（'\n' join），便于 review。
     const lines: string[] = [
       "Allow this command to run without sandbox?",
       "---",
       "",
       `Reason: ${escapeHtml(reason ?? "(No reason provided by model)")}`,
       "---",
+      fenceCodeBlock(command),
     ];
-    if (outcome.kind === "suggestion") {
-      lines.push("", outcome.suggestion.text, "---");
-    }
-    lines.push(fenceCodeBlock(command));
     // 执行目录与工作区不同时，提示实际执行目录（execCwd 是解析后的绝对路径，
     // 显示用 pretty path 风格：home 内 `~/…`，否则绝对路径）
     if (execCwd !== ctx.cwd) {
