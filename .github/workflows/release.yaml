@@ -42,16 +42,17 @@ jobs:
 
       - run: pnpm run check
 
-      # package.json 的 major.minor 是发布版本线的唯一来源，patch 是 HEAD commit 的 committer 时间（UTC）
-      # YYYYMMDDHHMMSS，形如 0.1.20260718031031；bump 版本线只改 package.json。
+      # package.json 的 major.minor 是发布版本线的唯一来源，patch 是 HEAD commit 的 committer 时间
+      # （Asia/Shanghai）的 YYYYMMDDHHMMSS，形如 0.1.20260718031031；bump 版本线只改 package.json。
       # 取 commit 时间而不是当前时间：同一个 commit 重跑得到同一个版本，重复发布会被 npm 拒绝。
       # 用 committer 而不是 author 时间，author 时间可被 rebase 保留或手工指定，会让版本号倒退。
-      # 整串以年份开头，不会出现前导零，仍是合法 semver。
+      # 固定时区且中国无夏令时，时间戳拼接后与时间前后一致；整串以年份开头，也没有前导零问题。
       - name: Set version from commit timestamp
         run: |
           BASE=$(node -p "require('./package.json').version")
           TS=$(git show -s --format=%ct HEAD)
-          STAMP=$(date -u -d "@$TS" +%Y%m%d%H%M%S)
+          STAMP=$(TZ=Asia/Shanghai date -d "@$TS" +%Y%m%d%H%M%S)
+          VERSION="${BASE%.*}.$STAMP"
           VERSION="${BASE%.*}.$STAMP"
           node -e "
             const fs = require('fs');
