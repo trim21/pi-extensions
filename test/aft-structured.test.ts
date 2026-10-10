@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 
 import type {
   ExtensionAPI,
-  ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,7 +54,7 @@ function busFor(register: (bus: ToolBus, ctx: AftToolContext) => void): ToolBus 
   return bus;
 }
 
-const extCtx = { cwd: "/tmp", sessionManager: { getSessionId: () => "s" } } as ExtensionContext;
+const extCtx = { cwd: "/tmp", sessionManager: { getSessionId: () => "s" } } as ExtensionToolContext;
 
 async function run(
   register: (bus: ToolBus, ctx: AftToolContext) => void,

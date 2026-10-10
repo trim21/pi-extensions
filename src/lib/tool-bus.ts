@@ -25,6 +25,7 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/p
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
@@ -80,7 +81,7 @@ export type ToolExecutionResult = AgentToolResult<unknown> & {
 
 export interface ExecuteToolOptions {
   /** 工具 `execute` 需要的宿主上下文：调用方把自己拿到的那个 ctx 传进来。 */
-  ctx: ExtensionContext;
+  ctx: ExtensionToolContext;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback<unknown>;
   /** 日志与临时文件命名用的调用 id；缺省由总线生成。 */
