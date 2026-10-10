@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type {
   AgentToolResult,
   ExtensionAPI,
-  ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -222,7 +222,7 @@ async function harness(
   };
 }
 
-function context(select: ReturnType<typeof vi.fn>, branch: unknown[] = []): ExtensionContext {
+function context(select: ReturnType<typeof vi.fn>, branch: unknown[] = []): ExtensionToolContext {
   return {
     cwd: "/tmp",
     model: { id: "gpt-5.6" },
@@ -234,7 +234,7 @@ function context(select: ReturnType<typeof vi.fn>, branch: unknown[] = []): Exte
       theme: { fg: (_c: string, t: string) => t },
     },
     sessionManager: { getBranch: () => branch },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
 }
 
 function textOf(result: { content: unknown }): string {
