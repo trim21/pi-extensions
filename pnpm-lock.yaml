@@ -167,8 +167,8 @@ importers:
   .:
     dependencies:
       '@cortexkit/aft-bridge':
-        specifier: 0.58.2
-        version: 0.58.2
+        specifier: 0.59.0
+        version: 0.59.0
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -292,8 +292,8 @@ importers:
         version: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(vite@8.3.1(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
     optionalDependencies:
       '@cortexkit/aft-linux-x64':
-        specifier: 0.58.2
-        version: 0.58.2
+        specifier: 0.59.0
+        version: 0.59.0
 
 packages:
 
@@ -417,17 +417,17 @@ packages:
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
 
-  '@cortexkit/aft-bridge@0.58.2':
-    resolution: {integrity: sha512-lJFW2N6SNsDeYZUkvtPAhNflMZHRicNMuROxN1PwjXONkv796rf0W2YdNEqrJnz18d0WdiHYhYTes6pEnpfMCQ==}
+  '@cortexkit/aft-bridge@0.59.0':
+    resolution: {integrity: sha512-RFmIQ6+R5tM0Mxbt3kQsKF5YoERAx90SyyVJ4MK1yXzllShA9mclUg+5NFCnzmM3tiewpTUUqFpDqDCskYPxTQ==}
 
-  '@cortexkit/aft-linux-x64@0.58.2':
-    resolution: {integrity: sha512-OFIvkFlu21YnlfQ0KsErMmyZEwdALbnbjjMFe0jfxWZX0c+Iw9a0VSG29vrGunhv5ioSXI8pfx/ts2V5EM2/jw==}
+  '@cortexkit/aft-linux-x64@0.59.0':
+    resolution: {integrity: sha512-zbt9EL2rmC5ca+5evghb7AoxaXUPkIDVLQmR7aE6VKA1NKT7gNhO/g1FEnX315CLmpWtGnwZeO1qpZvKSfRrvg==}
     cpu: [x64]
     os: [linux]
     hasBin: true
 
-  '@cortexkit/subc-client@0.13.1':
-    resolution: {integrity: sha512-fUPcVhBzBk1RRSLxo0o5Y+P3IVwlsz1MZik609zGDsr1vzA1TnEsIKlEQDz3U8JeuvcnUvKd5v1/F+gafI7+Ig==}
+  '@cortexkit/subc-client@0.20.0':
+    resolution: {integrity: sha512-nH0A6QFFYD/ac7cDfUX9fL9jRWK/XjKz84IDFlUu5Rq1cvqYML3l/iY9RduT0lLTMbvcnmawT9v9NqbxlDvE5w==}
     engines: {node: '>=18'}
 
   '@earendil-works/chord@0.87.1':
@@ -2880,15 +2880,15 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
-  '@cortexkit/aft-bridge@0.58.2':
+  '@cortexkit/aft-bridge@0.59.0':
     dependencies:
-      '@cortexkit/subc-client': 0.13.1
+      '@cortexkit/subc-client': 0.20.0
       undici: 7.29.1
 
-  '@cortexkit/aft-linux-x64@0.58.2':
+  '@cortexkit/aft-linux-x64@0.59.0':
     optional: true
 
-  '@cortexkit/subc-client@0.13.1': {}
+  '@cortexkit/subc-client@0.20.0': {}
 
   '@earendil-works/chord@0.87.1':
     dependencies:
