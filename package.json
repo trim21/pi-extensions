@@ -32,14 +32,14 @@
     "build:codemode-worker": "esbuild src/codemode/worker.ts --bundle --platform=node --external:quickjs-wasi --format=esm --target=node24 --outfile=src/codemode/worker.js"
   },
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": ">=0.84.1",
-    "@earendil-works/pi-ai": ">=0.84.1",
-    "@earendil-works/pi-coding-agent": ">=0.84.1"
+    "@earendil-works/pi-agent-core": ">=1.1.0",
+    "@earendil-works/pi-ai": ">=1.1.0",
+    "@earendil-works/pi-coding-agent": ">=1.1.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": ">=0.84.1",
-    "@earendil-works/pi-ai": ">=0.84.1",
-    "@earendil-works/pi-coding-agent": ">=0.84.1",
+    "@earendil-works/pi-agent-core": ">=1.1.0",
+    "@earendil-works/pi-ai": ">=1.1.0",
+    "@earendil-works/pi-coding-agent": ">=1.1.0",
     "@eslint/js": "10.0.1",
     "@types/lodash-es": "^4.17.12",
     "@types/node": "^24.13.3",
@@ -84,7 +84,7 @@
       "prettier --write"
     ]
   },
-  "packageManager": "pnpm@11.28.4",
+  "packageManager": "pnpm@11.28.5",
   "engines": {
     "node": ">=24.14"
   },

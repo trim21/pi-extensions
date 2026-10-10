@@ -1,4 +1,4 @@
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 
@@ -8,7 +8,7 @@ import {
   type ToolExecutionResult,
 } from "../src/lib/tool-bus.js";
 
-const ctx = { cwd: "/tmp" } as unknown as ExtensionContext;
+const ctx = { cwd: "/tmp" } as unknown as ExtensionToolContext;
 
 const echoParameters = Type.Object({ text: Type.String() });
 
