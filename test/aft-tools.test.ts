@@ -3,7 +3,11 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { AftProjectTransport } from "@cortexkit/aft-bridge";
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionContext,
+  ExtensionToolContext,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type AftState, callAftTool } from "../src/aft/bridge.js";
@@ -154,7 +158,7 @@ describe("aft_outline 路径转发", () => {
 
     await definition.execute("call-outline", params, undefined, undefined, {
       cwd: sessionCwd,
-    } as ExtensionContext);
+    } as unknown as ExtensionToolContext);
 
     const call = callAftToolMock.mock.calls.at(-1);
     return call?.[2] ?? {};
