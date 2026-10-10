@@ -7,7 +7,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createCodemodeTools } from "../src/codemode/tool.js";
@@ -48,8 +48,8 @@ async function workspace(): Promise<string> {
   return dir;
 }
 
-function context(cwd: string): ExtensionContext {
-  return { cwd } as unknown as ExtensionContext;
+function context(cwd: string): ExtensionToolContext {
+  return { cwd } as unknown as ExtensionToolContext;
 }
 
 /** 注册三个查询工具并返回总线（service 是双桩，不需要真实语言服务器）。 */
