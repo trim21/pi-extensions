@@ -14,6 +14,7 @@ async function run(
     code,
     tools: [{ name: "Read", description: "read a file" }],
     store: {},
+    toolCallId: "test-call",
     onCall: async ({ args }) => ({ ok: true, value: { echoed: args } }),
     ...overrides,
   });
@@ -42,7 +43,15 @@ describe("codemode 沙箱", () => {
       { type: "text", text: "read a.txt" },
       { type: "text", text: "done" },
     ]);
-    expect(result.calls).toEqual([{ name: "Read", status: "ok", durationMs: expect.any(Number) }]);
+    expect(result.calls).toEqual([
+      {
+        id: "test-call/1",
+        name: "Read",
+        args: '{"path":"a.txt"}',
+        status: "ok",
+        durationMs: expect.any(Number),
+      },
+    ]);
   });
 
   it("store.get 能读到初始 store", async () => {

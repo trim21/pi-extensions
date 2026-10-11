@@ -301,7 +301,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
         },
         executionMode: "sequential",
 
-        async execute(_toolCallId, params, signal, onUpdate, ctx) {
+        async execute(toolCallId, params, signal, onUpdate, ctx) {
           let code: string;
           let maxOutputTokens = DEFAULT_OUTPUT_TOKENS;
           try {
@@ -324,11 +324,14 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
           const recordedReads: Record<string, FileSnapshot> = {};
           // 脚本流式输出的文本累计：进度面板与结果面板的 Output 段是同一段文本
           let streamedText = "";
+          // 嵌套调用记录的最近一次快照：进度帧带上它，UI 运行期间就能列出调用行
+          let callsSnapshot: readonly ScriptCall[] = [];
 
           const outcome = await sandbox.run({
             code,
             tools: scriptTools,
             store: readStore(ctx),
+            toolCallId,
             signal,
             onOutput: (items) => {
               const text = textOf(items);
@@ -338,10 +341,14 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
               streamedText = streamedText === "" ? text : `${streamedText}\n${text}`;
               onUpdate?.({
                 content: [{ type: "text", text }],
-                details: { pendant: scriptPendant(code, text.slice(0, 80), streamedText) },
+                details: {
+                  calls: callsSnapshot,
+                  pendant: scriptPendant(code, text.slice(0, 80), streamedText),
+                },
               });
             },
-            onCallProgress: ({ phase, name, args }) => {
+            onCallProgress: ({ phase, name, args, calls }) => {
+              callsSnapshot = calls;
               const detail =
                 phase === "start" && args !== undefined
                   ? ` ${JSON.stringify(args).slice(0, 200)}`
@@ -349,7 +356,10 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
               const line = `${phase === "start" ? "→" : "←"} ${name}${detail}`;
               onUpdate?.({
                 content: [{ type: "text", text: line }],
-                details: { pendant: scriptPendant(code, line.slice(0, 120), streamedText) },
+                details: {
+                  calls: callsSnapshot,
+                  pendant: scriptPendant(code, line.slice(0, 120), streamedText),
+                },
               });
             },
             onCall: async ({ name, args }) => {

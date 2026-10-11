@@ -263,10 +263,11 @@ interface PendantShape {
   markdown?: string;
 }
 
-/** 一次 toolcall 进度更新：content 的文本与面板。 */
+/** 一次 toolcall 进度更新：content 的文本、面板与嵌套调用快照。 */
 interface ProgressUpdate {
   text: string;
   pendant?: PendantShape;
+  calls?: unknown[];
 }
 
 function pendantOf(result: ToolResultShape): PendantShape {
@@ -289,6 +290,7 @@ async function runScript(
           onUpdate({
             text: textOf(update),
             pendant: (update.details as { pendant?: PendantShape } | undefined)?.pendant,
+            calls: (update.details as { calls?: unknown[] } | undefined)?.calls,
           })
       : undefined,
     context(h.select, branch),
@@ -744,6 +746,38 @@ describe("codemode 工具", () => {
     expect(
       (result.details as { calls: { name: string }[] }).calls.map((call) => call.name),
     ).toEqual(["echo"]);
+  });
+
+  it("toolcall 进度带上嵌套调用快照，最终结果里同一条记录转为终态", async () => {
+    const h = await harness();
+    const updates: ProgressUpdate[] = [];
+    const result = await runScript(
+      h,
+      `await call("echo", { message: "hi" }); text("out");`,
+      [],
+      undefined,
+      (update) => {
+        updates.push(update);
+      },
+    );
+
+    const running = updates.find((update) => update.calls?.length === 1)?.calls?.[0];
+    expect(running).toMatchObject({
+      id: "call-1/1",
+      name: "echo",
+      args: '{"message":"hi"}',
+      status: "running",
+    });
+
+    expect((result.details as { calls: unknown[] }).calls).toEqual([
+      {
+        id: "call-1/1",
+        name: "echo",
+        args: '{"message":"hi"}',
+        status: "ok",
+        durationMs: expect.any(Number),
+      },
+    ]);
   });
 
   it("中止后结果带上已产生的输出", async () => {

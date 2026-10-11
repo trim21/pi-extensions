@@ -21,11 +21,17 @@ import {
 } from "./protocol.js";
 import { compileQuickJSWasm } from "./wasm.js";
 
-/** 脚本侧一次嵌套调用的记录（主线程是执行方，所以由它记录）。 */
+/** 脚本侧一次嵌套调用的记录（主线程是执行方，所以由它记录）。字段与 pi 内置 codemode 的嵌套调用一致，UI 直接消费。 */
 export interface ScriptCall {
+  /** 本次执行内唯一：`<toolCallId>/<序号>`。 */
+  id: string;
   name: string;
-  status: "ok" | "error";
-  durationMs: number;
+  /** 参数的紧凑 JSON（过长时截断），供 UI 显示。 */
+  args: string;
+  status: "running" | "ok" | "error";
+  durationMs?: number;
+  /** 失败时的错误文本。 */
+  error?: string;
 }
 
 export type SandboxCallOutcome = { ok: true; value: unknown } | { ok: false; error: string };
@@ -42,18 +48,21 @@ export interface SandboxRunOptions {
   code: string;
   tools: readonly ScriptTool[];
   store: Record<string, unknown>;
+  /** 本次工具调用的 id，用于给嵌套调用生成稳定的 `id`。 */
+  toolCallId: string;
   /** 调用方中止本次执行；脚本没有自己的超时，死循环只能靠它结束。 */
   signal?: AbortSignal;
   /** 每次嵌套调用：由调用方执行工具并把结果回给脚本。 */
   onCall(request: { id: number; name: string; args: unknown }): Promise<SandboxCallOutcome>;
   /** 脚本流式产生的输出项，用于 toolcall 进度。 */
   onOutput?(items: readonly CodemodeOutputItem[]): void;
-  /** 嵌套调用的开始与结束，用于 toolcall 进度。 */
+  /** 嵌套调用的开始与结束，用于 toolcall 进度；事件里带截至此刻的调用记录快照。 */
   onCallProgress?(event: {
     phase: "start" | "finish";
     name: string;
     args?: unknown;
-    status?: string;
+    status?: "ok" | "error";
+    calls: readonly ScriptCall[];
   }): void;
 }
 
@@ -67,6 +76,20 @@ function workerUrl(): URL {
 }
 
 const NO_WRITES: StoreWrites = { set: {}, delete: [] };
+
+/** 嵌套调用参数的预览长度：只进进度帧，不进模型上下文。 */
+const ARGS_PREVIEW_CHARS = 200;
+
+function previewArgs(args: unknown): string {
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(args);
+  } catch {
+    // 跨线程的结构化克隆允许循环引用，JSON.stringify 会抛
+    json = undefined;
+  }
+  return (json ?? "").slice(0, ARGS_PREVIEW_CHARS);
+}
 
 /** 注册工具时调用一次：编译 wasm 并返回可复用的沙箱。 */
 export async function createCodemodeSandbox(): Promise<CodemodeSandbox> {
@@ -83,7 +106,11 @@ function runInWorker(wasm: object, options: SandboxRunOptions): Promise<SandboxO
     const output: CodemodeOutputItem[] = [];
     const calls: ScriptCall[] = [];
     const started = new Map<number, { name: string; at: number }>();
+    let callSequence = 0;
     let settled = false;
+
+    // 进度帧发出去的是拷贝：记录随后会被改成终态，已经发出去的帧不能被它改掉
+    const snapshotCalls = (): ScriptCall[] => calls.map((call) => ({ ...call }));
 
     const finish = (
       body:
@@ -117,8 +144,17 @@ function runInWorker(wasm: object, options: SandboxRunOptions): Promise<SandboxO
     }
 
     const handleCall = async (id: number, name: string, args: unknown): Promise<void> => {
+      callSequence += 1;
+      const record: ScriptCall = {
+        id: `${options.toolCallId}/${callSequence}`,
+        name,
+        args: previewArgs(args),
+        status: "running",
+      };
+      calls.push(record);
       started.set(id, { name, at: Date.now() });
-      options.onCallProgress?.({ phase: "start", name, args });
+      // 开始时就带上记录（status=running）：运行期间 UI 就列出调用行，而不是等结果回来才有
+      options.onCallProgress?.({ phase: "start", name, args, calls: snapshotCalls() });
       let outcome: SandboxCallOutcome;
       try {
         outcome = await options.onCall({ id, name, args });
@@ -127,12 +163,17 @@ function runInWorker(wasm: object, options: SandboxRunOptions): Promise<SandboxO
       }
       const entry = started.get(id);
       started.delete(id);
-      calls.push({
+      record.status = outcome.ok ? "ok" : "error";
+      record.durationMs = entry ? Date.now() - entry.at : 0;
+      if (!outcome.ok) {
+        record.error = outcome.error;
+      }
+      options.onCallProgress?.({
+        phase: "finish",
         name,
-        status: outcome.ok ? "ok" : "error",
-        durationMs: entry ? Date.now() - entry.at : 0,
+        status: record.status,
+        calls: snapshotCalls(),
       });
-      options.onCallProgress?.({ phase: "finish", name, status: outcome.ok ? "ok" : "error" });
       if (!settled) {
         worker.postMessage({ t: "result", id, ...outcome });
       }
