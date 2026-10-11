@@ -1,15 +1,13 @@
 import { Type } from "typebox";
 
-import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
+import { type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   mergeChecks,
   resolveRepoTarget,
-  type StructuredResultOf,
-  subtitlePendant,
+  structuredResult,
   type ToolCall,
   toPositiveId,
-  withStructuredResult,
 } from "../base.js";
 import { prStatusSchema } from "../schemas.js";
 
@@ -23,14 +21,10 @@ interface PrStatusParams {
  * path as the wait tools (octokit), but it never polls — pending checks come
  * back as-is.
  */
-export async function prStatus(
-  gh: GhClient,
-  call: ToolCall<PrStatusParams>,
-): Promise<StructuredResultOf<typeof prStatusSchema>> {
+export async function prStatus(gh: GhClient, call: ToolCall<PrStatusParams>) {
   const { params, ctx, signal } = call;
   const { number, repo } = params;
   const pullNumber = toPositiveId(number, "number");
-  const pendant = subtitlePendant(params, "number");
   const {
     fullName: effectiveRepo,
     owner,
@@ -60,32 +54,27 @@ export async function prStatus(
     url: check.link,
   }));
 
-  const payload = { pr: pullNumber, repo: effectiveRepo, head_sha: headSha, checks };
-  return withStructuredResult(
-    {
-      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-      details: { ...payload, input: params, ...(pendant && { pendant }) },
-    },
-    payload,
-  );
+  return structuredResult(prStatusSchema, {
+    pr: pullNumber,
+    repo: effectiveRepo,
+    head_sha: headSha,
+    checks,
+  });
 }
 
 export function addReadPrStatusTool(gh: GhClient, bus: ToolBus) {
-  bus.register(
-    defineStructuredTool({
-      name: "read-github-pr-status",
-      label: "GitHub PR Status",
-      description:
-        "Get the current checks of a pull request's head commit. Each check's `bucket` is pass / fail / pending / skipped / action_required; `action_required` means the workflow is waiting for a maintainer's approval (a fork PR's first run) and has created no check run yet, so it is listed from its check suite and named after its workflow run. Actions checks carry the `run_id` and `job_id` behind them (null for other CI), which is what read-github-ci-logs and get-github-workflow-jobs take; `suite_id` groups the checks of one suite. Returns the snapshot immediately without waiting — use wait-github-pr-checks to block until the checks finish.",
-      promptSnippet: "Read GitHub PR status checks",
-      parameters: Type.Object({
-        number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
-        repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
-      }),
-      structuredSchema: prStatusSchema,
-      async execute(_id, params, signal, onUpdate, ctx) {
-        return prStatus(gh, { params, ctx, signal, onUpdate });
-      },
+  bus.registerCodemodeOnly({
+    name: "read-github-pr-status",
+    label: "GitHub PR Status",
+    description:
+      "Get the current checks of a pull request's head commit. Each check's `bucket` is pass / fail / pending / skipped / action_required; `action_required` means the workflow is waiting for a maintainer's approval (a fork PR's first run) and has created no check run yet, so it is listed from its check suite and named after its workflow run. Actions checks carry the `run_id` and `job_id` behind them (null for other CI), which is what read-github-ci-logs and get-github-workflow-jobs take; `suite_id` groups the checks of one suite. Returns the snapshot immediately without waiting — use wait-github-pr-checks to block until the checks finish.",
+    parameters: Type.Object({
+      number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
+      repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
     }),
-  );
+    structuredSchema: prStatusSchema,
+    async execute(_id, params, signal, ctx) {
+      return prStatus(gh, { params, ctx, signal });
+    },
+  });
 }

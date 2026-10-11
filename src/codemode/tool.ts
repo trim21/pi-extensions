@@ -24,7 +24,7 @@ import { Type } from "typebox";
 import type { FileSnapshot, ReadsState } from "../lib/file-reads.js";
 import type { ToolPendant } from "../lib/pendant.js";
 import type { RequestPolicy } from "../lib/request-policy.js";
-import { type ToolBus, toolResultText } from "../lib/tool-bus.js";
+import { type ToolBus } from "../lib/tool-bus.js";
 import { renderDeclarations, toScriptTools } from "./declarations.js";
 import { createCodemodeFs } from "./fs.js";
 import type { CodemodeOutputItem, ScriptError, StoreWrites } from "./protocol.js";
@@ -380,17 +380,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
               if (!callable.has(name)) {
                 return { ok: false, error: `Tool "${name}" is not available in codemode.` };
               }
-              const result = await bus.executeTool(name, args, { ctx, signal });
-              if (result.structuredResult) {
-                return result.structuredResult.ok
-                  ? { ok: true, value: result.structuredResult.value }
-                  : { ok: false, error: result.structuredResult.error };
-              }
-              const text = toolResultText(result);
-              if (result.isError) {
-                return { ok: false, error: text };
-              }
-              return { ok: true, value: text };
+              return bus.executeCodemodeTool(name, args, { ctx, signal });
             },
           });
 

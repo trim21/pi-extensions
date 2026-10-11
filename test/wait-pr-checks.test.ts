@@ -3,8 +3,7 @@
  *
  * - mergeChecks: commit statuses + check runs -> merged, judged checks
  * - pollPrChecks: the wait loop (any fail / all pass|skipped / timeout)
- * - renderPrChecksList: per-round in-flight rendering
- * - renderChecksVerdict: final PASSED / FAILED / STILL IN FLIGHT reports
+ * - checksVerdict: the final success / failure / pending / awaiting_approval verdict
  *
  * The API client itself (octokit-backed, lib/github.js) is a thin adapter and
  * is not mocked or tested here.
@@ -15,11 +14,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   type ChecksPollResult,
+  checksVerdict,
   mergeChecks,
   type MergedCheck,
   pollPrChecks,
-  renderChecksVerdict,
-  renderPrChecksList,
 } from "../src/gh/index.js";
 import type {
   ActionJob,
@@ -324,77 +322,8 @@ describe("mergeChecks", () => {
   });
 });
 
-describe("renderPrChecksList", () => {
-  it("lists running checks first, queued after, and hides completed ones", () => {
-    const text = renderPrChecksList({
-      subject: "PR #7",
-      round: 2,
-      checks: [
-        merged({}),
-        merged({ name: "e2e", bucket: "pending", startedAt: "2026-09-05T03:15:30Z", link: null }),
-        merged({ name: "lint", bucket: "skipped", startedAt: null, link: null }),
-        merged({ name: "queued", bucket: "pending", startedAt: null, link: null }),
-      ],
-    });
-
-    expect(text).toContain("PR #7 checks — round 2: 2/4 complete");
-    const lines = text.split("\n").filter((l) => l.startsWith("- ["));
-    expect(lines).toEqual(["- [>] e2e", "- [ ] queued"]);
-    // completed and skipped checks are hidden
-    expect(text).not.toContain("build");
-    expect(text).not.toContain("lint");
-  });
-
-  it("renders a link for checks that have one and omits the body when all checks are complete", () => {
-    const allComplete = renderPrChecksList({ subject: "PR #7", round: 2, checks: [merged({})] });
-    expect(allComplete).toBe("PR #7 checks — round 2: 1/1 complete");
-    expect(allComplete).not.toContain("- [");
-
-    const linked = renderPrChecksList({
-      subject: "PR #7",
-      round: 1,
-      checks: [merged({ name: "e2e", bucket: "pending", startedAt: "2026-09-05T03:15:30Z" })],
-    });
-    expect(linked).toContain("- [>] [e2e](https://github.com/owner/repo/actions/runs/5/job/10)");
-  });
-
-  it("labels checks with their distinct trigger events like the GitHub UI", () => {
-    const text = renderPrChecksList({
-      subject: "PR #7",
-      round: 1,
-      checks: [
-        merged({
-          name: "build",
-          bucket: "pending",
-          startedAt: "2026-09-05T03:15:30Z",
-          link: null,
-          event: "pull_request",
-        }),
-        merged({
-          name: "build",
-          bucket: "pending",
-          startedAt: null,
-          link: null,
-          event: "push",
-        }),
-        merged({ name: "e2e", bucket: "pending", startedAt: null, link: null }),
-      ],
-    });
-
-    const lines = text.split("\n").filter((l) => l.startsWith("- ["));
-    expect(lines).toEqual(["- [>] build (pull_request)", "- [ ] build (push)", "- [ ] e2e"]);
-  });
-
-  it("marks an empty check list as no checks reported", () => {
-    const text = renderPrChecksList({ subject: "PR #7", round: 1, checks: [] });
-    expect(text).toContain("PR #7 checks — round 1: 0/0 complete");
-    expect(text).toContain("- _no checks reported_");
-  });
-});
-
 function pollOptions(client: ReturnType<typeof fakeClient>): Parameters<typeof pollPrChecks>[0] {
   return {
-    subject: "PR #1",
     owner: "owner",
     repo: "repo",
     headSha: HEAD_OID,
@@ -406,7 +335,7 @@ function pollOptions(client: ReturnType<typeof fakeClient>): Parameters<typeof p
 }
 
 describe("pollPrChecks", () => {
-  it("re-polls while checks are pending and emits a list each round", async () => {
+  it("re-polls while checks are pending until they complete", async () => {
     let round = 0;
     const client = fakeClient({
       statuses: () => Promise.resolve(round === 0 ? [] : [status({})]),
@@ -415,25 +344,10 @@ describe("pollPrChecks", () => {
           round++ === 0 ? [run({ status: "in_progress", conclusion: null })] : [run({})],
         ),
     });
-    const updates: string[] = [];
 
-    const result = await pollPrChecks({
-      ...pollOptions(client),
-      onUpdate: (msg) => {
-        for (const part of msg.content) {
-          updates.push(part.text);
-        }
-      },
-    });
+    const result = await pollPrChecks(pollOptions(client));
 
     expect(client.checkRuns).toHaveBeenCalledTimes(2);
-    expect(updates).toHaveLength(2);
-    expect(updates[0]).toContain("round 1");
-    expect(updates[0]).toContain(
-      "- [>] [build](https://github.com/owner/repo/actions/runs/5/job/10)",
-    );
-    expect(updates[1]).toContain("round 2");
-    expect(updates[1]).toContain("2/2 complete");
     expect(result).toMatchObject({
       outcome: "completed",
       checks: [
@@ -602,23 +516,19 @@ const poll = (overrides: Partial<ChecksPollResult>): ChecksPollResult => ({
   ...overrides,
 });
 
-describe("renderChecksVerdict", () => {
-  it("reports PASSED when every check completed without failures", () => {
-    const verdict = renderChecksVerdict({
-      subject: "PR #1",
+describe("checksVerdict", () => {
+  it("reports success when every check completed without failures", () => {
+    const verdict = checksVerdict({
       poll: poll({
         checks: [merged({}), merged({ name: "lint", bucket: "skipped", link: null })],
       }),
     });
 
-    expect(verdict).toMatchObject({ status: "success", failedJobs: [] });
-    expect(verdict.text).toContain("PASSED");
-    expect(verdict.text).toContain("All 2 check(s) passed.");
+    expect(verdict).toEqual({ status: "success", failedJobs: [] });
   });
 
-  it("reports FAILED from the checks buckets, enriched with failed Actions jobs", () => {
-    const verdict = renderChecksVerdict({
-      subject: "PR #1",
+  it("reports failure from the checks buckets, enriched with failed Actions jobs", () => {
+    const verdict = checksVerdict({
       poll: poll({
         outcome: "fail_fast",
         checks: [
@@ -634,16 +544,7 @@ describe("renderChecksVerdict", () => {
     });
 
     expect(verdict.status).toBe("failure");
-    expect(verdict.text).toContain("FAILED");
-    expect(verdict.text).toContain("2 of 3 check(s) failed");
-    expect(verdict.text).toContain("**build**");
-    expect(verdict.text).toContain("**linux_64_**");
-    expect(verdict.text).toContain("job **build** (failure)");
-    expect(verdict.text).toContain("1 other check(s) still in flight");
-    // successful Actions jobs are not listed
-    expect(verdict.text).not.toContain("job **test**");
-    // event label suffixes appear on failed check names
-    expect(verdict.text).toContain("**build (pull_request)**");
+    // 成功的 Actions job 不进 failedJobs
     expect(verdict.failedJobs).toEqual([
       {
         runId: 5,
@@ -658,39 +559,24 @@ describe("renderChecksVerdict", () => {
   });
 
   it("treats a missing Actions job conclusion (in progress) as not succeeded", () => {
-    const verdict = renderChecksVerdict({
-      subject: "PR #1",
-      poll: poll({
-        outcome: "fail_fast",
-        checks: [merged({ name: "build", bucket: "fail" })],
-      }),
+    const verdict = checksVerdict({
+      poll: poll({ outcome: "fail_fast", checks: [merged({ name: "build", bucket: "fail" })] }),
       actionJobs: [job({ jobId: 12, jobName: "deploy", conclusion: null, jobUrl: undefined })],
     });
 
     expect(verdict.failedJobs[0]).toMatchObject({ jobName: "deploy", conclusion: "in_progress" });
-    expect(verdict.text).toContain("job **deploy** (in_progress)");
-    // falls back to the run URL when the job has no direct link
-    expect(verdict.text).toContain("job #12](https://github.com/owner/repo/actions/runs/5)");
   });
 
-  it("keeps the FAILED verdict when the Actions job enrichment fails", () => {
-    const verdict = renderChecksVerdict({
-      subject: "PR #1",
-      poll: poll({
-        outcome: "fail_fast",
-        checks: [merged({ name: "build", bucket: "fail" })],
-      }),
-      enrichmentError: "rate limited",
+  it("keeps the failure verdict when the Actions job enrichment is missing", () => {
+    const verdict = checksVerdict({
+      poll: poll({ outcome: "fail_fast", checks: [merged({ name: "build", bucket: "fail" })] }),
     });
 
-    expect(verdict.status).toBe("failure");
-    expect(verdict.text).toContain("FAILED");
-    expect(verdict.text).toContain("Actions job details unavailable: rate limited");
+    expect(verdict).toEqual({ status: "failure", failedJobs: [] });
   });
 
-  it("reports AWAITING APPROVAL with the waiting workflows instead of PASSED", () => {
-    const verdict = renderChecksVerdict({
-      subject: "PR #1",
+  it("reports awaiting_approval instead of success", () => {
+    const verdict = checksVerdict({
       poll: poll({
         outcome: "awaiting_approval",
         checks: [
@@ -706,19 +592,11 @@ describe("renderChecksVerdict", () => {
       }),
     });
 
-    expect(verdict.status).toBe("awaiting_approval");
-    expect(verdict.failedJobs).toEqual([]);
-    expect(verdict.text).toContain("AWAITING APPROVAL");
-    expect(verdict.text).toContain("1 workflow(s) have not started");
-    expect(verdict.text).toContain(
-      "- CI (pull_request) — [open run](https://github.com/owner/repo/actions/runs/42)",
-    );
-    expect(verdict.text).not.toContain("PASSED");
+    expect(verdict).toEqual({ status: "awaiting_approval", failedJobs: [] });
   });
 
-  it("reports FAILED when a failure and an approval wait arrive together", () => {
-    const verdict = renderChecksVerdict({
-      subject: "PR #1",
+  it("reports failure when a failure and an approval wait arrive together", () => {
+    const verdict = checksVerdict({
       poll: poll({
         outcome: "awaiting_approval",
         checks: [
@@ -729,13 +607,10 @@ describe("renderChecksVerdict", () => {
     });
 
     expect(verdict.status).toBe("failure");
-    expect(verdict.text).toContain("FAILED");
-    expect(verdict.text).toContain("1 workflow(s) still waiting for approval");
   });
 
-  it("reports the in-flight snapshot as pending on timeout instead of a verdict", () => {
-    const verdict = renderChecksVerdict({
-      subject: "PR #1",
+  it("reports the in-flight snapshot as pending on timeout", () => {
+    const verdict = checksVerdict({
       poll: poll({
         outcome: "timeout",
         elapsedMs: 600_000,
@@ -746,21 +621,12 @@ describe("renderChecksVerdict", () => {
       }),
     });
 
-    expect(verdict.status).toBe("pending");
-    expect(verdict.failedJobs).toEqual([]);
-    expect(verdict.text).toContain("STILL IN FLIGHT");
-    expect(verdict.text).toContain("1 of 2 check(s) still incomplete after ~10m");
-    expect(verdict.text).toContain("- [ ] osx_64_");
-    expect(verdict.text).not.toContain("PASSED");
+    expect(verdict).toEqual({ status: "pending", failedJobs: [] });
   });
 
-  it("marks a timeout with no checks ever reported", () => {
-    const verdict = renderChecksVerdict({
-      subject: "PR #1",
-      poll: poll({ outcome: "timeout", elapsedMs: 600_000 }),
-    });
+  it("marks a timeout with no checks ever reported as pending", () => {
+    const verdict = checksVerdict({ poll: poll({ outcome: "timeout", elapsedMs: 600_000 }) });
 
-    expect(verdict.status).toBe("pending");
-    expect(verdict.text).toContain("- _no checks reported_");
+    expect(verdict).toEqual({ status: "pending", failedJobs: [] });
   });
 });

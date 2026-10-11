@@ -95,86 +95,69 @@ function setupBus(routes: FixtureRoutes): { bus: ToolBus; calls: string[] } {
 
 const ctx = { cwd: "/tmp" } as never;
 
-/** 工具结果的文本（结果里只有文本内容）。 */
-function textOf(result: { content: { type: string; text?: string }[] }): string {
-  return result.content.map((part) => part.text ?? "").join("");
+/** 经 codemode 执行入口跑一次工具，返回结构化载荷（结构化失败直接抛）。 */
+async function runTool(bus: ToolBus, name: string, args: unknown) {
+  const result = await bus.executeCodemodeTool(name, args, { ctx });
+  if (!result.ok) {
+    throw new Error(`${name} failed: ${result.error}`);
+  }
+  return result.value;
 }
 
 describe("list-github-issues 的浏览分支", () => {
-  it("文本与载荷同源：TSV 与归一化后的行", async () => {
+  it("浏览分支返回归一化后的行", async () => {
     fakeRepoView();
     const { bus, calls } = setupBus({
       "repos/trim21/pi-extensions/issues": { body: [ISSUE] },
     });
 
-    const result = await bus.executeTool("list-github-issues", {}, { ctx });
-
-    // 浏览只查一个仓库，因此文本不带 repo 列；repo 仍进载荷
-    const text = "14\topen\tDependency Dashboard\tdependencies\t2026-10-03";
-    expect(textOf(result)).toBe(text);
-    expect(result.structuredResult).toEqual({
-      ok: true,
-      value: {
-        text,
-        items: [
-          {
-            number: 14,
-            state: "open",
-            title: "Dependency Dashboard",
-            url: "https://github.com/trim21/pi-extensions/issues/14",
-            repo: "trim21/pi-extensions",
-            author: "app/renovate",
-            labels: ["dependencies"],
-            milestone: "",
-            assignees: ["trim21"],
-            comments: 2,
-            createdAt: "2026-06-20",
-            updatedAt: "2026-10-03",
-            closedAt: "",
-            mergedAt: "",
-          },
-        ],
-      },
+    expect(await runTool(bus, "list-github-issues", {})).toEqual({
+      items: [
+        {
+          number: 14,
+          state: "open",
+          title: "Dependency Dashboard",
+          url: "https://github.com/trim21/pi-extensions/issues/14",
+          repo: "trim21/pi-extensions",
+          author: "app/renovate",
+          labels: ["dependencies"],
+          milestone: "",
+          assignees: ["trim21"],
+          comments: 2,
+          createdAt: "2026-06-20",
+          updatedAt: "2026-10-03",
+          closedAt: "",
+          mergedAt: "",
+        },
+      ],
     });
     expect(calls.some((url) => url.includes("/repos/trim21/pi-extensions/issues"))).toBe(true);
   });
 
-  it("显式 repo 时文本不带 repo 列", async () => {
-    const { bus } = setupBus({ "repos/trim21/pi-extensions/issues": { body: [ISSUE] } });
+  it("显式 repo 时不重复解析当前仓库", async () => {
+    const { bus, calls } = setupBus({
+      "repos/trim21/pi-extensions/issues": { body: [ISSUE] },
+    });
 
-    const result = await bus.executeTool(
-      "list-github-issues",
-      { repo: "trim21/pi-extensions" },
-      { ctx },
-    );
-
-    expect(textOf(result)).toBe("14\topen\tDependency Dashboard\tdependencies\t2026-10-03");
+    expect(await runTool(bus, "list-github-issues", { repo: "trim21/pi-extensions" })).toEqual({
+      items: [expect.objectContaining({ number: 14, repo: "trim21/pi-extensions" })],
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(calls.some((url) => url.includes("/repos/trim21/pi-extensions/issues"))).toBe(true);
   });
 
   it("PR 的 merged 状态由 merged_at 推断", async () => {
     const { bus } = setupBus({ "repos/trim21/pi-extensions/pulls": { body: [PULL] } });
 
-    const result = await bus.executeTool(
-      "list-github-prs",
-      { repo: "trim21/pi-extensions" },
-      { ctx },
-    );
-
-    expect(textOf(result)).toBe("176\tmerged\tstructured results\t\t2026-10-03");
-    expect(result.structuredResult).toMatchObject({
-      ok: true,
-      value: { items: [{ state: "merged", mergedAt: "2026-10-03" }] },
+    expect(await runTool(bus, "list-github-prs", { repo: "trim21/pi-extensions" })).toMatchObject({
+      items: [{ state: "merged", mergedAt: "2026-10-03" }],
     });
   });
 
   it("@me 按字面量传给 REST，不做展开", async () => {
     const { bus, calls } = setupBus({ "repos/trim21/pi-extensions/issues": { body: [] } });
 
-    await bus.executeTool(
-      "list-github-issues",
-      { repo: "trim21/pi-extensions", author: "@me" },
-      { ctx },
-    );
+    await runTool(bus, "list-github-issues", { repo: "trim21/pi-extensions", author: "@me" });
 
     expect(calls.some((url) => url.includes("creator=%40me"))).toBe(true);
   });
@@ -208,36 +191,25 @@ describe("list-github-issues 的搜索分支", () => {
       },
     });
 
-    const result = await bus.executeTool(
-      "list-github-issues",
-      { keywords: "old", state: "all" },
-      { ctx },
-    );
-
-    expect(textOf(result)).toBe("other/repo\t7\tclosed\told issue\t\t2026-01-02");
-    expect(result.structuredResult).toEqual({
-      ok: true,
-      value: {
-        text: "other/repo\t7\tclosed\told issue\t\t2026-01-02",
-        items: [
-          {
-            number: 7,
-            state: "closed",
-            title: "old issue",
-            url: "https://example.test/issues/7",
-            repo: "other/repo",
-            author: "someone",
-            labels: [],
-            milestone: "",
-            assignees: [],
-            comments: 0,
-            createdAt: "2026-01-01",
-            updatedAt: "2026-01-02",
-            closedAt: "2026-01-02",
-            mergedAt: "",
-          },
-        ],
-      },
+    expect(await runTool(bus, "list-github-issues", { keywords: "old", state: "all" })).toEqual({
+      items: [
+        {
+          number: 7,
+          state: "closed",
+          title: "old issue",
+          url: "https://example.test/issues/7",
+          repo: "other/repo",
+          author: "someone",
+          labels: [],
+          milestone: "",
+          assignees: [],
+          comments: 0,
+          createdAt: "2026-01-01",
+          updatedAt: "2026-01-02",
+          closedAt: "2026-01-02",
+          mergedAt: "",
+        },
+      ],
     });
   });
 
@@ -285,14 +257,13 @@ describe("list-github-issues 的搜索分支", () => {
       },
     });
 
-    const result = await bus.executeTool(
-      "list-github-issues",
-      { keywords: "pr", state: "all" },
-      { ctx },
-    );
-
-    expect(textOf(result)).toBe(
-      "other/repo\t12\tmerged\tmerged pr\t\t2026-01-02\nother/repo\t13\topen\topen pr\t\t2026-01-03",
-    );
+    expect(
+      await runTool(bus, "list-github-issues", { keywords: "pr", state: "all" }),
+    ).toMatchObject({
+      items: [
+        { number: 12, state: "merged", repo: "other/repo" },
+        { number: 13, state: "open", repo: "other/repo" },
+      ],
+    });
   });
 });

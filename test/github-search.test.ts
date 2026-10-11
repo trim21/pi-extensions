@@ -7,33 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import {
-  buildSearchQuery,
-  createGithubApi,
-  createGithubSearch,
-  renderHits,
-  type SearchHit,
-} from "../src/lib/github.js";
-
-function hit(overrides: Partial<SearchHit> = {}): SearchHit {
-  return {
-    number: 32100,
-    state: "merged",
-    title: "fix(platform): separate PR reuse",
-    url: "https://github.com/a/b/pull/32100",
-    repo: "a/b",
-    author: "trim21",
-    labels: ["bug", "priority-2-high"],
-    milestone: "v1",
-    assignees: ["octocat"],
-    comments: 3,
-    createdAt: "2024-11-01",
-    updatedAt: "2024-12-06",
-    closedAt: "2024-11-05",
-    mergedAt: "2024-11-05",
-    ...overrides,
-  };
-}
+import { buildSearchQuery, createGithubApi, createGithubSearch } from "../src/lib/github.js";
 
 describe("buildSearchQuery state semantics", () => {
   it("defaults to open (browse parity)", () => {
@@ -99,27 +73,6 @@ describe("buildSearchQuery filters", () => {
   it("does not quote simple qualifier values", () => {
     expect(buildSearchQuery("issue", { label: "bug", assignee: "@me" })).toBe(
       "is:issue state:open label:bug assignee:@me",
-    );
-  });
-});
-
-describe("renderHits", () => {
-  it("renders default columns with repo column when no repo is given", () => {
-    expect(renderHits([hit()], {})).toBe(
-      "a/b\t32100\tmerged\tfix(platform): separate PR reuse\tbug,priority-2-high\t2024-12-06",
-    );
-  });
-
-  it("drops the repo column when a repo is given", () => {
-    expect(renderHits([hit()], { repo: "a/b" })).toBe(
-      "32100\tmerged\tfix(platform): separate PR reuse\tbug,priority-2-high\t2024-12-06",
-    );
-  });
-
-  it("renders multiple hits as rows", () => {
-    const hits = [hit({ number: 1, title: "first" }), hit({ number: 2, title: "second" })];
-    expect(renderHits(hits, { repo: "a/b" })).toBe(
-      "1\tmerged\tfirst\tbug,priority-2-high\t2024-12-06\n2\tmerged\tsecond\tbug,priority-2-high\t2024-12-06",
     );
   });
 });

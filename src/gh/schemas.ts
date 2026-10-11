@@ -235,10 +235,10 @@ export const checksVerdictSchema = Type.Object({
   ),
 });
 
-// ── 文本类工具改成 --json 之后的载荷 ─────────────────────────────────────────
+// ── 各工具的载荷 ────────────────────────────────────────────────────────────
 //
-// 这批工具的文本由我们自己从 JSON 渲染，因此载荷是 gh 的 JSON（字段名就是 gh 的）加一个
-// `text`（与工具输出一致）。与上面十个透传工具一样，gh 的 JSON 允许额外字段。
+// 载荷是脚本侧唯一输出：REST 响应的原物（字段名保持 REST 命名），列表类工具给全部命中。
+// 与上面十个透传工具一样，gh 的 JSON 允许额外字段。
 
 /** `list-github-issues` / `list-github-prs` 的一行：浏览与搜索两条分支归一后的记录。 */
 export const ghHitSchema = Type.Object(
@@ -263,8 +263,7 @@ export const ghHitSchema = Type.Object(
 
 export const ghHitListPayloadSchema = Type.Object(
   {
-    text: Type.String({ description: "与工具输出一致的行列表（可能被行数/字节预算截断）" }),
-    items: Type.Array(ghHitSchema, { description: "全部命中，不受文本截断影响" }),
+    items: Type.Array(ghHitSchema, { description: "全部命中" }),
   },
   { additionalProperties: false },
 );
@@ -284,7 +283,6 @@ export const ghReleaseSummarySchema = Type.Object(
 
 export const ghReleaseListPayloadSchema = Type.Object(
   {
-    text: Type.String(),
     releases: Type.Array(ghReleaseSummarySchema),
   },
   { additionalProperties: false },
@@ -310,7 +308,6 @@ export const ghRunSummarySchema = Type.Object(
 
 export const ghRunListPayloadSchema = Type.Object(
   {
-    text: Type.String(),
     runs: Type.Array(ghRunSummarySchema),
   },
   { additionalProperties: false },
@@ -319,7 +316,6 @@ export const ghRunListPayloadSchema = Type.Object(
 /** `watch-github-run`：文本是轮询进度与完成报告，载荷是收尾时查到的运行状态。 */
 export const ghRunPayloadSchema = Type.Object(
   {
-    text: Type.String(),
     run: ghRunSummarySchema,
   },
   { additionalProperties: false },
@@ -387,7 +383,6 @@ export const ghReleaseViewSchema = Type.Object(
 
 export const ghReleaseViewPayloadSchema = Type.Object(
   {
-    text: Type.String(),
     release: ghReleaseViewSchema,
   },
   { additionalProperties: false },
@@ -396,7 +391,6 @@ export const ghReleaseViewPayloadSchema = Type.Object(
 /** `repos.get` 的载荷：文本 + REST 响应。 */
 export const ghRepoPayloadSchema = Type.Object(
   {
-    text: Type.String(),
     repo: ghRepoViewSchema,
   },
   { additionalProperties: false },
@@ -405,7 +399,6 @@ export const ghRepoPayloadSchema = Type.Object(
 /** `read-github-pr-diff`：文本是原始 diff，载荷是从它解析出的变更统计。 */
 export const ghDiffPayloadSchema = Type.Object(
   {
-    text: Type.String(),
     files: Type.Array(
       Type.Object(
         {

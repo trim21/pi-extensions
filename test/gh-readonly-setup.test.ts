@@ -15,7 +15,8 @@ vi.mock("node:fs", async (importOriginal) => ({
   existsSync: (...args: unknown[]) => existsMock(...args),
 }));
 
-import registerTools from "../src/gh/index.js";
+import registerTools, { createGithubTools } from "../src/gh/index.js";
+import { createToolBus } from "../src/lib/tool-bus.js";
 
 function createPi() {
   const tools: unknown[] = [];
@@ -63,15 +64,22 @@ describe.skipIf(process.platform === "win32")("gh-readonly setup", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("gh CLI not found"), "error");
   });
 
-  it("registers the full toolset when gh is available", () => {
+  it("hands no gh tool to pi, but registers them as codemode-only on the bus", () => {
     existsMock.mockReturnValue(true);
     const { pi, tools } = createPi();
     registerTools(pi as never);
 
-    expect(tools.length).toBeGreaterThan(0);
-    expect(tools.map((t) => (t as { name: string }).name)).toEqual(
+    // gh 工具只经 codemode 曝光：pi 一个都拿不到
+    expect(tools).toHaveLength(0);
+
+    const bus = createToolBus({ registerTool: () => {} } as never);
+    createGithubTools()?.register(bus);
+    const registered = bus.list();
+    expect(registered).toHaveLength(18);
+    expect(registered.map((tool) => tool.name)).toEqual(
       expect.arrayContaining(["read-github-issue", "read-github-pr", "watch-github-run"]),
     );
+    expect(registered.every((tool) => tool.codemodeOnly === true)).toBe(true);
   });
 });
 

@@ -146,21 +146,6 @@ function quoteQualifier(value: string): string {
   return `"${value.replaceAll('"', String.raw`\"`)}"`;
 }
 
-/**
- * Render search hits as tab-separated rows: one row per hit, fixed columns
- * `number,state,title,labels,updatedAt`, plus a leading `repo` column when no
- * repo is given (cross-repo search). Other fields of a hit reach the caller
- * through the structured payload, not through the text.
- */
-export function renderHits(hits: SearchHit[], options: { repo?: string }): string {
-  return hits
-    .map((hit) => {
-      const columns = [hit.number, hit.state, hit.title, hit.labels.join(","), hit.updatedAt];
-      return (options.repo ? columns : [hit.repo, ...columns]).join("\t");
-    })
-    .join("\n");
-}
-
 function toDate(iso: string | null | undefined): string {
   return dateOnly(iso);
 }

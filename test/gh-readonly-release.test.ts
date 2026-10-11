@@ -148,7 +148,7 @@ describe("downloadReleaseAssets", () => {
       (gh.reads as unknown as { downloadAssetTo: { mock: { calls: unknown[][] } } })
         .downloadAssetTo,
     ).not.toHaveBeenCalled();
-    expect(result.structuredResult).toMatchObject({
+    expect(result).toMatchObject({
       ok: true,
       value: { files: [{ name: "checksums.txt", bytes: 5 }] },
     });

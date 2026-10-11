@@ -1,7 +1,7 @@
 /**
  * `watchRun`（`src/gh/base.ts`）：替代 `gh run watch` 的轮询。测三个分支——运行结束、
- * 超过上限以超时结束（不挂住）、signal 中止；以及每轮都通过 onUpdate 报当前状态。
- * 末尾再跑一次 `watch-github-run` 工具的接线（cassette 喂 `actions/runs/<id>`）。
+ * 超过上限以超时结束（不挂住）、signal 中止；以及 `watch-github-run` 工具的接线
+ * （cassette 喂 `actions/runs/<id>`）。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
@@ -34,15 +34,9 @@ const DONE = {
   html_url: "https://example.test/run/99",
 };
 
-/** 工具结果的文本（结果里只有文本内容）。 */
-function textOf(result: { content: { type: string; text?: string }[] }): string {
-  return result.content.map((part) => part.text ?? "").join("");
-}
-
 describe("watchRun", () => {
-  it("运行结束时返回完成结果，并在每轮报一次状态", async () => {
+  it("运行结束时返回最终快照并停止轮询", async () => {
     const { reads, run } = readsReturning([PENDING, PENDING, DONE]);
-    const updates: string[] = [];
 
     const result = await watchRun({
       owner: "o",
@@ -52,17 +46,11 @@ describe("watchRun", () => {
       signal: new AbortController().signal,
       intervalMs: 1,
       deadlineMs: 1_000,
-      onUpdate: (msg) => {
-        updates.push(msg.content.map((part) => part.text ?? "").join(""));
-      },
     });
 
     expect(result.outcome).toBe("completed");
     expect(result.run).toEqual(DONE);
     expect(run.mock.calls).toHaveLength(3);
-    expect(updates).toHaveLength(3);
-    expect(updates.at(-1)).toContain("success");
-    expect(updates[0]).toContain("Watching workflow run 99");
   });
 
   it("超过上限以超时结束，而不是一直等下去", async () => {
@@ -114,7 +102,7 @@ describe("watchRun", () => {
 });
 
 describe("watch-github-run 工具", () => {
-  it("已在第一个快照就结束的 run 直接出报告，并带结构化载荷", async () => {
+  it("已在第一个快照就结束的 run 直接返回最终状态", async () => {
     const cassette = githubCassette({
       "repos/o/r/actions/runs/99": {
         body: {
@@ -132,25 +120,24 @@ describe("watch-github-run 工具", () => {
     const bus = createToolBus(pi);
     addWatchRunTool(gh, bus);
 
-    const updates: string[] = [];
-    const result = await bus.executeTool(
+    const result = await bus.executeCodemodeTool(
       "watch-github-run",
       { run_id: 99, repo: "o/r" },
-      {
-        ctx: { cwd: "/tmp" } as never,
-        onUpdate: (message: { content: { type: string; text?: string }[] }) => {
-          updates.push(message.content.map((part) => part.text ?? "").join(""));
+      { ctx: { cwd: "/tmp" } as never },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        run: {
+          id: 99,
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          head_branch: "master",
+          html_url: "https://example.test/run/99",
         },
       },
-    );
-    const text = textOf(result);
-
-    expect(text).toContain("## Workflow Run 99 Completed");
-    expect(text).toContain("success");
-    expect(updates[0]).toContain("Watching workflow run 99");
-    expect(result.structuredResult).toMatchObject({
-      ok: true,
-      value: { run: { id: 99, conclusion: "success" } },
     });
   });
 });

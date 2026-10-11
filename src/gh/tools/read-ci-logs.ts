@@ -7,22 +7,19 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 
 import { isNotFound, type RunJob } from "../../lib/github.js";
 import { createSeqState } from "../../lib/seq-state.js";
-import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
+import { type StructuredResult, type ToolBus } from "../../lib/tool-bus.js";
 import {
   type GhClient,
   resolveRepoTarget,
   splitRepo,
   structuredFailure,
-  type StructuredFailureResult,
-  type StructuredResultOf,
-  subtitlePendant,
+  structuredResult,
   type ToolCall,
   toPositiveId,
-  withStructuredResult,
 } from "../base.js";
 import { ciLogsSchema } from "../schemas.js";
 
@@ -352,26 +349,19 @@ interface JobIdParams {
 }
 
 /** 「没找到 / 还没日志」是结构化失败，不是异常：脚本能按 ok === false 分辨。 */
-type CiLogsResult = StructuredResultOf<typeof ciLogsSchema> | StructuredFailureResult;
+type CiLogsResult = StructuredResult<Static<typeof ciLogsSchema>>;
 
 /** The toolcall handler behind `read-github-ci-logs`. */
 async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<CiLogsResult> {
-  const { params, ctx, signal, onUpdate } = call;
+  const { params, ctx, signal } = call;
   const { job_id, repo } = params;
   const jobId = toPositiveId(job_id, "job_id");
 
-  const pendant = subtitlePendant(params, "job_id");
   const {
     fullName: effectiveRepo,
     owner,
     name,
   } = await resolveRepoTarget(repo, signal, ctx.cwd, params);
-
-  const failure = (text: string): StructuredFailureResult => ({
-    content: [{ type: "text", text }],
-    details: { input: params, ...(pendant && { pendant }) },
-    structuredResult: structuredFailure(text),
-  });
 
   let target: RunJob;
   try {
@@ -380,54 +370,38 @@ async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<CiLogs
     if (!isNotFound(error)) {
       throw error;
     }
-    return failure(
+    return structuredFailure(
       `Job ${jobId} not found in ${effectiveRepo} — job IDs come from \`get-github-workflow-jobs\`.`,
     );
   }
 
   if (target.status === "queued") {
-    return failure(
+    return structuredFailure(
       `Job "${target.name}" is still queued — no logs available yet. Use \`watch-github-run\` to wait for it to start, then retry.`,
     );
   }
 
-  onUpdate?.({
-    content: [{ type: "text", text: `Fetching log of job "${target.name}"...` }],
-    details: {},
-  });
-
   const rawLog = await getJobLog(gh, target, signal);
-  const index = jobLogIndex(target, rawLog);
-
-  return withStructuredResult(
-    {
-      content: [{ type: "text", text: JSON.stringify(index, null, 2) }],
-      details: { ...index, input: params, ...(pendant && { pendant }) },
-    },
-    index,
-  );
+  return structuredResult(ciLogsSchema, jobLogIndex(target, rawLog));
 }
 
 export function addReadCiLogsTool(gh: GhClient, bus: ToolBus) {
-  bus.register(
-    defineStructuredTool({
-      name: "read-github-ci-logs",
-      label: "GitHub CI Logs",
-      description:
-        "Download one GitHub Actions job's CI log by job ID and index its steps. `log_file` is the job's complete raw log on disk (runner timestamps and ANSI kept, exactly as GitHub delivers it) and each step carries the 1-based inclusive line range of its block inside that file." +
-        " The log text is not echoed back: `log_file` is the only copy, so read the parts you need out of it with Read/Grep — e.g. `Read(log_file, offset=start_line, limit=end_line - start_line + 1)` for one step's block, or grep for a pattern. Do not slice or filter the returned JSON to reconstruct log text: it carries only the step index, not the log. Fetch each job once; re-reading that file is how you get every further part of the log." +
-        " Get the job IDs from get-github-workflow-jobs, then call this once per job you need. Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
-      promptSnippet: "Read GitHub CI logs",
-      parameters: Type.Object({
-        job_id: Type.Union([Type.Number(), Type.String()], {
-          description: "Job ID, from get-github-workflow-jobs.",
-        }),
-        repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+  bus.registerCodemodeOnly({
+    name: "read-github-ci-logs",
+    label: "GitHub CI Logs",
+    description:
+      "Download one GitHub Actions job's CI log by job ID and index its steps. `log_file` is the job's complete raw log on disk (runner timestamps and ANSI kept, exactly as GitHub delivers it) and each step carries the 1-based inclusive line range of its block inside that file." +
+      " The log text is not echoed back: `log_file` is the only copy, so read the parts you need out of it with the `fs.read` primitive (or `Bash` when you need to slice lines) — e.g. read the block between a step's start_line and end_line. Do not treat the returned object as the log: it carries only the step index. Fetch each job once; re-reading that file is how you get every further part of the log." +
+      " Get the job IDs from get-github-workflow-jobs, then call this once per job you need. Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
+    parameters: Type.Object({
+      job_id: Type.Union([Type.Number(), Type.String()], {
+        description: "Job ID, from get-github-workflow-jobs.",
       }),
-      structuredSchema: ciLogsSchema,
-      async execute(_id, params, signal, onUpdate, ctx) {
-        return ciLogs(gh, { params, ctx, signal, onUpdate });
-      },
+      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
     }),
-  );
+    structuredSchema: ciLogsSchema,
+    async execute(_id, params, signal, ctx) {
+      return ciLogs(gh, { params, ctx, signal });
+    },
+  });
 }

@@ -7,7 +7,7 @@
  * Layout:
  *   - `base.ts`            shared helpers (result shaping, GhClient, repo resolution, checks watch)
  *   - `schemas.ts`         structured-output schemas
- *   - `render.ts`          text rendering of REST responses
+ *   - `diff-stats.ts`      unified diff 的变更统计解析
  *   - `tools/<name>.ts`    one tool per file, each exporting `add<Name>Tool(gh, bus)`
  *   - `index.ts`           this file: availability checks + tool registration
  *

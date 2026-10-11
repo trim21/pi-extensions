@@ -53,12 +53,12 @@
   直接改，不进脚本）。
 - **只有脚本输出进上下文**：`text(value)` / `console.log(...)` 与 `return` 值进入工具结果，
   中间的工具调用与它们的返回内容不会（也不在会话记录里留下工具调用条目）。
-- **返回值**：声明了 `structuredSchema` 的工具把结果放在 `structuredResult` 里，`call()`
-  解包成对象给脚本——gh-readonly 的读类工具给解析后的 JSON，`Bash` / `bash` 给
-  `{ exitCode, output }`（`exitCode` 为 `null` 表示命令被超时/中止杀掉；命令非零退出是正常
-  结果，直接读 `exitCode` 分支即可）。`{ ok: false, error }` 会 reject 成 `CallFailedError`
+- **返回值**：工具的结果就是结构化载荷，`call()` 直接把它解包成对象给脚本——gh-readonly
+  的工具给 REST 原物或从响应解析出的结构，`Bash` / `bash` 给 `{ exitCode, output }`
+  （`exitCode` 为 `null` 表示命令被超时/中止杀掉；命令非零退出是正常结果，直接读
+  `exitCode` 分支即可）。`{ ok: false, error }` 会 reject 成 `CallFailedError`
   （脚本可按 `instanceof CallFailedError` 区分调用失败与自身运行期错误）。没有声明输出
-  结构的工具回退成工具输出的文本。
+  结构的工具不进集合，`call()` 会报「not available in codemode」。
 - **脚本接口**：`call` / `CallFailedError` / `ALL_TOOLS` / `fs.read` / `fs.write` /
   `text` / `image` / `exit` / `console.*` / `store.set` / `store.get` / `store.list`
   （会话内持久的键值表）；首行可选 `// @options: {"max_output_tokens": 10000}`。
@@ -94,7 +94,7 @@
     "disabledTools": ["talk-*", { "tools": ["web_*"], "models": ["gpt-*"] }],
     "enabledTools": [{ "tools": ["web_search"], "models": ["glm-*"] }],
     // 只进 codemode、不交给模型的工具（须声明结构化输出才会生效）
-    "codemodeOnlyTools": [{ "tools": ["read-github-*"], "models": ["deepseek-*"] }],
+    "codemodeOnlyTools": [{ "tools": ["aft_*"], "models": ["deepseek-*"] }],
   },
 }
 ```
@@ -108,6 +108,9 @@
 `call(...)` 调用它（`codemode` 的工具描述里仍有它的参数与返回类型声明）。没有结构化输出
 的工具进不了 codemode，因此会被忽略、保持直接可用，并在会话启动时给出一条 warning——
 想真正移除工具用 `disabledTools`。
+
+有些工具由代码固定为 codemode-only（例如 gh-readonly 那一组，见
+[GitHub 只读工具](#github-只读工具)），不需要这条配置；`disabledTools` 对它们同样生效。
 
 **判定时机是每个会话启动**：pi 在启动 / `/new` / `resume` / `/fork` / `/reload` 时重建
 扩展，注册就发生在 `session_start` 里（模型在扩展加载期读不到），因此新会话按自己的
@@ -471,11 +474,13 @@ pi -e ./src/aft/index.ts
 
 GitHub 只读工具集。取数全部走 octokit REST（`src/lib/github-reads.ts` 的读取层 + `src/lib/github.ts` 的 accessor）；只有「当前仓库」解析（`gh repo view`）与 token 获取（`gh auth token`）还用系统 [`gh`](https://cli.github.com/)，因此 `gh` 不在 PATH 时整组不注册并在 session_start 报错；Windows 禁用。一个会话只 spawn 一次 `gh auth token`：三个子客户端（search / checks / reads）共用同一个 accessor。
 
+**这一组工具只经 `codemode` 曝光、模型不能直接调用**：它们注册在工具总线上但不交给 pi，只能在脚本里 `call("read-github-issue", …)`。工具的返回值就是结构化载荷（REST 原物，或从响应解析出的统计 / 判定），没有面向模型的文本输出。想在某些环境或模型下彻底关掉它们，用 `disabledTools`（可带 `models`）。
+
 - **Issue / PR**：`read-github-issue`、`list-github-issues`、`read-github-issue-comments`、`read-github-pr`、`list-github-prs`、`read-github-pr-diff`、`read-github-pr-status`、`read-github-pr-comments`
 - **CI**：`read-github-ci-logs`、`list-github-workflow-runs`、`get-github-workflow-jobs`、`wait-github-pr-checks`、`wait-github-commit-checks`、`watch-github-run`
 - **仓库 / 发布**：`read-github-repo`、`list-github-releases`、`read-github-release`、`download-github-release-assets`
 
-`list-github-issues` / `list-github-prs` 带 `keywords` 时走 GitHub search API，不带 `keywords` 时走 REST 列表端点（state 缺省只搜 open，`state: "all"` 不加 state qualifier 覆盖 open + closed），输出 TSV，固定列 `number,state,title,labels,updatedAt`（未给 `repo` 时最前面多一列 `repo`），默认列之外的字段从结构化载荷 `items` 里取。`wait-github-pr-checks` / `wait-github-commit-checks` 30 秒轮询、600 秒截止：任一 fail 即返回，全部 pass / skipped 才算通过，超时返回快照不抛错；检查快照还包含「已结束但没有 check run」的 check suite——fork PR 上等待维护者批准的 workflow 只存在于这一层，遇到它立即返回 `awaiting_approval`（不会自行开始，轮询无意义），条目名字取自对应的 workflow run。
+`list-github-issues` / `list-github-prs` 带 `keywords` 时走 GitHub search API，不带 `keywords` 时走 REST 列表端点（state 缺省只搜 open，`state: "all"` 不加 state qualifier 覆盖 open + closed），载荷给全部命中。`wait-github-pr-checks` / `wait-github-commit-checks` 30 秒轮询、600 秒截止：任一 fail 即返回，全部 pass / skipped 才算通过，超时返回快照不抛错；检查快照还包含「已结束但没有 check run」的 check suite——fork PR 上等待维护者批准的 workflow 只存在于这一层，遇到它立即返回 `awaiting_approval`（不会自行开始，轮询无意义），条目名字取自对应的 workflow run。`read-github-ci-logs` 把日志落盘并只返回 step 索引，日志正文用脚本的 `fs.read(log_file)` 读。
 
 出网代理：`~/.pi/agent/proxy.json`（`{ "proxy": "http://127.0.0.1:7890", "noProxy": "localhost" }`），缺省字段回退 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `NO_PROXY` 环境变量。
 

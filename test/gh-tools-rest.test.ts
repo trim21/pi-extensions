@@ -1,6 +1,6 @@
 /**
  * 迁移到 octokit 之后的一次性接线测试：把每个工具跑一遍，确认它读的是 REST 端点、
- * 文本与结构化载荷同源。渲染与解析的细节由 `gh-render.test.ts` 与 `github-reads.test.ts`
+ * 结构化载荷来自这份响应。解析细节由 `gh-diff-stats.test.ts` 与 `github-reads.test.ts`
  * 覆盖，这里只验证「工具 → 读层」这一段接线。
  *
  * 全部走 cassette（无网络、无 gh 子进程），`repo` 一律显式给出，因此不会触发
@@ -36,8 +36,9 @@ function busWith(
 
 const ctx = { cwd: "/tmp" } as never;
 
-function textOf(result: { content: { type: string; text?: string }[] }): string {
-  return result.content.map((part) => part.text ?? "").join("");
+/** 经 codemode 执行入口跑一次工具，返回结构化结果。 */
+function run(bus: ToolBus, name: string, args: unknown) {
+  return bus.executeCodemodeTool(name, args, { ctx });
 }
 
 describe("REST 接线的工具", () => {
@@ -54,10 +55,10 @@ describe("REST 接线的工具", () => {
     };
     const { bus } = busWith({ "repos/o/r/issues/7": { body: issue } }, addReadIssueTool);
 
-    const result = await bus.executeTool("read-github-issue", { number: 7, repo: "o/r" }, { ctx });
-
-    expect(JSON.parse(textOf(result))).toEqual(issue);
-    expect(result.structuredResult).toEqual({ ok: true, value: issue });
+    expect(await run(bus, "read-github-issue", { number: 7, repo: "o/r" })).toEqual({
+      ok: true,
+      value: issue,
+    });
   });
 
   it("label 的 description 为 null 时仍然是成功结果", async () => {
@@ -73,10 +74,7 @@ describe("REST 接线的工具", () => {
     };
     const { bus } = busWith({ "repos/o/r/issues/7": { body: issue } }, addReadIssueTool);
 
-    const result = await bus.executeTool("read-github-issue", { number: 7, repo: "o/r" }, { ctx });
-
-    expect(result.isError).toBeFalsy();
-    expect(result.structuredResult).toMatchObject({
+    expect(await run(bus, "read-github-issue", { number: 7, repo: "o/r" })).toMatchObject({
       ok: true,
       value: { labels: [{ description: null }, { description: null }] },
     });
@@ -95,11 +93,10 @@ describe("REST 接线的工具", () => {
     };
     const { bus } = busWith({ "repos/o/r/pulls/177": { body: pull } }, addReadPrTool);
 
-    const result = await bus.executeTool("read-github-pr", { number: 177, repo: "o/r" }, { ctx });
-
-    expect(result.isError).toBeFalsy();
-    expect(JSON.parse(textOf(result))).toEqual(pull);
-    expect(result.structuredResult).toEqual({ ok: true, value: pull });
+    expect(await run(bus, "read-github-pr", { number: 177, repo: "o/r" })).toEqual({
+      ok: true,
+      value: pull,
+    });
   });
 
   it("read-github-issue-comments 给出 comments 数组", async () => {
@@ -111,17 +108,13 @@ describe("REST 接线的工具", () => {
       addReadIssueCommentsTool,
     );
 
-    const result = await bus.executeTool(
-      "read-github-issue-comments",
-      { number: 7, repo: "o/r" },
-      { ctx },
-    );
-
-    expect(JSON.parse(textOf(result))).toEqual({ comments });
-    expect(result.structuredResult).toEqual({ ok: true, value: { comments } });
+    expect(await run(bus, "read-github-issue-comments", { number: 7, repo: "o/r" })).toEqual({
+      ok: true,
+      value: { comments },
+    });
   });
 
-  it("read-github-pr-diff 的文本是 diff、载荷是解析出的统计", async () => {
+  it("read-github-pr-diff 的载荷是解析出的统计", async () => {
     const diff = [
       "diff --git a/src/x.ts b/src/x.ts",
       "index 1111111..2222222 100644",
@@ -133,17 +126,9 @@ describe("REST 接线的工具", () => {
     ].join("\n");
     const { bus } = busWith({ "repos/o/r/pulls/9": { body: diff } }, addReadPrDiffTool);
 
-    const result = await bus.executeTool(
-      "read-github-pr-diff",
-      { number: 9, repo: "o/r" },
-      { ctx },
-    );
-
-    expect(textOf(result)).toBe(diff);
-    expect(result.structuredResult).toEqual({
+    expect(await run(bus, "read-github-pr-diff", { number: 9, repo: "o/r" })).toEqual({
       ok: true,
       value: {
-        text: diff,
         files: [{ path: "src/x.ts", additions: 1, deletions: 0 }],
         additions: 1,
         deletions: 0,
@@ -152,7 +137,7 @@ describe("REST 接线的工具", () => {
     });
   });
 
-  it("list-github-releases 每行一个 release，最新标记由顺序推断", async () => {
+  it("list-github-releases 列出每个 release", async () => {
     const { bus } = busWith(
       {
         "repos/o/r/releases": {
@@ -171,16 +156,13 @@ describe("REST 接线的工具", () => {
       addListReleasesTool,
     );
 
-    const result = await bus.executeTool("list-github-releases", { repo: "o/r" }, { ctx });
-
-    expect(textOf(result)).toBe("v2.0.0\tlatest\t2026-09-30\t2.0\nv1.0.0\t\t2026-01-01\t1.0");
-    expect(result.structuredResult).toMatchObject({
+    expect(await run(bus, "list-github-releases", { repo: "o/r" })).toMatchObject({
       ok: true,
       value: { releases: [{ tag_name: "v2.0.0" }, { tag_name: "v1.0.0" }] },
     });
   });
 
-  it("read-github-repo 渲染概览，载荷是 repos.get 的响应", async () => {
+  it("read-github-repo 的载荷是 repos.get 的响应", async () => {
     const { bus } = busWith(
       {
         "repos/o/r": {
@@ -203,17 +185,7 @@ describe("REST 接线的工具", () => {
       addReadRepoTool,
     );
 
-    const result = await bus.executeTool("read-github-repo", { repo: "o/r" }, { ctx });
-
-    expect(textOf(result)).toBe(
-      [
-        "o/r — demo",
-        "public · TypeScript · default branch master · stars 3 · forks 0 · open issues 2",
-        "https://github.com/o/r",
-        "pushed 2026-10-03 · created 2026-06-20 · MIT License",
-      ].join("\n"),
-    );
-    expect(result.structuredResult).toMatchObject({
+    expect(await run(bus, "read-github-repo", { repo: "o/r" })).toMatchObject({
       ok: true,
       value: { repo: { full_name: "o/r" } },
     });
@@ -237,21 +209,13 @@ describe("REST 接线的工具", () => {
       addReadReleaseTool,
     );
 
-    const result = await bus.executeTool(
-      "read-github-release",
-      { tag: "v1.2.3", repo: "o/r" },
-      { ctx },
-    );
-
-    expect(textOf(result)).toContain("- checksums.txt 12 bytes, 3 downloads");
-    expect(textOf(result)).toContain("notes");
-    expect(result.structuredResult).toMatchObject({
+    expect(await run(bus, "read-github-release", { tag: "v1.2.3", repo: "o/r" })).toMatchObject({
       ok: true,
       value: { release: { tag_name: "v1.2.3", assets: [{ id: 5 }] } },
     });
   });
 
-  it("list-github-workflow-runs 渲染行列表并把 status 过滤传给 REST", async () => {
+  it("list-github-workflow-runs 把 status 过滤传给 REST", async () => {
     const { bus, calls } = busWith(
       {
         "repos/o/r/actions/runs": {
@@ -275,19 +239,12 @@ describe("REST 接线的工具", () => {
       addListWorkflowRunsTool,
     );
 
-    const result = await bus.executeTool(
-      "list-github-workflow-runs",
-      { repo: "o/r", status: "success" },
-      { ctx },
-    );
-
-    expect(textOf(result)).toBe(
-      "37131067543\tcompleted\tsuccess\tCI\tmaster\tpush\t2026-10-03\thttps://example.test/run/1",
-    );
-    expect(calls[0]).toContain("status=success");
-    expect(result.structuredResult).toMatchObject({
+    expect(
+      await run(bus, "list-github-workflow-runs", { repo: "o/r", status: "success" }),
+    ).toMatchObject({
       ok: true,
       value: { runs: [{ id: 37131067543, conclusion: "success" }] },
     });
+    expect(calls[0]).toContain("status=success");
   });
 });

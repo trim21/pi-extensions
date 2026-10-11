@@ -89,18 +89,25 @@ function forkRoutes(): FixtureRoutes {
   };
 }
 
-/** Run one toolcall through a client wired to the recorded responses. */
-function callPrStatus(api: GithubCassette, params: { number: number | string; repo?: string }) {
-  return prStatus(new GhClient(api.fetch, { token: async () => "test-token" }), {
+/** Run one toolcall through a client wired to the recorded responses; returns the payload. */
+async function callPrStatus(
+  api: GithubCassette,
+  params: { number: number | string; repo?: string },
+) {
+  const result = await prStatus(new GhClient(api.fetch, { token: async () => "test-token" }), {
     params,
     ctx: {},
   });
+  if (!result.ok) {
+    throw new Error(`prStatus failed: ${result.error}`);
+  }
+  return result.value;
 }
 
 describe("read-github-pr-status", () => {
   it("reports every check of the head commit with its run/job ids", async () => {
     const api = githubCassette(routes());
-    const result = await callPrStatus(api, { number: PR_NUMBER, repo: "trim21/pi-extensions" });
+    const payload = await callPrStatus(api, { number: PR_NUMBER, repo: "trim21/pi-extensions" });
     // expectations come from the response this run served (replayed or recorded)
     const pull = api.body<PullFixture>(PULL_ROUTE);
     const combinedStatus = api.body<CombinedStatusFixture>(STATUS_ROUTE);
@@ -109,20 +116,6 @@ describe("read-github-pr-status", () => {
     if (!firstStatus) {
       throw new Error("fixture has no commit status");
     }
-    const text = result.content[0]?.text ?? "";
-    const payload = JSON.parse(text) as {
-      pr: number;
-      repo: string;
-      head_sha: string;
-      checks: {
-        name: string;
-        bucket: string;
-        event: string | null;
-        run_id: number | null;
-        job_id: number | null;
-        url: string | null;
-      }[];
-    };
 
     expect(payload.pr).toBe(PR_NUMBER);
     expect(payload.repo).toBe("trim21/pi-extensions");
@@ -166,9 +159,6 @@ describe("read-github-pr-status", () => {
     expect(payload.checks.some((c) => c.event === "pull_request")).toBe(true);
 
     expect(api.unused()).toEqual([]);
-
-    // 结构化结果与文本同源：codemode 脚本直接拿 checks 数组
-    expect(result.structuredResult).toEqual({ ok: true, value: payload });
   });
 
   it("returns the snapshot immediately instead of polling", async () => {
@@ -193,27 +183,12 @@ describe("read-github-pr-status", () => {
 
   it("lists workflows waiting for maintainer approval from their check suites", async () => {
     const api = githubCassette(forkRoutes());
-    const result = await callPrStatus(api, { number: FORK_PR_NUMBER, repo: FORK_REPO });
+    const payload = await callPrStatus(api, { number: FORK_PR_NUMBER, repo: FORK_REPO });
     const pull = api.body<PullFixture>("pulls/89");
     const checkRuns = api.body<CheckRunsFixture>("check-runs");
     const combinedStatus = api.body<CombinedStatusFixture>(STATUS_ROUTE);
     const suites = api.body<CheckSuitesFixture>("check-suites");
     const runs = api.body<WorkflowRunsFixture>(RUNS_ROUTE);
-
-    const payload = JSON.parse(result.content[0]?.text ?? "") as {
-      pr: number;
-      repo: string;
-      head_sha: string;
-      checks: {
-        name: string;
-        bucket: string;
-        event: string | null;
-        run_id: number | null;
-        job_id: number | null;
-        suite_id: number | null;
-        url: string | null;
-      }[];
-    };
 
     expect(payload.pr).toBe(FORK_PR_NUMBER);
     expect(payload.repo).toBe(FORK_REPO);
@@ -250,6 +225,5 @@ describe("read-github-pr-status", () => {
     expect(dco?.bucket).toBe("pass");
 
     expect(api.unused()).toEqual([]);
-    expect(result.structuredResult).toEqual({ ok: true, value: payload });
   });
 });

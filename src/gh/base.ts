@@ -26,47 +26,25 @@ import {
   type GithubClientOptions,
   type GithubSearch,
   normalizeRestList,
-  renderHits,
   type SearchHit,
   type WorkflowRunRef,
 } from "../lib/github.js";
 import { createGithubReads, type GithubReads } from "../lib/github-reads.js";
 import { parseWithSchema } from "../lib/parse-with-schema.js";
-import { type ToolPendant } from "../lib/pendant.js";
 import { type StructuredResult } from "../lib/tool-bus.js";
-import { type checksVerdictSchema, ghRunSummarySchema } from "./schemas.js";
+import { checksVerdictSchema, ghRunSummarySchema } from "./schemas.js";
 
-/** A tool result: what the model sees plus the structured details payload. */
-export interface ToolResult {
-  content: { type: "text"; text: string }[];
-  details: Record<string, unknown>;
-}
-
-/**
- * 带结构化结果的结果：`structuredResult` 的成功支类型由 `T` 决定。声明了 structuredSchema
- * 的工具用它，交给 codemode 脚本按名字调用时解包。它不改变 `content` 与 `details`。
- */
-export type WithStructured<T> = ToolResult & { structuredResult: StructuredResult<T> };
-
-/** 某个 `structuredSchema` 对应的工具结果：成功支与 schema 的静态类型对齐。 */
-export type StructuredResultOf<TSchema_ extends TSchema> = WithStructured<Static<TSchema_>>;
-
-/** 结构化失败（Result 的失败支）：与具体的输出类型无关，任何结构化工具都能用。 */
+/** 结构化失败（Result 的失败支）：与具体的输出类型无关，任何脚本工具都能用。 */
 export interface StructuredFailure {
   ok: false;
   error: string;
 }
-
-/** 结构化失败的结果：不必抛异常就能把「没找到」这类结果告诉脚本。 */
-export type StructuredFailureResult = ToolResult & { structuredResult: StructuredFailure };
 
 /** What a toolcall handler receives from the framework. */
 export interface ToolCall<Params> {
   params: Params;
   ctx: { cwd?: string };
   signal?: AbortSignal;
-  /** Streaming progress updates, passed through as-is. */
-  onUpdate?: (update: ToolResult) => void;
 }
 
 /**
@@ -204,92 +182,12 @@ export async function resolveRepoTarget(
   return { fullName, owner, name };
 }
 
-export function truncate(
-  text: string,
-  maxLines = 2000,
-  maxBytes = 50 * 1024,
-): { text: string; truncated: boolean } {
-  const lines = text.split("\n");
-  if (lines.length <= maxLines && Buffer.byteLength(text, "utf8") <= maxBytes) {
-    return { text, truncated: false };
-  }
-
-  const out: string[] = [];
-  let bytes = 0;
-  for (const line of lines) {
-    if (out.length >= maxLines) {
-      break;
-    }
-    const lineBytes = Buffer.byteLength(line + "\n", "utf8");
-    if (bytes + lineBytes > maxBytes) {
-      break;
-    }
-    out.push(line);
-    bytes += lineBytes;
-  }
-  if (out.length > 0) {
-    return { text: out.join("\n"), truncated: true };
-  }
-
-  // 首行自己就超过 maxBytes（如单行超长文本）：保底保留字节前缀，
-  // 不能把非空输出截成空字符串。
-  return {
-    text: Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8"),
-    truncated: true,
-  };
-}
-
-/**
- * Format a successful gh invocation's text stdout into a tool result,
- * line-truncated. JSON output must go through `toToolResultJson` instead.
- * Failures are thrown by `ghExec` as `GhError`, so only the success path lives here.
- */
-export function toToolResult(
-  stdout: string,
-  input?: unknown,
-): {
-  content: { type: "text"; text: string }[];
-  details: Record<string, unknown>;
-} {
-  const { text, truncated } = truncate(stdout);
-  return {
-    content: [{ type: "text", text }],
-    details: { ...(input !== undefined && { input }), truncated },
-  };
-}
-
-/**
- * Format a successful gh invocation's JSON stdout into a tool result, passed
- * through whole. Line-based truncation must not touch JSON: it would cut the
- * payload into invalid JSON, and since `gh --json` prints one line, any
- * over-budget payload used to be blanked entirely.
- */
-export function toToolResultJson(json: string, input?: unknown): ToolResult {
-  return {
-    content: [{ type: "text", text: json }],
-    details: { ...(input !== undefined && { input }), truncated: false },
-  };
-}
-
-/** 给结果附上结构化结果（成功支）：`value` 就是脚本解包后拿到的东西。 */
-export function withStructuredResult<T>(result: ToolResult, value: T): WithStructured<T> {
-  return { ...result, structuredResult: { ok: true, value } };
-}
-
-/**
- * 透传型工具的成功结果：`gh --json` 的原始输出既是给模型的文本（整段 JSON，不经行
- * 截断），也按 `schema` 解析成结构化结果。解析失败会抛错——schema 与 GitHub 实际返回
- * 漂移时必须显式失败，不能悄悄少给字段。
- */
-export function toStructuredJsonResult<T extends TSchema>(
-  json: string,
-  input: unknown,
+/** 成功结果：把外部数据按该工具的 `structuredSchema` 校验后交给脚本。 */
+export function structuredResult<T extends TSchema>(
   schema: T,
-): StructuredResultOf<T> {
-  return withStructuredResult(
-    toToolResultJson(json, input),
-    parseWithSchema(schema, JSON.parse(json)),
-  );
+  data: unknown,
+): StructuredResult<Static<T>> {
+  return { ok: true, value: parseWithSchema(schema, data) };
 }
 
 /** 结构化失败（Result 的失败支）：不必抛异常就能把「没找到」这类结果告诉脚本。 */
@@ -298,45 +196,8 @@ export function structuredFailure(error: string): StructuredFailure {
 }
 
 /**
- * Pendant subtitle for a tool result: `repo=x/y` (when provided) plus the
- * tool's id parameter, e.g. `repo=x/y number=123`. Returns undefined when
- * neither is available, so the pendant is omitted rather than shown empty.
- */
-export function subtitlePendant<IdKey extends string = never>(
-  params: { repo?: string } & Partial<Record<IdKey, string | number>>,
-  idKey?: IdKey,
-): ToolPendant | undefined {
-  const parts: string[] = [];
-  if (params.repo) {
-    parts.push(`repo=${params.repo}`);
-  }
-  const id = idKey === undefined ? undefined : params[idKey];
-  if (typeof id === "string" || typeof id === "number") {
-    parts.push(`${idKey}=${id}`);
-  }
-  if (parts.length === 0) {
-    return undefined;
-  }
-  return { subtitle: parts.join(" ") };
-}
-
-/**
- * 给结果挂上 pendant subtitle 后原样返回：取数工具的固定收尾，省掉每个工具重复的
- * `result.details.pendant = ...; return result;` 两行。
- */
-export function withPendant<T extends ToolResult, IdKey extends string = never>(
-  result: T,
-  params: { repo?: string } & Partial<Record<IdKey, string | number>>,
-  idKey?: IdKey,
-): T {
-  result.details.pendant = subtitlePendant(params, idKey);
-  return result;
-}
-
-/**
  * `list-github-issues` / `list-github-prs` 共用的一套过滤参数，只有 `state` 的说明文案按
- * kind 不同。文本列是固定的（见 `renderHits`），因此没有列选择参数：默认列之外的字段
- * 从结构化载荷里取。
+ * kind 不同。
  */
 export function listFilterParameters(kind: "issue" | "pr") {
   const isPr = kind === "pr";
@@ -381,14 +242,14 @@ export interface ListFilters {
 
 /**
  * 浏览分支（不带 keywords）：走 octokit 的 REST 列表端点，再归一到与搜索分支同一套
- * `SearchHit`。repo 缺省时先解析当前仓库——文本要据此决定是否带 repo 列，载荷里也必须有值。
+ * `SearchHit`。repo 缺省时先解析当前仓库（每个命中项都带它归一化后的 `repo`）。
  */
 export async function browseList(
   gh: GhClient,
   kind: "issue" | "pr",
   params: ListFilters,
   ctx: { cwd?: string; signal?: AbortSignal; input?: unknown },
-): Promise<{ repo: string; hits: SearchHit[] }> {
+): Promise<SearchHit[]> {
   const {
     fullName: repo,
     owner,
@@ -406,19 +267,7 @@ export async function browseList(
     kind === "issue"
       ? await gh.reads.listIssues(owner, name, query, ctx.signal)
       : await gh.reads.listPulls(owner, name, query, ctx.signal);
-  return { repo, hits: normalizeRestList(items, repo) };
-}
-
-/** 行列表的文本：两条分支共用一套 TSV 渲染（列为固定默认列）；空结果是成功结果。 */
-export function renderHitList(
-  kind: "issue" | "pr",
-  hits: SearchHit[],
-  options: { repo?: string },
-): string {
-  if (hits.length === 0) {
-    return `(no matching ${kind === "issue" ? "issues" : "pull requests"})`;
-  }
-  return renderHits(hits, options);
+  return normalizeRestList(items, repo);
 }
 
 /**
@@ -612,40 +461,6 @@ export function mergeChecks(
   return checks;
 }
 
-/** Display name of a check; the trigger event is labelled like the GitHub UI (`build (pull_request)`). */
-export function checkDisplayName(check: MergedCheck): string {
-  return check.event ? `${check.name} (${check.event})` : check.name;
-}
-
-/**
- * Render one polling round as a compact bullet list of the checks still in
- * flight: running ones first (`- [>]`), queued ones after (`- [ ]`). Completed
- * checks are hidden — the header already reports the completion count.
- * Pure — no network.
- */
-export function renderPrChecksList(options: {
-  /** Report subject, e.g. `PR #7` or `commit 5a7c407`. */
-  subject: string;
-  round: number;
-  checks: readonly MergedCheck[];
-}): string {
-  const { subject, round, checks } = options;
-  const completed = checks.filter((c) => c.bucket !== "pending").length;
-
-  const pending = checks.filter((c) => c.bucket === "pending");
-  const ordered = [...pending.filter((c) => c.startedAt), ...pending.filter((c) => !c.startedAt)];
-  const lines = ordered.map((check) => {
-    const name = check.link
-      ? `[${checkDisplayName(check)}](${check.link})`
-      : checkDisplayName(check);
-    return `- [${check.startedAt ? ">" : " "}] ${name}`;
-  });
-  const body =
-    checks.length === 0 ? "- _no checks reported_" : lines.length > 0 ? lines.join("\n") : "";
-
-  return `${subject} checks — round ${round}: ${completed}/${checks.length} complete${body ? `\n\n${body}` : ""}`;
-}
-
 function sleepInterruptibly(ms: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolve, reject) => {
     const onAbort = () => {
@@ -673,8 +488,6 @@ export interface ChecksPollResult {
 }
 
 export interface PollPrChecksOptions {
-  /** Report subject for progress lines, e.g. `PR #7` or `commit 5a7c407`. */
-  subject: string;
   owner: string;
   repo: string;
   headSha: string;
@@ -691,14 +504,12 @@ export interface PollPrChecksOptions {
   /** Test overrides. */
   intervalMs?: number;
   deadlineMs?: number;
-  onUpdate?: (msg: ToolResult) => void;
 }
 
 /**
  * Poll the commit's combined-status and check-runs APIs until the wait
  * semantics are met: return on any failure (immediately under fail-fast) or
- * when every check is complete (pass/skipped). Emits a compact list of
- * in-flight checks via `onUpdate` each round.
+ * when every check is complete (pass/skipped).
  *
  * A failed round (network, auth) does not end the wait — the error is kept
  * and polling continues, so a transient blip or a CI system that has not
@@ -706,7 +517,7 @@ export interface PollPrChecksOptions {
  * when no round ever succeeded by the deadline is the last error thrown.
  */
 export async function pollPrChecks(options: PollPrChecksOptions): Promise<ChecksPollResult> {
-  const { subject, owner, repo, headSha, failFast, checks, signal, onUpdate } = options;
+  const { owner, repo, headSha, failFast, checks, signal } = options;
   const intervalMs = options.intervalMs ?? CHECKS_POLL_INTERVAL_MS;
   const deadlineMs = options.deadlineMs ?? CHECKS_WATCH_DEADLINE_MS;
 
@@ -715,7 +526,7 @@ export async function pollPrChecks(options: PollPrChecksOptions): Promise<Checks
   let lastError: unknown;
   let everSucceeded = false;
 
-  for (let round = 1; ; round++) {
+  for (;;) {
     if (signal.aborted) {
       throw new Error("PR checks polling was aborted");
     }
@@ -734,12 +545,6 @@ export async function pollPrChecks(options: PollPrChecksOptions): Promise<Checks
       if (options.event) {
         lastChecks = lastChecks.filter((c) => c.event === options.event);
       }
-      onUpdate?.({
-        content: [
-          { type: "text", text: renderPrChecksList({ subject, round, checks: lastChecks }) },
-        ],
-        details: {},
-      });
       // A failure is the actionable verdict, so `fail_fast` still wins here.
       if (failFast && lastChecks.some((c) => c.bucket === "fail")) {
         return { outcome: "fail_fast", checks: lastChecks, elapsedMs: Date.now() - watchStart };
@@ -788,14 +593,6 @@ export interface RunSnapshot {
   html_url?: string;
 }
 
-/** 一行运行状态：`工作流 · 事件 · 分支 — 状态`（附耗时与链接）。 */
-export function renderRunStatus(run: RunSnapshot, elapsedMs?: number): string {
-  const state = run.conclusion ?? run.status ?? "unknown";
-  const facts = [run.name, run.event, run.head_branch].filter(Boolean).join(" · ");
-  const elapsed = elapsedMs === undefined ? "" : ` (${Math.round(elapsedMs / 1000)}s)`;
-  return `${facts} — ${state}${elapsed}${run.html_url === undefined ? "" : `\n${run.html_url}`}`;
-}
-
 export interface WatchRunOptions {
   owner: string;
   repo: string;
@@ -806,7 +603,6 @@ export interface WatchRunOptions {
   /** Test overrides. */
   intervalMs?: number;
   deadlineMs?: number;
-  onUpdate?: (msg: ToolResult) => void;
 }
 
 export interface RunWatchResult {
@@ -816,11 +612,11 @@ export interface RunWatchResult {
 }
 
 /**
- * 轮询 `getWorkflowRun` 直到运行结束（`gh run watch` 的替代）：固定间隔轮询，每轮通过
- * onUpdate 报一次当前状态，超过上限以 timeout 结束（不挂住）。
+ * 轮询 `getWorkflowRun` 直到运行结束（`gh run watch` 的替代）：固定间隔轮询，超过上限以
+ * timeout 结束（不挂住）。不输出进度——这条路径上没有会消费它的调用方。
  */
 export async function watchRun(options: WatchRunOptions): Promise<RunWatchResult> {
-  const { owner, repo, runId, reads, signal, onUpdate } = options;
+  const { owner, repo, runId, reads, signal } = options;
   const intervalMs = options.intervalMs ?? RUN_WATCH_INTERVAL_MS;
   const deadlineMs = options.deadlineMs ?? RUN_WATCH_DEADLINE_MS;
 
@@ -829,15 +625,6 @@ export async function watchRun(options: WatchRunOptions): Promise<RunWatchResult
     signal.throwIfAborted();
     const run = parseWithSchema(ghRunSummarySchema, await reads.run(owner, repo, runId, signal));
     const elapsedMs = Date.now() - watchStart;
-    onUpdate?.({
-      content: [
-        {
-          type: "text",
-          text: `Watching workflow run ${runId}...\n${renderRunStatus(run, elapsedMs)}`,
-        },
-      ],
-      details: {},
-    });
     if (run.status === "completed") {
       return { outcome: "completed", run, elapsedMs };
     }
@@ -857,33 +644,7 @@ const FAILED_JOB_CONCLUSIONS = new Set([
   "cancelled",
 ]);
 
-export function statusIcon(conclusion: string | null): string {
-  switch (conclusion) {
-    case "success": {
-      return "✅";
-    }
-    case "failure": {
-      return "❌";
-    }
-    case "cancelled": {
-      return "🚫";
-    }
-    case "skipped": {
-      return "⏭️";
-    }
-    case "timed_out": {
-      return "⏰";
-    }
-    case "action_required": {
-      return "⚠️";
-    }
-    default: {
-      return "🔄";
-    }
-  }
-}
-
-/** One Actions job that did not succeed, for the FAILED report details. */
+/** One Actions job that did not succeed, for the FAILED verdict details. */
 export interface FailedActionJob {
   readonly runId: number;
   readonly runName: string;
@@ -896,36 +657,24 @@ export interface FailedActionJob {
 
 export interface ChecksVerdict {
   readonly status: "success" | "failure" | "pending" | "awaiting_approval";
-  readonly text: string;
   readonly failedJobs: readonly FailedActionJob[];
 }
 
 /**
- * Turn a poll result into the final report. Verdict comes from the checks
+ * Turn a poll result into the final verdict: the status comes from the checks
  * buckets alone (so external CI such as Azure counts); Actions jobs are
- * display-only enrichment. Pure — no network.
+ * payload-only enrichment. Pure — no network.
  */
-export function renderChecksVerdict(options: {
-  /** Report subject, e.g. `PR #123` or `commit 5a7c407`. */
-  subject: string;
+export function checksVerdict(options: {
   poll: ChecksPollResult;
-  /** All Actions jobs of the head commit; failed/incomplete ones are listed. */
+  /** All Actions jobs of the head commit; the ones that did not succeed enter `failedJobs`. */
   actionJobs?: readonly ActionJob[];
-  /** Set when the Actions job fetch failed; the verdict stays untouched. */
-  enrichmentError?: string;
 }): ChecksVerdict {
-  const { subject, poll, actionJobs, enrichmentError } = options;
-  const totalChecks = poll.checks.length;
+  const { poll, actionJobs } = options;
   const failed = poll.checks.filter((c) => c.bucket === "fail");
-  const pending = poll.checks.filter((c) => c.bucket === "pending");
-  const awaiting = poll.checks.filter((c) => c.bucket === "action_required");
 
   if (failed.length === 0 && poll.outcome === "completed") {
-    return {
-      status: "success",
-      text: `## ${subject} CI Checks - PASSED\n\nAll ${totalChecks} check(s) passed.`,
-      failedJobs: [],
-    };
+    return { status: "success", failedJobs: [] };
   }
 
   if (failed.length > 0) {
@@ -940,95 +689,36 @@ export function renderChecksVerdict(options: {
         conclusion: j.conclusion ?? "in_progress",
         ...(j.jobUrl && { jobUrl: j.jobUrl }),
       }));
-
-    const lines = failed.map(
-      (c) =>
-        `- ${statusIcon("failure")} **${checkDisplayName(c)}**${c.link ? ` — [view check](${c.link})` : ""}`,
-    );
-    for (const j of failedJobs) {
-      lines.push(
-        `  - ${statusIcon(j.conclusion)} job **${j.jobName}** (${j.conclusion}) — [job #${j.jobId}](${j.jobUrl ?? j.runUrl})`,
-        `    - workflow: [${j.runName} (#${j.runId})](${j.runUrl})`,
-      );
-    }
-    if (enrichmentError) {
-      lines.push(`  - _Actions job details unavailable: ${enrichmentError}_`);
-    }
-    if (pending.length > 0) {
-      lines.push(`\n_${pending.length} other check(s) still in flight._`);
-    }
-    if (awaiting.length > 0) {
-      lines.push(`_${awaiting.length} workflow(s) still waiting for approval._`);
-    }
-
-    return {
-      status: "failure",
-      text:
-        `## ${subject} CI Checks - FAILED\n\n` +
-        `${failed.length} of ${totalChecks} check(s) failed:\n\n${lines.join("\n")}`,
-      failedJobs,
-    };
+    return { status: "failure", failedJobs };
   }
 
   if (poll.outcome === "awaiting_approval") {
-    const lines = awaiting.map(
-      (c) => `- ${checkDisplayName(c)}${c.link ? ` — [open run](${c.link})` : ""}`,
-    );
-    if (pending.length > 0) {
-      lines.push(`\n_${pending.length} other check(s) still in flight._`);
-    }
-    return {
-      status: "awaiting_approval",
-      text:
-        `## ${subject} CI Checks - AWAITING APPROVAL\n\n` +
-        `${awaiting.length} workflow(s) have not started: they need approval from a maintainer ` +
-        `(fork PR workflows do not run until then), so they cannot finish on their own:\n\n` +
-        lines.join("\n"),
-      failedJobs: [],
-    };
+    return { status: "awaiting_approval", failedJobs: [] };
   }
 
-  const waitedMinutes = Math.max(1, Math.round(poll.elapsedMs / 60_000));
-  const pendingLines = pending.map(
-    (c) => `- [${c.startedAt ? ">" : " "}] ${c.link ? `[${c.name}](${c.link})` : c.name}`,
-  );
-  return {
-    status: "pending",
-    text:
-      `## ${subject} CI Checks - STILL IN FLIGHT\n\n` +
-      `${pending.length} of ${totalChecks} check(s) still incomplete after ~${waitedMinutes}m:\n\n` +
-      (pendingLines.length > 0 ? pendingLines.join("\n") : "- _no checks reported_"),
-    failedJobs: [],
-  };
+  return { status: "pending", failedJobs: [] };
 }
 
 /**
  * Shared wait core of `wait-github-pr-checks` and `wait-github-commit-checks`:
- * poll the commit's checks, enrich FAILED reports with Actions job details
- * (display-only), render the verdict. The caller resolves repo/headSha;
- * `subject` formats the report header.
+ * poll the commit's checks, enrich the FAILED verdict with Actions job details,
+ * and return the structured verdict. The caller resolves repo/headSha.
  */
 export async function waitChecksReport(options: {
   checks: GithubChecksClient;
-  subject: string;
   owner: string;
   repo: string;
   headSha: string;
   failFast: boolean;
   event?: string;
   signal: AbortSignal | undefined;
-  onUpdate: ((msg: ToolResult) => void) | undefined;
-  params: unknown;
-  pendant?: ToolPendant;
-}): Promise<StructuredResultOf<typeof checksVerdictSchema>> {
-  const { subject, owner, repo, headSha, failFast, event, signal, onUpdate, params, pendant } =
-    options;
+}): Promise<StructuredResult<Static<typeof checksVerdictSchema>>> {
+  const { owner, repo, headSha, failFast, event, signal } = options;
 
   // 轮询层要求非空 signal；框架可能不给时构造一个占位的（从不取消）。
   const pollSignal = signal ?? new AbortController().signal;
 
   const poll = await pollPrChecks({
-    subject,
     owner,
     repo,
     headSha,
@@ -1036,34 +726,25 @@ export async function waitChecksReport(options: {
     event,
     checks: options.checks,
     signal: pollSignal,
-    onUpdate,
   });
 
-  // Actions job 详情只做展示补充，不影响判定（判定来自 checks bucket，
-  // 覆盖 Azure 等外部 CI）。抓取失败时降级为提示，不推翻结论。
+  // Actions job 详情只补充失败 job 明细，不影响判定（判定来自 checks bucket，
+  // 覆盖 Azure 等外部 CI）。抓取失败只让 failedJobs 为空，不推翻结论。
   let actionJobs: readonly ActionJob[] | undefined;
-  let enrichmentError: string | undefined;
   if (poll.checks.some((c) => c.bucket === "fail")) {
     try {
       actionJobs = await options.checks.actionJobs(owner, repo, headSha, pollSignal);
-    } catch (error) {
-      enrichmentError = error instanceof Error ? error.message : "Actions job details unavailable";
+    } catch {
+      // 补充数据可有可无：保留 actionJobs 为 undefined
     }
   }
 
-  const verdict = renderChecksVerdict({ subject, poll, actionJobs, enrichmentError });
-  const payload = {
+  const verdict = checksVerdict({ poll, actionJobs });
+  return structuredResult(checksVerdictSchema, {
     status: verdict.status,
     totalChecks: poll.checks.length,
     // 复制成可变数组：结构化结果的类型要与 structuredSchema 的静态类型一致
     checks: [...poll.checks],
     failedJobs: [...verdict.failedJobs],
-  };
-  return withStructuredResult(
-    {
-      content: [{ type: "text", text: verdict.text }],
-      details: { ...payload, input: params, ...(pendant && { pendant }) },
-    },
-    payload,
-  );
+  });
 }

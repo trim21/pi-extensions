@@ -88,16 +88,53 @@ export interface ExecuteToolOptions {
   toolCallId?: string;
 }
 
-/** 注册后的定义：多出的 `structuredSchema` 供 codemode 渲染脚本侧返回类型，`codemodeOnly` 标出未交给 pi 的只读脚本工具。 */
+/**
+ * codemode-only 工具的定义：`execute` 直接返回结构化结果，没有 pi 的 `AgentToolResult`
+ * （`content` / `details`）——这条路径上不存在「模型读到的文本」这个位置，唯一的消费者
+ * 是 codemode 脚本。
+ */
+export interface CodemodeToolDefinition<
+  TParams extends TSchema = TSchema,
+  TOutput extends TSchema = TSchema,
+> {
+  name: string;
+  label: string;
+  description: string;
+  parameters: TParams;
+  structuredSchema: TOutput;
+  prepareArguments?: (args: unknown) => unknown;
+  execute(
+    toolCallId: string,
+    params: Static<TParams>,
+    signal: AbortSignal | undefined,
+    ctx: ExtensionContext,
+  ): Promise<StructuredResult<Static<TOutput>>>;
+}
+
+/**
+ * 注册后的定义：`codemodeOnly` 标出未交给 pi 的脚本工具。`structuredSchema` 供 codemode
+ * 渲染脚本侧返回类型；`scripted` 区分「`execute` 直接返回结构化结果」的脚本工具与经配置
+ * 转成 codemode-only 的普通工具（后者仍返回 `AgentToolResult`，结构化结果在
+ * `structuredResult` 里）。
+ */
 export type RegisteredToolDefinition = ToolDefinition<TSchema, unknown, unknown> & {
   structuredSchema?: TSchema;
   codemodeOnly?: boolean;
+  scripted?: true;
 };
 
 export interface ToolBus {
   /** 注册一个工具；被配置禁用时跳过并返回 false。 */
   register<TParams extends TSchema, TDetails>(
     definition: ToolDefinition<TParams, TDetails, unknown>,
+  ): boolean;
+  /**
+   * 注册一个只进 codemode 的脚本工具：曝光方式由模块自己决定、不问配置，MUST NOT 交给 pi。
+   * 参数类型要求 `structuredSchema` 与「`execute` 直接返回结构化结果」，因此没有「没有
+   * 结构化输出就退回普通注册」的分支；被配置禁用时与 `register` 一样跳过并返回 false。
+   */
+  registerCodemodeOnly<TParams extends TSchema, TOutput extends TSchema>(
+    definition: CodemodeToolDefinition<TParams, TOutput>,
   ): boolean;
   /** 本次实际注册的工具定义。 */
   list(): readonly RegisteredToolDefinition[];
@@ -112,6 +149,16 @@ export interface ToolBus {
     args: unknown,
     options: ExecuteToolOptions,
   ): Promise<ToolExecutionResult>;
+  /**
+   * 按名执行一个 codemode 可调用的工具，直接返回结构化结果：脚本定义（`execute` 直接返回
+   * 结果）原样复核后返回，普通定义取其 `structuredResult`。参数校验失败与工具抛出的异常都
+   * 归一成 `{ ok: false, error }`。
+   */
+  executeCodemodeTool(
+    name: string,
+    args: unknown,
+    options: ExecuteToolOptions,
+  ): Promise<StructuredResult<unknown>>;
 }
 
 export interface ToolBusOptions {
@@ -185,6 +232,41 @@ function checkStructuredResult(
   }
 }
 
+/**
+ * 复核脚本工具的返回值：成功支的载荷必须过 `structuredSchema`（外部数据用 typebox
+ * 校验是本仓库约定），失败支的错误必须是字符串。
+ */
+function checkScriptedResult(
+  name: string,
+  structuredSchema: TSchema | undefined,
+  result: unknown,
+): StructuredResult<unknown> {
+  if (typeof result !== "object" || result === null) {
+    return { ok: false, error: `Tool "${name}" returned a malformed structured result.` };
+  }
+  const candidate = result as { ok?: unknown; value?: unknown; error?: unknown };
+  if (candidate.ok === false) {
+    return {
+      ok: false,
+      error:
+        typeof candidate.error === "string"
+          ? candidate.error
+          : `Tool "${name}" returned a structured failure without an error message.`,
+    };
+  }
+  if (structuredSchema === undefined || candidate.ok !== true) {
+    return { ok: false, error: `Tool "${name}" returned a malformed structured result.` };
+  }
+  try {
+    return { ok: true, value: parseWithSchema(structuredSchema, candidate.value) };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Tool "${name}" returned a value that does not match its structuredSchema: ${errorMessage(error)}`,
+    };
+  }
+}
+
 export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): ToolBus {
   const registered = new Map<string, RegisteredToolDefinition>();
   const declared = new Set<string>();
@@ -219,10 +301,45 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
       return true;
     },
 
+    registerCodemodeOnly(definition) {
+      declared.add(definition.name);
+      if (options.isDisabled?.(definition.name) === true) {
+        return false;
+      }
+      // 总线内部统一按 pi 的调用约定（第 4 个参数是 onUpdate）；脚本定义没有 onUpdate，
+      // 因此在这里把它的 ctx 摆到第 5 位。
+      const stored = {
+        name: definition.name,
+        label: definition.label,
+        description: definition.description,
+        parameters: definition.parameters,
+        structuredSchema: definition.structuredSchema,
+        codemodeOnly: true,
+        scripted: true,
+        ...(definition.prepareArguments !== undefined && {
+          prepareArguments: definition.prepareArguments,
+        }),
+        execute: (
+          toolCallId: string,
+          params: Static<TSchema>,
+          signal: AbortSignal | undefined,
+          _onUpdate: unknown,
+          ctx: ExtensionContext,
+        ) =>
+          definition.execute(
+            toolCallId,
+            params as Static<typeof definition.parameters>,
+            signal,
+            ctx,
+          ),
+      } as unknown as RegisteredToolDefinition;
+      registered.set(stored.name, stored);
+      return true;
+    },
+
     list() {
       return [...registered.values()];
     },
-
     declaredNames() {
       return [...declared];
     },
@@ -239,6 +356,11 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
       const definition = registered.get(name);
       if (!definition) {
         return errorResult(`Tool "${name}" is not available.`);
+      }
+      if (definition.scripted === true) {
+        return errorResult(
+          `Tool "${name}" is a codemode-only script tool: it has no model-facing result, run it with executeCodemodeTool.`,
+        );
       }
 
       const toolCallId = options.toolCallId ?? `tool-bus-${++callCounter}`;
@@ -271,12 +393,44 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
         return errorResult(`Tool "${name}" failed: ${errorMessage(error)}`);
       }
     },
-  };
-}
 
-/** 工具结果里的文本内容拼接，便于调用方展示或回传给脚本。 */
-export function toolResultText(result: ToolExecutionResult): string {
-  return result.content
-    .map((part) => (part.type === "text" ? part.text : `[image ${part.mimeType}]`))
-    .join("\n");
+    async executeCodemodeTool(name, args, options) {
+      const definition = registered.get(name);
+      if (!definition) {
+        return { ok: false, error: `Tool "${name}" is not available.` };
+      }
+
+      const toolCallId = options.toolCallId ?? `tool-bus-${++callCounter}`;
+      let params: Static<TSchema>;
+      try {
+        const prepared = definition.prepareArguments ? definition.prepareArguments(args) : args;
+        params = parseWithSchema(definition.parameters, prepared);
+      } catch (error) {
+        return { ok: false, error: `Invalid arguments for tool "${name}": ${errorMessage(error)}` };
+      }
+
+      try {
+        const result = await definition.execute(
+          toolCallId,
+          params,
+          options.signal,
+          options.onUpdate,
+          options.ctx,
+        );
+        if (definition.scripted === true) {
+          return checkScriptedResult(name, definition.structuredSchema, result);
+        }
+        // 仍是 pi 工具的普通定义：结构化结果在 `structuredResult` 里。
+        const checked = checkStructuredResult(name, definition.structuredSchema, result);
+        if (!checked.ok) {
+          return { ok: false, error: checked.error };
+        }
+        return (
+          checked.result ?? { ok: false, error: `Tool "${name}" returned no structured result.` }
+        );
+      } catch (error) {
+        return { ok: false, error: `Tool "${name}" failed: ${errorMessage(error)}` };
+      }
+    },
+  };
 }

@@ -3,48 +3,35 @@
  * `/search/issues`，浏览走 REST 列表端点），归一成同一套 `SearchHit`。
  */
 
-import { defineStructuredTool, type ToolBus } from "../../lib/tool-bus.js";
+import { type ToolBus } from "../../lib/tool-bus.js";
 import {
   browseList,
   type GhClient,
   listFilterParameters,
   type ListFilters,
-  renderHitList,
-  type StructuredResultOf,
+  structuredResult,
   type ToolCall,
-  toToolResult,
-  withPendant,
-  withStructuredResult,
 } from "../base.js";
 import { ghHitListPayloadSchema } from "../schemas.js";
 
-async function listPrs(
-  gh: GhClient,
-  call: ToolCall<ListFilters>,
-): Promise<StructuredResultOf<typeof ghHitListPayloadSchema>> {
+async function listPrs(gh: GhClient, call: ToolCall<ListFilters>) {
   const { params, ctx, signal } = call;
-  const { repo, hits } = params.keywords
-    ? { repo: params.repo, hits: await gh.search.search("pr", params) }
+  const hits = params.keywords
+    ? await gh.search.search("pr", params)
     : await browseList(gh, "pr", params, { cwd: ctx.cwd, signal, input: params });
-  const text = renderHitList("pr", hits, { repo });
-  const result = toToolResult(text, params);
-  // 文本可能被行数/字节预算截断，载荷给全部命中
-  return withStructuredResult(withPendant(result, params), { text, items: hits });
+  return structuredResult(ghHitListPayloadSchema, { items: hits });
 }
 
 export function addListPrsTool(gh: GhClient, bus: ToolBus) {
-  bus.register(
-    defineStructuredTool({
-      name: "list-github-prs",
-      label: "GitHub PRs List",
-      description:
-        'List GitHub pull requests with optional filters and keyword search. When repo is omitted, keyword search runs across GitHub. Keyword search defaults to open PRs — pass state="merged", state="closed" (merged excluded) or state="all" to broaden.',
-      promptSnippet: "List or search GitHub PRs",
-      parameters: listFilterParameters("pr"),
-      structuredSchema: ghHitListPayloadSchema,
-      async execute(_id, params, signal, onUpdate, ctx) {
-        return listPrs(gh, { params, ctx, signal, onUpdate });
-      },
-    }),
-  );
+  bus.registerCodemodeOnly({
+    name: "list-github-prs",
+    label: "GitHub PRs List",
+    description:
+      'List GitHub pull requests with optional filters and keyword search. When repo is omitted, keyword search runs across GitHub. Keyword search defaults to open PRs — pass state="merged", state="closed" (merged excluded) or state="all" to broaden.',
+    parameters: listFilterParameters("pr"),
+    structuredSchema: ghHitListPayloadSchema,
+    async execute(_id, params, signal, ctx) {
+      return listPrs(gh, { params, ctx, signal });
+    },
+  });
 }
