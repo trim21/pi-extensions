@@ -608,7 +608,6 @@ export class BwrapRuntime {
     );
 
     try {
-      onUpdate?.({ content: [], details: undefined });
       const { exitCode } = await runInSandbox(runtime, {
         workspace,
         commandCwd: execCwd,
