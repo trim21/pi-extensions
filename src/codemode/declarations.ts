@@ -82,10 +82,22 @@ function renderType(schema: unknown, indent: string): string {
  * 返回类型取自工具声明的输出结构，未声明就是文本（`string`）。
  */
 function renderOverload(tool: ToolLike): string {
-  const summary = tool.description?.split("\n", 1)[0]?.trim();
-  const doc = summary ? `/** ${summary} */\n` : "";
+  const description = tool.description?.trim();
+  const doc = description ? `${docComment(description)}\n` : "";
   const output = renderType(tool.structuredSchema, "");
   return `${doc}declare function call(name: ${JSON.stringify(tool.name)}, args: ${renderType(tool.parameters, "")}): Promise<${output}>;`;
+}
+
+/**
+ * 工具的 JSDoc 注释：description 的每一行都要进描述——只取首行会让工具作者写的说明
+ * 在 codemode 里凭空消失。多行按 JSDoc 缩进渲染，单行仍是一行注释。
+ */
+function docComment(description: string): string {
+  const lines = description.split("\n").map((line) => line.trim());
+  if (lines.length === 1) {
+    return `/** ${lines[0]} */`;
+  }
+  return ["/**", ...lines.map((line) => (line === "" ? " *" : ` * ${line}`)), " */"].join("\n");
 }
 
 /** 给脚本用的工具清单（名字 + 说明）。 */

@@ -591,6 +591,32 @@ describe("codemode 工具", () => {
     expect(textOf(result)).toContain('"name": "pi"');
   });
 
+  it("多行 description 的每一行都进描述", async () => {
+    const h = await harness({
+      active: ["echo"],
+      register: (bus) => {
+        bus.register(
+          defineStructuredTool({
+            name: "multi-line",
+            label: "Multi Line",
+            description: "First line.\nSecond line.\n\n * Fourth line.",
+            parameters: Type.Object({}),
+            structuredSchema: Type.Object({ ok: Type.Boolean() }),
+            execute: async () => ({
+              content: [{ type: "text" as const, text: "ok" }],
+              details: {},
+              structuredResult: { ok: true as const, value: { ok: true } },
+            }),
+          }),
+        );
+      },
+    });
+
+    expect(h.codemode.description).toContain(
+      "/**\n * First line.\n * Second line.\n *\n * Fourth line.\n */",
+    );
+  });
+
   it("脚本调用 codemode 自身被拒", async () => {
     const h = await harness();
     const result = await runScript(h, `return await call("codemode", { code: "return 1" });`);

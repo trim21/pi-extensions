@@ -10,6 +10,8 @@
 
 扩展 MUST 注册名为 `codemode` 的工具，并 MUST 在注册时把脚本可调用的工具集合渲染进工具描述，为每个工具给出名字、说明、参数类型与返回类型。返回类型 MUST 按该工具的 `structuredSchema` 渲染——可调用集合里每个工具都声明了它，因此每个条目都有确定的返回类型。
 
+每个工具的说明 MUST 是它 `description` 的**全文**，包含多行描述的每一行（按 JSDoc 注释渲染）；MUST NOT 只取首行，也 MUST NOT 做任何截断——工具作者写在描述里的约束必须在 codemode 里同样可见。
+
 可调用集合 MUST 只包含本仓库工具总线上**声明了 `structuredSchema`** 的工具；在此之上，MUST 包含所有 codemode-only 工具，且对非 codemode-only 的工具 MUST 再与当前 active 工具列表求交（取不到 active 列表时不过滤）。codemode-only 工具不在 active 列表里是常态，MUST NOT 因此把它排除。这条准入条件 MUST 是唯一的集合规则：MUST NOT 再维护手工的工具名单（黑名单会随工具增减而漂移）。理由是脚本拿到的返回值必须有确定的形状：只给文本的工具在脚本里既不能当数据用（得解析文本），也没有返回类型能写进声明。
 
 由此天然不在集合里、且各自理由独立成立的例子：`codemode` 自身与 `spawn-agent`（没有结构化输出）、两套文件工具集的读写工具（脚本用 `fs.read` / `fs.write`，不重复一套为 LLM 上下文设计的行号/锚点语义）、两套工具集的搜索工具（脚本用 `call("Bash", { command })` 跑 `rg` / `grep`，走同一个沙箱、拿得到退出码，还能拼管道）、`lsp-rename`（写工具）、talk 工具与会话工具（会把执行时间交给用户或另一个 agent 的回答）。这些工具 MUST NOT 需要写进特殊名单：它们没有声明结构化输出，因此自然不在集合里。
@@ -25,6 +27,11 @@
 
 - **WHEN** 某个工具声明了 `structuredSchema`
 - **THEN** 描述里它的返回类型按该 schema 渲染；没声明 schema 的工具不出现（因此不存在「未声明就渲染成文本」的条目）
+
+#### Scenario: 多行说明完整渲染
+
+- **WHEN** 某个可调用工具的 `description` 有多行
+- **THEN** 描述里该工具的 JSDoc 注释包含这个 `description` 的每一行，MUST NOT 只保留第一行
 
 #### Scenario: 集合外的工具不可调用
 
