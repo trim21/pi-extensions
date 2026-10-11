@@ -62,8 +62,12 @@ export function addWaitPrChecksTool(gh: GhClient, bus: ToolBus) {
       name: "wait-github-pr-checks",
       label: "Watch GitHub PR Checks",
       description:
-        "Watch CI status checks for a PR until they complete. Blocks until all checks pass (or are skipped) or one fails. " +
-        "Covers both commit statuses (Azure DevOps, Jenkins, ...) and GitHub Actions check runs. " +
+        "Watch CI status checks for a PR until they complete. Blocks until all checks pass (or are skipped), " +
+        "a check fails, or a workflow turns out to be waiting for maintainer approval — then it returns " +
+        '`status: "awaiting_approval"` right away instead of burning the timeout, because such a workflow ' +
+        "(a fork PR's first run) never starts on its own. " +
+        "Covers commit statuses (Azure DevOps, Jenkins, ...), GitHub Actions check runs, and check suites that " +
+        "have no check runs at all (the waiting-for-approval case). " +
         "Each polling round streams a compact bullet list of the checks still in flight via onUpdate; " +
         "on timeout the still-in-flight snapshot is returned instead of a verdict. " +
         "Use this when you need to wait for CI to complete and see the final result.",

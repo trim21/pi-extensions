@@ -1,0 +1,79 @@
+{
+  "total_count": 1,
+  "check_runs": [
+    {
+      "id": 114450124514,
+      "name": "DCO",
+      "node_id": "CR_kwDOMRW3Is8AAAAapcJO4g",
+      "head_sha": "6d8644d9f82961e8f71a554b6913b1a1a9f3ab5a",
+      "external_id": "",
+      "url": "https://api.github.com/repos/valkey-io/libvalkey-py/check-runs/114450124514",
+      "html_url": "https://github.com/valkey-io/libvalkey-py/runs/114450124514",
+      "details_url": "https://probot.github.io/apps/dco/",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-11T10:38:56Z",
+      "completed_at": "2026-10-11T10:38:57Z",
+      "output": {
+        "title": "DCO",
+        "summary": "All commits are signed off!",
+        "text": null,
+        "annotations_count": 0,
+        "annotations_url": "https://api.github.com/repos/valkey-io/libvalkey-py/check-runs/114450124514/annotations"
+      },
+      "check_suite": {
+        "id": 103314831515
+      },
+      "app": {
+        "id": 1861,
+        "client_id": "Iv1.8d242d6d729752ee",
+        "slug": "dco",
+        "node_id": "MDM6QXBwMTg2MQ==",
+        "owner": {
+          "login": "dcoapp",
+          "id": 97926257,
+          "node_id": "O_kgDOBdY8cQ",
+          "avatar_url": "https://avatars.githubusercontent.com/u/97926257?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/dcoapp",
+          "html_url": "https://github.com/dcoapp",
+          "followers_url": "https://api.github.com/users/dcoapp/followers",
+          "following_url": "https://api.github.com/users/dcoapp/following{/other_user}",
+          "gists_url": "https://api.github.com/users/dcoapp/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/dcoapp/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/dcoapp/subscriptions",
+          "organizations_url": "https://api.github.com/users/dcoapp/orgs",
+          "repos_url": "https://api.github.com/users/dcoapp/repos",
+          "events_url": "https://api.github.com/users/dcoapp/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/dcoapp/received_events",
+          "type": "Organization",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "name": "DCO",
+        "description": "This App enforces the [Developer Certificate of Origin](https://developercertificate.org/) (DCO) on Pull Requests. It requires all commit messages to contain the `Signed-off-by` line with an email address that matches the commit author.\r\n\r\n\r\nThe Developer Certificate of Origin (DCO) is a lightweight way for contributors to certify that they wrote or otherwise have the right to submit the code they are contributing to the project. Here is the full [text of the DCO](https://developercertificate.org/), reformatted for readability:\r\n\r\n> By making a contribution to this project, I certify that:\r\n>\r\n> 1. The contribution was created in whole or in part by me and I have the right to submit it under the open source license indicated in the file; or\r\n>\r\n> 2. The contribution is based upon previous work that, to the best of my knowledge, is covered under an appropriate open source license and I have the right under that license to submit that work with modifications, whether created in whole or in part by me, under the same open source license (unless I am permitted to submit under a different license), as indicated in the file; or\r\n>\r\n> 3. The contribution was provided directly to me by some other person who certified 1., 2. or 3. and I have not modified it.\r\n>\r\n> 4. I understand and agree that this project and the contribution are public and that a record of the contribution (including all personal information I submit with it, including my sign-off) is maintained indefinitely and may be redistributed consistent with this project or the open source license(s) involved.\r\n\r\nContributors _sign-off_ that they adhere to these requirements by adding a `Signed-off-by` line to commit messages.\r\n\r\n```\r\nThis is my commit message\r\n\r\nSigned-off-by: Random J Developer <random@developer.example.org>\r\n```\r\n\r\nGit even has a `-s` command line option to append this automatically to your commit message:\r\n\r\n```\r\n$ git commit -s -m 'This is my commit message'\r\n```\r\n\r\nOnce [installed](#usage), this integration will set the [status](https://developer.github.com/v3/repos/statuses/) to `failed` if commits in a Pull Request do not contain a valid `Signed-off-by` line.\r\n\r\n![](https://cloud.githubusercontent.com/assets/173/24482273/a35dc23e-14b5-11e7-9371-fd241873e2c3.png)\r\n\r\n",
+        "external_url": "https://probot.github.io/apps/dco/",
+        "html_url": "https://github.com/apps/dco",
+        "created_at": "2017-03-25T13:51:49Z",
+        "updated_at": "2026-07-28T19:08:25Z",
+        "permissions": {
+          "checks": "write",
+          "contents": "read",
+          "members": "read",
+          "merge_queues": "read",
+          "metadata": "read",
+          "pull_requests": "read"
+        },
+        "events": [
+          "check_run",
+          "merge_group",
+          "pull_request",
+          "pull_request_review",
+          "pull_request_review_comment",
+          "push"
+        ]
+      },
+      "pull_requests": []
+    }
+  ]
+}

@@ -59,10 +59,11 @@ export function addWaitCommitChecksTool(gh: GhClient, bus: ToolBus) {
       label: "Watch GitHub Commit Checks",
       description:
         "Watch CI status checks for a commit until they complete — no pull request required. " +
-        "Same semantics as wait-github-pr-checks: returns when any check fails (immediately under fail_fast) " +
+        "Same semantics as wait-github-pr-checks: returns when any check fails (immediately under fail_fast), " +
+        'when a workflow is waiting for maintainer approval (`status: "awaiting_approval"`, returned right away), ' +
         "or all checks pass/skip; on timeout the still-in-flight snapshot is returned. " +
-        "With `event`, only check runs triggered by that workflow event (e.g. push) are judged; " +
-        "commit statuses have an unknown trigger event and are excluded under a filter. " +
+        "With `event`, only checks triggered by that workflow event (e.g. push) are judged; " +
+        "commit statuses and suites whose workflow run is unknown are excluded under a filter. " +
         "Use this to wait for the runs a commit's push triggered, or for checks on an arbitrary ref.",
       promptSnippet: "Watch and wait for GitHub commit CI checks to complete",
       parameters: Type.Object({

@@ -478,12 +478,40 @@ export interface CheckRun {
   readonly conclusion: string | null;
   readonly startedAt: string | null;
   readonly url: string | null;
-  /** Triggering workflow event (push, pull_request, ...); null when unknown. */
-  readonly event: string | null;
+  /** Owning check suite (`check_suite.id`); null when the API omits it. */
+  readonly checkSuiteId: number | null;
   /** Actions workflow run id parsed from `details_url`; null for non-Actions checks. */
   readonly runId: number | null;
   /** Actions job id parsed from `details_url`; null when the check is run- not job-level. */
   readonly jobId: number | null;
+}
+
+/**
+ * One check suite of the check-suites API (`checks.listSuitesForRef`): the
+ * container an app creates per commit per trigger. A suite with no check runs
+ * is how GitHub represents a workflow that is waiting for human approval — the
+ * only place that state exists.
+ */
+export interface CheckSuite {
+  readonly id: number;
+  /** Owning app's slug (`github-actions`, `dco`, ...); the fallback name of a suite. */
+  readonly appSlug: string;
+  /** The REST API types this as nullable; anything but `completed` is not finished. */
+  readonly status: string | null;
+  readonly conclusion: string | null;
+}
+
+/** One Actions workflow run of a commit, reduced to what the check layer needs. */
+export interface WorkflowRunRef {
+  readonly id: number;
+  /** Suite this run backs; the join key to `CheckSuite.id`. */
+  readonly checkSuiteId: number | null;
+  /** Workflow name (`CI`, `FreeBSD`, ...) — the only human-readable name of a suite. */
+  readonly name: string;
+  readonly event: string;
+  /** The run page URL; where a waiting-for-approval workflow can be approved. */
+  readonly htmlUrl: string;
+  readonly runStartedAt: string | null;
 }
 
 /** One Actions job flattened with its workflow run metadata. */
@@ -536,6 +564,24 @@ export interface GithubChecksClient {
     ref: string,
     signal: AbortSignal,
   ): Promise<readonly CheckRun[]>;
+  /** Every check suite of one commit (one per app per trigger). */
+  suites(
+    owner: string,
+    repo: string,
+    ref: string,
+    signal: AbortSignal,
+  ): Promise<readonly CheckSuite[]>;
+  /**
+   * Every Actions workflow run of one commit. Carries the names and events the
+   * check runs and suites lack: a check run's trigger event and a suite's name
+   * both live only on the run (`check_suite_id` is the join key).
+   */
+  workflowRuns(
+    owner: string,
+    repo: string,
+    headSha: string,
+    signal: AbortSignal,
+  ): Promise<readonly WorkflowRunRef[]>;
   /** All Actions jobs across the workflow runs of one head commit. */
   actionJobs(
     owner: string,
@@ -625,33 +671,6 @@ export function createGithubChecks(api: GithubApi): GithubChecksClient {
           request: { signal },
         }),
       );
-      // The check run object itself carries no event field. Its details_url
-      // contains the workflow run id, and every run of this commit (push and
-      // pull_request events alike) shows up under actions/runs?head_sha=, so
-      // one extra request resolves run id -> event for the suffix display.
-      const runIds = new Set(
-        runs
-          .map((run) => ACTIONS_RUN_URL_RE.exec(run.details_url ?? "")?.[1])
-          .filter((id): id is string => id !== undefined),
-      );
-      const events = new Map<string, string>();
-      if (runIds.size > 0) {
-        const commitRuns = await api.call((octokit) =>
-          octokit.paginate(octokit.rest.actions.listWorkflowRunsForRepo, {
-            owner,
-            repo,
-            head_sha: ref,
-            per_page: 100,
-            request: { signal },
-          }),
-        );
-        for (const run of commitRuns) {
-          const id = String(run.id);
-          if (runIds.has(id)) {
-            events.set(id, run.event);
-          }
-        }
-      }
       return runs.map((run) => {
         const detailsUrl = run.details_url ?? "";
         const runId = ACTIONS_RUN_URL_RE.exec(detailsUrl)?.[1];
@@ -662,11 +681,49 @@ export function createGithubChecks(api: GithubApi): GithubChecksClient {
           conclusion: run.conclusion,
           startedAt: run.started_at,
           url: run.html_url ?? run.details_url ?? null,
-          event: events.get(runId ?? "") ?? null,
+          checkSuiteId: run.check_suite?.id ?? null,
           runId: runId === undefined ? null : Number(runId),
           jobId: jobId === undefined ? null : Number(jobId),
         };
       });
+    },
+
+    async suites(owner, repo, ref, signal) {
+      const suites = await api.call((octokit) =>
+        octokit.paginate(octokit.rest.checks.listSuitesForRef, {
+          owner,
+          repo,
+          ref,
+          per_page: 100,
+          request: { signal },
+        }),
+      );
+      return suites.map((suite) => ({
+        id: suite.id,
+        appSlug: suite.app?.slug ?? "",
+        status: suite.status,
+        conclusion: suite.conclusion,
+      }));
+    },
+
+    async workflowRuns(owner, repo, headSha, signal) {
+      const runs = await api.call((octokit) =>
+        octokit.paginate(octokit.rest.actions.listWorkflowRunsForRepo, {
+          owner,
+          repo,
+          head_sha: headSha,
+          per_page: 100,
+          request: { signal },
+        }),
+      );
+      return runs.map((run) => ({
+        id: run.id,
+        checkSuiteId: run.check_suite_id ?? null,
+        name: run.name ?? "",
+        event: run.event,
+        htmlUrl: run.html_url,
+        runStartedAt: run.run_started_at ?? null,
+      }));
     },
 
     async actionJobs(owner, repo, headSha, signal) {

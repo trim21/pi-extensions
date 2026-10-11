@@ -36,19 +36,56 @@ interface CheckRunsFixture {
     conclusion: string | null;
     html_url: string;
     details_url: string;
+    check_suite: { id: number };
+  }[];
+}
+interface CheckSuitesFixture {
+  total_count: number;
+  check_suites: { id: number; conclusion: string | null; app: { slug: string } }[];
+}
+interface WorkflowRunsFixture {
+  total_count: number;
+  workflow_runs: {
+    id: number;
+    name: string;
+    event: string;
+    check_suite_id: number;
+    html_url: string;
   }[];
 }
 
 const PR_NUMBER = 137;
 
+/** 录制来源：valkey-io/libvalkey-py#89，一个 fork PR，6 个 workflow 在等维护者批准。 */
+const FORK_REPO = "valkey-io/libvalkey-py";
+const FORK_PR_NUMBER = 89;
+
 /** Route table shared by the tests in this file. */
 function routes(): FixtureRoutes {
   return {
     [PULL_ROUTE]: "pull.json",
+    // suite and check-run endpoints both live under /commits/<sha>/check-*, so
+    // they must precede the combined-status route
+    "check-suites": "check-suites.json",
     "check-runs": "check-runs.json",
-    // must come after check-runs, both live under /commits/<sha>/
     [STATUS_ROUTE]: "combined-status.json",
     [RUNS_ROUTE]: "workflow-runs.json",
+  };
+}
+
+/**
+ * Route table of the fork PR awaiting approval: its suites have no check runs,
+ * so the suite list is the only place that state shows up.
+ */
+function forkRoutes(): FixtureRoutes {
+  return {
+    "pulls/89": "awaiting-approval-pull.json",
+    // both suite and check-run endpoints live under /commits/<sha>/check-*, so
+    // they must precede the combined-status route
+    "check-suites": "awaiting-approval-check-suites.json",
+    "check-runs": "awaiting-approval-check-runs.json",
+    [RUNS_ROUTE]: "awaiting-approval-workflow-runs.json",
+    [STATUS_ROUTE]: "awaiting-approval-combined-status.json",
   };
 }
 
@@ -90,7 +127,12 @@ describe("read-github-pr-status", () => {
     expect(payload.pr).toBe(PR_NUMBER);
     expect(payload.repo).toBe("trim21/pi-extensions");
     expect(payload.head_sha).toBe(pull.head.sha);
-    // every commit status and every check run of the commit shows up separately
+    // every commit status and every check run of the commit shows up separately.
+    // The suites add nothing here: GitHub creates one per app per commit, and
+    // the ones with no check runs are unfinished shells (netlify, vercel, ...)
+    // that never report anything.
+    const suites = api.body<CheckSuitesFixture>("check-suites");
+    expect(suites.check_suites.length).toBeGreaterThan(checkRuns.check_runs.length);
     expect(payload.checks).toHaveLength(
       combinedStatus.statuses.length + checkRuns.check_runs.length,
     );
@@ -147,5 +189,67 @@ describe("read-github-pr-status", () => {
       callPrStatus(api, { number: "abc", repo: "trim21/pi-extensions" }),
     ).rejects.toThrow(/invalid number/);
     expect(api.calls).toEqual([]);
+  });
+
+  it("lists workflows waiting for maintainer approval from their check suites", async () => {
+    const api = githubCassette(forkRoutes());
+    const result = await callPrStatus(api, { number: FORK_PR_NUMBER, repo: FORK_REPO });
+    const pull = api.body<PullFixture>("pulls/89");
+    const checkRuns = api.body<CheckRunsFixture>("check-runs");
+    const combinedStatus = api.body<CombinedStatusFixture>(STATUS_ROUTE);
+    const suites = api.body<CheckSuitesFixture>("check-suites");
+    const runs = api.body<WorkflowRunsFixture>(RUNS_ROUTE);
+
+    const payload = JSON.parse(result.content[0]?.text ?? "") as {
+      pr: number;
+      repo: string;
+      head_sha: string;
+      checks: {
+        name: string;
+        bucket: string;
+        event: string | null;
+        run_id: number | null;
+        job_id: number | null;
+        suite_id: number | null;
+        url: string | null;
+      }[];
+    };
+
+    expect(payload.pr).toBe(FORK_PR_NUMBER);
+    expect(payload.repo).toBe(FORK_REPO);
+    expect(payload.head_sha).toBe(pull.head.sha);
+
+    // a suite already represented by check runs must not be listed separately
+    const covered = new Set(checkRuns.check_runs.map((run) => run.check_suite.id));
+    const orphanSuites = suites.check_suites.filter((suite) => !covered.has(suite.id));
+    expect(orphanSuites.length).toBeGreaterThan(0);
+    expect(payload.checks).toHaveLength(
+      combinedStatus.statuses.length + checkRuns.check_runs.length + orphanSuites.length,
+    );
+
+    // every waiting workflow shows up, named and linked through its workflow run
+    const runsBySuite = new Map(runs.workflow_runs.map((run) => [run.check_suite_id, run]));
+    for (const suite of orphanSuites) {
+      const run = runsBySuite.get(suite.id);
+      expect(run, `suite ${String(suite.id)} has no workflow run in the fixture`).toBeDefined();
+      expect(payload.checks).toContainEqual({
+        name: run?.name,
+        bucket: "action_required",
+        event: run?.event,
+        run_id: run?.id,
+        job_id: null,
+        suite_id: suite.id,
+        url: run?.html_url,
+      });
+    }
+
+    // check runs of a suite that did run carry that suite id
+    const [dcoRun] = checkRuns.check_runs;
+    const dco = payload.checks.find((c) => c.name === dcoRun?.name);
+    expect(dco?.suite_id).toBe(dcoRun?.check_suite.id);
+    expect(dco?.bucket).toBe("pass");
+
+    expect(api.unused()).toEqual([]);
+    expect(result.structuredResult).toEqual({ ok: true, value: payload });
   });
 });

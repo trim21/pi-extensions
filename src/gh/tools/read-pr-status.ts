@@ -39,16 +39,24 @@ export async function prStatus(
 
   const pollSignal = signal ?? new AbortController().signal;
   const headSha = await gh.checks.pullHead(owner, name, pullNumber, pollSignal);
-  const [statuses, checkRuns] = await Promise.all([
+  const [statuses, checkRuns, suites] = await Promise.all([
     gh.checks.statuses(owner, name, headSha, pollSignal),
     gh.checks.checkRuns(owner, name, headSha, pollSignal),
+    gh.checks.suites(owner, name, headSha, pollSignal),
   ]);
-  const checks = mergeChecks(statuses, checkRuns).map((check) => ({
+  // The trigger event of a check run and the name of a suite only exist on the
+  // commit's workflow runs.
+  const workflowRuns =
+    suites.length > 0 || checkRuns.some((run) => run.runId !== null)
+      ? await gh.checks.workflowRuns(owner, name, headSha, pollSignal)
+      : [];
+  const checks = mergeChecks(statuses, checkRuns, suites, workflowRuns).map((check) => ({
     name: check.name,
     bucket: check.bucket,
     event: check.event,
     run_id: check.runId,
     job_id: check.jobId,
+    suite_id: check.suiteId,
     url: check.link,
   }));
 
@@ -68,7 +76,7 @@ export function addReadPrStatusTool(gh: GhClient, bus: ToolBus) {
       name: "read-github-pr-status",
       label: "GitHub PR Status",
       description:
-        "Get the current checks of a pull request's head commit as JSON {pr, repo, head_sha, checks:[{name, bucket, event, run_id, job_id, url}]}. `bucket` is pass / fail / pending / skipped; Actions checks carry the `run_id` and `job_id` behind them (null for other CI), which is what read-github-ci-logs and get-github-workflow-jobs take. Returns the snapshot immediately without waiting — use wait-github-pr-checks to block until the checks finish.",
+        "Get the current checks of a pull request's head commit as JSON {pr, repo, head_sha, checks:[{name, bucket, event, run_id, job_id, suite_id, url}]}. `bucket` is pass / fail / pending / skipped / action_required; `action_required` means the workflow is waiting for a maintainer's approval (a fork PR's first run) and has created no check run yet, so it is listed from its check suite and named after its workflow run. Actions checks carry the `run_id` and `job_id` behind them (null for other CI), which is what read-github-ci-logs and get-github-workflow-jobs take; `suite_id` groups the checks of one suite. Returns the snapshot immediately without waiting — use wait-github-pr-checks to block until the checks finish.",
       promptSnippet: "Read GitHub PR status checks",
       parameters: Type.Object({
         number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),

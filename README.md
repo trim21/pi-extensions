@@ -475,7 +475,7 @@ GitHub 只读工具集。取数全部走 octokit REST（`src/lib/github-reads.ts
 - **CI**：`read-github-ci-logs`、`list-github-workflow-runs`、`get-github-workflow-jobs`、`wait-github-pr-checks`、`wait-github-commit-checks`、`watch-github-run`
 - **仓库 / 发布**：`read-github-repo`、`list-github-releases`、`read-github-release`、`download-github-release-assets`
 
-`list-github-issues` / `list-github-prs` 带 `keywords` 时走 GitHub search API，不带 `keywords` 时走 REST 列表端点（state 缺省只搜 open，`state: "all"` 不加 state qualifier 覆盖 open + closed），输出 TSV，默认列 `number,state,title,labels,updatedAt`，可用 `fields` 白名单指定列。`wait-github-pr-checks` / `wait-github-commit-checks` 30 秒轮询、600 秒截止：任一 fail 即返回，全部 pass / skipped 才算通过，超时返回快照不抛错。
+`list-github-issues` / `list-github-prs` 带 `keywords` 时走 GitHub search API，不带 `keywords` 时走 REST 列表端点（state 缺省只搜 open，`state: "all"` 不加 state qualifier 覆盖 open + closed），输出 TSV，默认列 `number,state,title,labels,updatedAt`，可用 `fields` 白名单指定列。`wait-github-pr-checks` / `wait-github-commit-checks` 30 秒轮询、600 秒截止：任一 fail 即返回，全部 pass / skipped 才算通过，超时返回快照不抛错；检查快照还包含「已结束但没有 check run」的 check suite——fork PR 上等待维护者批准的 workflow 只存在于这一层，遇到它立即返回 `awaiting_approval`（不会自行开始，轮询无意义），条目名字取自对应的 workflow run。
 
 出网代理：`~/.pi/agent/proxy.json`（`{ "proxy": "http://127.0.0.1:7890", "noProxy": "localhost" }`），缺省字段回退 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `NO_PROXY` 环境变量。
 

@@ -21,7 +21,13 @@ import {
   renderChecksVerdict,
   renderPrChecksList,
 } from "../src/gh/index.js";
-import type { ActionJob, CheckRun, CommitStatus } from "../src/lib/github.js";
+import type {
+  ActionJob,
+  CheckRun,
+  CheckSuite,
+  CommitStatus,
+  WorkflowRunRef,
+} from "../src/lib/github.js";
 
 function status(overrides: Partial<CommitStatus> & { context?: string }): CommitStatus {
   return {
@@ -39,9 +45,31 @@ function run(overrides: Partial<CheckRun> & { name?: string }): CheckRun {
     conclusion: "success",
     startedAt: "2026-09-05T03:12:01Z",
     url: "https://github.com/owner/repo/actions/runs/5/job/10",
-    event: null,
+    checkSuiteId: null,
     runId: 5,
     jobId: 10,
+    ...overrides,
+  };
+}
+
+function suite(overrides: Partial<CheckSuite> & { id?: number }): CheckSuite {
+  return {
+    id: 100,
+    appSlug: "github-actions",
+    status: "completed",
+    conclusion: "action_required",
+    ...overrides,
+  };
+}
+
+function workflowRun(overrides: Partial<WorkflowRunRef> & { id?: number }): WorkflowRunRef {
+  return {
+    id: 5,
+    checkSuiteId: 100,
+    name: "CI",
+    event: "pull_request",
+    htmlUrl: "https://github.com/owner/repo/actions/runs/5",
+    runStartedAt: "2026-09-05T03:12:00Z",
     ...overrides,
   };
 }
@@ -53,6 +81,7 @@ function merged(overrides: Partial<MergedCheck> & { name?: string }): MergedChec
     startedAt: "2026-09-05T03:12:01Z",
     link: "https://github.com/owner/repo/actions/runs/5/job/10",
     event: null,
+    suiteId: null,
     runId: 5,
     jobId: 10,
     ...overrides,
@@ -79,15 +108,21 @@ function fakeClient(
   overrides: {
     statuses?: (round: number) => Promise<readonly CommitStatus[]>;
     checkRuns?: (round: number) => Promise<readonly CheckRun[]>;
+    suites?: (round: number) => Promise<readonly CheckSuite[]>;
+    workflowRuns?: (round: number) => Promise<readonly WorkflowRunRef[]>;
   } = {},
 ): {
   statuses: ReturnType<typeof vi.fn>;
   checkRuns: ReturnType<typeof vi.fn>;
+  suites: ReturnType<typeof vi.fn>;
+  workflowRuns: ReturnType<typeof vi.fn>;
   actionJobs: ReturnType<typeof vi.fn>;
 } {
   return {
     statuses: vi.fn(overrides.statuses ?? (() => Promise.resolve([]))),
     checkRuns: vi.fn(overrides.checkRuns ?? (() => Promise.resolve([]))),
+    suites: vi.fn(overrides.suites ?? (() => Promise.resolve([]))),
+    workflowRuns: vi.fn(overrides.workflowRuns ?? (() => Promise.resolve([]))),
     actionJobs: vi.fn(() => Promise.resolve([])),
   };
 }
@@ -103,6 +138,8 @@ describe("mergeChecks", () => {
         status({ context: "e", state: "expected" }),
         status({ context: "f", state: "something-new" }),
       ],
+      [],
+      [],
       [],
     );
 
@@ -133,6 +170,8 @@ describe("mergeChecks", () => {
         run({ name: "k", conclusion: "action_required" }),
         run({ name: "l", conclusion: "brand-new" }),
       ],
+      [],
+      [],
     );
 
     expect(Object.fromEntries(checks.map((c) => [c.name, c.bucket]))).toEqual({
@@ -146,8 +185,8 @@ describe("mergeChecks", () => {
       h: "fail",
       i: "fail",
       j: "fail",
-      // awaiting approval never runs, so it must not block the wait
-      k: "skipped",
+      // awaiting approval cannot start on its own: it must not be judged passed
+      k: "action_required",
       l: "pending",
     });
   });
@@ -156,11 +195,13 @@ describe("mergeChecks", () => {
     const checks = mergeChecks(
       [],
       [
-        run({ name: "build", event: "push", conclusion: "success" }),
-        run({ name: "build", event: "pull_request", conclusion: "failure" }),
-        run({ name: "test", conclusion: "success" }),
-        run({ name: "test", status: "in_progress", conclusion: null }),
+        run({ name: "build", runId: 5, conclusion: "success" }),
+        run({ name: "build", runId: 6, conclusion: "failure" }),
+        run({ name: "test", runId: null, conclusion: "success" }),
+        run({ name: "test", runId: null, status: "in_progress", conclusion: null }),
       ],
+      [],
+      [workflowRun({ id: 5, event: "push" }), workflowRun({ id: 6, event: "pull_request" })],
     );
 
     expect(checks.map((c) => [c.event, c.bucket])).toEqual([
@@ -175,16 +216,111 @@ describe("mergeChecks", () => {
     const checks = mergeChecks(
       [status({ context: "ci", state: "success" })],
       [run({ name: "ci", status: "in_progress", conclusion: null })],
+      [],
+      [],
     );
 
     expect(checks).toHaveLength(2);
-    expect(checks[0]).toMatchObject({ name: "ci", bucket: "pass", event: null });
+    expect(checks[0]).toMatchObject({ name: "ci", bucket: "pass", event: null, suiteId: null });
     expect(checks[1]).toMatchObject({
       name: "ci",
       bucket: "pending",
       event: null,
       startedAt: "2026-09-05T03:12:01Z",
     });
+  });
+
+  it("expands a suite with no check runs into its own check, named by its workflow run", () => {
+    const checks = mergeChecks(
+      [],
+      [],
+      [suite({ id: 100, conclusion: "action_required" })],
+      [
+        workflowRun({
+          id: 42,
+          checkSuiteId: 100,
+          name: "FreeBSD",
+          event: "pull_request",
+          htmlUrl: "https://github.com/owner/repo/actions/runs/42",
+        }),
+      ],
+    );
+
+    expect(checks).toEqual([
+      {
+        name: "FreeBSD",
+        bucket: "action_required",
+        startedAt: "2026-09-05T03:12:00Z",
+        link: "https://github.com/owner/repo/actions/runs/42",
+        event: "pull_request",
+        suiteId: 100,
+        runId: 42,
+        jobId: null,
+      },
+    ]);
+  });
+
+  it("falls back to the app slug for a suite with no workflow run (non-Actions app)", () => {
+    const checks = mergeChecks([], [], [suite({ id: 7, appSlug: "some-app" })], []);
+
+    expect(checks).toMatchObject([
+      { name: "some-app", event: null, link: null, suiteId: 7, runId: null },
+    ]);
+  });
+
+  it("maps suite conclusions to buckets", () => {
+    const checks = mergeChecks(
+      [],
+      [],
+      [
+        suite({ id: 1, status: "queued", conclusion: null }),
+        suite({ id: 2, conclusion: "success" }),
+        suite({ id: 3, conclusion: "skipped" }),
+        suite({ id: 4, conclusion: "timed_out" }),
+        suite({ id: 5, conclusion: "brand-new" }),
+        suite({ id: 6, conclusion: "action_required" }),
+      ],
+      [],
+    );
+
+    // the queued shell is skipped; every finished suite is judged
+    expect(checks.map((c) => [c.suiteId, c.bucket])).toEqual([
+      [2, "pass"],
+      [3, "skipped"],
+      [4, "fail"],
+      [5, "pending"],
+      [6, "action_required"],
+    ]);
+  });
+
+  it("ignores unfinished suites with no check runs (per-app shells)", () => {
+    const checks = mergeChecks(
+      [],
+      [],
+      [
+        // GitHub creates one per app per commit; apps that never report leave
+        // them queued forever, so treating them as pending would hang the wait
+        suite({ id: 1, appSlug: "netlify", status: "queued", conclusion: null }),
+        suite({ id: 2, appSlug: "vercel", status: "in_progress", conclusion: null }),
+      ],
+      [],
+    );
+
+    expect(checks).toEqual([]);
+  });
+
+  it("does not double-count a suite that has check runs of its own", () => {
+    const checks = mergeChecks(
+      [],
+      [run({ name: "job-a", checkSuiteId: 100 }), run({ name: "job-b", checkSuiteId: 100 })],
+      [suite({ id: 100, conclusion: "success" })],
+      [],
+    );
+
+    expect(checks.map((c) => [c.name, c.suiteId])).toEqual([
+      ["job-a", 100],
+      ["job-b", 100],
+    ]);
   });
 });
 
@@ -328,8 +464,13 @@ describe("pollPrChecks", () => {
       statuses: () => Promise.resolve([status({ context: "linux_64_", state: "pending" })]),
       checkRuns: () =>
         Promise.resolve([
-          run({ name: "build", event: "push", conclusion: "failure" }),
-          run({ name: "build", event: "pull_request", status: "in_progress", conclusion: null }),
+          run({ name: "build", runId: 5, conclusion: "failure" }),
+          run({ name: "build", runId: 6, status: "in_progress", conclusion: null }),
+        ]),
+      workflowRuns: () =>
+        Promise.resolve([
+          workflowRun({ id: 5, event: "push" }),
+          workflowRun({ id: 6, event: "pull_request" }),
         ]),
     });
 
@@ -340,6 +481,34 @@ describe("pollPrChecks", () => {
     expect(result.outcome).toBe("completed");
     expect(result.checks).toHaveLength(1);
     expect(result.checks[0]).toMatchObject({ name: "build", event: "push", bucket: "fail" });
+  });
+
+  it("returns awaiting_approval after one round when a workflow waits for approval", async () => {
+    const client = fakeClient({
+      suites: () => Promise.resolve([suite({ id: 100, conclusion: "action_required" })]),
+      workflowRuns: () => Promise.resolve([workflowRun({ id: 42, checkSuiteId: 100, name: "CI" })]),
+    });
+
+    const result = await pollPrChecks({ ...pollOptions(client), intervalMs: 1 });
+
+    // approval will not arrive on its own, so the wait must not burn the deadline
+    expect(client.suites).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("awaiting_approval");
+    expect(result.checks).toMatchObject([
+      { name: "CI", bucket: "action_required", suiteId: 100, runId: 42 },
+    ]);
+  });
+
+  it("lets a failure win over a workflow waiting for approval", async () => {
+    const client = fakeClient({
+      checkRuns: () => Promise.resolve([run({ name: "broken", conclusion: "failure" })]),
+      suites: () => Promise.resolve([suite({ id: 100 })]),
+    });
+
+    const result = await pollPrChecks({ ...pollOptions(client), failFast: true });
+
+    expect(result.outcome).toBe("fail_fast");
+    expect(result.checks.map((c) => c.bucket)).toEqual(["fail", "action_required"]);
   });
 
   it("completes when every check is pass or skipped", async () => {
@@ -370,6 +539,7 @@ describe("pollPrChecks", () => {
         startedAt: null,
         link: expect.any(String),
         event: null,
+        suiteId: null,
         runId: null,
         jobId: null,
       },
@@ -516,6 +686,51 @@ describe("renderChecksVerdict", () => {
     expect(verdict.status).toBe("failure");
     expect(verdict.text).toContain("FAILED");
     expect(verdict.text).toContain("Actions job details unavailable: rate limited");
+  });
+
+  it("reports AWAITING APPROVAL with the waiting workflows instead of PASSED", () => {
+    const verdict = renderChecksVerdict({
+      subject: "PR #1",
+      poll: poll({
+        outcome: "awaiting_approval",
+        checks: [
+          merged({ name: "DCO", bucket: "pass" }),
+          merged({
+            name: "CI",
+            bucket: "action_required",
+            event: "pull_request",
+            startedAt: null,
+            link: "https://github.com/owner/repo/actions/runs/42",
+          }),
+        ],
+      }),
+    });
+
+    expect(verdict.status).toBe("awaiting_approval");
+    expect(verdict.failedJobs).toEqual([]);
+    expect(verdict.text).toContain("AWAITING APPROVAL");
+    expect(verdict.text).toContain("1 workflow(s) have not started");
+    expect(verdict.text).toContain(
+      "- CI (pull_request) — [open run](https://github.com/owner/repo/actions/runs/42)",
+    );
+    expect(verdict.text).not.toContain("PASSED");
+  });
+
+  it("reports FAILED when a failure and an approval wait arrive together", () => {
+    const verdict = renderChecksVerdict({
+      subject: "PR #1",
+      poll: poll({
+        outcome: "awaiting_approval",
+        checks: [
+          merged({ name: "build", bucket: "fail" }),
+          merged({ name: "CI", bucket: "action_required", startedAt: null, link: null }),
+        ],
+      }),
+    });
+
+    expect(verdict.status).toBe("failure");
+    expect(verdict.text).toContain("FAILED");
+    expect(verdict.text).toContain("1 workflow(s) still waiting for approval");
   });
 
   it("reports the in-flight snapshot as pending on timeout instead of a verdict", () => {

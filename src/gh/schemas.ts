@@ -70,6 +70,7 @@ export const checkBucketSchema = Type.Union([
   Type.Literal("fail"),
   Type.Literal("pending"),
   Type.Literal("skipped"),
+  Type.Literal("action_required"),
 ]);
 
 // ── 各工具的输出 ─────────────────────────────────────────────────────────────
@@ -142,6 +143,7 @@ export const prStatusSchema = Type.Object({
       event: Type.Union([Type.String(), Type.Null()]),
       run_id: Type.Union([Type.Number(), Type.Null()]),
       job_id: Type.Union([Type.Number(), Type.Null()]),
+      suite_id: Type.Union([Type.Number(), Type.Null()]),
       url: Type.Union([Type.String(), Type.Null()]),
     }),
   ),
@@ -201,7 +203,12 @@ export const releaseDownloadSchema = Type.Object({
 
 /** 两个 wait 工具共享的判定结果（`waitChecksReport` 的 payload）。 */
 export const checksVerdictSchema = Type.Object({
-  status: Type.Union([Type.Literal("success"), Type.Literal("failure"), Type.Literal("pending")]),
+  status: Type.Union([
+    Type.Literal("success"),
+    Type.Literal("failure"),
+    Type.Literal("pending"),
+    Type.Literal("awaiting_approval"),
+  ]),
   totalChecks: Type.Number(),
   checks: Type.Array(
     Type.Object({
@@ -210,6 +217,7 @@ export const checksVerdictSchema = Type.Object({
       startedAt: Type.Union([Type.String(), Type.Null()]),
       link: Type.Union([Type.String(), Type.Null()]),
       event: Type.Union([Type.String(), Type.Null()]),
+      suiteId: Type.Union([Type.Number(), Type.Null()]),
       runId: Type.Union([Type.Number(), Type.Null()]),
       jobId: Type.Union([Type.Number(), Type.Null()]),
     }),

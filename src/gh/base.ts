@@ -17,6 +17,7 @@ import { type GhResult, runGh } from "../lib/gh-process.js";
 import {
   type ActionJob,
   type CheckRun,
+  type CheckSuite,
   type CommitStatus,
   createGithubApi,
   createGithubChecks,
@@ -27,6 +28,7 @@ import {
   normalizeRestList,
   renderHits,
   type SearchHit,
+  type WorkflowRunRef,
 } from "../lib/github.js";
 import { createGithubReads, type GithubReads } from "../lib/github-reads.js";
 import { parseWithSchema } from "../lib/parse-with-schema.js";
@@ -464,13 +466,14 @@ const RUN_WATCH_DEADLINE_MS = 600_000;
 
 const CHECKS_WATCH_DEADLINE_MS = 600_000;
 
-export type CheckBucket = "pass" | "skipped" | "fail" | "pending";
+export type CheckBucket = "pass" | "skipped" | "fail" | "pending" | "action_required";
 
 /**
- * One judged CI check of a commit: a single commit status or check run, kept
- * distinct — same-named checks from different sources (push vs pull_request
- * events, status vs check run channels) stay separate entries, like the
- * GitHub checks UI.
+ * One judged CI check of a commit: a single commit status, check run, or a
+ * check suite that has no check runs of its own (a workflow waiting for human
+ * approval). Same-named entries from different sources (push vs pull_request
+ * events, status vs check run channels) stay separate, like the GitHub checks
+ * UI.
  */
 export interface MergedCheck {
   readonly name: string;
@@ -479,6 +482,8 @@ export interface MergedCheck {
   readonly link: string | null;
   /** Triggering workflow event (push, pull_request, ...); null when unknown. */
   readonly event: string | null;
+  /** Owning check suite; null for commit statuses. */
+  readonly suiteId: number | null;
   /** Actions run id behind this check, for `get-github-workflow-jobs`; null when unknown. */
   readonly runId: number | null;
   /** Actions job id behind this check, for `read-github-ci-logs`; null when unknown. */
@@ -497,19 +502,29 @@ function statusBucket(state: string): CheckBucket {
 }
 
 function checkRunBucket(run: CheckRun): CheckBucket {
-  if (run.status !== "completed" || run.conclusion === null) {
+  return conclusionBucket(run.status, run.conclusion);
+}
+
+function suiteBucket(suite: CheckSuite): CheckBucket {
+  return conclusionBucket(suite.status, suite.conclusion);
+}
+
+function conclusionBucket(status: string | null, conclusion: string | null): CheckBucket {
+  if (status !== "completed" || conclusion === null) {
     return "pending";
   }
-  switch (run.conclusion) {
+  switch (conclusion) {
     case "success": {
       return "pass";
     }
+    case "action_required": {
+      // No job was ever created (fork-PR approval) or a human has to act: it
+      // cannot start on its own, so it must never be judged as passed.
+      return "action_required";
+    }
     case "skipped":
     case "neutral":
-    case "stale":
-    case "action_required": {
-      // awaiting maintainer approval: it will never run, so waiting for it is
-      // meaningless — treat like skipped
+    case "stale": {
       return "skipped";
     }
     case "failure":
@@ -525,22 +540,38 @@ function checkRunBucket(run: CheckRun): CheckBucket {
 }
 
 /**
- * Judge the commit's statuses and check runs into individual checks, keeping
- * same-named entries distinct so the wait verdict (any fail / all
- * pass-or-skipped across every entry) can never lose a failure. Pure — no
- * network.
+ * Judge the commit's statuses, check runs and suites into one flat list of
+ * checks, keeping same-named entries distinct so the wait verdict (any fail /
+ * all pass-or-skipped across every entry) can never lose a failure.
+ *
+ * A suite becomes its own entry only when it is finished AND carries no check
+ * run — otherwise it is either already represented by its check runs (a suite
+ * conclusion is just their rollup, counting both would double-count CI) or an
+ * empty per-app shell that never reports anything. Finished suites with no
+ * check runs are where a workflow waiting for approval lives: GitHub creates
+ * the suite and the workflow run but never a check run. Pure — no network.
  */
 export function mergeChecks(
   statuses: readonly CommitStatus[],
   checkRuns: readonly CheckRun[],
+  suites: readonly CheckSuite[],
+  workflowRuns: readonly WorkflowRunRef[],
 ): MergedCheck[] {
-  return [
+  const runsById = new Map(workflowRuns.map((run) => [run.id, run] as const));
+  const runsBySuite = new Map(
+    workflowRuns
+      .filter((run) => run.checkSuiteId !== null)
+      .map((run) => [run.checkSuiteId, run] as const),
+  );
+
+  const checks: MergedCheck[] = [
     ...statuses.map((status) => ({
       name: status.context,
       bucket: statusBucket(status.state),
       startedAt: null,
       link: status.targetUrl,
       event: null,
+      suiteId: null,
       runId: null,
       jobId: null,
     })),
@@ -549,11 +580,42 @@ export function mergeChecks(
       bucket: checkRunBucket(run),
       startedAt: run.startedAt,
       link: run.url,
-      event: run.event,
+      event: run.runId === null ? null : (runsById.get(run.runId)?.event ?? null),
+      suiteId: run.checkSuiteId,
       runId: run.runId,
       jobId: run.jobId,
     })),
   ];
+
+  const representedSuites = new Set(
+    checkRuns.map((run) => run.checkSuiteId).filter((id): id is number => id !== null),
+  );
+  for (const suite of suites) {
+    // A suite that is not finished yet and has no check runs is a shell: GitHub
+    // creates one per app per commit, and most apps (netlify, vercel, renovate,
+    // ...) never put anything in it — listing those as pending checks would hang
+    // every wait forever.
+    if (
+      representedSuites.has(suite.id) ||
+      suite.status !== "completed" ||
+      suite.conclusion === null
+    ) {
+      continue;
+    }
+    const run = runsBySuite.get(suite.id);
+    checks.push({
+      name: run?.name || suite.appSlug,
+      bucket: suiteBucket(suite),
+      startedAt: run?.runStartedAt ?? null,
+      link: run?.htmlUrl ?? null,
+      event: run?.event ?? null,
+      suiteId: suite.id,
+      runId: run?.id ?? null,
+      jobId: null,
+    });
+  }
+
+  return checks;
 }
 
 /** Display name of a check; the trigger event is labelled like the GitHub UI (`build (pull_request)`). */
@@ -608,7 +670,7 @@ function sleepInterruptibly(ms: number, signal: AbortSignal | undefined): Promis
   });
 }
 
-export type ChecksPollOutcome = "completed" | "fail_fast" | "timeout";
+export type ChecksPollOutcome = "completed" | "fail_fast" | "awaiting_approval" | "timeout";
 
 export interface ChecksPollResult {
   readonly outcome: ChecksPollOutcome;
@@ -664,12 +726,17 @@ export async function pollPrChecks(options: PollPrChecksOptions): Promise<Checks
       throw new Error("PR checks polling was aborted");
     }
     try {
-      const [statuses, runs] = await Promise.all([
+      const [statuses, runs, suites] = await Promise.all([
         checks.statuses(owner, repo, headSha, signal),
         checks.checkRuns(owner, repo, headSha, signal),
+        checks.suites(owner, repo, headSha, signal),
       ]);
+      // Suites and check runs both get their event/name from the commit's
+      // workflow runs, so the list is fetched once and shared.
+      const needsRuns = suites.length > 0 || runs.some((run) => run.runId !== null);
+      const commitRuns = needsRuns ? await checks.workflowRuns(owner, repo, headSha, signal) : [];
       everSucceeded = true;
-      lastChecks = mergeChecks(statuses, runs);
+      lastChecks = mergeChecks(statuses, runs, suites, commitRuns);
       if (options.event) {
         lastChecks = lastChecks.filter((c) => c.event === options.event);
       }
@@ -679,11 +746,21 @@ export async function pollPrChecks(options: PollPrChecksOptions): Promise<Checks
         ],
         details: {},
       });
-      if (lastChecks.every((c) => c.bucket !== "pending")) {
-        return { outcome: "completed", checks: lastChecks, elapsedMs: Date.now() - watchStart };
-      }
+      // A failure is the actionable verdict, so `fail_fast` still wins here.
       if (failFast && lastChecks.some((c) => c.bucket === "fail")) {
         return { outcome: "fail_fast", checks: lastChecks, elapsedMs: Date.now() - watchStart };
+      }
+      // A check waiting for human approval cannot start on its own: polling
+      // further rounds would only burn the deadline.
+      if (lastChecks.some((c) => c.bucket === "action_required")) {
+        return {
+          outcome: "awaiting_approval",
+          checks: lastChecks,
+          elapsedMs: Date.now() - watchStart,
+        };
+      }
+      if (lastChecks.every((c) => c.bucket !== "pending")) {
+        return { outcome: "completed", checks: lastChecks, elapsedMs: Date.now() - watchStart };
       }
     } catch (error) {
       // 不用 if (signal.aborted)：循环顶部的同名字段检查把它收窄成 false，
@@ -824,7 +901,7 @@ export interface FailedActionJob {
 }
 
 export interface ChecksVerdict {
-  readonly status: "success" | "failure" | "pending";
+  readonly status: "success" | "failure" | "pending" | "awaiting_approval";
   readonly text: string;
   readonly failedJobs: readonly FailedActionJob[];
 }
@@ -847,6 +924,7 @@ export function renderChecksVerdict(options: {
   const totalChecks = poll.checks.length;
   const failed = poll.checks.filter((c) => c.bucket === "fail");
   const pending = poll.checks.filter((c) => c.bucket === "pending");
+  const awaiting = poll.checks.filter((c) => c.bucket === "action_required");
 
   if (failed.length === 0 && poll.outcome === "completed") {
     return {
@@ -885,6 +963,9 @@ export function renderChecksVerdict(options: {
     if (pending.length > 0) {
       lines.push(`\n_${pending.length} other check(s) still in flight._`);
     }
+    if (awaiting.length > 0) {
+      lines.push(`_${awaiting.length} workflow(s) still waiting for approval._`);
+    }
 
     return {
       status: "failure",
@@ -892,6 +973,24 @@ export function renderChecksVerdict(options: {
         `## ${subject} CI Checks - FAILED\n\n` +
         `${failed.length} of ${totalChecks} check(s) failed:\n\n${lines.join("\n")}`,
       failedJobs,
+    };
+  }
+
+  if (poll.outcome === "awaiting_approval") {
+    const lines = awaiting.map(
+      (c) => `- ${checkDisplayName(c)}${c.link ? ` — [open run](${c.link})` : ""}`,
+    );
+    if (pending.length > 0) {
+      lines.push(`\n_${pending.length} other check(s) still in flight._`);
+    }
+    return {
+      status: "awaiting_approval",
+      text:
+        `## ${subject} CI Checks - AWAITING APPROVAL\n\n` +
+        `${awaiting.length} workflow(s) have not started: they need approval from a maintainer ` +
+        `(fork PR workflows do not run until then), so they cannot finish on their own:\n\n` +
+        lines.join("\n"),
+      failedJobs: [],
     };
   }
 

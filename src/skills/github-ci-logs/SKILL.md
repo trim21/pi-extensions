@@ -14,12 +14,12 @@ description: Use when 排查某个仓库的 CI 失败、要拿到具体 job 的�
 
 ## 入口选择
 
-| 手里有什么                    | 第一步                                                            | 拿到什么                                                                           |
-| ----------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| PR number                     | `read-github-pr-status { number, repo? }`                         | 该 PR head commit 的 checks 快照：`bucket` / `event` / `run_id` / `job_id` / `url` |
-| commit sha / branch / tag     | `wait-github-commit-checks { commit, repo?, event? }`             | 已失败时立即返回；报告失败 job 的行带 `#<jobId>`                                   |
-| 只有 repo（不知道是哪个 run） | `list-github-workflow-runs { repo?, workflow?, status?, limit? }` | run 列表（含 run id）                                                              |
-| 只有 run_id                   | `get-github-workflow-jobs { run_id, repo? }`                      | 该 run 的全部 job：`id` / `name` / `status` / `conclusion` / `html_url` / `steps`  |
+| 手里有什么                    | 第一步                                                            | 拿到什么                                                                                        |
+| ----------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| PR number                     | `read-github-pr-status { number, repo? }`                         | 该 PR head commit 的 checks 快照：`bucket` / `event` / `run_id` / `job_id` / `suite_id` / `url` |
+| commit sha / branch / tag     | `wait-github-commit-checks { commit, repo?, event? }`             | 已失败时立即返回；报告失败 job 的行带 `#<jobId>`                                                |
+| 只有 repo（不知道是哪个 run） | `list-github-workflow-runs { repo?, workflow?, status?, limit? }` | run 列表（含 run id）                                                                           |
+| 只有 run_id                   | `get-github-workflow-jobs { run_id, repo? }`                      | 该 run 的全部 job：`id` / `name` / `status` / `conclusion` / `html_url` / `steps`               |
 
 `repo` 都可省略，缺省用当前目录解析。
 
@@ -54,8 +54,8 @@ description: Use when 排查某个仓库的 CI 失败、要拿到具体 job 的�
 
 ## 输出与边界
 
-- `read-github-pr-status`：**立即返回快照，不轮询**。字段：`checks[].{name,bucket,event,run_id,job_id,url}`，非 Actions 的 check（Azure DevOps 等）`run_id`/`job_id` 为 null —— 这类没有 GitHub 侧 job 日志可读。
-- `wait-github-commit-checks`：用于「没有 PR、只有 sha/branch/tag」的入口。它等的是 checks 全部结束，但**已经失败的 check 会让它第一轮就返回**；失败报告里的 Actions job 行带 `#jobId`。要更快返回可传 `fail_fast: true`；只想看某个事件的 check 用 `event`（如 `push`）。
+- `read-github-pr-status`：**立即返回快照，不轮询**。字段：`checks[].{name,bucket,event,run_id,job_id,suite_id,url}`，非 Actions 的 check（Azure DevOps 等）`run_id`/`job_id` 为 null —— 这类没有 GitHub 侧 job 日志可读。`bucket == "action_required"` 表示该 workflow 在等维护者批准（fork PR 的首次运行），它还没有 job、没有日志可读，条目来自 check suite 并按对应的 workflow run 命名。
+- `wait-github-commit-checks`：用于「没有 PR、只有 sha/branch/tag」的入口。它等的是 checks 全部结束，但**已经失败的 check 会让它第一轮就返回**；失败报告里的 Actions job 行带 `#jobId`。要更快返回可传 `fail_fast: true`；只想看某个事件的 check 用 `event`（如 `push`）。遇到等待审批的 workflow 立即返回 `status: "awaiting_approval"`，不会挂到超时。
 - `get-github-workflow-jobs`：SDK 分页，一个 run 有 72 个 job 也会全部返回（旧版只返回前 30 个，第 31 个之后既列不出也选不中）。
 - `read-github-ci-logs`：job 还在 `queued` 时不出日志，提示用 `watch-github-run` 等它开始；日志原样落盘到 `~/.cache/pi/github/ci-logs/<owner>/<repo>/<run_id>/<job_id>.log`（保留 runner 时间戳与 ANSI），同一 job 重复调用命中缓存，不重复下载。
 - 工具**不做**日志截断、清洗或回显；拿到的是文件路径 + 行号，正文自己读。
