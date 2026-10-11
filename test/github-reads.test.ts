@@ -98,19 +98,30 @@ describe("列表端点", () => {
     );
   });
 
-  it("翻页：带 next link 的第一页之后继续取第二页", async () => {
+  it("翻页：客户端过滤后凑不满 limit 时继续取下一页", async () => {
     // 第 2 页的键必须在更宽的前缀键之前：cassette 按子串匹配，且先命中者胜
-    const { reads } = setup({
-      "repos/o/r/issues?per_page=30&page=2": { body: [{ number: 2 }] },
+    const { reads, calls } = setup({
+      "repos/o/r/issues?per_page=2&page=2": { body: [{ number: 3 }] },
       "repos/o/r/issues": {
-        body: [{ number: 1 }],
-        headers: {
-          link: '<https://api.github.com/repos/o/r/issues?per_page=30&page=2>; rel="next"',
-        },
+        body: [{ number: 1 }, { number: 2, pull_request: { url: "https://example.test/pulls/2" } }],
       },
     });
 
-    expect(await reads.listIssues("o", "r", {})).toEqual([{ number: 1 }, { number: 2 }]);
+    expect(await reads.listIssues("o", "r", { limit: 2 })).toEqual([{ number: 1 }, { number: 3 }]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("page=2");
+  });
+
+  it("凑满 limit 后停止请求后续页", async () => {
+    const { reads, calls } = setup({
+      "repos/o/r/issues": {
+        body: [{ number: 1 }, { number: 2 }],
+      },
+    });
+
+    expect(await reads.listIssues("o", "r", { limit: 2 })).toEqual([{ number: 1 }, { number: 2 }]);
+    // 第一页刚好凑满：即便该页是满页，也不再请求下一页
+    expect(calls).toHaveLength(1);
   });
 });
 
@@ -156,13 +167,17 @@ describe("release", () => {
     expect(await reads.release("o", "r", "v1.2.3")).toEqual({ tag_name: "v1.2.3" });
     expect(await reads.listReleases("o", "r", 5)).toEqual([{ tag_name: "v1.2.3" }]);
     expect(calls[1]).toContain("per_page=5");
+    // 条目少于 limit：列表已取尽，不再多请求一页探底
+    expect(calls).toHaveLength(2);
   });
 });
 
 describe("workflow runs", () => {
   it("workflow 参数先解析成 id 再列 run", async () => {
     const { reads, calls } = setup({
-      "repos/o/r/actions/workflows/11/runs": { body: [{ id: 99 }] },
+      "repos/o/r/actions/workflows/11/runs": {
+        body: { total_count: 1, workflow_runs: [{ id: 99 }] },
+      },
       "repos/o/r/actions/workflows": {
         body: [
           { id: 10, name: "CI", path: ".github/workflows/ci.yml" },
@@ -177,7 +192,7 @@ describe("workflow runs", () => {
 
   it("按文件名也能解析，未命中时报出可选工作流", async () => {
     const { reads, calls } = setup({
-      "repos/o/r/actions/workflows/10/runs": { body: [] },
+      "repos/o/r/actions/workflows/10/runs": { body: { total_count: 0, workflow_runs: [] } },
       "repos/o/r/actions/workflows": {
         body: [{ id: 10, name: "CI", path: ".github/workflows/ci.yml" }],
       },
@@ -191,13 +206,20 @@ describe("workflow runs", () => {
     );
   });
 
-  it("不带 workflow 时列仓库的全部 run，截到 limit", async () => {
+  it("不带 workflow 时列仓库的 run，凑满 limit 即停止请求", async () => {
     const { reads, calls } = setup({
-      "repos/o/r/actions/runs": { body: [{ id: 1 }, { id: 2 }, { id: 3 }] },
+      "repos/o/r/actions/runs": {
+        body: {
+          total_count: 3,
+          workflow_runs: [{ id: 1 }, { id: 2 }, { id: 3 }],
+        },
+      },
     });
 
     expect(await reads.listRuns("o", "r", { limit: 2 })).toEqual([{ id: 1 }, { id: 2 }]);
     expect(calls[0]).toContain("per_page=2");
+    // 一页就凑满了，不再请求下一页（同一路由在 fixture 里会重复返回全部条目）
+    expect(calls).toHaveLength(1);
   });
 
   it("单个 run 与仓库信息原样透传", async () => {

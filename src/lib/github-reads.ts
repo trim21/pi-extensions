@@ -146,6 +146,37 @@ function limitOf(limit: number | undefined, fallback: number): number {
   return Math.min(Math.max(limit ?? fallback, 1), 100);
 }
 
+/**
+ * 逐页取列表直到凑满 `limit` 条命中项：每页 `per_page` 就是 limit，所以通常一次请求即够；
+ * 需要客户端过滤（issues 端点混着 PR）或列表本身更长时才继续翻页，凑满立刻停止，不像
+ * `octokit.paginate` 那样把整个列表拉完再在客户端截断。
+ *
+ * `fetchPage` 必须由调用方在 `api.call` 的回调里构造，401 重试才会覆盖循环里的每个请求。
+ */
+async function takePages<T>(
+  fetchPage: (page: number) => Promise<T[]>,
+  limit: number,
+  accept: (item: T) => boolean = () => true,
+): Promise<T[]> {
+  const taken: T[] = [];
+  for (let page = 1; ; page += 1) {
+    const items = await fetchPage(page);
+    for (const item of items) {
+      if (!accept(item)) {
+        continue;
+      }
+      taken.push(item);
+      if (taken.length >= limit) {
+        return taken;
+      }
+    }
+    // 本页不足 per_page（= limit）说明列表已经取尽，再请求下一页只会拿到空数组
+    if (items.length < limit) {
+      return taken;
+    }
+  }
+}
+
 function octokitRequest(signal: AbortSignal | undefined): { signal?: AbortSignal } {
   return signal === undefined ? {} : { signal };
 }
@@ -212,32 +243,44 @@ export function createGithubReads(api: GithubApi): GithubReads {
 
     async listIssues(owner, repo, query, signal) {
       const limit = limitOf(query.limit, 30);
-      const data = await api.call((octokit) =>
-        octokit.paginate(octokit.rest.issues.listForRepo, {
-          owner,
-          repo,
-          per_page: limit,
-          ...listParams(query),
-          ...octokitRequest(signal),
-        }),
+      const params = {
+        owner,
+        repo,
+        per_page: limit,
+        ...listParams(query),
+        ...octokitRequest(signal),
+      };
+      const issues = await api.call((octokit) =>
+        takePages(
+          async (page) => {
+            const { data } = await octokit.rest.issues.listForRepo({ ...params, page });
+            return data;
+          },
+          limit,
+          // 列表端点混着 PR（REST 的 issues 列表包含 PR），与 gh issue list 一致地过滤掉，
+          // 过滤后的条数才计入 limit
+          (item) => !("pull_request" in item),
+        ),
       );
-      // 列表端点混着 PR（REST 的 issues 列表包含 PR），与 gh issue list 一致地过滤掉
-      const issues = data.filter((item) => !("pull_request" in item));
-      return issues.slice(0, limit).map((item) => asJson(item));
+      return issues.map((item) => asJson(item));
     },
 
     async listPulls(owner, repo, query, signal) {
       const limit = limitOf(query.limit, 30);
-      const data = await api.call((octokit) =>
-        octokit.paginate(octokit.rest.pulls.list, {
-          owner,
-          repo,
-          per_page: limit,
-          ...listParams(query),
-          ...octokitRequest(signal),
-        }),
+      const params = {
+        owner,
+        repo,
+        per_page: limit,
+        ...listParams(query),
+        ...octokitRequest(signal),
+      };
+      const pulls = await api.call((octokit) =>
+        takePages(async (page) => {
+          const { data } = await octokit.rest.pulls.list({ ...params, page });
+          return data;
+        }, limit),
       );
-      return data.slice(0, limit).map((item) => asJson(item));
+      return pulls.map((item) => asJson(item));
     },
 
     async pullDiff(owner, repo, number, signal) {
@@ -256,15 +299,15 @@ export function createGithubReads(api: GithubApi): GithubReads {
     },
 
     async listReleases(owner, repo, limit, signal) {
-      const data = await api.call((octokit) =>
-        octokit.paginate(octokit.rest.repos.listReleases, {
-          owner,
-          repo,
-          per_page: limitOf(limit, 10),
-          ...octokitRequest(signal),
-        }),
+      const max = limitOf(limit, 10);
+      const params = { owner, repo, per_page: max, ...octokitRequest(signal) };
+      const releases = await api.call((octokit) =>
+        takePages(async (page) => {
+          const { data } = await octokit.rest.repos.listReleases({ ...params, page });
+          return data;
+        }, max),
       );
-      return data.map((item) => asJson(item));
+      return releases.map((item) => asJson(item));
     },
 
     async release(owner, repo, tag, signal) {
@@ -301,24 +344,27 @@ export function createGithubReads(api: GithubApi): GithubReads {
         }
         workflowId = match.id;
       }
-      const data = await api.call(async (octokit) => {
-        const params = {
-          owner,
-          repo,
-          per_page: limit,
-          // REST 的 status 同时接受运行状态与结论（success / failure / in_progress …）；
-          // octokit 把取值声明成字面量联合，这里按它的类型断言（非法取值由 API 报 422）
-          ...(query.status !== undefined && { status: query.status as WorkflowRunStatus }),
-          ...octokitRequest(signal),
-        };
-        return workflowId === undefined
-          ? octokit.paginate(octokit.rest.actions.listWorkflowRunsForRepo, params)
-          : octokit.paginate(octokit.rest.actions.listWorkflowRuns, {
-              ...params,
-              workflow_id: workflowId,
-            });
-      });
-      return data.slice(0, limit).map((item) => asJson(item));
+      const runs = await api.call((octokit) =>
+        takePages(async (page) => {
+          const params = {
+            owner,
+            repo,
+            per_page: limit,
+            // REST 的 status 同时接受运行状态与结论（success / failure / in_progress …）；
+            // octokit 把取值声明成字面量联合，这里按它的类型断言（非法取值由 API 报 422）
+            ...(query.status !== undefined && { status: query.status as WorkflowRunStatus }),
+            ...octokitRequest(signal),
+            page,
+          };
+          // 两个端点的响应都包着 workflow_runs，与 octokit.paginate 的归一化一致地取出来
+          const response =
+            workflowId === undefined
+              ? await octokit.rest.actions.listWorkflowRunsForRepo(params)
+              : await octokit.rest.actions.listWorkflowRuns({ ...params, workflow_id: workflowId });
+          return response.data.workflow_runs;
+        }, limit),
+      );
+      return runs.map((item) => asJson(item));
     },
 
     async run(owner, repo, runId, signal) {

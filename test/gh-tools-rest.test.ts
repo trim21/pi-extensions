@@ -255,18 +255,21 @@ describe("REST 接线的工具", () => {
     const { bus, calls } = busWith(
       {
         "repos/o/r/actions/runs": {
-          body: [
-            {
-              id: 37131067543,
-              name: "CI",
-              status: "completed",
-              conclusion: "success",
-              head_branch: "master",
-              event: "push",
-              created_at: "2026-10-03T14:50:27Z",
-              html_url: "https://example.test/run/1",
-            },
-          ],
+          body: {
+            total_count: 1,
+            workflow_runs: [
+              {
+                id: 37131067543,
+                name: "CI",
+                status: "completed",
+                conclusion: "success",
+                head_branch: "master",
+                event: "push",
+                created_at: "2026-10-03T14:50:27Z",
+                html_url: "https://example.test/run/1",
+              },
+            ],
+          },
         },
       },
       addListWorkflowRunsTool,

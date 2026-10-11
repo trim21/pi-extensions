@@ -86,6 +86,30 @@ GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST
 - **WHEN** 调用 `read-github-pr-diff`
 - **THEN** diff 由 `pulls.get` 带 `mediaType: { format: "diff" }` 取回（GitHub 返回 diff 文本），结构化的变更统计由同一份 diff 解析得出：每个文件的增删行数、总计与变更文件数，含重命名（`oldPath`）与二进制文件（0 行变更）
 
+### Requirement: 列表取数凑满 limit 即停止翻页
+
+带 `limit` 的列表工具（`list-github-issues`、`list-github-prs`、`list-github-releases`、`list-github-workflow-runs`）MUST 在取到 limit 条命中项后立即停止向 GitHub 请求后续页，MUST NOT 取完整个列表再在客户端截断。每页 `per_page` MUST 取 limit（上限 100）。需要客户端过滤的列表 MUST 按过滤后的条数计数。
+
+#### Scenario: 凑满 limit 就停止请求
+
+- **WHEN** 仓库的 issue / PR / release / workflow run 数量远多于 `limit`
+- **THEN** 只请求凑满 limit 所需的最少页数，其后不再发出请求，返回条数为 limit
+
+#### Scenario: 客户端过滤后计数
+
+- **WHEN** 列出 issue，而 REST `issues.listForRepo` 的响应里混着 PR
+- **THEN** 过滤掉 PR 后才计入 limit，凑不满时继续请求下一页，返回的条目全部是 issue
+
+#### Scenario: 列表取尽不足 limit
+
+- **WHEN** 列表剩余条目少于 limit
+- **THEN** 返回已取到的全部条目，不报错
+
+#### Scenario: 全量列表不受影响
+
+- **WHEN** 读取 issue / PR comments、reviews、workflow run 的全部 job 或 check runs
+- **THEN** 仍跟随 Link 取完所有页，不因 limit 提前停止
+
 ### Requirement: workflow run 与 job 查询
 
 `get-github-workflow-jobs` 列出一个 workflow run 的全部 job（octokit `actions.listJobsForWorkflowRun` 分页），`list-github-workflow-runs` 列出仓库的 run（octokit `actions.listWorkflowRunsForRepo`，`workflow` 参数先经 `actions.listRepoWorkflows` 按名字或文件名解析成 id）。两者都 MUST NOT spawn `gh`。`watch-github-run` MUST 轮询 `actions.getWorkflowRun` 直到运行结束（`status` 为 `completed`），不再执行 `gh run watch`。
