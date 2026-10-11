@@ -1,8 +1,11 @@
 import { readFile } from "node:fs/promises";
+import { Worker } from "node:worker_threads";
 
 import { describe, expect, it, vi } from "vitest";
 
 import { createCodemodeSandbox, type SandboxRunOptions } from "../src/codemode/sandbox.js";
+import { compileQuickJSWasm } from "../src/codemode/wasm.js";
+import { isRecord } from "../src/lib/narrow.js";
 
 /** 建沙箱 + 跑一段脚本；onCall 缺省把参数原样回给脚本。 */
 async function run(
@@ -183,6 +186,62 @@ describe("codemode 沙箱", () => {
     }
   });
 
+  it("sleep 等到指定时间后继续，自身不产生进度与输出", async () => {
+    const started = Date.now();
+    const onCallProgress = vi.fn();
+    const result = await run(`await sleep(0.05); text("done"); return typeof sleep;`, {
+      onCallProgress,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe("function");
+    }
+    // 等待本身不产生输出：只有脚本自己 text 的那一条
+    expect(result.output).toEqual([{ type: "text", text: "done" }]);
+    expect(onCallProgress).not.toHaveBeenCalled();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(45);
+  });
+
+  it("sleep 的参数不是非负秒数时抛 TypeError，而不是等待", async () => {
+    const result = await run(`
+      const outcomes = [];
+      for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY, "2", undefined]) {
+        try {
+          await sleep(value);
+          outcomes.push("resolved");
+        } catch (error) {
+          outcomes.push([error instanceof TypeError, error instanceof CallFailedError].join("/"));
+        }
+      }
+      return outcomes;
+    `);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual([
+        "true/false",
+        "true/false",
+        "true/false",
+        "true/false",
+        "true/false",
+      ]);
+    }
+  });
+
+  it("sleep 与嵌套调用并行时互不阻塞", async () => {
+    const result = await run(`
+      const [, value] = await Promise.all([sleep(0.02), call("Read", { path: "a.txt" })]);
+      return value.echoed.path;
+    `);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe("a.txt");
+    }
+    expect(result.calls).toHaveLength(1);
+  });
+
   it("中止信号终止脚本", async () => {
     const controller = new AbortController();
     // 用死循环而不是挂起的 promise：后者会被 stalled() 立刻判失败
@@ -278,6 +337,54 @@ describe("codemode 沙箱", () => {
   });
 });
 
+describe("worker 与主线程的消息", () => {
+  /**
+   * 主线程发的消息不重复做 typebox 校验，但形状对不上是宿主自己的 bug：worker 必须报出来，
+   * 而不是丢掉消息让脚本永远等在 pending 上。
+   */
+  it("收到形状不对的 host 消息时报 sandbox 错误，而不是静默挂住", async () => {
+    const worker = new Worker(new URL("../src/codemode/worker.js", import.meta.url), {
+      workerData: { wasm: await compileQuickJSWasm() },
+    });
+    const messages: unknown[] = [];
+    let notify: (() => void) | undefined;
+    worker.on("message", (message: unknown) => {
+      messages.push(message);
+      notify?.();
+    });
+
+    const waitFor = (predicate: (message: unknown) => boolean): Promise<unknown> =>
+      new Promise((resolve) => {
+        const check = (): void => {
+          const hit = messages.find((message) => predicate(message));
+          if (hit === undefined) {
+            notify = check;
+            return;
+          }
+          resolve(hit);
+        };
+        check();
+      });
+
+    try {
+      // 脚本先等 sleep，worker 才有空处理下面那条畸形消息
+      worker.postMessage({
+        t: "start",
+        code: 'text("ready");\nawait sleep(5);',
+        tools: [],
+        store: {},
+      });
+      await waitFor((message) => isRecord(message) && message.t === "output");
+      worker.postMessage({ t: "result", id: "not-a-number", ok: true });
+
+      const done = await waitFor((message) => isRecord(message) && message.t === "done");
+      expect(done).toMatchObject({ ok: false, error: { kind: "sandbox" } });
+    } finally {
+      await worker.terminate();
+    }
+  });
+});
+
 describe("worker 产物", () => {
   /**
    * `worker.js` 是 `new Worker(url)` 直接起的普通 Node 模块，不像主线程那样经 jiti 加载
@@ -292,5 +399,12 @@ describe("worker 产物", () => {
       .filter((specifier) => !specifier.startsWith("node:") && specifier !== "quickjs-wasi");
 
     expect(bare).toEqual([]);
+  });
+
+  // prelude 与 worker 都改了却忘记重建时，产物里就没有 sleep，打包后脚本里会 ReferenceError
+  it("带上了 prelude 的 sleep（源码改动后必须重建产物）", async () => {
+    const source = await readFile(new URL("../src/codemode/worker.js", import.meta.url), "utf8");
+    expect(source).toContain("sleep(seconds) expects a non-negative number of seconds");
+    expect(source).toContain("timerDone");
   });
 });

@@ -6,8 +6,9 @@
  * 主线程执行工具后把结果发回去。脚本没有超时，只有调用方的中止：中止时主线程直接
  * `worker.terminate()`，因此不需要取消消息。
  *
- * worker 边界两侧都做 typebox 校验：worker 里跑的是模型写的代码，回传的消息同样
- * 当外部输入对待。
+ * 校验只做一个方向：worker 里跑的是模型写的代码，它回传的消息由主线程用 typebox
+ * 当外部输入复核；反向的消息是主线程自己构造的，形状由 `HostMessage` 类型约束，
+ * worker 只按 `t` 分派。
  */
 
 import { type TSchema, Type } from "typebox";
@@ -30,35 +31,6 @@ export const MEMORY_LIMIT_BYTES = 2 * 1024 ** 3;
 const outputItemSchema = Type.Union([
   Type.Object({ type: Type.Literal("text"), text: Type.String() }),
   Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String() }),
-]);
-
-const toolDeclSchema = Type.Object({
-  name: Type.String(),
-  description: Type.Optional(Type.String()),
-  /** 工具的 structuredSchema（TypeBox schema）：脚本侧据此渲染 call() 的返回类型。 */
-  structuredSchema: Type.Optional(Type.Unknown()),
-});
-
-const startSchema = Type.Object({
-  t: Type.Literal("start"),
-  code: Type.String(),
-  tools: Type.Array(toolDeclSchema),
-  store: Type.Record(Type.String(), Type.Unknown()),
-});
-
-const resultSchema = Type.Union([
-  Type.Object({
-    t: Type.Literal("result"),
-    id: Type.Number(),
-    ok: Type.Literal(true),
-    value: Type.Unknown(),
-  }),
-  Type.Object({
-    t: Type.Literal("result"),
-    id: Type.Number(),
-    ok: Type.Literal(false),
-    error: Type.String(),
-  }),
 ]);
 
 const callSchema = Type.Object({
@@ -100,7 +72,6 @@ const doneSchema = Type.Union([
   }),
 ]);
 
-const hostMessageSchema = Type.Union([startSchema, resultSchema]);
 const workerMessageSchema = Type.Union([callSchema, outputFrameSchema, doneSchema]);
 
 /** worker 启动数据：注册时编译好的 wasm 模块（结构化克隆可以带它跨线程）。 */
@@ -153,11 +124,6 @@ function decode<T>(schema: TSchema, value: unknown): DecodeResult<T> {
     return { ok: false, error: `unexpected message shape: ${preview}` };
   }
   return { ok: true, frame: value as T };
-}
-
-/** 校验主线程发给 worker 的消息。 */
-export function decodeHostMessage(value: unknown): DecodeResult<HostMessage> {
-  return decode<HostMessage>(hostMessageSchema, value);
 }
 
 /** 校验 worker 发回主线程的消息。 */

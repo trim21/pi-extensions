@@ -113,6 +113,8 @@ function buildDescription(tools: readonly CallableTool[]): string {
     "  fields you need into `text(value)` / `return` — e.g. `text(result.items.map((item) => item.title))`.",
     "- Do not stringify whole results (`JSON.stringify(result)`) or print every field the tool happened to",
     "  return: urls, ids and metadata you will not use cost context and buy nothing.",
+    "- `await sleep(seconds)` waits that many seconds (fractions allowed). It is the only way to",
+    '  wait: the sandbox has no timers, and it beats `call("Bash", { command: "sleep 1" })`.',
     "- `store.set(key, value)`, `store.get(key)` and `store.list()` are a small key/value store that",
     "  persists across codemode calls in this session; `store.set(key, undefined)` removes a key.",
     "- The sandbox has no file system, network, timers or Node APIs: calling tools is its only",

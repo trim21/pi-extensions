@@ -8,6 +8,11 @@ var __export = (target, all) => {
 import { parentPort, workerData } from "node:worker_threads";
 import { JSException, MAX_STACK_SIZE, QuickJS } from "quickjs-wasi";
 
+// src/lib/narrow.ts
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // src/codemode/prelude.ts
 var MAX_STORE_VALUE_CHARS = 256 * 1024;
 var MAX_STORE_TOTAL_CHARS = 1024 * 1024;
@@ -248,6 +253,22 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 		throw EXIT;
 	}
 
+	// 脚本唯一的等待手段：worker 线程在 ms 后调 timerDone(id) 解开它。沙箱里没有别的
+	// timer，也没有上限——睡多久由脚本决定，结束只能靠调用方中止。
+	function sleep(seconds) {
+		if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+			throw new TypeErrorCtor(
+				"sleep(seconds) expects a non-negative number of seconds, got " + format(seconds),
+			);
+		}
+		return new Promise((resolve) => {
+			const id = nextId++;
+			// sleep 只会被 timerDone 成功解开，reject 用不到
+			pending.set(id, { resolve, reject: () => {} });
+			bridge("sleep", id, Math.round(seconds * 1000));
+		});
+	}
+
 	const console = {};
 	for (const level of ["log", "info", "warn", "error", "debug"]) {
 		console[level] = (...args) => {
@@ -264,6 +285,7 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 	Object.defineProperty(globalThis, "text", { value: text, enumerable: true });
 	Object.defineProperty(globalThis, "image", { value: image, enumerable: true });
 	Object.defineProperty(globalThis, "exit", { value: exit, enumerable: true });
+	Object.defineProperty(globalThis, "sleep", { value: sleep, enumerable: true });
 
 	return {
 		settle(id, ok, payload) {
@@ -282,6 +304,13 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 				return;
 			}
 			entry.resolve(value);
+		},
+		// worker 线程的定时器到点后解开一次 sleep（成功路径，不带值）
+		timerDone(id) {
+			const entry = pending.get(id);
+			if (!entry) return;
+			pending.delete(id);
+			entry.resolve();
 		},
 		run(fn) {
 			let promise;
@@ -1371,15 +1400,15 @@ function Get2() {
 
 // node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/_codec.mjs
 var EncodeBuilder = class {
-  constructor(type, decode2) {
+  constructor(type, decode) {
     this.type = type;
-    this.decode = decode2;
+    this.decode = decode;
   }
   Encode(callback) {
     const type = this.type;
-    const decode2 = IsCodec(type) ? (value) => this.decode(type["~codec"].decode(value)) : this.decode;
+    const decode = IsCodec(type) ? (value) => this.decode(type["~codec"].decode(value)) : this.decode;
     const encode = IsCodec(type) ? (value) => type["~codec"].encode(callback(value)) : callback;
-    const codec = { decode: decode2, encode };
+    const codec = { decode, encode };
     return memory_exports.Update(this.type, { "~codec": codec }, {});
   }
 };
@@ -4707,8 +4736,8 @@ function RestSpread(types) {
 }
 
 // node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/instantiate.mjs
-function State(callstack, visited2) {
-  return { callstack, visited: visited2 };
+function State(callstack, visited) {
+  return { callstack, visited };
 }
 function CanInstantiate(types) {
   return guard_exports.ShiftLeft(types, (left, right) => IsRef(left) ? false : CanInstantiate(right), () => true);
@@ -7286,15 +7315,6 @@ var AssertError = class extends Error {
     });
   }
 };
-function Assert(...args) {
-  const [context, type, value] = arguments_exports.Match(args, {
-    3: (context2, type2, value2) => [context2, type2, value2],
-    2: (type2, value2) => [{}, type2, value2]
-  });
-  const check = Check2(context, type, value);
-  if (!check)
-    throw new AssertError("Assert", value, Errors2(context, type, value));
-}
 
 // node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/from_array.mjs
 function FromArray7(context, type, value) {
@@ -8095,7 +8115,7 @@ var DecodeError = class extends AssertError {
     super("Decode", value, errors);
   }
 };
-function Assert2(context, type, value) {
+function Assert(context, type, value) {
   if (!Check2(context, type, value))
     throw new DecodeError(value, Errors2(context, type, value));
   return value;
@@ -8109,16 +8129,9 @@ var Decoder = Pipeline([
   (context, type, value) => Default(context, type, value),
   (context, type, value) => Convert(context, type, value),
   (context, type, value) => Clean(context, type, value),
-  (context, type, value) => Assert2(context, type, value),
+  (context, type, value) => Assert(context, type, value),
   (context, type, value) => DecodeUnsafe(context, type, value)
 ]);
-function Decode10(...args) {
-  const [context, type, value] = arguments_exports.Match(args, {
-    3: (context2, type2, value2) => [context2, type2, value2],
-    2: (type2, value2) => [{}, type2, value2]
-  });
-  return Decoder(context, type, value);
-}
 
 // node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/encode.mjs
 var EncodeError = class extends AssertError {
@@ -8126,7 +8139,7 @@ var EncodeError = class extends AssertError {
     super("Encode", value, errors);
   }
 };
-function Assert3(context, type, value) {
+function Assert2(context, type, value) {
   if (!Check2(context, type, value))
     throw new EncodeError(value, Errors2(context, type, value));
   return value;
@@ -8141,248 +8154,8 @@ var Encoder = Pipeline([
   (context, type, value) => Default(context, type, value),
   (context, type, value) => Convert(context, type, value),
   (context, type, value) => Clean(context, type, value),
-  (context, type, value) => Assert3(context, type, value)
+  (context, type, value) => Assert2(context, type, value)
 ]);
-function Encode10(...args) {
-  const [context, type, value] = arguments_exports.Match(args, {
-    3: (context2, type2, value2) => [context2, type2, value2],
-    2: (type2, value2) => [{}, type2, value2]
-  });
-  return Encoder(context, type, value);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/has.mjs
-function FromArray11(context, type) {
-  return IsCodec(type) || FromType24(context, type.items);
-}
-function FromCyclic10(context, type) {
-  return IsCodec(type) || FromRef9({ ...context, ...type.$defs }, Ref(type.$ref));
-}
-function FromIntersect10(context, type) {
-  return IsCodec(type) || type.allOf.some((type2) => FromType24(context, type2));
-}
-function FromObject15(context, type) {
-  return IsCodec(type) || guard_exports.Keys(type.properties).some((key) => {
-    return FromType24(context, type.properties[key]);
-  });
-}
-function FromRecord7(context, type) {
-  return IsCodec(type) || FromType24(context, RecordValue(type));
-}
-function FromRef9(context, type) {
-  if (visited.has(type.$ref))
-    return false;
-  visited.add(type.$ref);
-  return IsCodec(type) || guard_exports.HasPropertyKey(context, type.$ref) && FromType24(context, context[type.$ref]);
-}
-function FromTuple9(context, type) {
-  return IsCodec(type) || type.items.some((type2) => FromType24(context, type2));
-}
-function FromUnion13(context, type) {
-  return IsCodec(type) || type.anyOf.some((type2) => FromType24(context, type2));
-}
-function FromType24(context, type) {
-  return IsArray2(type) ? FromArray11(context, type) : IsCyclic(type) ? FromCyclic10(context, type) : IsIntersect(type) ? FromIntersect10(context, type) : IsObject2(type) ? FromObject15(context, type) : IsRecord(type) ? FromRecord7(context, type) : IsRef(type) ? FromRef9(context, type) : IsTuple(type) ? FromTuple9(context, type) : IsUnion(type) ? FromUnion13(context, type) : IsCodec(type);
-}
-var visited = /* @__PURE__ */ new Set();
-function HasCodec(...args) {
-  const [context, type] = arguments_exports.Match(args, {
-    2: (context2, type2) => [context2, type2],
-    1: (type2) => [{}, type2]
-  });
-  visited.clear();
-  return FromType24(context, type);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/error.mjs
-var CreateError = class extends Error {
-  constructor(type, message) {
-    super(message);
-    this.type = type;
-  }
-};
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_default.mjs
-function FromDefault2(_context, schema) {
-  return guard_exports.IsFunction(schema.default) ? schema.default(schema) : guard_exports.IsObject(schema.default) ? Clone2(schema.default) : schema.default;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_array.mjs
-function FromArray12(context, type) {
-  if (IsUniqueItems(type) && !IsDefault(type))
-    throw new CreateError(type, "Arrays with uniqueItems constraints must specify a default annotation");
-  const length = IsMinItems(type) ? type.minItems : 0;
-  return Array.from({ length }, () => FromType25(context, type.items));
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_bigint.mjs
-function FromBigInt7(_context, type) {
-  return IsExclusiveMinimum(type) ? BigInt(type.exclusiveMinimum) + BigInt(1) : IsMinimum(type) ? BigInt(type.minimum) : BigInt(0);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_boolean.mjs
-function FromBoolean7(_context, _type) {
-  return false;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_constructor.mjs
-function FromConstructor2(context, type) {
-  const instanceType = FromType25(context, type.instanceType);
-  return class {
-    constructor() {
-      Object.assign(this, instanceType);
-    }
-  };
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_cyclic.mjs
-function FromCyclic11(context, type) {
-  return FromType25({ ...context, ...type.$defs }, Ref(type.$ref));
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_enum.mjs
-function FromEnum4(context, type) {
-  return FromType25(context, Evaluate(type));
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_function.mjs
-function FromFunction2(context, type) {
-  const returnType = FromType25(context, type.returnType);
-  return () => returnType;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_integer.mjs
-function FromInteger2(_context, type) {
-  return IsExclusiveMinimum(type) && guard_exports.IsNumber(type.exclusiveMinimum) ? type.exclusiveMinimum + 1 : IsMinimum(type) ? type.minimum : 0;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_intersect.mjs
-function FromIntersect11(context, type) {
-  const instantiated = Instantiate(context, type);
-  const evaluated = Evaluate(instantiated);
-  return FromType25(context, evaluated);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_literal.mjs
-function FromLiteral7(_context, type) {
-  return type.const;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_never.mjs
-function FromNever(_context, type) {
-  throw new CreateError(type, "Cannot create TNever types");
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_null.mjs
-function FromNull3(_context, _type) {
-  return null;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_number.mjs
-function FromNumber6(_context, type) {
-  return IsExclusiveMinimum(type) && guard_exports.IsNumber(type.exclusiveMinimum) ? type.exclusiveMinimum + 1 : IsMinimum(type) ? type.minimum : 0;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_object.mjs
-function FromObject16(context, type) {
-  const required = guard_exports.IsUndefined(type.required) ? [] : type.required;
-  return required.reduce((result, key) => {
-    return { ...result, [key]: FromType25(context, type.properties[key]) };
-  }, {});
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_record.mjs
-function FromRecord8(_context, type) {
-  if (IsMinProperties(type) && !IsDefault(type))
-    throw new CreateError(type, "Record with the minProperties constraint must have a default annotation");
-  return {};
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_ref.mjs
-function FromRef10(context, type) {
-  return guard_exports.HasPropertyKey(context, type.$ref) ? FromType25(context, context[type.$ref]) : (() => {
-    throw new CreateError(type, "Unable to deref Ref");
-  })();
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_string.mjs
-function FromString8(_context, type) {
-  const needsDefault = (IsPattern(type) || IsFormat(type)) && !IsDefault(type);
-  if (needsDefault)
-    throw Error("Strings with format or pattern constraints must specify default");
-  const minLength = IsMinLength3(type) ? type.minLength : 0;
-  return "".padEnd(minLength);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_symbol.mjs
-function FromSymbol2(_context, _type) {
-  return /* @__PURE__ */ Symbol();
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_template_literal.mjs
-function FromTemplateLiteral5(context, type) {
-  const decoded = TemplateLiteralDecode(type.pattern);
-  if (IsString3(decoded))
-    throw new CreateError(type, "Unable to create TemplateLiteral due to infinite type expansion");
-  return FromType25(context, decoded);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_tuple.mjs
-function FromTuple10(context, type) {
-  return Array.from({ length: type.minItems }, (_, i) => FromType25(context, type.items[i]));
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_undefined.mjs
-function FromUndefined3(_context, _type) {
-  return void 0;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_union.mjs
-function FromUnion14(context, type) {
-  if (guard_exports.IsEqual(type.anyOf.length, 0)) {
-    throw Error("Unable to create Union with no variants");
-  }
-  return FromType25(context, type.anyOf[0]);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_void.mjs
-function FromVoid2(_context, _type) {
-  return void 0;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/from_type.mjs
-function FromType25(context, type) {
-  return (
-    // -----------------------------------------------------
-    // Default
-    // -----------------------------------------------------
-    IsDefault(type) ? FromDefault2(context, type) : (
-      // -----------------------------------------------------
-      // Types
-      // -----------------------------------------------------
-      IsArray2(type) ? FromArray12(context, type) : IsBigInt2(type) ? FromBigInt7(context, type) : IsBoolean3(type) ? FromBoolean7(context, type) : IsConstructor2(type) ? FromConstructor2(context, type) : IsCyclic(type) ? FromCyclic11(context, type) : IsEnum(type) ? FromEnum4(context, type) : IsFunction2(type) ? FromFunction2(context, type) : IsInteger2(type) ? FromInteger2(context, type) : IsIntersect(type) ? FromIntersect11(context, type) : IsLiteral(type) ? FromLiteral7(context, type) : IsNever(type) ? FromNever(context, type) : IsNull2(type) ? FromNull3(context, type) : IsNumber3(type) ? FromNumber6(context, type) : IsObject2(type) ? FromObject16(context, type) : IsRecord(type) ? FromRecord8(context, type) : IsRef(type) ? FromRef10(context, type) : IsString3(type) ? FromString8(context, type) : IsSymbol2(type) ? FromSymbol2(context, type) : IsTemplateLiteral(type) ? FromTemplateLiteral5(context, type) : IsTuple(type) ? FromTuple10(context, type) : IsUndefined2(type) ? FromUndefined3(context, type) : IsUnion(type) ? FromUnion14(context, type) : IsVoid(type) ? FromVoid2(context, type) : void 0
-    )
-  );
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/create/create.mjs
-function Create2(...args) {
-  const [context, type] = arguments_exports.Match(args, {
-    2: (context2, type2) => [context2, type2],
-    1: (type2) => [{}, type2]
-  });
-  return FromType25(context, type);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/equal/equal.mjs
-function Equal(left, right) {
-  return guard_exports.IsDeepEqual(left, right);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/hash/hash.mjs
-function Hash2(value) {
-  return hash_exports.Hash(value);
-}
 
 // node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/parse/parse.mjs
 var ParseError = class extends AssertError {
@@ -8390,7 +8163,7 @@ var ParseError = class extends AssertError {
     super("Parse", value, errors);
   }
 };
-function Assert4(context, type, value) {
+function Assert3(context, type, value) {
   if (!Check2(context, type, value))
     throw new ParseError(value, Errors2(context, type, value));
   return value;
@@ -8400,107 +8173,8 @@ var Parser = Pipeline([
   (context, type, value) => Default(context, type, value),
   (context, type, value) => Convert(context, type, value),
   (context, type, value) => Clean(context, type, value),
-  (context, type, value) => Assert4(context, type, value)
+  (context, type, value) => Assert3(context, type, value)
 ]);
-function Parse(...args) {
-  const [context, type, value] = arguments_exports.Match(args, {
-    3: (context2, type2, value2) => [context2, type2, value2],
-    2: (type2, value2) => [{}, type2, value2]
-  });
-  const checked = Check2(context, type, value);
-  if (checked)
-    return value;
-  if (settings_exports.Get().correctiveParse)
-    return Parser(context, type, value);
-  throw new ParseError(value, Errors2(context, type, value));
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/delta/diff.mjs
-function CreateUpdate(path, value) {
-  return { type: "update", path, value };
-}
-function CreateInsert(path, value) {
-  return { type: "insert", path, value };
-}
-function CreateDelete(path) {
-  return { type: "delete", path };
-}
-function AssertCanDiffObject(value) {
-  if (guard_exports.IsObject(value) && guard_exports.IsEqual(guard_exports.Symbols(value).length, 0))
-    return;
-  throw new Error("Cannot create diffs for objects with symbols keys");
-}
-function* FromObject17(path, left, right) {
-  if (!guard_exports.IsObject(right) || guard_exports.IsArray(right))
-    return yield CreateUpdate(path, right);
-  AssertCanDiffObject(left);
-  AssertCanDiffObject(right);
-  const leftKeys = guard_exports.Keys(left);
-  const rightKeys = guard_exports.Keys(right);
-  for (const key of rightKeys) {
-    if (guard_exports.HasPropertyKey(left, key))
-      continue;
-    if (guard_exports.IsUnsafePropertyKey(key))
-      continue;
-    yield CreateInsert(`${path}/${key}`, right[key]);
-  }
-  for (const key of leftKeys) {
-    if (!guard_exports.HasPropertyKey(right, key))
-      continue;
-    if (guard_exports.IsUnsafePropertyKey(key))
-      continue;
-    if (Equal(left, right))
-      continue;
-    yield* FromValue4(`${path}/${key}`, left[key], right[key]);
-  }
-  for (const key of leftKeys) {
-    if (guard_exports.HasPropertyKey(right, key))
-      continue;
-    if (guard_exports.IsUnsafePropertyKey(key))
-      continue;
-    yield CreateDelete(`${path}/${key}`);
-  }
-}
-function* FromArray13(path, left, right) {
-  if (!guard_exports.IsArray(right))
-    return yield CreateUpdate(path, right);
-  for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    yield* FromValue4(`${path}/${i}`, left[i], right[i]);
-  }
-  for (let i = 0; i < right.length; i++) {
-    if (i < left.length)
-      continue;
-    yield CreateInsert(`${path}/${i}`, right[i]);
-  }
-  for (let i = left.length - 1; i >= 0; i--) {
-    if (i < right.length)
-      continue;
-    yield CreateDelete(`${path}/${i}`);
-  }
-}
-function* FromTypedArray2(path, left, right) {
-  const typeLeft = globalThis.Object.getPrototypeOf(left).constructor.name;
-  const typeRight = globalThis.Object.getPrototypeOf(right).constructor.name;
-  const predicate = globals_exports.IsTypeArray(right) && guard_exports.IsEqual(left.length, right.length) && guard_exports.IsEqual(typeLeft, typeRight);
-  if (predicate) {
-    for (let index = 0; index < Math.min(left.length, right.length); index++) {
-      yield* FromValue4(`${path}/${index}`, left[index], right[index]);
-    }
-  } else {
-    return yield CreateUpdate(path, right);
-  }
-}
-function* FromUnknown(path, left, right) {
-  if (left === right)
-    return;
-  yield CreateUpdate(path, right);
-}
-function* FromValue4(path, left, right) {
-  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path, left, right) : yield* FromUnknown(path, left, right);
-}
-function Diff(current, next) {
-  return [...FromValue4("", current, next)];
-}
 
 // node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/delta/edit.mjs
 var Insert2 = _Object_({
@@ -8519,306 +8193,11 @@ var Delete2 = _Object_({
 });
 var Edit = Union([Insert2, Update2, Delete2]);
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/delta/patch.mjs
-function IsRoot(edits) {
-  return edits.length > 0 && edits[0].path === "" && edits[0].type === "update";
-}
-function IsEmpty(edits) {
-  return edits.length === 0;
-}
-function Patch(current, edits) {
-  if (IsRoot(edits))
-    return Clone2(edits[0].value);
-  if (IsEmpty(edits))
-    return Clone2(current);
-  const clone = Clone2(current);
-  for (const edit of edits) {
-    switch (edit.type) {
-      case "insert": {
-        pointer_exports.Set(clone, edit.path, edit.value);
-        break;
-      }
-      case "update": {
-        pointer_exports.Set(clone, edit.path, edit.value);
-        break;
-      }
-      case "delete": {
-        pointer_exports.Delete(clone, edit.path);
-        break;
-      }
-    }
-  }
-  return clone;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/error.mjs
-var RepairError = class extends Error {
-  constructor(context, type, value, message) {
-    super(message);
-    this.context = context;
-    this.type = type;
-    this.value = value;
-  }
-};
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/from_array.mjs
-function MakeUnique(values) {
-  const [hashes, result] = [/* @__PURE__ */ new Set(), []];
-  for (const value of values) {
-    const hash = Hash2(value);
-    if (hashes.has(hash))
-      continue;
-    hashes.add(hash);
-    result.push(value);
-  }
-  return result;
-}
-function FromArray14(context, type, value) {
-  if (Check2(context, type, value))
-    return value;
-  const created = guard_exports.IsArray(value) ? value : Create2(context, type);
-  const minimum = IsMinItems(type) && created.length < type.minItems ? [...created, ...Array.from({ length: type.minItems - created.length }, () => Create2(context, type))] : created;
-  const maximum = IsMaxItems(type) && minimum.length > type.maxItems ? minimum.slice(0, type.maxItems) : minimum;
-  const repaired = maximum.map((value2) => FromType26(context, type.items, value2));
-  if (!IsUniqueItems(type) || IsUniqueItems(type) && !guard_exports.IsEqual(type.uniqueItems, true))
-    return repaired;
-  const unique = MakeUnique(repaired);
-  if (!Check2(context, type, unique))
-    throw new RepairError(context, type, value, "Failed to repair Array due to uniqueItems constraint");
-  return unique;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/from_enum.mjs
-function FromEnum5(context, type, value) {
-  return FromType26(context, Evaluate(type), value);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/from_intersect.mjs
-function FromIntersect12(context, type, value) {
-  const instantiated = Instantiate(context, type);
-  const evaluated = Evaluate(instantiated);
-  return FromType26(context, evaluated, value);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/from_object.mjs
-function FromObject18(context, type, value) {
-  if (Check2(context, type, value))
-    return value;
-  if (!guard_exports.IsObjectNotArray(value))
-    return Create2(context, type);
-  const required = new Set(guard_exports.IsUndefined(type.required) ? [] : type.required);
-  const result = {};
-  for (const [key, schema] of guard_exports.Entries(type.properties)) {
-    if (!required.has(key) && guard_exports.IsUndefined(value[key]))
-      continue;
-    result[key] = key in value ? FromType26(context, schema, value[key]) : Create2(context, schema);
-  }
-  const evaluatedKeys = guard_exports.Keys(type.properties);
-  if (IsAdditionalProperties(type) && guard_exports.IsObject(type.additionalProperties)) {
-    for (const key of guard_exports.Keys(value)) {
-      if (evaluatedKeys.includes(key))
-        continue;
-      result[key] = FromType26(context, type.additionalProperties, value[key]);
-    }
-  }
-  return result;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/from_record.mjs
-function FromRecord9(context, type, value) {
-  if (Check2(context, type, value))
-    return value;
-  if (guard_exports.IsNull(value) || !guard_exports.IsObject(value) || guard_exports.IsArray(value))
-    return Create2(context, type);
-  const recordKey = new RegExp(RecordPattern(type));
-  const recordValue = RecordValue(type);
-  const evaluatedKeys = /* @__PURE__ */ new Set();
-  const result = {};
-  for (const [key, value_] of guard_exports.Entries(value)) {
-    if (!recordKey.test(key))
-      continue;
-    result[key] = FromType26(context, recordValue, value_);
-    evaluatedKeys.add(key);
-  }
-  if (IsAdditionalProperties(type)) {
-    for (const key of guard_exports.Keys(value)) {
-      if (evaluatedKeys.has(key))
-        continue;
-      result[key] = FromType26(context, type.additionalProperties, value[key]);
-    }
-  }
-  return result;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/from_ref.mjs
-function FromRef11(context, type, value) {
-  return guard_exports.HasPropertyKey(context, type.$ref) ? FromType26(context, context[type.$ref], value) : (() => {
-    throw new RepairError(context, type, value, "Unable to de-reference target type");
-  })();
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/from_template_literal.mjs
-function FromTemplateLiteral6(context, type, value) {
-  const decoded = TemplateLiteralDecode(type.pattern);
-  return FromType26(context, decoded, value);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/from_tuple.mjs
-function FromTuple11(context, schema, value) {
-  if (Check2(context, schema, value))
-    return value;
-  if (!guard_exports.IsArray(value))
-    return Create2(context, schema);
-  return schema.items.map((schema2, index) => FromType26(context, schema2, value[index]));
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/shared/union_score_select.mjs
-function Deref(context, type, value) {
-  return IsRef(type) ? guard_exports.HasPropertyKey(context, type.$ref) ? Deref(context, context[type.$ref], value) : (() => {
-    throw new Error("Unable to Deref target");
-  })() : type;
-}
-function ScoreVariant(context, type, value) {
-  if (!(IsObject2(type) && guard_exports.IsObject(value)))
-    return 0;
-  const keys = guard_exports.Keys(value);
-  const entries = guard_exports.Entries(type.properties);
-  return entries.reduce((result, [key, schema]) => {
-    const literal = IsLiteral(schema) && guard_exports.IsEqual(schema.const, value[key]) ? 100 : 0;
-    const checks = Check2(context, schema, value[key]) ? 10 : 0;
-    const exists = keys.includes(key) ? 1 : 0;
-    return result + (literal + checks + exists);
-  }, 0);
-}
-function UnionScoreSelect(context, type, value) {
-  const schemas = type.anyOf.map((schema) => Deref(context, schema, value));
-  let [select, best] = [schemas[0], 0];
-  for (const schema of schemas) {
-    const score = ScoreVariant(context, schema, value);
-    if (score > best) {
-      select = schema;
-      best = score;
-    }
-  }
-  return select;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/from_union.mjs
-function RepairUnion(context, type, value) {
-  const union = Union(Flatten(type.anyOf));
-  const schema = UnionScoreSelect(context, union, value);
-  return FromType26(context, schema, value);
-}
-function FromUnion15(context, type, value) {
-  if (Check2(context, type, value))
-    return Clone2(value);
-  if (IsDefault(type))
-    return Create2(context, type);
-  return RepairUnion(context, type, value);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/from_unknown.mjs
-function FromUnknown2(context, type, value) {
-  if (Check2(context, type, value))
-    return value;
-  const converted = Convert(context, type, value);
-  if (Check2(context, type, converted))
-    return converted;
-  return Create2(context, type);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/from_type.mjs
-function AssertRepairableValue(context, type, value) {
-  const unsupported = globals_exports.IsDate(value) || globals_exports.IsMap(value) || globals_exports.IsSet(value) || globals_exports.IsTypeArray(value) || guard_exports.IsConstructor(value) || guard_exports.IsFunction(value);
-  if (unsupported) {
-    throw new RepairError(context, type, value, "Value is not repairable");
-  }
-}
-function AssertRepairableType(context, type, value) {
-  const unsupported = IsConstructor2(type) || IsFunction2(type) || IsNever(type);
-  if (unsupported) {
-    throw new RepairError(context, type, value, "Type is not repairable");
-  }
-}
-function CreateWhenUndefined(context, type, value) {
-  return guard_exports.IsUndefined(value) && !IsUndefined2(type) ? Create2(context, type) : value;
-}
-function FinalizeRepair(context, type, repaired) {
-  return IsRefine(type) ? Check2(context, type, repaired) ? repaired : Create2(context, type) : repaired;
-}
-function FromType26(context, type, value) {
-  AssertRepairableValue(context, type, value);
-  AssertRepairableType(context, type, value);
-  const candidate = CreateWhenUndefined(context, type, value);
-  const repaired = IsArray2(type) ? FromArray14(context, type, candidate) : IsEnum(type) ? FromEnum5(context, type, candidate) : IsIntersect(type) ? FromIntersect12(context, type, candidate) : IsObject2(type) ? FromObject18(context, type, candidate) : IsRecord(type) ? FromRecord9(context, type, candidate) : IsRef(type) ? FromRef11(context, type, candidate) : IsTemplateLiteral(type) ? FromTemplateLiteral6(context, type, candidate) : IsTuple(type) ? FromTuple11(context, type, candidate) : IsUnion(type) ? FromUnion15(context, type, candidate) : FromUnknown2(context, type, candidate);
-  return FinalizeRepair(context, type, repaired);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/repair/repair.mjs
-function Repair(...args) {
-  const [context, type, value] = arguments_exports.Match(args, {
-    3: (context2, type2, value2) => [context2, type2, value2],
-    2: (type2, value2) => [{}, type2, value2]
-  });
-  const repaired = FromType26(context, type, value);
-  Assert(context, type, repaired);
-  return repaired;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/value.mjs
-var value_exports = {};
-__export(value_exports, {
-  Assert: () => Assert,
-  Check: () => Check2,
-  Clean: () => Clean,
-  Clone: () => Clone2,
-  Convert: () => Convert,
-  Create: () => Create2,
-  Decode: () => Decode10,
-  Default: () => Default,
-  Diff: () => Diff,
-  Encode: () => Encode10,
-  Equal: () => Equal,
-  Errors: () => Errors2,
-  HasCodec: () => HasCodec,
-  Hash: () => Hash2,
-  Parse: () => Parse,
-  Patch: () => Patch,
-  Pointer: () => pointer_exports,
-  Repair: () => Repair
-});
-
 // src/codemode/protocol.ts
 var MEMORY_LIMIT_BYTES = 2 * 1024 ** 3;
 var outputItemSchema = typebox_exports.Union([
   typebox_exports.Object({ type: typebox_exports.Literal("text"), text: typebox_exports.String() }),
   typebox_exports.Object({ type: typebox_exports.Literal("image"), data: typebox_exports.String(), mimeType: typebox_exports.String() })
-]);
-var toolDeclSchema = typebox_exports.Object({
-  name: typebox_exports.String(),
-  description: typebox_exports.Optional(typebox_exports.String()),
-  /** 工具的 structuredSchema（TypeBox schema）：脚本侧据此渲染 call() 的返回类型。 */
-  structuredSchema: typebox_exports.Optional(typebox_exports.Unknown())
-});
-var startSchema = typebox_exports.Object({
-  t: typebox_exports.Literal("start"),
-  code: typebox_exports.String(),
-  tools: typebox_exports.Array(toolDeclSchema),
-  store: typebox_exports.Record(typebox_exports.String(), typebox_exports.Unknown())
-});
-var resultSchema = typebox_exports.Union([
-  typebox_exports.Object({
-    t: typebox_exports.Literal("result"),
-    id: typebox_exports.Number(),
-    ok: typebox_exports.Literal(true),
-    value: typebox_exports.Unknown()
-  }),
-  typebox_exports.Object({
-    t: typebox_exports.Literal("result"),
-    id: typebox_exports.Number(),
-    ok: typebox_exports.Literal(false),
-    error: typebox_exports.String()
-  })
 ]);
 var callSchema = typebox_exports.Object({
   t: typebox_exports.Literal("call"),
@@ -8854,18 +8233,7 @@ var doneSchema = typebox_exports.Union([
     writes: storeWritesSchema
   })
 ]);
-var hostMessageSchema = typebox_exports.Union([startSchema, resultSchema]);
 var workerMessageSchema = typebox_exports.Union([callSchema, outputFrameSchema, doneSchema]);
-function decode(schema, value) {
-  if (!value_exports.Check(schema, value)) {
-    const preview = JSON.stringify(value).slice(0, 200);
-    return { ok: false, error: `unexpected message shape: ${preview}` };
-  }
-  return { ok: true, frame: value };
-}
-function decodeHostMessage(value) {
-  return decode(hostMessageSchema, value);
-}
 
 // src/codemode/worker.ts
 function discardOutput(memory) {
@@ -8883,6 +8251,19 @@ function discardOutput(memory) {
 }
 function post(message) {
   parentPort?.postMessage(message);
+}
+function isResultMessage(value) {
+  return isRecord(value) && value.t === "result" && typeof value.id === "number";
+}
+function isStartMessage(value) {
+  return isRecord(value) && value.t === "start";
+}
+function previewMessage(value) {
+  try {
+    return JSON.stringify(value).slice(0, 200);
+  } catch {
+    return String(value);
+  }
 }
 function emptyWrites() {
   return { set: {}, delete: [] };
@@ -8935,6 +8316,7 @@ async function runScript(wasm, start) {
     "bridge",
     (kind, a, b, c) => {
       const stringOr = (value, fallback) => value === void 0 || value.isUndefined ? fallback : value.toString();
+      const numberOr = (value, fallback) => value === void 0 || value.isUndefined ? fallback : value.toNumber();
       switch (kind.toString()) {
         case "call": {
           post({
@@ -8956,6 +8338,20 @@ async function runScript(wasm, start) {
               }
             ] : [{ type: "text", text: stringOr(b, "") }]
           });
+          break;
+        }
+        case "sleep": {
+          const id = a.toNumber();
+          const ms = numberOr(b, 0);
+          setTimeout(() => {
+            try {
+              vm.withScope(() => {
+                vm.callFunction(timerDone, api, vm.newNumber(id)).dispose();
+              });
+            } catch {
+            }
+            drain();
+          }, ms);
           break;
         }
         case "done": {
@@ -9001,6 +8397,7 @@ async function runScript(wasm, start) {
     )
   );
   const settle = api.getProp("settle");
+  const timerDone = api.getProp("timerDone");
   const run = api.getProp("run");
   const stalled = api.getProp("stalled");
   const drain = () => {
@@ -9008,19 +8405,26 @@ async function runScript(wasm, start) {
     vm.callFunction(stalled, api).dispose();
   };
   port.on("message", (value) => {
-    const message = decodeHostMessage(value);
-    if (!message.ok || message.frame.t !== "result") {
+    if (!isResultMessage(value)) {
+      post({
+        t: "done",
+        ok: false,
+        error: {
+          kind: "sandbox",
+          message: `codemode worker: unexpected host message: ${previewMessage(value)}`
+        },
+        writes: emptyWrites()
+      });
       return;
     }
-    const result = message.frame;
     try {
       vm.withScope(() => {
         vm.callFunction(
           settle,
           api,
-          vm.newNumber(result.id),
-          result.ok ? vm.true : vm.false,
-          result.ok ? result.value === void 0 ? vm.undefined : vm.newString(JSON.stringify(result.value)) : vm.newString(result.error)
+          vm.newNumber(value.id),
+          value.ok ? vm.true : vm.false,
+          value.ok ? value.value === void 0 ? vm.undefined : vm.newString(JSON.stringify(value.value)) : vm.newString(value.error)
         );
       });
     } catch {
@@ -9060,8 +8464,7 @@ function main() {
   }
   const { wasm } = workerData;
   port.once("message", (value) => {
-    const message = decodeHostMessage(value);
-    if (!message.ok || message.frame.t !== "start") {
+    if (!isStartMessage(value)) {
       post({
         t: "done",
         ok: false,
@@ -9070,7 +8473,7 @@ function main() {
       });
       return;
     }
-    void runScript(wasm, message.frame);
+    void runScript(wasm, value);
   });
 }
 main();

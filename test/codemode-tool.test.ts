@@ -524,6 +524,20 @@ describe("codemode 工具", () => {
     expect(textOf(result)).toContain('"function|false"');
   });
 
+  it("描述里有 sleep 的声明，脚本里可以直接等待", async () => {
+    const h = await harness();
+
+    expect(h.codemode.description).toContain(
+      "declare function sleep(seconds: number): Promise<void>;",
+    );
+    // sleep 是内建能力：不在 ALL_TOOLS 里，也不是 call 重载
+    const result = await runScript(
+      h,
+      `await sleep(0.01); return [typeof sleep, ALL_TOOLS.some((tool) => tool.name === "sleep")].join("|");`,
+    );
+    expect(textOf(result)).toContain('"function|false"');
+  });
+
   it("描述里不列出 spawn-agent", async () => {
     const h = await harness({ active: ["Read", "Edit", "spawn-agent"] });
 

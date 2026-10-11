@@ -13,9 +13,9 @@ import { parentPort, workerData } from "node:worker_threads";
 
 import { JSException, type JSValueHandle, MAX_STACK_SIZE, QuickJS } from "quickjs-wasi";
 
+import { isRecord } from "../lib/narrow.js";
 import { PRELUDE_SOURCE } from "./prelude.js";
 import {
-  decodeHostMessage,
   type HostMessage,
   MEMORY_LIMIT_BYTES,
   type ScriptError,
@@ -44,6 +44,28 @@ function discardOutput(memory: { readonly buffer: ArrayBufferLike }) {
 
 function post(message: WorkerMessage): void {
   parentPort?.postMessage(message);
+}
+
+/**
+ * 主线程发来的消息由主线程自己构造，形状由 `HostMessage` 类型约束，所以这里只做分派、
+ * 不重复 typebox 校验；但形状对不上就是内部 bug，得报错而不是静默丢弃——静默丢弃只会
+ * 让脚本永远等在 pending 上，症状比故障本身难查得多。
+ */
+function isResultMessage(value: unknown): value is Extract<HostMessage, { t: "result" }> {
+  return isRecord(value) && value.t === "result" && typeof value.id === "number";
+}
+
+function isStartMessage(value: unknown): value is Extract<HostMessage, { t: "start" }> {
+  return isRecord(value) && value.t === "start";
+}
+
+/** 畸形消息的预览：截断成一行，序列化不了（循环引用、undefined 等）就退化成 String()。 */
+function previewMessage(value: unknown): string {
+  try {
+    return JSON.stringify(value).slice(0, 200);
+  } catch {
+    return String(value);
+  }
 }
 
 function emptyWrites(): StoreWrites {
@@ -111,6 +133,8 @@ async function runScript(wasm: object, start: Extract<HostMessage, { t: "start" 
     ) => {
       const stringOr = (value: JSValueHandle | undefined, fallback: string): string =>
         value === undefined || value.isUndefined ? fallback : value.toString();
+      const numberOr = (value: JSValueHandle | undefined, fallback: number): number =>
+        value === undefined || value.isUndefined ? fallback : value.toNumber();
       switch (kind.toString()) {
         case "call": {
           post({
@@ -136,6 +160,22 @@ async function runScript(wasm: object, start: Extract<HostMessage, { t: "start" 
                   ]
                 : [{ type: "text", text: stringOr(b, "") }],
           });
+          break;
+        }
+        case "sleep": {
+          // 用 worker 线程自己的定时器：不经主线程，也没有消息往返
+          const id = a.toNumber();
+          const ms = numberOr(b, 0);
+          setTimeout(() => {
+            try {
+              vm.withScope(() => {
+                vm.callFunction(timerDone, api, vm.newNumber(id)).dispose();
+              });
+            } catch {
+              /* VM 已中止 */
+            }
+            drain();
+          }, ms);
           break;
         }
         case "done": {
@@ -186,6 +226,7 @@ async function runScript(wasm: object, start: Extract<HostMessage, { t: "start" 
     ),
   );
   const settle = api.getProp("settle");
+  const timerDone = api.getProp("timerDone");
   const run = api.getProp("run");
   const stalled = api.getProp("stalled");
 
@@ -196,23 +237,31 @@ async function runScript(wasm: object, start: Extract<HostMessage, { t: "start" 
   };
 
   port.on("message", (value: unknown) => {
-    const message = decodeHostMessage(value);
-    if (!message.ok || message.frame.t !== "result") {
+    if (!isResultMessage(value)) {
+      // 主线程只会发 result：对不上就是宿主自己的 bug，报出去而不是静默让脚本挂住
+      post({
+        t: "done",
+        ok: false,
+        error: {
+          kind: "sandbox",
+          message: `codemode worker: unexpected host message: ${previewMessage(value)}`,
+        },
+        writes: emptyWrites(),
+      });
       return;
     }
-    const result = message.frame;
     try {
       vm.withScope(() => {
         vm.callFunction(
           settle,
           api,
-          vm.newNumber(result.id),
-          result.ok ? vm.true : vm.false,
-          result.ok
-            ? result.value === undefined
+          vm.newNumber(value.id),
+          value.ok ? vm.true : vm.false,
+          value.ok
+            ? value.value === undefined
               ? vm.undefined
-              : vm.newString(JSON.stringify(result.value))
-            : vm.newString(result.error),
+              : vm.newString(JSON.stringify(value.value))
+            : vm.newString(value.error),
         );
       });
     } catch {
@@ -256,8 +305,7 @@ function main(): void {
   const { wasm } = workerData as WorkerBootstrap;
   // 主线程先发 start；worker 收到后才实例化 VM（wasm 已在主线程编译好）
   port.once("message", (value: unknown) => {
-    const message = decodeHostMessage(value);
-    if (!message.ok || message.frame.t !== "start") {
+    if (!isStartMessage(value)) {
       post({
         t: "done",
         ok: false,
@@ -266,7 +314,7 @@ function main(): void {
       });
       return;
     }
-    void runScript(wasm, message.frame);
+    void runScript(wasm, value);
   });
 }
 

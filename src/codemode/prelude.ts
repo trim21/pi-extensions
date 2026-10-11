@@ -1,16 +1,17 @@
 /**
  * codemode 脚本侧的 prelude：在 QuickJS VM 里先于脚本求值，构建脚本能看到的全部
  * 能力（`call` / `CallFailedError` / `ALL_TOOLS` / `fs` / `text` / `image` / `exit` /
- * `console` / `store`），并把宿主桥接封在闭包里——脚本拿不到 `bridge` 本身。
+ * `sleep` / `console` / `store`），并把宿主桥接封在闭包里——脚本拿不到 `bridge` 本身。
  *
  * 值与参数过桥时都是 JSON 文本，本侧负责 parse/stringify；异步调用用一个 pending
  * 表把 id 映射到 promise，由宿主在结果到达时 settle。每次调用失败（工具或 fs 原语）
  * 都由宿主以 `ok: false` 回报，本侧统一 reject 成 `CallFailedError`（脚本可以按
  * instanceof 区分「调用失败」与自己的运行期错误）。
  *
- * 求值结果是一个函数 `(bridge, toolsJson, storeJson) => { settle, run, stalled }`。
+ * 求值结果是一个函数 `(bridge, toolsJson, storeJson) => { settle, timerDone, run, stalled }`。
  * `bridge(kind, a, b, c)`：
  * - `"call"`（id, name, argsJson）：工具，以及名字为 `fs.read` / `fs.write` 的 fs 原语
+ * - `"sleep"`（id, ms）：等待，由 worker 线程自己的定时器在 ms 后调 `timerDone(id)`
  * - `"output"`（"text", text）/（"image", data, mimeType）
  * - `"done"`（ok, valueJsonOrErrorJson, writesJson）
  */
@@ -259,6 +260,22 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 		throw EXIT;
 	}
 
+	// 脚本唯一的等待手段：worker 线程在 ms 后调 timerDone(id) 解开它。沙箱里没有别的
+	// timer，也没有上限——睡多久由脚本决定，结束只能靠调用方中止。
+	function sleep(seconds) {
+		if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+			throw new TypeErrorCtor(
+				"sleep(seconds) expects a non-negative number of seconds, got " + format(seconds),
+			);
+		}
+		return new Promise((resolve) => {
+			const id = nextId++;
+			// sleep 只会被 timerDone 成功解开，reject 用不到
+			pending.set(id, { resolve, reject: () => {} });
+			bridge("sleep", id, Math.round(seconds * 1000));
+		});
+	}
+
 	const console = {};
 	for (const level of ["log", "info", "warn", "error", "debug"]) {
 		console[level] = (...args) => {
@@ -275,6 +292,7 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 	Object.defineProperty(globalThis, "text", { value: text, enumerable: true });
 	Object.defineProperty(globalThis, "image", { value: image, enumerable: true });
 	Object.defineProperty(globalThis, "exit", { value: exit, enumerable: true });
+	Object.defineProperty(globalThis, "sleep", { value: sleep, enumerable: true });
 
 	return {
 		settle(id, ok, payload) {
@@ -293,6 +311,13 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 				return;
 			}
 			entry.resolve(value);
+		},
+		// worker 线程的定时器到点后解开一次 sleep（成功路径，不带值）
+		timerDone(id) {
+			const entry = pending.get(id);
+			if (!entry) return;
+			pending.delete(id);
+			entry.resolve();
 		},
 		run(fn) {
 			let promise;

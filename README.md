@@ -31,7 +31,8 @@
 
 `codemode` 让模型写一段 JavaScript（作为 async 函数体，`await` 与 `return` 都可用），在
 进程内的 worker 线程里用 QuickJS wasm VM 执行。VM 里没有 node、文件系统、网络、timer
-或模块加载，脚本的出口只有 `call(name, args)` 与 `fs.read` / `fs.write` 两个文件原语。
+或模块加载，脚本的出口只有 `call(name, args)`、`fs.read` / `fs.write` 两个文件原语与内建的
+`sleep`。
 
 - **嵌套调用经工具总线**：`call("Bash", { command })` 最终执行的是 `Bash` 工具自己的
   `execute`，所以工具的审批照常生效（Bash 沙箱外执行会弹自己的提权确认）。codemode
@@ -60,9 +61,11 @@
   （脚本可按 `instanceof CallFailedError` 区分调用失败与自身运行期错误）。没有声明输出
   结构的工具不进集合，`call()` 会报「not available in codemode」。
 - **脚本接口**：`call` / `CallFailedError` / `ALL_TOOLS` / `fs.read` / `fs.write` /
-  `text` / `image` / `exit` / `console.*` / `store.set` / `store.get` / `store.list`
+  `text` / `image` / `exit` / `sleep` / `console.*` / `store.set` / `store.get` / `store.list`
   （会话内持久的键值表）；首行可选 `// @options: {"max_output_tokens": 10000}`。
   脚本没有超时：死循环由调用方中止（Esc）结束，等嵌套调用返回（含用户审批弹窗）多久都不算超时。
+  `await sleep(seconds)`（秒，可为小数）是脚本唯一的等待手段，由 worker 线程自己的定时器驱动
+  （不经主线程、不产生进度帧），也没有上限——要等多久由脚本决定，不想等就中止。
 - **工具描述**里给出每个可调用工具的 `declare function call(name, args): Promise<T>` 重载，
   参数与返回类型都取自工具自己的 schema，所以模型在写脚本前就知道返回值形状。
 - **store** 记在每次成功调用工具结果的 `details.store` 上（与 `src/lib/file-reads.ts` 的
