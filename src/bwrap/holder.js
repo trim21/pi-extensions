@@ -28,7 +28,10 @@ async function waitFor(attempts, delayMs, predicate) {
 async function main() {
   process.stdin.resume();
   process.stdin.on("end", () => process.exit(0));
-  await waitFor(100, 100, tap0Exists);
+  if (!await waitFor(100, 100, tap0Exists)) {
+    console.error("slirp4netns did not create tap0 within 10s");
+    process.exit(1);
+  }
   const mihomo = spawn(mihomoPath, ["-d", mihomoHome, "-config", configBase64], {
     stdio: ["ignore", "inherit", "inherit"]
   });
@@ -43,7 +46,10 @@ async function main() {
     stop();
     process.exit(0);
   });
-  await new Promise((resolve) => mihomo.once("exit", () => resolve()));
+  const exitCode = await new Promise((resolve) => {
+    mihomo.once("exit", (code) => resolve(code));
+  });
+  process.exit(exitCode ?? 1);
 }
 try {
   await main();

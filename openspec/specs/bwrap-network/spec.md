@@ -74,6 +74,10 @@
 
 **停止信号的约束**：持有 network namespace 的包装进程（`unshare`）会永久阻塞 SIGINT/SIGTERM，停止网络栈 MUST NOT 依赖它响应这类信号，也 MUST NOT 为此设置固定等待超时；应以不可被阻塞或忽略的信号终止包装进程，由包装进程把终止传递给 pid namespace 的 init，再由 init 优雅停止过滤进程。
 
+**终止通道的约束**：终止网络栈 MUST 优先使用不依赖 pid 的通道——关闭 holder 的 stdin 写端触发其自我退出（内核随之清理 pid namespace），slirp4netns 由 exit-fd HUP 自行退出。MUST NOT 把「先检查子进程是否已退出、再按 pid（或子进程句柄）发信号」当作常规终止手段：检查与发信号之间不是原子的，子进程可能在检查通过后退出、其 pid 被内核复用，信号会落到无关进程上（Node 的子进程句柄同样最终按 pid 调用 `kill(2)`，无法消除该窗口）。等待子进程退出 MUST 基于子进程状态或事件，MUST NOT 用 `kill(pid, 0)` 轮询判活。仅在 fd 通道超时（进程卡死）时才允许用子进程句柄强杀作为兜底，兜底路径的残余风险 MUST 在实现中注明。
+
+**停栈的幂等与兜底注销**：停止网络栈 MUST 幂等——重复调用不得重复终止。用于「调用方忘记停栈」的 GC 兜底 MUST 在正常停栈时注销，且该兜底 MUST 只走 fd 通道：对象被回收时记下的 pid 可能早已被内核复用给无关进程，兜底路径 MUST NOT 按 pid 发信号。
+
 #### Scenario: 命令正常结束
 
 - **WHEN** 沙箱命令完成
@@ -98,6 +102,45 @@
 
 - **WHEN** 连续多次执行沙箱命令
 - **THEN** 每次命令的网络栈独立创建与销毁，前后无进程或 namespace 累积
+
+#### Scenario: 重复停栈不重复终止
+
+- **WHEN** 调用方对同一网络栈重复调用停止方法
+- **THEN** 第二次调用直接返回，不做任何重复终止
+
+#### Scenario: 常规停栈不按 pid 发信号
+
+- **WHEN** 调用方停止网络栈，且各进程正常存活（未卡死）
+- **THEN** 停栈只关闭 fd 通道让进程自行退出，不向任何 pid 发送信号
+
+#### Scenario: 停栈后兜底已注销
+
+- **WHEN** 网络栈正常停止后，其句柄对象被回收
+- **THEN** GC 兜底不再触发任何终止（它只关闭 fd 通道，且已注销），临时目录与正常停栈时一致地已删除
+
+#### Scenario: 子进程已自行退出时不再发信号
+
+- **WHEN** 承载网络栈的子进程在调用方停止它之前已自行退出（例如过滤进程崩溃）
+- **THEN** 停栈不对该 pid 发信号，仅做收尾
+
+### Requirement: 运行期失败诊断留档
+
+网络栈在命令运行期间异常终止时（承载进程在调用方停止它之前已自行退出），MUST 把已收集的子进程输出与失败原因落盘，并把日志路径交给调用方；该命令以失败结束时，调用方 MUST 把日志路径呈现给用户。正常停栈 MUST NOT 产生这类日志。
+
+#### Scenario: 运行期异常退出留档
+
+- **WHEN** 命令运行期间过滤进程或 holder 崩溃，holder 在调用方停栈前已退出
+- **THEN** 已收集的子进程输出与退出状态落盘为日志文件，停栈结果里带有该路径
+
+#### Scenario: 命令失败时用户能看到日志路径
+
+- **WHEN** 网络栈在运行期间异常退出且该命令以失败结束
+- **THEN** 呈现给用户的错误信息里带有网络栈日志的路径
+
+#### Scenario: 正常停栈不落盘
+
+- **WHEN** 命令正常结束、调用方主动停止网络栈
+- **THEN** 不产生网络栈日志文件，停栈结果里没有日志路径
 
 ### Requirement: 临时工作目录不残留
 
@@ -136,6 +179,8 @@
 
 过滤进程完成网络接管后命令才开始执行。
 
+**egress 接口的就绪前提**：网络栈的 egress 接口（tap0）由宿主侧的 egress 进程创建，过滤进程的出站绑定在该接口上。接口未就绪时 MUST NOT 启动过滤进程：等待接口就绪 MUST 有明确的失败路径，未就绪时 MUST 立即以带原因的失败结束，使调用方在秒级内看到真实原因（egress 进程未能创建接口），而不是过滤进程的就绪超时。
+
 #### Scenario: 就绪后执行命令
 
 - **WHEN** 网络栈启动
@@ -145,6 +190,11 @@
 
 - **WHEN** 过滤进程的就绪日志单行被输出流切分为多个数据块
 - **THEN** 就绪判定不受数据块边界影响，仍能正确识别
+
+#### Scenario: egress 接口未就绪时立即失败
+
+- **WHEN** egress 进程未能在超时内创建 tap0（版本、参数或权限问题）
+- **THEN** holder 立即以非零码退出并输出原因，调用方在秒级内看到「接口未创建」类的失败，而不是等待过滤进程就绪超时
 
 ## Implementation
 
@@ -174,5 +224,9 @@ pi（Bash 工具进程，持有 stdin 写端）
 - **DNS 层拒绝**：`nameserver` 设为伪服务器 `rcode://name_error`，未允许域名即时拿到 NXDOMAIN（客户端报 `Could not resolve host`），不查上游、不等超时。mihomo 的 fakeip 分支没有按域名拒绝的钩子，收窄白名单是把拒绝做到 DNS 层的唯一途径；`dns.rules` 不是 mihomo 的字段（会被静默忽略），不要用它表达 DNS 策略。
 - **DIRECT 出站解析**：`direct-nameserver` 指向配置的真实 DNS——连接由 fake IP 还原成域名后 DIRECT 要按域名重新解析，不指定会解析回 fake-ip 再进 TUN 成环。
 - **条目匹配两档**：裸域名条目在 DNS 侧写裸域名、连接层写 `DOMAIN,<host>`（只匹配该域名）；`*.` 条目在 DNS 侧写 `.example.com`（trie 的 dot-wildcard）、连接层写 `DOMAIN-WILDCARD,*.example.com`（glob 的 `*` 跨点），两者都是「任意深度子域名、不含 apex」。两层由同一个条目生成，保证 DNS 白名单与连接层规则表达同一集合；带端口条目在连接层用 `AND,(<域名规则>),(DST-PORT,<port>,DIRECT),DIRECT` 组合。
+
+- **终止走 fd 通道**：停栈不按 pid 发信号，而是关闭 holder 的 stdin 写端——holder 读到 EOF 退出（`holder.ts` 的 stdin 监听），内核清理其 pid namespace（mihomo 随之消失），unshare waitpid 后退出，holder 持有的 exit-fd 写端关闭，slirp4netns 收到 HUP 自行退出。检查「子进程是否已退出」再发信号不是原子的（Node 的子进程 kill 最终按 pid 调 `kill(2)`），因此只作兜底：`waitForChildExit` 超时（进程卡死）才用句柄强杀，残余窗口在 `killChild` 注释里注明；等待退出用 `exit` 事件 + `AbortSignal.timeout`，不用 `kill(pid, 0)` 轮询。GC 兜底同样只关 fd（`FinalizationRegistry` 回调里不能 await，也绝不按 pid 发信号），正常停栈会注销它。
+- **运行期异常退出的留档**：holder 把 mihomo 的退出码作为自己的退出码；`stop()` 在关 fd 之前发现 holder 已自行退出即记 `exitedEarly`，此时把缓冲的 holder/slirp 输出落盘为 `agent-dir/tmp/bwrap-netstack-*.log`，路径经 `SandboxRunResult.networkStackLog` 交给调用方，运行时层把它附进 `sandboxHint`。
+- **egress 接口 fail fast**：holder 等 tap0 满 10 秒未出现时打印 `slirp4netns did not create tap0 within 10s` 并以退出码 1 退出，宿主侧的 exit 监听立即把它变成一条可诊断的启动失败，不再呈现为过滤进程就绪超时。
 
 涉及文件：`src/bwrap/network-stack.ts`、`src/bwrap/holder.ts`（esbuild 编译为 `holder.js`）、`src/bwrap/mihomo-config.ts`、`src/lib/proc.ts`；命令经 netns 执行的前缀由 `src/bwrap/exec.ts` 组装。

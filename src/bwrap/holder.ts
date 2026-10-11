@@ -8,6 +8,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 // 否则出站流量会绕回 mihomo 的 TUN 被 dns-hijack 自劫持），它通过 exit-fd 绑定本进程的生命周期：
 // fd 3 是 exit-fd 的写端（network-stack 经 unshare 传入），本进程存活期间保持打开，死亡即关闭，
 // slirp4netns 侧收到 HUP 自行退出并释放 tap fd，netns 引用随之归零。
+// 常规停栈也走这条 stdin EOF 通道（宿主关闭写端而不是按 pid 发信号）：检查 pid 与发信号
+// 之间不是原子的，用 pid 终止可能误伤复用同一 pid 的无关进程。
 const args = process.argv.slice(2);
 const configBase64 = args[0];
 const mihomoPath = args[1];
@@ -45,12 +47,17 @@ async function waitFor(
 async function main(): Promise<void> {
   // 宿主（pi）进程死亡检测：宿主以任何方式退出（含 SIGKILL）都会关闭它持有的 stdin 写端，
   // 这里读到 EOF 即自杀（init 退出即触发内核清理整个 pid ns，顺带关闭 exit-fd 写端）。
+  // 宿主侧的正常停栈同样只是关闭这个写端——这条通道绑定 fd 而非 pid，不存在 pid 复用问题。
   process.stdin.resume();
   process.stdin.on("end", () => process.exit(0));
 
   // tap0 由宿主侧的 slirp4netns（fork 进本 netns）创建，就绪后再拉起 mihomo。
-  // mihomo 日志透传到 holder 的 stdout/stderr，宿主侧监听 "Tun adapter listening" 判定就绪。
-  await waitFor(100, 100, tap0Exists);
+  // 接口没建起来就启动 mihomo 必然失败（配置把出站绑在 tap0 上），宿主侧只会看到
+  // 「过滤进程就绪超时」；这里直接以带原因的失败结束，让真实死因秒级进入诊断日志。
+  if (!(await waitFor(100, 100, tap0Exists))) {
+    console.error("slirp4netns did not create tap0 within 10s");
+    process.exit(1);
+  }
 
   const mihomo = spawn(mihomoPath, ["-d", mihomoHome, "-config", configBase64], {
     stdio: ["ignore", "inherit", "inherit"],
@@ -68,7 +75,11 @@ async function main(): Promise<void> {
     process.exit(0);
   });
 
-  await new Promise<void>((resolve) => mihomo.once("exit", () => resolve()));
+  // 传播 mihomo 的退出码：宿主侧据此区分「过滤进程崩溃」（非零）与「停栈时的优雅退出」
+  const exitCode = await new Promise<number | null>((resolve) => {
+    mihomo.once("exit", (code) => resolve(code));
+  });
+  process.exit(exitCode ?? 1);
 }
 
 try {

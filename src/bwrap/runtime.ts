@@ -389,6 +389,18 @@ export function sandboxHintBlock(hint: string | undefined): { type: "text"; text
   return hint === undefined ? [] : [{ type: "text", text: hint }];
 }
 
+/** 网络栈在命令运行期间异常退出时，把落盘的诊断日志路径附进沙箱状态提示。 */
+function withNetworkStackLog(
+  hint: string | undefined,
+  logPath: string | undefined,
+): string | undefined {
+  if (logPath === undefined) {
+    return hint;
+  }
+  const line = `The sandbox network stack exited during the command; diagnostics: ${logPath}`;
+  return hint === undefined ? line : `${hint}\n${line}`;
+}
+
 /**
  * 项目配置文件形状非法时的错误：消息带文件路径与字段位置，cause 保留校验错误
  * （Value.Check 只回答是否合法，详情用同一 schema 解析一次取到）。
@@ -618,7 +630,7 @@ export class BwrapRuntime {
     );
 
     try {
-      const { exitCode } = await runInSandbox(runtime, {
+      const { exitCode, networkStackLog } = await runInSandbox(runtime, {
         workspace,
         commandCwd: execCwd,
         command: request.command,
@@ -633,7 +645,7 @@ export class BwrapRuntime {
       const partial = await this.finalizeOutput(output);
       return {
         exitCode,
-        sandboxHint,
+        sandboxHint: withNetworkStackLog(sandboxHint, networkStackLog),
         ...(sandboxReminder && { sandboxReminder }),
         output: partial.output,
         ...(partial.fullOutputPath && { fullOutputPath: partial.fullOutputPath }),

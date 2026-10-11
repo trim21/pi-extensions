@@ -28,7 +28,7 @@ import {
   type ResolvedBwrap,
 } from "./core.js";
 import { buildBwrapInvocation, createBwrapBashOperations, invocationArgv } from "./exec.js";
-import type { NetworkStack } from "./network-stack.js";
+import type { NetworkStack, NetworkStackStopResult } from "./network-stack.js";
 
 export interface SandboxConfigInput {
   /** 沙箱工作区：默认配置文件的查找目录，也是 writablePaths 中 "." 的解析基准。 */
@@ -65,6 +65,8 @@ export interface SandboxRunOptions {
 export interface SandboxRunResult {
   /** 命令退出码；被信号杀死时为 null。 */
   exitCode: number | null;
+  /** 命令运行期间网络栈异常退出时落盘的诊断日志路径（正常停栈没有这个字段）。 */
+  networkStackLog?: string;
 }
 
 /** 把 "."/"~" 形式的路径收敛成绝对路径，使执行策略自成一体、可断言。 */
@@ -117,6 +119,8 @@ export async function runInSandbox(
   const local = options.unsandboxed === true || !resolved.bwrapEnabled;
   // 每次执行现建现停网络栈（起栈 ~40ms、停栈 ~100ms），作用域结束即停栈：allowlist 变更即时生效
   const stack = local ? undefined : await createNetworkStack(resolved, options.log);
+  let result: SandboxRunResult | undefined;
+  let failure: unknown;
   try {
     if (stack) {
       options.onNetworkStack?.(stack);
@@ -129,14 +133,38 @@ export async function runInSandbox(
       signal: options.signal,
       timeout: options.timeout,
     });
-    return { exitCode };
-  } finally {
-    try {
-      await stack?.stop();
-    } catch {
-      // best-effort：停栈失败（进程已退出/目录删除失败）不掩盖命令结果
-    }
+    result = { exitCode };
+  } catch (error) {
+    failure = error;
   }
+  // 停栈放在命令结束之后、结果返回之前：网络栈若在命令运行期间异常退出，停栈返回的
+  // 日志路径要能附到失败信息上（成功路径不打扰用户，也不改变命令结果）
+  let stopResult: NetworkStackStopResult | undefined;
+  try {
+    stopResult = await stack?.stop();
+  } catch {
+    // best-effort：停栈失败（进程已退出/目录删除失败）不掩盖命令结果
+  }
+  if (failure !== undefined) {
+    if (!(failure instanceof Error)) {
+      // 非 Error 抛出（字符串 / 对象）：保留字符串内容，其余不渲染成 [object Object]
+      throw new Error(
+        typeof failure === "string" ? failure : "Sandbox command failed (non-error value thrown)",
+      );
+    }
+    if (stopResult?.exitedEarly === true) {
+      const detail =
+        stopResult.logPath === undefined
+          ? "(network stack exited during the command; diagnostics could not be written)"
+          : `(network stack diagnostics: ${stopResult.logPath})`;
+      failure.message = `${failure.message}\n${detail}`;
+    }
+    throw failure;
+  }
+  return {
+    ...(result ?? { exitCode: null }),
+    ...(stopResult?.logPath !== undefined && { networkStackLog: stopResult.logPath }),
+  };
 }
 
 /** 一步式入口：按配置加载策略并在对应沙箱里执行命令（CLI 与集成测试用）。 */

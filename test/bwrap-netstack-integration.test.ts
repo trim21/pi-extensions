@@ -1,10 +1,12 @@
+import { ChildProcess, spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   completeBwrapConfig,
@@ -230,4 +232,84 @@ describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack inte
       await stack.stop();
     }
   }, 60000);
+
+  // 回归：正常停栈必须报告「这次是我们停的」，且重复调用幂等——正常路径要注销 GC 兜底，
+  // 否则对象被回收后会再对可能已被内核复用的 pid 发一次信号。
+  it("reports a normal stop without diagnostics and is idempotent", async () => {
+    const stack = await startNetworkStack({
+      allowlist: [],
+      dnsServers: await resolveDnsServers(),
+      mihomoPath: findMihomo(),
+      slirp4netnsPath: findSlirp4netns(),
+    });
+    const first = await stack.stop();
+    expect(first).toEqual({ exitedEarly: false });
+    expect(await stack.stop()).toEqual(first);
+  }, 60000);
+
+  // 回归：常规停栈不得按 pid 发信号——「检查子进程是否已退出」与「发信号」之间不是
+  // 原子的，子进程可能在检查通过后退出、pid 被内核复用，信号会落到无关进程上。停栈必须
+  // 走 fd 通道（关 holder 的 stdin → holder 自行退出 → 内核清理 pid ns → exit-fd HUP
+  // → slirp4netns 自行退出）。
+  it("stops without sending any signal to a pid", async () => {
+    const kill = vi.spyOn(ChildProcess.prototype, "kill");
+    try {
+      const stack = await startNetworkStack({
+        allowlist: [],
+        dnsServers: await resolveDnsServers(),
+        mihomoPath: findMihomo(),
+        slirp4netnsPath: findSlirp4netns(),
+      });
+      await stack.stop();
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
+  }, 60000);
+
+  // 回归：holder 在停栈前自行退出（运行期崩溃）时必须留档——此前缓冲里的 holder /
+  // slirp 输出只在启动失败时落盘，运行期崩溃的死因被直接丢弃。
+  it("persists diagnostics when the stack dies before stopping", async () => {
+    const stack = await startNetworkStack({
+      allowlist: [],
+      dnsServers: await resolveDnsServers(),
+      mihomoPath: findMihomo(),
+      slirp4netnsPath: findSlirp4netns(),
+    });
+    process.kill(stack.holderPid, "SIGKILL");
+    expect(await waitForPidGone(stack.holderPid, 5000)).toBe(true);
+    // Node 在 waitpid 之后才更新子进程的 exitCode，等它一拍再停栈
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const result = await stack.stop();
+    expect(result.exitedEarly).toBe(true);
+    const logPath = result.logPath ?? "";
+    expect(logPath).not.toBe("");
+    const content = await readFile(logPath, "utf8");
+    expect(content).toContain("Network stack exited during command execution");
+    await rm(logPath, { force: true });
+  }, 60000);
+
+  // 回归：egress 接口没建起来时必须立刻以带原因的失败结束，而不是继续启动过滤进程、
+  // 让宿主侧在 20 秒后把它呈现为「过滤进程就绪超时」。直接在宿主 netns 跑 holder：
+  // 没有 slirp4netns 创建 tap0，holder 必须自己发现并退出（宿主上通常不存在 tap0）。
+  it("fails fast when the egress interface is missing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bwrap-holder-"));
+    const holderPath = fileURLToPath(new URL("../src/bwrap/holder.js", import.meta.url));
+    // 配置用 base64("{}")：tap0 缺失时根本不会走到启动过滤进程这一步
+    // stdin 必须是保持打开的 pipe：给 /dev/null 会让 holder 立刻读到 EOF 并自杀
+    const child = spawn(process.execPath, [holderPath, "e30=", findMihomo(), "1500", dir], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    const code = await new Promise<number | null>((resolve) => {
+      child.once("exit", (exitCode) => resolve(exitCode));
+    });
+    child.kill("SIGKILL");
+    expect(code).toBe(1);
+    expect(stderr).toContain("did not create tap0");
+  }, 20000);
 });

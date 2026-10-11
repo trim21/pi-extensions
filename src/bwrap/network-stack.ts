@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-import { forEachLine } from "../lib/proc.js";
+import { childHasExited, forEachLine, killChild, waitForChildExit } from "../lib/proc.js";
 import { generateMihomoConfig, TUN_MTU } from "./mihomo-config.js";
 
 export interface NetworkStackOptions {
@@ -24,6 +24,8 @@ export interface NetworkStackOptions {
 }
 
 const NAMESERVER_PATTERN = /^\s*nameserver\s+(\S+)/;
+/** 停栈时等待单个子进程退出的上限（毫秒）。 */
+const STOP_WAIT_TIMEOUT_MS = 2000;
 
 /**
  * 启动失败时把收集到的子进程完整 stdout/stderr 与错误本身落盘到
@@ -62,40 +64,40 @@ const HOLDER_PATH = fileURLToPath(new URL("holder.js", import.meta.url));
 // ip 通常位于 /usr/sbin 或 /sbin，进程默认 PATH 不含它们；node 则依赖宿主完整 PATH
 const SBIN_PATH_SUFFIX = "/usr/local/sbin:/usr/sbin:/sbin";
 
-function killProcess(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM"): void {
+/** 兜底：对 holder 存活期间读到的 pid ns init pid 发 SIGKILL。 */
+function killInitProcess(pid: number | undefined): void {
   if (!pid) {
     return;
   }
   try {
-    process.kill(pid, signal);
+    process.kill(pid, "SIGKILL");
   } catch {
     // 已退出
   }
 }
 
 /**
- * 终止 holder（unshare 包装进程）必须用 SIGKILL：util-linux 的 unshare 在 fork 前
+ * 请求 holder 自行退出：关闭我们持有的 stdin 写端，holder 读到 EOF 即退出（见
+ * holder.ts），内核随之清理整个 pid namespace，unshare 包装进程 waitpid 后自行退出，
+ * slirp4netns 经 exit-fd HUP 退出。这条通道绑定的是 fd 而不是 pid，不存在「检查时
+ * 还活着、发信号时 pid 已被复用」的窗口——常规停栈走这里，不发任何信号。
+ */
+function requestHolderShutdown(holder: ChildProcess): void {
+  holder.stdin?.destroy();
+}
+
+/**
+ * 兜底强杀 holder（unshare 包装进程）。只在 fd 通道超时（holder 卡死）时使用：Node 的
+ * kill 最终按 pid 调 kill(2)，仍有极小但非零的复用窗口，见 killChild 的说明。
+ *
+ * 必须用 SIGKILL：util-linux 的 unshare 在 fork 前
  * `sigprocmask(SIG_BLOCK, {SIGINT, SIGTERM})`，且只在子进程里恢复掩码——父进程永久
  * 阻塞这两个信号，发给它的 SIGTERM 只会 pending 永不投递（实测 3s 后仍存活）。
  * SIGKILL 不可阻塞，unshare 立即退出；其子进程（pid ns 的 init）经 --kill-child 的
  * PDEATHSIG 收到 SIGTERM，走优雅退出并触发内核清理整个 pid ns。
  */
-function killHolder(pid: number | undefined): void {
-  killProcess(pid, "SIGKILL");
-}
-
-/** 轮询等待进程退出（进程消失即返回）。 */
-async function waitForExit(pid: number): Promise<void> {
-  const timeoutMs = 2000;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+function killHolder(holder: ChildProcess): boolean {
+  return killChild(holder, "SIGKILL");
 }
 
 /** 读取 holder 的直接子进程 pid（pid ns 的 init）：PDEATHSIG 未生效时的 SIGKILL 兜底用。 */
@@ -201,25 +203,37 @@ function forwardOutput(
   });
 }
 
+/** 停栈结果：网络栈在命令运行期间自行终止时，调用方据此拿到落盘的诊断日志。 */
+export interface NetworkStackStopResult {
+  /** holder 在本次停栈之前已自行退出（没有收到本次停止信号）。 */
+  readonly exitedEarly: boolean;
+  /** 运行期异常退出时落盘的诊断日志路径。 */
+  readonly logPath?: string;
+}
+
 export interface NetworkStack {
-  stop(): Promise<void>;
+  /** 停止网络栈；幂等，重复调用返回同一结果。 */
+  stop(): Promise<NetworkStackStopResult>;
   /** holder pid：可 `nsenter -U -n --preserve-credentials -t <pid>` 手动进入该 netns 排查。 */
   readonly holderPid: number;
 }
 
 interface NetworkStackState {
-  holderPid: number;
-  slirpPid: number;
+  /** unshare 包装进程句柄：发信号必须经句柄，pid 退出后可能被内核复用。 */
+  holder: ChildProcess;
+  /** slirp4netns 句柄（宿主 netns，exit-fd 绑定 holder 生命周期）。 */
+  slirp: ChildProcess;
   /** 过滤进程的工作目录：GC 兜底路径也要把它删掉。 */
   mihomoHome: string;
 }
 
-/** 兜底：调用方忘记 stop() 时，对象被 GC 回收后 kill 残留进程并清掉工作目录。 */
+/** 兜底：调用方忘记 stop() 时，对象被 GC 回收后让残留进程自行退出并清掉工作目录。 */
 const stackFinalizer = new FinalizationRegistry<NetworkStackState>((state) => {
-  // holder 退出触发内核清理 pid ns 内全部进程；
-  // slirp4netns 在宿主侧持有 tap fd，单独终止
-  killHolder(state.holderPid);
-  killProcess(state.slirpPid);
+  // 只走 fd 通道：关闭 holder 的 stdin 写端让它自己退出（内核随之清理 pid ns），
+  // slirp4netns 由 exit-fd HUP 退出。GC 回调不能 await，更不能按 pid 发信号——对象被
+  // 回收时这些 pid 可能早已被内核复用给无关进程。holder 卡死时这条兜底清理不掉，
+  // 留给宿主退出或人工处理，这是刻意的取舍。
+  requestHolderShutdown(state.holder);
   // FinalizationRegistry 回调不能 await：尽力而为，删不掉就留下（宿主崩溃时同样如此）
   // eslint-disable-next-line unicorn/no-useless-undefined
   void rm(state.mihomoHome, { recursive: true, force: true }).catch(() => undefined);
@@ -353,44 +367,87 @@ export async function startNetworkStack(options: NetworkStackOptions): Promise<N
       mihomoReady.catch(() => undefined);
     });
 
-    const state: NetworkStackState = { holderPid, slirpPid: slirp.pid, mihomoHome };
+    const state: NetworkStackState = { holder, slirp, mihomoHome };
+    const finalizerToken: object = {};
+    let stopResult: NetworkStackStopResult | undefined;
     const stack: NetworkStack = {
       stop: async () => {
-        const children = await readChildPids(state.holderPid);
-        // slirp4netns 持有 tap fd（pin 住 netns），必须随 holder 一起显式终止；
-        // 先杀它再杀 holder，避免 stop() 与 exit-fd HUP 的收尾时序竞争
-        killProcess(state.slirpPid);
-        // SIGKILL holder → init 经 PDEATHSIG 收到 SIGTERM，优雅停 mihomo 后退出，
-        // 内核清理 pid ns 内全部进程，ns 引用随之归零（毫秒级，见 killHolder）
-        killHolder(state.holderPid);
-        await waitForExit(state.holderPid);
-        await waitForExit(state.slirpPid);
-        // 兜底：init 未在超时内退出 → SIGKILL init → 内核清 pid ns
-        for (const pid of children) {
-          killProcess(pid, "SIGKILL");
+        if (stopResult !== undefined) {
+          return stopResult;
+        }
+        // 兜底只服务「调用方忘记停栈」：正常路径在这里注销，不再触发第二条终止路径
+        stackFinalizer.unregister(finalizerToken);
+        // holder 已自行退出（过滤进程崩溃、unshare 被外在因素终止）：这次不是我们停的
+        const exitedEarly = childHasExited(state.holder);
+        // 常规停栈走 fd 通道：关掉 holder 的 stdin 写端，它读到 EOF 自己退出 → 内核清理
+        // pid ns → unshare waitpid 后退出 → slirp4netns 经 exit-fd HUP 退出。全程不按
+        // pid 发信号，因此没有「检查时还活着、发信号时已被复用」的窗口。
+        requestHolderShutdown(state.holder);
+        const holderExited = await waitForChildExit(state.holder, STOP_WAIT_TIMEOUT_MS);
+        const slirpExited = await waitForChildExit(state.slirp, STOP_WAIT_TIMEOUT_MS);
+        // 兜底：fd 通道超时（holder 卡死，EOF 未被 event loop 处理）才强杀。这是唯一
+        // 仍按 pid 发信号的路径（Node 的 kill 最终落到 kill(2)），窗口极小但非零
+        if (!holderExited) {
+          killHolder(state.holder);
+          const killed = await waitForChildExit(state.holder, STOP_WAIT_TIMEOUT_MS);
+          if (!killed) {
+            // holder 仍存活 → 它的 pid ns init 必然仍属本网络栈，pid 兜底才安全
+            for (const pid of await readChildPids(holderPid)) {
+              killInitProcess(pid);
+            }
+          }
+        }
+        if (!slirpExited) {
+          killChild(state.slirp);
+          await waitForChildExit(state.slirp, STOP_WAIT_TIMEOUT_MS);
         }
         // 工作目录只服务本次实例（mihomo 的 cache.db 等运行时缓存），随停栈删除；
         // best-effort：删除失败不外抛，避免掩盖命令结果
         // eslint-disable-next-line unicorn/no-useless-undefined
         await rm(state.mihomoHome, { recursive: true, force: true }).catch(() => undefined);
+        // 运行期异常退出：缓冲里的 holder/slirp 输出是唯一的死因材料，落盘并把
+        // 路径交给调用方；成功路径不落盘
+        const logPath = exitedEarly
+          ? await writeFailureLog(
+              new Error(
+                `Network stack exited during command execution (holder exit code ${String(state.holder.exitCode)}${state.holder.signalCode === null ? "" : `, signal ${state.holder.signalCode}`})`,
+              ),
+              [holderLog.join(""), slirpLog.join("")],
+            )
+          : undefined;
+        stopResult = { exitedEarly, ...(logPath !== undefined && { logPath }) };
+        return stopResult;
       },
       holderPid,
     };
-    stackFinalizer.register(stack, state);
+    stackFinalizer.register(stack, state, finalizerToken);
     return stack;
   } catch (error) {
     // 失败清理：SIGKILL holder（unshare）→ init 经 PDEATHSIG 收到 SIGTERM 后退出，
     // 内核清理 pid ns 内全部进程；slirp4netns 在宿主侧，需单独终止
     //（exit-fd 写端也会随 holder 死亡关闭，这里主动杀只是不等到 HUP 轮询）
-    if (slirp?.pid) {
-      killProcess(slirp.pid);
+    // 启动失败清理同样优先走 fd 通道：关 holder 的 stdin 让它自己退出，slirp4netns
+    // 随之经 exit-fd HUP 退出；只有超时（卡死）才强杀
+    if (holder !== undefined) {
+      requestHolderShutdown(holder);
     }
-    if (holder?.pid) {
-      const children = await readChildPids(holder.pid);
-      killHolder(holder.pid);
-      await waitForExit(holder.pid);
-      for (const pid of children) {
-        killProcess(pid, "SIGKILL");
+    if (slirp !== undefined) {
+      const slirpExited = await waitForChildExit(slirp, STOP_WAIT_TIMEOUT_MS);
+      if (!slirpExited) {
+        killChild(slirp);
+      }
+    }
+    if (holder !== undefined && !childHasExited(holder)) {
+      const holderExited = await waitForChildExit(holder, STOP_WAIT_TIMEOUT_MS);
+      if (!holderExited) {
+        killHolder(holder);
+        const killed = await waitForChildExit(holder, STOP_WAIT_TIMEOUT_MS);
+        if (!killed && holder.pid !== undefined) {
+          // holder 仍存活 → 这些 pid 必然仍属本网络栈
+          for (const pid of await readChildPids(holder.pid)) {
+            killInitProcess(pid);
+          }
+        }
       }
     }
     // 这里刻意不删 mihomoHome：启动失败时它属于现场材料，与下面落盘的诊断日志
