@@ -156,11 +156,15 @@ describe("list-github-issues 的浏览分支", () => {
 
     const result = await bus.executeTool(
       "list-github-prs",
-      { repo: "trim21/pi-extensions", fields: "number,state,mergedAt" },
+      { repo: "trim21/pi-extensions" },
       { ctx },
     );
 
-    expect(textOf(result)).toBe("176\tmerged\t2026-10-03");
+    expect(textOf(result)).toBe("176\tmerged\tstructured results\t\t2026-10-03");
+    expect(result.structuredResult).toMatchObject({
+      ok: true,
+      value: { items: [{ state: "merged", mergedAt: "2026-10-03" }] },
+    });
   });
 
   it("@me 按字面量传给 REST，不做展开", async () => {

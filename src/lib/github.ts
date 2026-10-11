@@ -146,42 +146,19 @@ function quoteQualifier(value: string): string {
   return `"${value.replaceAll('"', String.raw`\"`)}"`;
 }
 
-const FIELD_EXTRACTORS: Record<string, (hit: SearchHit) => string> = {
-  number: (h) => String(h.number),
-  state: (h) => h.state,
-  title: (h) => h.title,
-  url: (h) => h.url,
-  repo: (h) => h.repo,
-  author: (h) => h.author,
-  labels: (h) => h.labels.join(","),
-  milestone: (h) => h.milestone,
-  assignees: (h) => h.assignees.join(","),
-  comments: (h) => String(h.comments),
-  createdAt: (h) => h.createdAt,
-  updatedAt: (h) => h.updatedAt,
-  closedAt: (h) => h.closedAt,
-  mergedAt: (h) => h.mergedAt,
-};
-
-export const SEARCH_FIELDS: readonly string[] = Object.keys(FIELD_EXTRACTORS);
-
-/** Render search hits as tab-separated rows; one row per hit, one column per field. */
-export function renderHits(hits: SearchHit[], options: { repo?: string; fields?: string }): string {
-  const requested = options.fields
-    ? options.fields
-        .split(",")
-        .map((f) => f.trim())
-        .filter(Boolean)
-    : options.repo
-      ? ["number", "state", "title", "labels", "updatedAt"]
-      : ["repo", "number", "state", "title", "labels", "updatedAt"];
-  const unknown = requested.filter((f) => !(f in FIELD_EXTRACTORS));
-  if (unknown.length > 0) {
-    throw new Error(
-      `unknown field${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")} (valid: ${SEARCH_FIELDS.join(", ")})`,
-    );
-  }
-  return hits.map((hit) => requested.map((f) => FIELD_EXTRACTORS[f](hit)).join("\t")).join("\n");
+/**
+ * Render search hits as tab-separated rows: one row per hit, fixed columns
+ * `number,state,title,labels,updatedAt`, plus a leading `repo` column when no
+ * repo is given (cross-repo search). Other fields of a hit reach the caller
+ * through the structured payload, not through the text.
+ */
+export function renderHits(hits: SearchHit[], options: { repo?: string }): string {
+  return hits
+    .map((hit) => {
+      const columns = [hit.number, hit.state, hit.title, hit.labels.join(","), hit.updatedAt];
+      return (options.repo ? columns : [hit.repo, ...columns]).join("\t");
+    })
+    .join("\n");
 }
 
 function toDate(iso: string | null | undefined): string {

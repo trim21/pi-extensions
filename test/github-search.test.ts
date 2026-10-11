@@ -12,7 +12,6 @@ import {
   createGithubApi,
   createGithubSearch,
   renderHits,
-  SEARCH_FIELDS,
   type SearchHit,
 } from "../src/lib/github.js";
 
@@ -117,20 +116,10 @@ describe("renderHits", () => {
     );
   });
 
-  it("renders the requested fields in order", () => {
-    expect(renderHits([hit()], { fields: "number,state,url,author" })).toBe(
-      "32100\tmerged\thttps://github.com/a/b/pull/32100\ttrim21",
-    );
-  });
-
   it("renders multiple hits as rows", () => {
     const hits = [hit({ number: 1, title: "first" }), hit({ number: 2, title: "second" })];
-    expect(renderHits(hits, { fields: "number,title" })).toBe("1\tfirst\n2\tsecond");
-  });
-
-  it("throws on unknown fields with the valid list", () => {
-    expect(() => renderHits([hit()], { fields: "number,bogus" })).toThrow(
-      `unknown field: bogus (valid: ${SEARCH_FIELDS.join(", ")})`,
+    expect(renderHits(hits, { repo: "a/b" })).toBe(
+      "1\tmerged\tfirst\tbug,priority-2-high\t2024-12-06\n2\tmerged\tsecond\tbug,priority-2-high\t2024-12-06",
     );
   });
 });

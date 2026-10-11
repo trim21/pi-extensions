@@ -26,7 +26,7 @@ async function listPrs(
   const { repo, hits } = params.keywords
     ? { repo: params.repo, hits: await gh.search.search("pr", params) }
     : await browseList(gh, "pr", params, { cwd: ctx.cwd, signal, input: params });
-  const text = renderHitList("pr", hits, { repo, fields: params.fields });
+  const text = renderHitList("pr", hits, { repo });
   const result = toToolResult(text, params);
   // 文本可能被行数/字节预算截断，载荷给全部命中
   return withStructuredResult(withPendant(result, params), { text, items: hits });

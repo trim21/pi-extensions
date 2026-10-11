@@ -334,8 +334,9 @@ export function withPendant<T extends ToolResult, IdKey extends string = never>(
 }
 
 /**
- * `list-github-issues` / `list-github-prs` 共用的一套过滤参数，只有 `state` 与 `fields`
- * 的说明文案按 kind 不同。
+ * `list-github-issues` / `list-github-prs` 共用的一套过滤参数，只有 `state` 的说明文案按
+ * kind 不同。文本列是固定的（见 `renderHits`），因此没有列选择参数：默认列之外的字段
+ * 从结构化载荷里取。
  */
 export function listFilterParameters(kind: "issue" | "pr") {
   const isPr = kind === "pr";
@@ -364,11 +365,6 @@ export function listFilterParameters(kind: "issue" | "pr") {
     ),
     milestone: Type.Optional(Type.String({ description: "Filter by milestone" })),
     limit: Type.Optional(Type.Number({ description: "Max results (default 30, max 100)" })),
-    fields: Type.Optional(
-      Type.String({
-        description: `Comma-separated columns for the rows (default: number,state,title,labels,updatedAt; adds repo when no repo given). Valid: number,state,title,url,author,labels,milestone,assignees,comments,repo,createdAt,updatedAt,closedAt${isPr ? ",mergedAt" : ""}`,
-      }),
-    ),
   });
 }
 
@@ -381,8 +377,6 @@ export interface ListFilters {
   assignee?: string;
   milestone?: string;
   limit?: number;
-  /** Comma-separated field names for the keyword-search result rows. */
-  fields?: string;
 }
 
 /**
@@ -415,11 +409,11 @@ export async function browseList(
   return { repo, hits: normalizeRestList(items, repo) };
 }
 
-/** 行列表的文本：两条分支共用一套 TSV 渲染；空结果是成功结果。 */
+/** 行列表的文本：两条分支共用一套 TSV 渲染（列为固定默认列）；空结果是成功结果。 */
 export function renderHitList(
   kind: "issue" | "pr",
   hits: SearchHit[],
-  options: { repo?: string; fields?: string },
+  options: { repo?: string },
 ): string {
   if (hits.length === 0) {
     return `(no matching ${kind === "issue" ? "issues" : "pull requests"})`;
