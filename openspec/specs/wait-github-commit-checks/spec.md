@@ -19,17 +19,22 @@
 
 ### Requirement: 事件过滤
 
-`event` 参数可选；设置时只判定该 workflow event 触发的 check runs。
+`event` 参数可选；设置时 MUST 只判定该 workflow event 触发的检查条目。
 
 #### Scenario: 严格匹配
 
 - **WHEN** 指定 `event`（如 `push`）
-- **THEN** 只保留 `event` 匹配的 check runs 参与 any(fail) / all(pass|skipped) 判定；commit status（触发事件未知）被排除
+- **THEN** 只保留 `event` 匹配的 check runs 与 suite 条目参与 any(fail) / any(action_required) / all(pass|skipped) 判定；commit status 与事件未知的 suite（匹配不到 workflow run）被排除
 
 #### Scenario: 不过滤
 
 - **WHEN** 未指定 `event`
-- **THEN** 判定范围是该 commit 上的全部检查（status + check runs，含 push 与 pull_request 等各事件来源的条目）
+- **THEN** 判定范围是该 commit 上的全部检查（status + check runs + 无 check run 的 suite，含 push 与 pull_request 等各事件来源的条目）
+
+#### Scenario: 等待审批的 workflow 参与判定
+
+- **WHEN** 某 workflow 因等待维护者审批而没有 check run，且它的 workflow run 事件与指定的 `event` 相同
+- **THEN** 该 suite 条目参与判定，并按共享等待语义立即返回 `awaiting_approval`
 
 ### Requirement: 等待与返回语义
 
@@ -42,6 +47,6 @@
 
 ## Implementation
 
-- 与 `wait-github-pr-checks` 共享 `waitChecksReport` 核心（`src/gh/base.ts`，工具入口 `src/gh/tools/wait-commit-checks.ts`）：`pollPrChecks`（含 `event` 过滤）→ `renderChecksVerdict`；`event` 过滤在每轮合并判定后应用（严格匹配）。
+- 与 `wait-github-pr-checks` 共享 `waitChecksReport` 核心（`src/gh/base.ts`，工具入口 `src/gh/tools/wait-commit-checks.ts`）：`pollPrChecks`（含 `event` 过滤）→ `renderChecksVerdict`；`event` 过滤在每轮合并判定后应用（严格匹配），因此无 check run 的 suite 条目按其 workflow run 的 event 一起参与或一起被排除。
 - commit 解析：`src/lib/github.ts` 的 `GithubChecksClient.headSha()`（octokit `repos.getCommit`，接受 SHA / 分支 / tag）。
 - spec 中的共享语义在 `openspec/specs/wait-github-pr-checks/spec.md` 中描述，本文件只记录差异（commit 入口与事件过滤）。

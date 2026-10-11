@@ -199,12 +199,17 @@ GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST
 
 ### Requirement: 状态快照与 run 级等待
 
-`read-github-pr-status` 的 checks 状态快照（commit statuses + check runs）继续走 octokit；`wait-github-pr-checks` / `wait-github-commit-checks` 的轮询与判定不变（独立成 spec，见 `openspec/specs/wait-github-pr-checks/`）。`watch-github-run` 改为按固定间隔轮询 `actions.getWorkflowRun`（间隔与上限沿用等待工具的 30s / 600s），轮询期间 MUST 通过 `onUpdate` 报告当前状态；超过上限时 MUST 以超时结束而不是挂住。
+`read-github-pr-status` 的 checks 状态快照（commit statuses + check runs + 无 check run 的 check suites）继续走 octokit 并立即返回；`wait-github-pr-checks` / `wait-github-commit-checks` 的轮询与判定见独立 spec（`openspec/specs/wait-github-pr-checks/`）。`watch-github-run` 改为按固定间隔轮询 `actions.getWorkflowRun`（间隔与上限沿用等待工具的 30s / 600s），轮询期间 MUST 通过 `onUpdate` 报告当前状态；超过上限时 MUST 以超时结束而不是挂住。
 
 #### Scenario: 状态快照
 
 - **WHEN** 调用 `read-github-pr-status`（`number` 必填、`repo` 可选）
-- **THEN** 走 octokit 读该 PR head commit 的 commit statuses 与 check runs，立即返回 JSON `{pr, repo, head_sha, checks:[{name, bucket, event, run_id, job_id, url}]}`，不等待；`bucket` 为 pass / fail / pending / skipped，Actions 来源的 check 带 `run_id` / `job_id`（由 check run 的 `details_url` 解析），非 Actions 的 check 两者为 null
+- **THEN** 走 octokit 读该 PR head commit 的 commit statuses、check runs 与 check suites，立即返回 JSON `{pr, repo, head_sha, checks:[{name, bucket, event, run_id, job_id, url, suite_id}]}`，不等待；`bucket` 为 pass / fail / pending / skipped / action_required，Actions 来源的 check 带 `run_id` / `job_id`（check run 由 `details_url` 解析，suite 条目取自 `check_suite_id` 匹配到的 workflow run），非 Actions 的 check 两者为 null；`suite_id` 为该检查所属 suite（commit status 为 null）
+
+#### Scenario: 等待审批的 workflow 也在快照里
+
+- **WHEN** 该 head commit 上有等待维护者审批的 workflow（只有 check suite 与 workflow run，没有 check run）
+- **THEN** 快照里出现对应条目（名字、event 与链接取自其 workflow run），`bucket` 为 `action_required`、`suite_id` 为其 suite id，不再被静默省略
 
 #### Scenario: run 级等待
 
@@ -283,7 +288,7 @@ GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST
 - **文本渲染**：文本由 `src/gh/render.ts` 的纯函数从 REST 响应渲染，不再用 gh 的表格 / 字段块 / markdown（issue/PR 列表统一为 TSV 行，列由 `fields` 决定）；`read-github-pr-diff` 的变更统计由 `parseDiffStats` 从同一份 diff 解析。
 - **错误契约**：`gh` 子进程非零退出抛 `GhError`，消息带调用输入与输出上下文，标注 `(command timed out)` / `(command aborted)` / `spawn failed`；被 kill 的进程退出码记为失败而非成功。REST 失败抛 `GithubApiError`（`src/lib/github.ts`，带 `status` 与触发请求的工具参数，`isNotFound` 判 404），由 `createGithubApi` 的 `call` / `rawFetch` 统一产出，调用方不再各自去剥错误对象上的 status。
 - **repo 缺省**：未指定 `repo` 时用当前目录解析（`resolveRepoTarget`：`gh repo view --json nameWithOwner` 取全名后拆开 `OWNER/REPO`）。
-- **octokit 读取**：`src/lib/github-reads.ts` 的 `GithubReads` 提供 issue / PR / comments / diff / releases / runs / repository / job logs 与资产下载；`read-github-pr-status` / `wait-github-pr-checks` / `wait-github-commit-checks` 的 checks 与 `get-github-workflow-jobs` / `read-github-ci-logs` 的 job 元数据经 `GithubChecksClient`（`pullHead` / `headSha` / `statuses` / `checkRuns` / `runJobs` / `job`）；job 列表用 `octokit.paginate` 跟随 Link 分页，因此没有 30 条上限；`run_id` / `job_id` 由 check run 的 `details_url`（`/actions/runs/<run_id>/job/<job_id>`）解析。
+- **octokit 读取**：`src/lib/github-reads.ts` 的 `GithubReads` 提供 issue / PR / comments / diff / releases / runs / repository / job logs 与资产下载；`read-github-pr-status` / `wait-github-pr-checks` / `wait-github-commit-checks` 的 checks 与 `get-github-workflow-jobs` / `read-github-ci-logs` 的 job 元数据经 `GithubChecksClient`（`pullHead` / `headSha` / `statuses` / `checkRuns` / `suites` / `workflowRuns` / `runJobs` / `job`）；job 列表用 `octokit.paginate` 跟随 Link 分页，因此没有 30 条上限；`run_id` / `job_id` 由 check run 的 `details_url`（`/actions/runs/<run_id>/job/<job_id>`）解析，check run 的 `suite_id` 取 `check_suite.id`，suite 条目的名字/event/链接由 `run.check_suite_id` 匹配 workflow run 得出（`workflowRuns` 与 check run 的 event 标注共用同一次请求）。
 - **CI 日志**：`read-github-ci-logs` 只取 `job_id` / `repo?`；job 元数据走 octokit（`actions.getJobForWorkflowRun`），日志走 `actions.downloadJobLogsForWorkflowRun`（GitHub 只有按 job id 取日志的端点，没有按 job 名称的），响应原样写入 `~/.cache/pi/github/ci-logs/<owner>/<repo>/<runId>/<jobId>.log`（`jobLogPath` 统一计算；owner/repo 由 `repoFromRunUrl` 解析 job 的 `run_url` 得出，用 GitHub 规范化后的仓库大小写，不受调用方传入的 `repo` 字符串影响），同一 job 的请求经 `createSeqState` 串行化。step 行号由 `stepLineSpans` 得出：先收集深度 1 的 `##[group]Run …` / `##[group]Post Run …` header（每个真正执行过的 step 一个），再与 API steps 做**保序最优匹配**——名字相等记 4 分，header 时间戳落在 step `started_at` 之后 5s 内按距离记分（runner 约在 0.01–1.6s 后写 header，而 API 时间戳只到秒），只有得分大于 0 才配对，匹配不到就不给行号（不猜）。因此：自定义 `name:` 的 step 没有名字证据仍能靠时间戳命中；skipped 的 step 不参与匹配（它不会产生 header，否则会抢走同名的、真正跑过的 step 的块）；复合 action 的内部 step header 对任何 API step 都没有证据，不被认领，自然归入外层 step 的区间；「Set up job」拥有第一个 header 之前的 runner 前言。工具不清洗、不截断、不回显日志内容。
 - **release 资产**：`download-github-release-assets` 先 `gh.reads.release`（`repos.getLatestRelease` / `repos.getReleaseByTag`）解析出真实 tag 与该 release 的资产清单（tag 不存在就在这里报错），再按资产 id 逐个下载（`getReleaseAsset` → `rawFetch` + `Accept: application/octet-stream` 流式落盘；源码归档走 `zipball` / `tarball` 端点）；pattern 由 `releasePatterns` 按逗号切分、`matchAsset` 用 `matchesGlob` 匹配；结果由目录实读得出（`listReleaseFiles`：普通文件 + `stat` 大小，按名排序），同名同大小视为已下载。pattern 未命中时由工具自己报出该 release 的实际资产名。
 - **代理**：`gh` 子进程与 octokit 请求共用 `src/lib/proxy.ts` 解析的代理配置（配置 `~/.pi/agent/proxy.json`，回退 `HTTPS_PROXY` 等环境变量），经共享出网层 `src/lib/egress.ts` 的 `env` / `fetch` 取用，在扩展加载时读一次；配置写错直接抛，不带着被忽略的配置静默直连。`web_fetch` / `web_search` 经同一层出网（见 `openspec/specs/web/spec.md`）。
