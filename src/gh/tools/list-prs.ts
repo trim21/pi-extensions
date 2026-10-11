@@ -38,7 +38,7 @@ export function addListPrsTool(gh: GhClient, bus: ToolBus) {
       name: "list-github-prs",
       label: "GitHub PRs List",
       description:
-        'List GitHub pull requests with optional filters and keyword search. When repo is omitted, keyword search runs across GitHub. Keyword search defaults to open PRs — pass state="merged", state="closed" (merged excluded) or state="all" to broaden. Set fields to choose the columns of each result row.',
+        'List GitHub pull requests with optional filters and keyword search. When repo is omitted, keyword search runs across GitHub. Keyword search defaults to open PRs — pass state="merged", state="closed" (merged excluded) or state="all" to broaden.',
       promptSnippet: "List or search GitHub PRs",
       parameters: listFilterParameters("pr"),
       structuredSchema: ghHitListPayloadSchema,

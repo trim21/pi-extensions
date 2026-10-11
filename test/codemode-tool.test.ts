@@ -441,6 +441,50 @@ describe("codemode 工具", () => {
     expect(h.codemode.description).toContain("declare class CallFailedError extends Error");
   });
 
+  it("schema 字段的 description 渲染成声明里的注释", async () => {
+    const h = await harness({
+      active: ["echo", "annotated"],
+      register: (bus) => {
+        bus.register(
+          defineStructuredTool({
+            name: "annotated",
+            label: "Annotated",
+            description: "annotated tool",
+            parameters: Type.Object({}),
+            structuredSchema: Type.Object({
+              single: Type.String({ description: "one line" }),
+              multi: Type.String({ description: "first line\nsecond line" }),
+              plain: Type.Number(),
+            }),
+            execute: async () => ({
+              content: [{ type: "text" as const, text: "ok" }],
+              details: {},
+              structuredResult: {
+                ok: true as const,
+                value: { single: "a", multi: "b", plain: 1 },
+              },
+            }),
+          }),
+        );
+      },
+    });
+
+    expect(h.codemode.description).toContain(
+      [
+        'declare function call(name: "annotated", args: Record<string, unknown>): Promise<{',
+        "  // one line",
+        "  single: string;",
+        "  /**",
+        "   * first line",
+        "   * second line",
+        "   */",
+        "  multi: string;",
+        "  plain: number;",
+        "}>;",
+      ].join("\n"),
+    );
+  });
+
   it("声明了结构化输出却没给载荷时，脚本拿到 CallFailedError", async () => {
     const h = await harness();
     const result = await runScript(
@@ -593,13 +637,13 @@ describe("codemode 工具", () => {
 
   it("多行 description 的每一行都进描述", async () => {
     const h = await harness({
-      active: ["echo"],
+      active: ["echo", "multi-line"],
       register: (bus) => {
         bus.register(
           defineStructuredTool({
             name: "multi-line",
             label: "Multi Line",
-            description: "First line.\nSecond line.\n\n * Fourth line.",
+            description: "  First line.\nSecond line.\n\nFourth line.  ",
             parameters: Type.Object({}),
             structuredSchema: Type.Object({ ok: Type.Boolean() }),
             execute: async () => ({

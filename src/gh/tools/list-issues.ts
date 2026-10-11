@@ -38,7 +38,7 @@ export function addListIssuesTool(gh: GhClient, bus: ToolBus) {
       name: "list-github-issues",
       label: "GitHub Issues List",
       description:
-        'List GitHub issues with optional filters and keyword search. When repo is omitted, keyword search runs across GitHub. Keyword search defaults to open issues — pass state="all" to include closed ones. Set fields to choose the columns of each result row.',
+        'List GitHub issues with optional filters and keyword search. When repo is omitted, keyword search runs across GitHub. Keyword search defaults to open issues — pass state="all" to include closed ones.',
       promptSnippet: "List or search GitHub issues",
       parameters: listFilterParameters("issue"),
       structuredSchema: ghHitListPayloadSchema,

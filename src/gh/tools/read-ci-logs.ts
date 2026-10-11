@@ -414,8 +414,9 @@ export function addReadCiLogsTool(gh: GhClient, bus: ToolBus) {
       name: "read-github-ci-logs",
       label: "GitHub CI Logs",
       description:
-        "Download one GitHub Actions job's CI log by job ID and index its steps. Returns JSON {name, id, status, conclusion, log_file, steps:[{number, name, conclusion, start_line?, end_line?}]}: `log_file` is the job's complete raw log on disk (runner timestamps and ANSI kept, exactly as GitHub delivers it) and each step carries the 1-based inclusive line range of its block inside that file. Read the content out of the file yourself (read/grep with offset/limit) — it is not echoed back. Get the job IDs from get-github-workflow-jobs, then call this once per job you need." +
-        " Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
+        "Download one GitHub Actions job's CI log by job ID and index its steps. `log_file` is the job's complete raw log on disk (runner timestamps and ANSI kept, exactly as GitHub delivers it) and each step carries the 1-based inclusive line range of its block inside that file." +
+        " The log text is not echoed back: `log_file` is the only copy, so read the parts you need out of it with Read/Grep — e.g. `Read(log_file, offset=start_line, limit=end_line - start_line + 1)` for one step's block, or grep for a pattern. Do not slice or filter the returned JSON to reconstruct log text: it carries only the step index, not the log. Fetch each job once; re-reading that file is how you get every further part of the log." +
+        " Get the job IDs from get-github-workflow-jobs, then call this once per job you need. Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
       promptSnippet: "Read GitHub CI logs",
       parameters: Type.Object({
         job_id: Type.Union([Type.Number(), Type.String()], {

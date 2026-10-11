@@ -197,9 +197,8 @@ export function addDownloadReleaseAssetsTool(gh: GhClient, bus: ToolBus) {
         "Download a GitHub release's assets (or its source archive) into " +
         "~/.cache/pi/github/releases/<owner>/<repo>/<tag>/ using the GitHub credentials, " +
         "so private repositories and large binaries work where a plain HTTP fetch cannot. " +
-        "Files already in that directory are kept, never re-fetched. The result is the JSON " +
-        "summary {repo, tag, dir, files:[{name, path, bytes}]} listing everything now in the " +
-        "directory; file contents are not echoed. Read the entries you need from `path`.",
+        "Files already in that directory are kept, never re-fetched. The result lists everything " +
+        "now in the directory; file contents are not echoed. Read the entries you need from `path`.",
       promptSnippet: "Download GitHub release assets",
       parameters: Type.Object({
         repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),

@@ -28,6 +28,11 @@
 - **WHEN** 某个工具声明了 `structuredSchema`
 - **THEN** 描述里它的返回类型按该 schema 渲染；没声明 schema 的工具不出现（因此不存在「未声明就渲染成文本」的条目）
 
+#### Scenario: 返回类型字段的说明渲染成注释
+
+- **WHEN** `structuredSchema` 的某个字段带 `description`
+- **THEN** 描述里该字段的类型声明上方渲染这段 `description`：单行用 `//`，多行按 JSDoc 渲染；嵌套对象与数组元素的字段同样递归渲染，没有 `description` 的字段不产生注释
+
 #### Scenario: 多行说明完整渲染
 
 - **WHEN** 某个可调用工具的 `description` 有多行

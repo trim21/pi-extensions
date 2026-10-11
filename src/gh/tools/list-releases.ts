@@ -17,8 +17,7 @@ export function addListReleasesTool(gh: GhClient, bus: ToolBus) {
     defineStructuredTool({
       name: "list-github-releases",
       label: "GitHub Releases List",
-      description:
-        "List GitHub releases. Each row is: tag, flags (latest/prerelease/draft), published date, name.",
+      description: "List GitHub releases.",
       promptSnippet: "List GitHub releases",
       parameters: Type.Object({
         repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),

@@ -26,7 +26,28 @@ function propertyName(name: string): string {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : JSON.stringify(name);
 }
 
-function renderType(schema: unknown, indent: string): string {
+/** schema 自带的字段说明：没有或为空时不渲染注释。 */
+function descriptionOf(schema: unknown): string {
+  if (!isRecord(schema) || typeof schema.description !== "string") {
+    return "";
+  }
+  return schema.description.trim();
+}
+
+/** 字段注释：单行用 `//`，多行才用 JSDoc；缩进与它下面的属性对齐。 */
+function fieldComment(description: string, indent: string): string {
+  const lines = description.split("\n").map((line) => line.trim());
+  if (lines.length === 1) {
+    return `${indent}// ${lines[0]}`;
+  }
+  return [
+    `${indent}/**`,
+    ...lines.map((line) => (line === "" ? `${indent} *` : `${indent} * ${line}`)),
+    `${indent} */`,
+  ].join("\n");
+}
+
+export function renderType(schema: unknown, indent: string): string {
   if (!isRecord(schema)) {
     return "unknown";
   }
@@ -67,7 +88,11 @@ function renderType(schema: unknown, indent: string): string {
       }
       const lines = entries.map(([key, value]) => {
         const optional = required.has(key) ? "" : "?";
-        return `${indent}  ${propertyName(key)}${optional}: ${renderType(value, `${indent}  `)};`;
+        const property = `${indent}  ${propertyName(key)}${optional}: ${renderType(value, `${indent}  `)};`;
+        const description = descriptionOf(value);
+        return description === ""
+          ? property
+          : `${fieldComment(description, `${indent}  `)}\n${property}`;
       });
       return `{\n${lines.join("\n")}\n${indent}}`;
     }

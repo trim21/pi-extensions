@@ -17,8 +17,7 @@ export function addListWorkflowRunsTool(gh: GhClient, bus: ToolBus) {
     defineStructuredTool({
       name: "list-github-workflow-runs",
       label: "GitHub Workflow Runs",
-      description:
-        "List GitHub Actions workflow runs. Each row is: id, status, conclusion, workflow, branch, event, created date, url.",
+      description: "List GitHub Actions workflow runs.",
       promptSnippet: "List GitHub workflow runs",
       parameters: Type.Object({
         repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),

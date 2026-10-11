@@ -41,7 +41,7 @@ export function addGetWorkflowJobsTool(gh: GhClient, bus: ToolBus) {
       name: "get-github-workflow-jobs",
       label: "GitHub Workflow Jobs",
       description:
-        "Get every job of a workflow run as JSON {total_count, jobs:[{id, run_id, run_url, name, status, conclusion, html_url, steps:[{name, number, status, conclusion, started_at}]}]}. Paginated server-side, so runs with more than 30 jobs return all of them. Use the `id` with read-github-ci-logs after read-github-pr-status / wait-github-commit-checks did not already give you a job id.",
+        "Get every job of a workflow run. Paginated server-side, so runs with more than 30 jobs return all of them. Use the `id` with read-github-ci-logs after read-github-pr-status / wait-github-commit-checks did not already give you a job id.",
       promptSnippet: "Get GitHub workflow run jobs",
       parameters: Type.Object({
         run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),

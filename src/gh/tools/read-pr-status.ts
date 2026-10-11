@@ -76,7 +76,7 @@ export function addReadPrStatusTool(gh: GhClient, bus: ToolBus) {
       name: "read-github-pr-status",
       label: "GitHub PR Status",
       description:
-        "Get the current checks of a pull request's head commit as JSON {pr, repo, head_sha, checks:[{name, bucket, event, run_id, job_id, suite_id, url}]}. `bucket` is pass / fail / pending / skipped / action_required; `action_required` means the workflow is waiting for a maintainer's approval (a fork PR's first run) and has created no check run yet, so it is listed from its check suite and named after its workflow run. Actions checks carry the `run_id` and `job_id` behind them (null for other CI), which is what read-github-ci-logs and get-github-workflow-jobs take; `suite_id` groups the checks of one suite. Returns the snapshot immediately without waiting — use wait-github-pr-checks to block until the checks finish.",
+        "Get the current checks of a pull request's head commit. Each check's `bucket` is pass / fail / pending / skipped / action_required; `action_required` means the workflow is waiting for a maintainer's approval (a fork PR's first run) and has created no check run yet, so it is listed from its check suite and named after its workflow run. Actions checks carry the `run_id` and `job_id` behind them (null for other CI), which is what read-github-ci-logs and get-github-workflow-jobs take; `suite_id` groups the checks of one suite. Returns the snapshot immediately without waiting — use wait-github-pr-checks to block until the checks finish.",
       promptSnippet: "Read GitHub PR status checks",
       parameters: Type.Object({
         number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
