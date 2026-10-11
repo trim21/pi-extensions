@@ -225,6 +225,7 @@ async function harness(
 function context(select: ReturnType<typeof vi.fn>, branch: unknown[] = []): ExtensionToolContext {
   return {
     cwd: "/tmp",
+    hasUI: true,
     model: { id: "gpt-5.6" },
     ui: {
       select,
@@ -812,9 +813,52 @@ describe("codemode 工具", () => {
   it("非法 @options 直接失败且不执行脚本", async () => {
     const h = await harness();
     const result = await runScript(h, `// @options: {"nope": 1}\nreturn 1;`);
+
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("does not support");
     expect(h.echoTool).not.toHaveBeenCalled();
+  });
+
+  it("timeout_ms 必须是正整数且不超过上限", async () => {
+    const h = await harness();
+    for (const raw of ["0", "-1", "1.5", "2147483648", '"50"']) {
+      const result = await runScript(h, `// @options: {"timeout_ms": ${raw}}\nreturn 1;`);
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("timeout_ms");
+      expect(h.echoTool).not.toHaveBeenCalled();
+    }
+  });
+
+  it("合法的 timeout_ms 被接受", async () => {
+    const h = await harness();
+    const result = await runScript(h, `// @options: {"timeout_ms": 5000}\nreturn "ok";`);
+
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain("ok");
+  });
+
+  it("超出 timeout_ms 的执行以超时结束并保留已产生的输出", async () => {
+    const h = await harness();
+    const result = await runScript(
+      h,
+      // 预算要明显大于 worker 启动时间，否则并行跑时可能还没产出就被超时
+      `// @options: {"timeout_ms": 500}\ntext("started");\nawait sleep(5);\ntext("never");`,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("timeout");
+    expect(textOf(result)).toContain("started");
+    expect(textOf(result)).not.toContain("never");
+  });
+
+  it("脚本里的工作区外写入直接失败，不弹审批", async () => {
+    const h = await harness();
+    const outside = join(process.cwd(), ".tmp-codemode-unapprovable", "a.txt");
+    const result = await runScript(h, `await fs.write(${JSON.stringify(outside)}, "hi");`);
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("codemode cannot ask for");
+    expect(h.select).not.toHaveBeenCalled();
   });
 
   it("脚本报错时保留部分输出与调用记录", async () => {

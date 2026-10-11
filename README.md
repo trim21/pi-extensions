@@ -35,8 +35,9 @@
 `sleep`。
 
 - **嵌套调用经工具总线**：`call("Bash", { command })` 最终执行的是 `Bash` 工具自己的
-  `execute`，所以工具的审批照常生效（Bash 沙箱外执行会弹自己的提权确认）。codemode
-  不额外加确认层：脚本里连发十次调用就是十次工具自己的审批（需要审批的那些）。
+  `execute`。**脚本里不弹审批**：需要人工授权的调用（写工作区外、Bash 申请沙箱外执行）
+  在 codemode 内直接以 `CallFailedError` 失败，错误信息提示改用直调；模型直调同一个工具时
+  审批照常出现。此外 codemode 不额外加确认层：不需要审批的调用不会多出任何确认框。
 - **可调用集合 = 声明了结构化输出的工具**（有 `structuredSchema` 的才进），执行时再与当前
   active 列表求交，所以 `personalExtensions.disabledTools`、pi 的 `defaultTools` /
   `--tools`、子代理的工具白名单都同样约束脚本。脚本拿到的返回值必须有确定的形状，因此没给
@@ -62,10 +63,14 @@
   结构的工具不进集合，`call()` 会报「not available in codemode」。
 - **脚本接口**：`call` / `CallFailedError` / `ALL_TOOLS` / `fs.read` / `fs.write` /
   `text` / `image` / `exit` / `sleep` / `console.*` / `store.set` / `store.get` / `store.list`
-  （会话内持久的键值表）；首行可选 `// @options: {"max_output_tokens": 10000}`。
-  脚本没有超时：死循环由调用方中止（Esc）结束，等嵌套调用返回（含用户审批弹窗）多久都不算超时。
+  （会话内持久的键值表）；首行可选
+  `// @options: {"max_output_tokens": 10000, "timeout_ms": 600000}`——选项留在脚本里而不是工具参数，
+  因为 pi 的 grammar 约束（`constrainedSampling`）只支持单个自由文本参数，多出来的参数在支持
+  grammar 的模型上会被静默忽略。不声明 `timeout_ms` 时脚本没有时间上限：死循环由调用方中止（Esc）
+  结束，等嵌套调用返回（含慢命令）多久都不算超时。声明了 `timeout_ms` 就有墙钟预算（含等待嵌套
+  调用的时间），到点时正在跑的调用被中止、结果以超时结束，已产生的输出与调用记录仍然返回。
   `await sleep(seconds)`（秒，可为小数）是脚本唯一的等待手段，由 worker 线程自己的定时器驱动
-  （不经主线程、不产生进度帧），也没有上限——要等多久由脚本决定，不想等就中止。
+  （不经主线程、不产生进度帧），它自己也没有上限——但会被 `timeout_ms` 结束。
 - **工具描述**里给出每个可调用工具的 `declare function call(name, args): Promise<T>` 重载，
   参数与返回类型都取自工具自己的 schema，所以模型在写脚本前就知道返回值形状。
 - **store** 记在每次成功调用工具结果的 `details.store` 上（与 `src/lib/file-reads.ts` 的

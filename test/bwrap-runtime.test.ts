@@ -314,6 +314,23 @@ describe("BwrapRuntime", () => {
     ).rejects.toThrow(/User denied unsandboxed execution/);
   });
 
+  it("rejects full-access requests from a codemode call without a dialog", async () => {
+    const { runtime } = setupRuntime();
+    const select = vi.fn();
+    const ctx = fullAccessContext({ select, notify: vi.fn(), input: vi.fn() });
+
+    await expect(
+      runtime.execute({
+        toolCallId: "test",
+        command: "printf should-not-run",
+        requestFullAccess: true,
+        ctx,
+        unapprovable: true,
+      }),
+    ).rejects.toThrow(/codemode cannot ask for/);
+    expect(select).not.toHaveBeenCalled();
+  });
+
   it("runs headless sessions under the configured mode instead of forcing readonly", async () => {
     writeFileSync(
       join(process.env.PI_CODING_AGENT_DIR!, "sandbox.json"),

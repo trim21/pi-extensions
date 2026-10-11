@@ -242,6 +242,60 @@ describe("codemode 沙箱", () => {
     expect(result.calls).toHaveLength(1);
   });
 
+  it("声明了 timeout_ms 时到点结束，保留已产生的输出", async () => {
+    const result = await run(`text("started");\nawait sleep(5);\ntext("never");`, {
+      // 预算要明显大于 worker 启动时间，否则并行跑时可能还没产出就被超时
+      timeoutMs: 500,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("timeout");
+      expect(result.error.message).toContain("timed out");
+    }
+    expect(result.output).toEqual([{ type: "text", text: "started" }]);
+  });
+
+  it("忙循环也会被预算结束", async () => {
+    const result = await run(`while (true) {}`, { timeoutMs: 100 });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("timeout");
+    }
+  });
+
+  it("超时中止正在执行的嵌套调用", async () => {
+    let aborted = false;
+    const result = await run(`await call("Read", { path: "slow" });`, {
+      timeoutMs: 1_000,
+      onCall: async ({ signal }) =>
+        await new Promise((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              resolve({ ok: false, error: "aborted" } as const);
+            },
+            { once: true },
+          );
+        }),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.kind).toBe("timeout");
+    }
+    expect(aborted).toBe(true);
+  });
+
+  it("没有声明预算时不设上限", async () => {
+    const result = await run(`await sleep(0.2);\ntext("done");`);
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toEqual([{ type: "text", text: "done" }]);
+  });
+
   it("中止信号终止脚本", async () => {
     const controller = new AbortController();
     // 用死循环而不是挂起的 promise：后者会被 stalled() 立刻判失败

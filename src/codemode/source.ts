@@ -1,12 +1,15 @@
 /**
- * codemode 脚本源码的解析：首行可选的 `// @options: {"max_output_tokens":…}`。
+ * codemode 脚本源码的解析：首行可选的 `// @options: {"max_output_tokens":…, "timeout_ms":…}`。
  *
  * 选项行与脚本首行共用一行，解析后原样保留为空行，脚本里报错的行号因此与用户写的
  * 一致。解析失败（空输入、JSON 非法、未知字段、只有选项行没有代码）直接报错。
  */
 
 const OPTIONS_PREFIX = "// @options:";
-const SUPPORTED_FIELDS = ["max_output_tokens"] as const;
+const SUPPORTED_FIELDS = ["max_output_tokens", "timeout_ms"] as const;
+
+/** `timeout_ms` 的上限：`setTimeout` 能接受的最大延时（毫秒）。 */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 export const DEFAULT_OUTPUT_TOKENS = 10_000;
 
@@ -19,6 +22,8 @@ export class CodemodeSourceError extends Error {
 
 export interface CodemodeSourceOptions {
   maxOutputTokens: number;
+  /** 本次执行的墙钟预算（毫秒）。不声明时脚本没有时间上限。 */
+  timeoutMs: number;
 }
 
 export interface ParsedCodemodeSource {
@@ -44,6 +49,20 @@ function parseOptions(json: string): Partial<CodemodeSourceOptions> {
       throw new CodemodeSourceError(
         `${OPTIONS_PREFIX} does not support ${JSON.stringify(key)}; supported fields are ${SUPPORTED_FIELDS.map((field) => `\`${field}\``).join(" and ")}`,
       );
+    }
+    if (key === "timeout_ms") {
+      if (
+        typeof value !== "number" ||
+        !Number.isSafeInteger(value) ||
+        value <= 0 ||
+        value > MAX_TIMEOUT_MS
+      ) {
+        throw new CodemodeSourceError(
+          `${OPTIONS_PREFIX} \`timeout_ms\` must be a positive integer up to ${MAX_TIMEOUT_MS}`,
+        );
+      }
+      options.timeoutMs = value;
+      continue;
     }
     if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
       throw new CodemodeSourceError(`${OPTIONS_PREFIX} ${key} must be a positive number`);

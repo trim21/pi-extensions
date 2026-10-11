@@ -376,6 +376,24 @@ describe("guardWriteAccess", () => {
     await expect(guardWriteAccess(ctxWith({}), writeOptions(INSIDE))).resolves.toBeUndefined();
   });
 
+  it("refuses outside writes from a codemode call without a dialog", async () => {
+    const select = vi.fn();
+
+    await expect(
+      guardWriteAccess(ctxWith({ ui: { select, input: vi.fn() } }), {
+        ...writeOptions(OUTSIDE),
+        unapprovable: true,
+      }),
+    ).rejects.toThrow(/codemode cannot ask for/);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("still auto-allows workspace writes from a codemode call", async () => {
+    await expect(
+      guardWriteAccess(ctxWith({}), { ...writeOptions(INSIDE), unapprovable: true }),
+    ).resolves.toBeUndefined();
+  });
+
   it.skipIf(process.platform === "win32")(
     "asks for approval again once the policy is off",
     async () => {

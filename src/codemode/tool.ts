@@ -115,6 +115,10 @@ function buildDescription(tools: readonly CallableTool[]): string {
     "  return: urls, ids and metadata you will not use cost context and buy nothing.",
     "- `await sleep(seconds)` waits that many seconds (fractions allowed). It is the only way to",
     '  wait: the sandbox has no timers, and it beats `call("Bash", { command: "sleep 1" })`.',
+    "- Nested calls cannot ask for user approval: a call that would need it (writing outside the",
+    "  workspace, unsandboxed Bash) fails. Make those calls directly instead of from a script.",
+    '- `// @options: {"timeout_ms": N}` bounds the whole run in milliseconds; without it the script',
+    "  has no time limit beyond the user aborting it.",
     "- `store.set(key, value)`, `store.get(key)` and `store.list()` are a small key/value store that",
     "  persists across codemode calls in this session; `store.set(key, undefined)` removes a key.",
     "- The sandbox has no file system, network, timers or Node APIs: calling tools is its only",
@@ -294,9 +298,12 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
         parameters: Type.Object({
           code: Type.String({
             description:
-              'Raw JavaScript source. Top-level await and return work. May start with a `// @options: {"max_output_tokens": 10000}` line.',
+              'Raw JavaScript source. Top-level await and return work. May start with a `// @options: {"max_output_tokens": 10000, "timeout_ms": 600000}` line.',
           }),
         }),
+        // 采样约束与 pi 内置 codemode 同形：grammar 只能约束一个自由文本参数，所以
+        // options 只能待在脚本里（多参数会让这个工具在支持 grammar 的模型上退化成
+        // 单字段 custom tool，额外参数被静默忽略）
         constrainedSampling: {
           type: "grammar",
           variants: { openai_lark: CODEMODE_SOURCE_GRAMMAR },
@@ -306,10 +313,12 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
         async execute(toolCallId, params, signal, onUpdate, ctx) {
           let code: string;
           let maxOutputTokens = DEFAULT_OUTPUT_TOKENS;
+          let timeoutMs: number | undefined;
           try {
             const parsed = parseCodemodeSource(params.code);
             code = parsed.code;
             maxOutputTokens = parsed.options.maxOutputTokens ?? maxOutputTokens;
+            timeoutMs = parsed.options.timeoutMs;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             return {
@@ -335,6 +344,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
             store: readStore(ctx),
             toolCallId,
             signal,
+            timeoutMs,
             onOutput: (items) => {
               const text = textOf(items);
               if (text === "") {
@@ -364,10 +374,15 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
                 },
               });
             },
-            onCall: async ({ name, args }) => {
+            onCall: async ({ name, args, signal: callSignal }) => {
               if (fs.handles(name)) {
                 try {
-                  const result = await fs.execute(name, args, { ctx, signal });
+                  // 脚本里弹不了审批：需要授权的操作（工作区外写入）直接失败
+                  const result = await fs.execute(name, args, {
+                    ctx,
+                    signal: callSignal,
+                    unapprovable: true,
+                  });
                   if (result.reads !== undefined) {
                     Object.assign(recordedReads, result.reads);
                   }
@@ -382,7 +397,7 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
               if (!callable.has(name)) {
                 return { ok: false, error: `Tool "${name}" is not available in codemode.` };
               }
-              return bus.executeCodemodeTool(name, args, { ctx, signal });
+              return bus.executeCodemodeTool(name, args, { ctx, signal: callSignal });
             },
           });
 

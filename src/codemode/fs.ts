@@ -36,6 +36,8 @@ const FS_WRITE = "fs.write";
 export interface FsCallContext {
   ctx: ExtensionContext;
   signal?: AbortSignal;
+  /** 本次调用不可请求用户审批（脚本里弹不了框）：区外写入直接失败。 */
+  unapprovable?: boolean;
 }
 
 /** 一次 fs 原语的结果：`value` 回给脚本，`reads` 是本次新增的已读记账（进 details.reads）。 */
@@ -114,6 +116,7 @@ export function createCodemodeFs(options: CodemodeFsOptions): CodemodeFs {
       },
       policy,
       signal: call.signal,
+      unapprovable: call.unapprovable,
     });
     await mkdir(dirname(absolutePath), { recursive: true });
     await writeFile(absolutePath, content, { encoding: "utf8", signal: call.signal });

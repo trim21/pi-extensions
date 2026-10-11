@@ -84,7 +84,7 @@ export interface WorkerBootstrap {
 export type CodemodeOutputItem =
   { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
-export type ScriptErrorKind = "script" | "aborted" | "sandbox";
+export type ScriptErrorKind = "script" | "aborted" | "timeout" | "sandbox";
 
 export interface ScriptError {
   kind: ScriptErrorKind;

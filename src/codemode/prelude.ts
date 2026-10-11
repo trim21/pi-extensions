@@ -351,7 +351,7 @@ export const PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson
 				stringify({
 					name: "Error",
 					message:
-						"The script is waiting on a promise that can never settle: no tool call is pending, and timers do not exist here.",
+						"The script is waiting on a promise that can never settle: no tool call and no sleep is pending.",
 				}),
 			);
 			return true;

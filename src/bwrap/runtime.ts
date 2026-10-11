@@ -86,6 +86,8 @@ export interface BwrapExecutionRequest {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
   ctx: ExtensionContext;
+  /** 本次调用不可请求用户审批（codemode 的嵌套调用）：提权请求直接失败，不弹框。 */
+  unapprovable?: boolean;
 }
 
 /**
@@ -333,6 +335,13 @@ function describeLimits(resolved: ResolvedBwrap): string {
  */
 const UNSANDBOXED_DENIED = "User denied unsandboxed execution.";
 
+/**
+ * codemode 内的提权请求：脚本里弹不了审批框（那次工具调用只经 codemode 暴露），
+ * 因此直接拒绝，并让模型知道改用直调就能走正常审批。
+ */
+const UNSANDBOXED_DENIED_IN_CODEMODE =
+  "Unsandboxed execution needs user approval, which codemode cannot ask for. Call Bash directly instead of from a script.";
+
 /** 命令没经沙箱时沿用 prompt 里的说法，给出在沙盒外重跑的手段。 */
 const SANDBOX_ESCAPE_HATCH =
   "If the command needs more than that, use the `dangerouslyDisableSandbox` parameter to request unsandboxed execution; the user must approve this request.";
@@ -571,6 +580,7 @@ export class BwrapRuntime {
             request.description,
             execCwd,
             ruleSet,
+            request.unapprovable === true,
           )) === "sandbox";
       }
     }
@@ -706,10 +716,15 @@ export class BwrapRuntime {
     reason: string | undefined,
     execCwd: string,
     ruleSet: ApprovalRuleSet,
+    unapprovable: boolean,
   ): Promise<FullAccessGrant> {
     // hasUI 判定推迟到审批时刻：无 UI 会话弹不了审批框，按用户点 Deny 的标准文案拒绝
     if (!ctx.hasUI) {
       throw new Error(UNSANDBOXED_DENIED);
+    }
+    // codemode 内一律不弹审批：提权请求直接失败，并提示改用直调
+    if (unapprovable) {
+      throw new Error(UNSANDBOXED_DENIED_IN_CODEMODE);
     }
     const decision = await this.approveFullAccessUI(ctx, command, reason, execCwd, ruleSet);
     // 关闭对话框 = 中断并拒绝，不循环重问

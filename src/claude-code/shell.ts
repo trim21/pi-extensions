@@ -127,7 +127,7 @@ export function registerShellTools(bus: ToolBus, pi: ExtensionAPI, runtime: Bwra
         },
         { additionalProperties: false },
       ),
-      async execute(id, params, signal, onUpdate, ctx) {
+      async execute(id, params, signal, onUpdate, ctx, callOptions) {
         const timeout = params.timeout ?? BASH_DEFAULT_TIMEOUT_MS;
         if (!Number.isFinite(timeout) || timeout <= 0 || timeout > BASH_MAX_TIMEOUT_MS) {
           throw new Error(`timeout must be between 1 and ${BASH_MAX_TIMEOUT_MS} milliseconds`);
@@ -147,6 +147,7 @@ export function registerShellTools(bus: ToolBus, pi: ExtensionAPI, runtime: Bwra
             description: params.description,
             signal,
             onUpdate,
+            unapprovable: callOptions?.unapprovable,
           });
         } catch (error) {
           if (!(error instanceof Error)) {

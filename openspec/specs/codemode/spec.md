@@ -114,12 +114,17 @@
 
 ### Requirement: 嵌套调用的执行
 
-脚本发起的每次嵌套调用 MUST 经本仓库工具总线的 `executeTool` 执行（参数校验与错误归一化由总线负责），因此工具实现内部的审批 MUST 照常生效；`codemode` MUST NOT 在工具自身审批之外再加确认层。本次调用的宿主上下文与调用方中止信号 MUST 传递给工具。工具结果的 `structuredResult.ok === true` 时，调用 MUST 在脚本内 resolve 为该结果的 `value`（解包后的结构化数据）；`ok === false` 时 MUST 在脚本内以 `CallFailedError` 失败，其 message 取自该结果的 `error`。结果不带 `structuredResult` 时 MUST resolve 为现有的文本（工具输出拍平）。调用失败 MUST 统一是 `CallFailedError`：工具抛出的异常、参数校验失败、结构化失败、工具名不可调用都走同一类型，脚本据此把「工具失败」与自身的运行期错误区分开。脚本可以选择捕获后继续执行。`structuredResult` MUST NOT 改变工具面向模型的文本输出、既有 `details` 或 `isError` 语义。
+脚本发起的每次嵌套调用 MUST 经本仓库工具总线的 `executeTool` 执行（参数校验与错误归一化由总线负责）。codemode 内 MUST NOT 出现任何审批：需要人工授权的嵌套调用（脚本 `fs.write` 写工作区外、`Bash` 申请沙箱外执行）MUST 在脚本内以 `CallFailedError` 直接失败，错误信息 MUST 说明该操作需要授权并建议改为直接调用该工具；这些调用 MUST NOT 产生宿主副作用。脚本之外的直接调用（模型直调同一工具）的审批 MUST 不受影响。本次调用的宿主上下文与调用方中止信号 MUST 传递给工具。工具结果的 `structuredResult.ok === true` 时，调用 MUST 在脚本内 resolve 为该结果的 `value`（解包后的结构化数据）；`ok === false` 时 MUST 在脚本内以 `CallFailedError` 失败，其 message 取自该结果的 `error`。结果不带 `structuredResult` 时 MUST resolve 为现有的文本（工具输出拍平）。调用失败 MUST 统一是 `CallFailedError`：工具抛出的异常、参数校验失败、结构化失败、工具名不可调用都走同一类型，脚本据此把「工具失败」与自身的运行期错误区分开。脚本可以选择捕获后继续执行。`structuredResult` MUST NOT 改变工具面向模型的文本输出、既有 `details` 或 `isError` 语义。
 
 #### Scenario: 写类工具照常弹审批
 
-- **WHEN** 脚本调用一个需要审批的工具（例如 `Bash` 的沙箱外执行、写工作区外文件的 `Edit`）
+- **WHEN** 模型直接调用一个需要授权的写类工具（写工作区外的 `Edit` / `Write`，不经 codemode）
 - **THEN** 该工具自己的审批界面照常出现，用户的选择决定本次调用成功还是失败
+
+#### Scenario: 需要授权的调用直接失败
+
+- **WHEN** 脚本发起一个需要人工授权的调用（例如 `fs.write` 写工作区外、`Bash` 申请沙箱外执行）
+- **THEN** 该调用在脚本内以 `CallFailedError` 失败，错误信息说明需要授权，不出现审批界面，也不产生任何副作用
 
 #### Scenario: 结构化成功结果解包给脚本
 
@@ -148,7 +153,7 @@
 
 ### Requirement: 中止
 
-脚本没有整体超时：脚本执行 MUST 只受调用方中止信号的约束。中止时 MUST 终止执行该脚本的 worker 线程，且 MUST NOT 留下仍在运行的线程或进程。脚本等待嵌套调用返回的时长 MUST NOT 受任何时限约束（其中包含用户确认写类调用、Bash 提权弹窗的等待）。
+脚本执行 MUST 只受调用方中止信号与脚本声明的执行预算（见「执行超时」）约束。中止时 MUST 立即终止执行该脚本的 worker 线程，且 MUST NOT 留下仍在运行的线程或进程；正在执行的嵌套调用 MUST 一并被中止。脚本等待嵌套调用返回的时长 MUST 计入执行预算（嵌套调用不再需要人工审批，见「嵌套调用的执行」）。
 
 #### Scenario: 中止终止
 
@@ -157,19 +162,43 @@
 
 #### Scenario: 等用户确认多久都不算失败
 
-- **WHEN** 脚本发起一个需要用户确认的嵌套调用，用户过了很久才确认
-- **THEN** 该调用照常返回结果，脚本继续运行
+- **WHEN** 脚本等待一个很慢的嵌套调用返回（codemode 内不再有需要用户确认的调用，见「嵌套调用的执行」）
+- **THEN** 未声明 `timeout_ms` 时等待多久都照常返回结果；声明了预算则该等待计入预算
 
 #### Scenario: 无残留
 
-- **WHEN** 脚本以任何方式结束（成功、失败、中止）
+- **WHEN** 脚本以任何方式结束（成功、失败、中止、超时）
 - **THEN** 该次执行的 worker 线程结束
+
+### Requirement: 执行超时
+
+脚本 MAY 用首行的 `// @options: {"timeout_ms": …}` 声明本次执行的墙钟预算，该预算 MUST 包含等待嵌套调用的时间；未声明时 MUST 不施加任何时间上限。预算到点时 MUST 先确定结果再收尾：工具结果 MUST 是以超时为原因的失败，已产生的输出与完整调用记录 MUST 仍然可见；正在执行的嵌套调用 MUST 被中止；执行该脚本的 worker MUST 被终止。预算 MUST 覆盖无法自行交出控制权的脚本（忙循环）。
+
+#### Scenario: 预算到点
+
+- **WHEN** 脚本声明了 `timeout_ms` 且超过该时长仍未结束
+- **THEN** 工具以失败结果返回（原因为超时），已产生的输出与调用记录仍然可见，worker 被终止
+
+#### Scenario: 忙循环也被超时终止
+
+- **WHEN** 脚本在 VM 里忙循环，且声明了 `timeout_ms`
+- **THEN** 到点后该次执行结束，会话不受影响
+
+#### Scenario: 等嵌套调用也计入预算
+
+- **WHEN** 脚本声明了 `timeout_ms`，并在等待一个嵌套调用时超过该时长
+- **THEN** 该嵌套调用被中止，执行以超时结束
+
+#### Scenario: 未声明预算不设限
+
+- **WHEN** 脚本没有声明 `timeout_ms` 且长时间运行
+- **THEN** 不因时间原因被结束，只能由调用方中止（见「中止」）
 
 ### Requirement: 脚本接口
 
-脚本 MUST 提供：`call(name, args)`（按工具名调用，返回 promise）、`CallFailedError`（工具调用失败的错误类型，脚本可按 `instanceof` 判别）、`ALL_TOOLS`、`text(value)`、`image(value)`、`exit()`、`sleep(seconds)`、`console.*`、`store.set(key, value)`、`store.get(key)`、`store.list()`，MUST 支持顶层 `await` 与 `return`，首行 MAY 为 `// @options:` 行（`max_output_tokens`；未知字段 MUST 报错）。脚本 MUST NOT 能访问 `tools` 对象或任何按属性名分发的调用入口。脚本未调用任何工具却停在一个永远不会 settle 的 promise 上时 MUST 立刻失败，而不是挂住。
+脚本 MUST 提供：`call(name, args)`（按工具名调用，返回 promise）、`CallFailedError`（工具调用失败的错误类型，脚本可按 `instanceof` 判别）、`ALL_TOOLS`、`text(value)`、`image(value)`、`exit()`、`sleep(seconds)`、`console.*`、`store.set(key, value)`、`store.get(key)`、`store.list()`，MUST 支持顶层 `await` 与 `return`，首行 MAY 为 `// @options:` 行（`max_output_tokens`、`timeout_ms`；未知字段 MUST 报错）。脚本 MUST NOT 能访问 `tools` 对象或任何按属性名分发的调用入口。脚本未调用任何工具却停在一个永远不会 settle 的 promise 上时 MUST 立刻失败，而不是挂住。
 
-`sleep(seconds)` 是脚本唯一的等待手段：参数是秒、MAY 是小数，脚本 MUST 在指定秒数之后继续执行；它 MUST NOT 产生输出、MUST NOT 产生 toolcall 进度、也 MUST NOT 有上限（睡多久由脚本决定，结束只能靠调用方中止）。沙箱里其余 timer（`setTimeout` / `setInterval`）MUST 仍然不存在。参数不是非负有限数时 MUST 以 `TypeError` 失败，且不是 `CallFailedError`。
+`sleep(seconds)` 是脚本唯一的等待手段：参数是秒、MAY 是小数，脚本 MUST 在指定秒数之后继续执行；它 MUST NOT 产生输出、MUST NOT 产生 toolcall 进度、也 MUST NOT 有上限（睡多久由脚本决定，结束只能靠调用方中止或执行预算）。沙箱里其余 timer（`setTimeout` / `setInterval`）MUST 仍然不存在。参数不是非负有限数时 MUST 以 `TypeError` 失败，且不是 `CallFailedError`。
 
 `store` 是持久的键值表：`store.set(key, value)` 写入一个 JSON 可序列化的值，`store.set(key, undefined)` MUST 删除该键；`store.get(key)` MUST 返回该值（未命中返回 `undefined`）；`store.list()` MUST 返回当前所有键（升序）。
 
@@ -187,6 +216,11 @@
 
 - **WHEN** 脚本 `await sleep(-1)`、`await sleep(Number.NaN)` 或 `await sleep("2")`
 - **THEN** 该调用抛 `TypeError`（脚本可捕获），不是 `CallFailedError`，也不执行等待
+
+#### Scenario: 非法的 timeout_ms
+
+- **WHEN** `// @options: {"timeout_ms": 0}`、负数、非整数或超过 2147483647
+- **THEN** 工具以失败结果返回解析错误，不执行脚本
 
 #### Scenario: 按名字调用工具
 

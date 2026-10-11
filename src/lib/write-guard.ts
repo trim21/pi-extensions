@@ -139,6 +139,8 @@ export interface WriteGuardOptions {
   policy: RequestPolicy;
   /** 工具调用的中止信号：透传给审批对话框，工具被取消时对话框一起关掉。 */
   signal?: AbortSignal;
+  /** 本次调用不可请求用户审批（codemode 的嵌套调用）：区外写入直接失败，不弹框。 */
+  unapprovable?: boolean;
 }
 
 /**
@@ -162,6 +164,13 @@ export async function guardWriteAccess(
   // 放在 win32 / 无 UI 分支之前，策略优先级高于各平台的降级路径。
   if (opts.policy.deniesRequests()) {
     throw new Error(`user deny ${opts.toolName}: blocked`);
+  }
+
+  // codemode 内不弹审批：那次嵌套调用只经 codemode 暴露，弹不了框，因此直接失败并提示直调
+  if (opts.unapprovable === true) {
+    throw new Error(
+      `${opts.toolName} needs user approval to write outside the workspace, which codemode cannot ask for. Call the tool directly instead of from a script.`,
+    );
   }
 
   if (process.platform === "win32") {

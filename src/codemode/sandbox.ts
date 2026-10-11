@@ -52,8 +52,18 @@ export interface SandboxRunOptions {
   toolCallId: string;
   /** 调用方中止本次执行；脚本没有自己的超时，死循环只能靠它结束。 */
   signal?: AbortSignal;
-  /** 每次嵌套调用：由调用方执行工具并把结果回给脚本。 */
-  onCall(request: { id: number; name: string; args: unknown }): Promise<SandboxCallOutcome>;
+  /**
+   * 本次执行的墙钟预算（毫秒），含等待嵌套调用的时间；缺省不设上限。
+   * 到点后执行以 `kind: "timeout"` 结束，正在跑的嵌套调用收到中止信号。
+   */
+  timeoutMs?: number;
+  /** 每次嵌套调用：由调用方执行工具并把结果回给脚本。`signal` 含调用方中止与本次预算。 */
+  onCall(request: {
+    id: number;
+    name: string;
+    args: unknown;
+    signal: AbortSignal;
+  }): Promise<SandboxCallOutcome>;
   /** 脚本流式产生的输出项，用于 toolcall 进度。 */
   onOutput?(items: readonly CodemodeOutputItem[]): void;
   /** 嵌套调用的开始与结束，用于 toolcall 进度；事件里带截至此刻的调用记录快照。 */
@@ -108,6 +118,15 @@ function runInWorker(wasm: object, options: SandboxRunOptions): Promise<SandboxO
     const started = new Map<number, { name: string; at: number }>();
     let callSequence = 0;
     let settled = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+
+    // 超时与调用方中止合成一条信号，交给嵌套调用：预算到点时正在跑的工具也要停，
+    // 否则 terminate 只杀 worker，工具会在主线程继续跑完并留下副作用
+    const aborter = new AbortController();
+    const signal =
+      options.signal === undefined
+        ? aborter.signal
+        : AbortSignal.any([options.signal, aborter.signal]);
 
     // 进度帧发出去的是拷贝：记录随后会被改成终态，已经发出去的帧不能被它改掉
     const snapshotCalls = (): ScriptCall[] => calls.map((call) => ({ ...call }));
@@ -121,6 +140,7 @@ function runInWorker(wasm: object, options: SandboxRunOptions): Promise<SandboxO
         return;
       }
       settled = true;
+      clearTimeout(timeoutTimer);
       void worker.terminate();
       resolve({ ...body, output, calls });
     };
@@ -143,6 +163,15 @@ function runInWorker(wasm: object, options: SandboxRunOptions): Promise<SandboxO
       );
     }
 
+    if (options.timeoutMs !== undefined) {
+      const timeoutMs = options.timeoutMs;
+      timeoutTimer = setTimeout(() => {
+        // 先中止正在跑的嵌套调用，再定结果：terminate 不会自动停主线程里的工具
+        aborter.abort();
+        fail(`Execution timed out after ${timeoutMs} ms`, "timeout");
+      }, timeoutMs);
+    }
+
     const handleCall = async (id: number, name: string, args: unknown): Promise<void> => {
       callSequence += 1;
       const record: ScriptCall = {
@@ -157,7 +186,7 @@ function runInWorker(wasm: object, options: SandboxRunOptions): Promise<SandboxO
       options.onCallProgress?.({ phase: "start", name, args, calls: snapshotCalls() });
       let outcome: SandboxCallOutcome;
       try {
-        outcome = await options.onCall({ id, name, args });
+        outcome = await options.onCall({ id, name, args, signal });
       } catch (error) {
         outcome = { ok: false, error: error instanceof Error ? error.message : String(error) };
       }

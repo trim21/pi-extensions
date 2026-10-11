@@ -55,6 +55,7 @@ export interface StructuredToolDefinition<
     signal: AbortSignal | undefined,
     onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
     ctx: ExtensionContext,
+    callOptions?: ToolCallOptions,
   ): Promise<AgentToolResult<TDetails> & { structuredResult: StructuredResult<Static<TOutput>> }>;
 }
 
@@ -112,15 +113,36 @@ export interface CodemodeToolDefinition<
 }
 
 /**
+ * 工具 `execute` 的额外调用选项：只有本仓库自己的调用路径会传（目前是 codemode 的嵌套
+ * 调用），pi 直接调用工具时它永远是 `undefined`。因此在 pi 的 `ToolDefinition` 之外，
+ * 总线单独把 `execute` 的签名放宽一个可选参数。
+ */
+export interface ToolCallOptions {
+  /** 本次调用不可请求用户审批：需要授权的操作直接失败，不弹审批框。 */
+  unapprovable?: boolean;
+}
+
+/**
  * 注册后的定义：`codemodeOnly` 标出未交给 pi 的脚本工具。`structuredSchema` 供 codemode
  * 渲染脚本侧返回类型；`scripted` 区分「`execute` 直接返回结构化结果」的脚本工具与经配置
  * 转成 codemode-only 的普通工具（后者仍返回 `AgentToolResult`，结构化结果在
  * `structuredResult` 里）。
  */
-export type RegisteredToolDefinition = ToolDefinition<TSchema, unknown, unknown> & {
+export type RegisteredToolDefinition = Omit<
+  ToolDefinition<TSchema, unknown, unknown>,
+  "execute"
+> & {
   structuredSchema?: TSchema;
   codemodeOnly?: boolean;
   scripted?: true;
+  execute(
+    toolCallId: string,
+    params: unknown,
+    signal: AbortSignal | undefined,
+    onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+    ctx: ExtensionContext,
+    callOptions?: ToolCallOptions,
+  ): Promise<AgentToolResult<unknown>>;
 };
 
 export interface ToolBus {
@@ -416,6 +438,8 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
           options.signal,
           options.onUpdate,
           options.ctx,
+          // codemode 的嵌套调用弹不了审批框：需要授权的操作直接失败
+          { unapprovable: true },
         );
         if (definition.scripted === true) {
           return checkScriptedResult(name, definition.structuredSchema, result);
