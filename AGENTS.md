@@ -31,6 +31,7 @@ pi-extensions 是 pi coding-agent 的自定义扩展集合，TypeScript ESM 项�
 
 - **toolcall 进度**：工具 `execute` 的 `onUpdate` 回调被调用时传入的内容。文档、注释与回复中一律用这个说法指代它。
 - **toolcall 输出**：工具 `execute` 返回值里的 `content` 部分（`{ content: [...] }`），即真正进入 LLM 上下文的内容；同级的 `details` 不算输出。文档、注释与回复中一律用这个说法指代它。
+- **pendant**：一个 VS Code 扩展，充当 pi 的 UI。工具结果 `details.pendant` 里的可折叠 markdown 面板（类型 `ToolPendant`，定义在 `src/lib/pendant.ts`）就是为它准备的；pi 自身不读这个字段（非 pi 官方 schema）。
 
 ## 项目结构
 
