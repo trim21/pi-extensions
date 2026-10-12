@@ -76,14 +76,35 @@ jobs:
       - name: Build native sandbox executor
         run: pnpm run build:native
 
-      # bwrap.test.ts imports src/bwrap which resolves the bwrap binary at
-      # module load time; bubblewrap is not preinstalled on ubuntu-latest.
-      # The claude-code Glob tool and its tests spawn `rg` directly, which is
-      # also not preinstalled on ubuntu-latest.
-      # Cache the apt packages to avoid re-downloading on every run.
+      # The claude-code Glob tool and its tests spawn `rg` directly, and it is
+      # not preinstalled on ubuntu-latest. Cache the apt packages to avoid
+      # re-downloading on every run.
+      # bwrap comes from pixi below rather than apt: the Ubuntu package ships an
+      # AppArmor profile, the pixi build is the one the dev machines use.
       - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
-          packages: bubblewrap ripgrep
+          packages: ripgrep
+
+      # 真实沙箱用例需要 bwrap / mihomo / slirp4netns：与开发机一致，用 pixi 装到全局环境
+      # （mihomo 来自自建 channel）。装最新版而不钉版本：上游更新导致的失败会直接出现在
+      # CI 里，再决定是改代码还是收敛版本。
+      - uses: prefix-dev/setup-pixi@v0.11.0
+        with:
+          pixi-version: v0.76.2
+          # 仓库没有 pixi.toml：只装 pixi 本体，依赖走下面的 pixi global install
+          run-install: false
+
+      - name: Install sandbox runtime dependencies
+        run: |
+          pixi global install --channel https://prefix.dev/trim21-pkgs mihomo
+          pixi global install bubblewrap
+          pixi global install slirp4netns
+          echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
+
+      # Ubuntu 24.04 起 AppArmor 默认限制非特权 user namespace，而 bwrap 与原生执行器
+      # 都要靠它建 namespace；不放开的话真实沙箱用例会被探测整组跳过（CI 上一直如此）。
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       # lsp-e2e-pyright-ruff.test.ts 需要真实的 pyright / ruff LSP server，
       # lsp-e2e-tsls.test.ts / lsp-e2e-rename.test.ts 需要真实的
@@ -97,7 +118,10 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       # coverage 在两个 Node 版本上都生成并上传，codecov 合并两次报告。
+      # 真实网络栈用例（allowlist 放行/拒绝、超时清理）需要显式开启。
       - run: pnpm test:coverage
+        env:
+          RUN_NETSTACK_INTEGRATION: "1"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
