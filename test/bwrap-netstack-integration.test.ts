@@ -7,7 +7,7 @@
  * （未设置时用随包分发的 bin/native，缺失则整组跳过）。
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -110,6 +110,12 @@ describe.skipIf(!enabled || !executorUsable())("native sandbox integration", () 
       "curl -sS -m 10 -o /dev/null -w '%{http_code}' https://example.com",
     );
     expect(denied.output).toMatch(/Could not resolve host|Temporary failure in name resolution/);
+
+    // 宿主 resolv.conf 指向 loopback stub 时靠栈内监听处理，沙箱内文件保持原样
+    const hostResolv = readFileSync("/etc/resolv.conf", "utf8");
+    const sandboxResolv = await runLimited(["pypi.org"], "cat /etc/resolv.conf");
+    expect(sandboxResolv.exitCode).toBe(0);
+    expect(sandboxResolv.output).toBe(hostResolv);
   }, 120000);
 
   it("超时由执行器终止并以 TimeoutError 结束，且不残留网络栈进程", async () => {

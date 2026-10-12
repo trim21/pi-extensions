@@ -15,6 +15,11 @@ import (
 const (
 	fakeIPRange      = "198.18.0.1/16"
 	rejectNameserver = "rcode://name_error"
+	// 除 TUN 劫持外，DNS 还监听本机所有地址的 53：宿主 resolv.conf 指向 loopback
+	// stub（如 systemd-resolved 的 127.0.0.53）时，这类查询不出网络设备、进不了 TUN，
+	// dns-hijack 拦不到；监听本机地址让它们直达栈内解析器，策略与劫持路径一致。
+	// 端口在 netns 内是隔离的，不占用宿主端口。
+	dnsListen = "0.0.0.0:53"
 )
 
 // 合法 DNS 主机名（标签 1-63 字符，字母数字加连字符，不得以连字符开头/结尾）。
@@ -220,6 +225,7 @@ func withPort(rule string, port string) string {
 type mihomoDNS struct {
 	Enable            bool     `json:"enable"`
 	IPv6              bool     `json:"ipv6"`
+	Listen            string   `json:"listen"`
 	EnhancedMode      string   `json:"enhanced-mode"`
 	FakeIPRange       string   `json:"fake-ip-range"`
 	FakeIPFilterMode  string   `json:"fake-ip-filter-mode"`
@@ -268,6 +274,7 @@ func generateMihomoConfig(allowlist []string, dnsServers []string, mtu int) (str
 		InterfaceName: "tap0",
 		DNS: mihomoDNS{
 			Enable:            true,
+			Listen:            dnsListen,
 			EnhancedMode:      "fake-ip",
 			FakeIPRange:       fakeIPRange,
 			FakeIPFilterMode:  "whitelist",
