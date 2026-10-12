@@ -26,6 +26,8 @@ describe("generateMihomoConfig", () => {
     expect(result.dns["fake-ip-range"]).toBe("198.18.0.1/16");
     // whitelist：只有白名单里的域名拿 fake IP
     expect(result.dns["fake-ip-filter-mode"]).toBe("whitelist");
+    // 宿主 resolv.conf 指向 loopback stub 时，查询靠这条监听直达栈内解析器
+    expect(result.dns.listen).toBe("0.0.0.0:53");
     expect(result.dns["fake-ip-filter"]).toEqual(["pypi.org"]);
   });
 

@@ -178,6 +178,15 @@ describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack inte
       // 未允许域名在 DNS 层被拒（不在 fake-ip 白名单里 → 落到 rcode://name_error）：
       // 报 Could not resolve host，而非 fake-ip 后连接层断（TLS decode error）
       expect(out).toMatch(/Could not resolve host|Temporary failure in name resolution/);
+
+      // 监听入口：宿主 resolv.conf 指向 loopback stub 时走的就是它，显式查本机地址的 53
+      expect(await execInStack(stack, "dig +short @127.0.0.1 -p 53 pypi.org")).toMatch(
+        /^198\.18\./,
+      );
+
+      // 沙箱内解析配置保持宿主原样：stub 由栈内监听接管，不改写文件
+      const hostResolv = await readFile("/etc/resolv.conf", "utf8");
+      expect(await execInStack(stack, "cat /etc/resolv.conf")).toBe(hostResolv);
     } finally {
       await stack.stop();
     }
