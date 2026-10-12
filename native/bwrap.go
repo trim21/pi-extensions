@@ -1,54 +1,62 @@
-// bwrap 命令行组装：与 TS 版 src/bwrap/core.ts 的 buildBwrapArgs 语义一致
-// （readonly → --ro-bind-try，readwrite → --bind-try，deny 目录 → --tmpfs、
-// deny 文件 → /dev/null 覆盖）。原型的裁剪见 design.md。
+// bwrap 命令行构造：把策略里的"能力描述"翻译成 bwrap 参数。
+//
+// 这份知识只存在于执行器一处——预览（print-args）与实际执行共用 buildBwrapArgv，
+// 因此"打印出来的命令行"与"真正跑的命令行"不可能漂移。
 package main
 
 import (
+	"fmt"
+	"path/filepath"
 	"strconv"
-	"strings"
 )
 
-func buildBwrapArgs(policy Policy) []string {
-	args := []string{"--new-session", "--die-with-parent", "--unshare-user", "--unshare-pid"}
-	args = append(args, "--uid", strconv.Itoa(*policy.UID), "--gid", strconv.Itoa(*policy.GID))
-	for _, path := range policy.FS.Readonly {
-		args = append(args, "--ro-bind-try", path, path)
+// mountArgs 把一条挂载语义翻译成 bwrap 参数。
+func mountArgs(mount Mount) ([]string, error) {
+	if !filepath.IsAbs(mount.Path) {
+		return nil, fmt.Errorf("挂载路径必须是绝对路径: %s", mount.Path)
 	}
-	for _, path := range policy.FS.Readwrite {
-		args = append(args, "--bind-try", path, path)
+	switch mount.Mode {
+	case MountReadonly:
+		return []string{"--ro-bind", mount.Path, mount.Path}, nil
+	case MountReadonlyTry:
+		return []string{"--ro-bind-try", mount.Path, mount.Path}, nil
+	case MountReadwriteTry:
+		return []string{"--bind-try", mount.Path, mount.Path}, nil
+	case MountDenyDir:
+		return []string{"--tmpfs", mount.Path}, nil
+	case MountDenyFile:
+		return []string{"--ro-bind-try", "/dev/null", mount.Path}, nil
+	default:
+		return nil, fmt.Errorf("未知挂载模式 %q（%s）", mount.Mode, mount.Path)
 	}
-	for _, path := range policy.FS.Deny {
-		if strings.HasSuffix(path, "/") {
-			args = append(args, "--tmpfs", path)
-		} else {
-			args = append(args, "--ro-bind-try", "/dev/null", path)
-		}
-	}
-	if policy.Net.Mode == NetworkBlock {
-		args = append(args, "--unshare-net")
-	}
-	args = append(args, "--dev", "/dev", "--proc", "/proc")
-	args = append(args, policy.Bwrap.ExtraArgs...)
-	return args
 }
 
-// bwrapArgv 是完整命令行：bwrap + 挂载参数 + `-- shell -lc command`。
-func bwrapArgv(policy Policy, command string) []string {
-	argv := []string{policy.Bwrap.Path}
-	argv = append(argv, buildBwrapArgs(policy)...)
-	argv = append(argv, "--", policy.Shell, "-lc", command)
-	return argv
-}
-
-// printableArgv 用于 --print-args：把 argv 渲染成可直接复制执行的一行。
-func printableArgv(argv []string) string {
-	quoted := make([]string, 0, len(argv))
-	for _, arg := range argv {
-		if strings.ContainsAny(arg, " \t\"'\\$`") {
-			quoted = append(quoted, "'"+strings.ReplaceAll(arg, "'", `'\''`)+"'")
-			continue
+// buildBwrapArgv 组装完整命令行：
+//
+//	bwrap --ro-bind <root> <root>
+//	      --new-session --die-with-parent --unshare-user --unshare-pid --uid <uid> --gid <gid>
+//	      <挂载计划...> [--unshare-net] <extraArgs>
+//	      --dev /dev --proc /proc -- <shell> -lc <command>
+//
+// 参数顺序与语义与 TS 侧原实现一致：挂载计划靠后的覆盖靠前的（因此只读保护排在
+// 可写绑定之后），extraArgs 追加在挂载计划之后、--dev/--proc 之前。
+func buildBwrapArgv(policy Policy, bwrapPath string) ([]string, error) {
+	argv := []string{bwrapPath, "--ro-bind", policy.Root, policy.Root}
+	argv = append(argv,
+		"--new-session", "--die-with-parent", "--unshare-user", "--unshare-pid",
+		"--uid", strconv.Itoa(*policy.UID), "--gid", strconv.Itoa(*policy.GID),
+	)
+	for _, mount := range policy.Mounts {
+		args, err := mountArgs(mount)
+		if err != nil {
+			return nil, err
 		}
-		quoted = append(quoted, arg)
+		argv = append(argv, args...)
 	}
-	return strings.Join(quoted, " ")
+	if policy.Network.Mode == NetworkBlock {
+		argv = append(argv, "--unshare-net")
+	}
+	argv = append(argv, policy.ExtraArgs...)
+	argv = append(argv, "--dev", "/dev", "--proc", "/proc", "--", policy.Shell, "-lc", policy.Command)
+	return argv, nil
 }

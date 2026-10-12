@@ -6,14 +6,13 @@
  * （src/bwrap/sandbox.ts，与 pi 扩展层共用）里执行一条命令。参数解析用 citty。
  *
  *   pnpm sandbox --config=/tmp/net.json --verbose -- 'curl -sS https://pypi.org/simple/'
- *   pnpm sandbox --fs=readonly --network=block --print-args -- 'ls -al'
+ *   pnpm sandbox --fs=readonly --network=block -- 'ls -al'
  *
  * 约定：
  *   - ` -- ` 之后只接受**一个**参数：整条命令的字符串，原样交给 `bash -lc` 解析，
  *     本 CLI 不做任何再转义，所以 `&&`、管道、`$()`、`*` 都与 pi 的 Bash 工具同语义。
  *     用你自己的 shell 引号包住整体：-- 'cd ~/tmp && ls'
- *   - `--print-args` 输出 JSON（argv 与环境变量按结构化数据给出，无 quoting 歧义）；
- *     命令输出走 stdout，诊断信息一律以 `# ` 前缀走 stderr，便于分开重定向。
+ *   - 命令输出走 stdout，诊断信息一律以 `# ` 前缀走 stderr，便于分开重定向。
  *   - 退出码即被执行命令的退出码（被信号杀死为 1；用法错误为 2）。
  */
 
@@ -29,12 +28,7 @@ import {
   NETWORK_MODES,
   type NetworkMode,
 } from "../src/bwrap/core.js";
-import {
-  HOLDER_PID_PLACEHOLDER,
-  loadSandboxConfig,
-  previewSandboxCommand,
-  runInSandbox,
-} from "../src/bwrap/sandbox.js";
+import { loadSandboxConfig, runInSandbox } from "../src/bwrap/sandbox.js";
 import { expandHome } from "../src/lib/path.js";
 
 function diagnose(text: string): void {
@@ -87,13 +81,9 @@ const command = defineCommand({
       description: "命令超时秒数",
       valueHint: "<sec>",
     },
-    "print-args": {
-      type: "boolean",
-      description: "以 JSON 打印将要执行的 argv 与环境变量（stdout）后退出，不执行",
-    },
     verbose: {
       type: "boolean",
-      description: "透传 netns holder（unshare/mihomo）与 slirp4netns 日志",
+      description: "透传原生执行器的网络栈（mihomo / slirp4netns）诊断日志",
     },
   },
   async run({ args }) {
@@ -143,14 +133,6 @@ const command = defineCommand({
       ...(fsMode && { fsMode }),
       ...(networkMode && { networkMode }),
     });
-    const preview = strategy.bwrapEnabled
-      ? await previewSandboxCommand(strategy, {
-          workspace,
-          commandCwd,
-          command,
-        })
-      : undefined;
-
     const plan = [
       ["config", configPath ?? "全局 + 项目 sandbox.json"],
       ["workspace", workspace],
@@ -164,31 +146,9 @@ const command = defineCommand({
       ["allowlist", strategy.networkAllowlist.join(", ") || "-"],
       ["approval rules", `${strategy.approvalRules.length} 条（CLI 不做审批，仅提示）`],
     ];
-    // 要执行的命令行：argv 逐项 + 沙箱环境，结构化给出（不拼 shell 文本，无 quoting 歧义）
-    const payload =
-      preview === undefined
-        ? undefined
-        : { fs: strategy.fs, network: strategy.network, ...preview };
     const width = Math.max(...plan.map(([label]) => label.length));
     for (const [label, value] of plan) {
       diagnose(`${label.padEnd(width)}: ${value}`);
-    }
-
-    if (args["print-args"] === true) {
-      if (!payload) {
-        usageError(`fs=${strategy.fs} network=${strategy.network} 不经 bwrap，没有可打印的命令行`);
-      }
-      console.log(JSON.stringify(payload, null, 2));
-      if (payload.needsNetworkStack) {
-        diagnose(
-          `argv 里的 ${HOLDER_PID_PLACEHOLDER} 是 netns holder pid 占位符：加 --verbose 实跑可看到真实 pid`,
-        );
-      }
-      return;
-    }
-    // 实跑路径也打出真正执行的命令行（一行 JSON），否则只剩结果、看不到沙箱参数
-    if (payload) {
-      diagnose(`argv: ${JSON.stringify(payload)}`);
     }
 
     const controller = new AbortController();
@@ -206,10 +166,7 @@ const command = defineCommand({
         ...(timeout !== undefined && { timeout }),
         ...(verbose && {
           log: {
-            holder: (chunk: string) => diagnose(`[holder] ${chunk.trimEnd()}`),
-          },
-          onNetworkStack: (stack) => {
-            diagnose(`netns holder pid: ${String(stack.holderPid)}`);
+            diagnostic: (line: string) => diagnose(`[netstack] ${line}`),
           },
         }),
       });
