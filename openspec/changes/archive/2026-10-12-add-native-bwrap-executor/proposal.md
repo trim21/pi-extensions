@@ -39,3 +39,11 @@ Go 可以直接做这些事：`clone(CLONE_NEW*)` 建 namespace、pidfd（`pidfd
 - 新增：`native/`（Go 模块、CLI 源码、README 说明用法与已知差异）。
 - 不改动：`src/`、`test/`、`package.json`（`files` 不含 `native/`）、CI、发布流程。
 - 观测手段：手工运行 CLI 对比与 TS 实现的差异，并统计可迁移代码量（预算：`src/bwrap/` 约 1050 行可搬，Go 侧约 600–900 行）。
+
+## 后续演进
+
+本 change 记录的是原型阶段：当时 policy 携带**完整 bwrap argv**、由 TS 组装，并保留 `--print-args`
+预览与 `@file`/`-`（stdin）输入。此后形态被收敛：policy 改为**能力描述**（`root` + 有序 `mounts`
+
+- `command`/`shell`/`env`/`uid`/`gid`），bwrap 参数构造回到执行器（`native/bwrap.go`），
+  `--print-args` 预览与多余输入入口删除。落地细节见 `wire-native-sandbox-executor`。

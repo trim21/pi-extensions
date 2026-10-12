@@ -66,17 +66,35 @@
 - **WHEN** allowlist 条目包含裸 IPv6 地址（未用 `[]` 包裹）
 - **THEN** 配置校验失败并提示用方括号包裹
 
+### Requirement: allowlist 的 IP 条目解析
+
+allowlist 里的 IP / CIDR 条目 MUST 经真实地址解析来判定，MUST NOT 按字符形态（正则）判定：形态像 IP 但解析不过的条目 MUST 报配置错误，MUST NOT 被当成合法地址，也 MUST NOT 降级成域名。
+
+#### Scenario: 非法 IP 字面量报错
+
+- **WHEN** allowlist 出现 `999.999.999.999`、`1.2.3.4.5`、`10.0.0.0/33` 这类条目
+- **THEN** 配置校验失败，并指出该条目不是合法的 IP 地址或 IP 段
+
+#### Scenario: 合法 IP 与 CIDR 照常接受
+
+- **WHEN** allowlist 出现 `1.2.3.4`、`10.0.0.0/8`、`[::1]`、`[2001:db8::/32]`
+- **THEN** 解析成功，并分别生成 IPv4 / IPv6 的连接层规则
+
 ### Requirement: 网络栈生命周期管理
 
 网络栈（user/network namespace、egress 通道、流量过滤进程）随命令生命周期创建，并在所有退出路径下释放，不残留进程或 namespace。
 
-**防僵尸 namespace 的机制**：network namespace 由 pid namespace 的 init 进程持有，init 以任何方式退出（包括被 SIGKILL 强制终止）时，内核自动终止该 pid namespace 内的全部进程，namespace 引用随之归零——网络栈内的进程无需在每条退出路径手工清理。宿主（pi）进程崩溃时，内核关闭宿主持有的 stdin 管道写端（进程退出必然关闭 fd），holder 读到 EOF 即退出，走同一套内核清理。因此网络栈的 namespace 泄漏被系统性杜绝，而非依赖调用方记得清理。
+**职责边界**：TS 调用方只描述能力（配置解析与校验、fs 挂载计划、审批、策略序列化、输出截断与诊断呈现）；挂载计划到 bwrap 参数的翻译、namespace 创建、网络栈拉起、进程身份与终止、内核级清理由原生执行器负责。
 
-**停止信号的约束**：持有 network namespace 的包装进程（`unshare`）会永久阻塞 SIGINT/SIGTERM，停止网络栈 MUST NOT 依赖它响应这类信号，也 MUST NOT 为此设置固定等待超时；应以不可被阻塞或忽略的信号终止包装进程，由包装进程把终止传递给 pid namespace 的 init，再由 init 优雅停止过滤进程。
+**防僵尸 namespace 的机制**：network namespace 由 pid namespace 的 init（执行器自身）持有，init 以任何方式退出（包括被 SIGKILL 强制终止）时，内核自动终止该 pid namespace 内的全部进程，namespace 引用随之归零——网络栈内的进程无需在每条退出路径手工清理。调用方进程崩溃时，内核关闭宿主持有的执行器 stdin 管道写端（进程退出必然关闭 fd），执行器读到 EOF 即退出，走同一套内核清理。因此网络栈的 namespace 泄漏被系统性杜绝，而非依赖调用方记得清理。
 
-**终止通道的约束**：终止网络栈 MUST 优先使用不依赖 pid 的通道——关闭 holder 的 stdin 写端触发其自我退出（内核随之清理 pid namespace），slirp4netns 由 exit-fd HUP 自行退出。MUST NOT 把「先检查子进程是否已退出、再按 pid（或子进程句柄）发信号」当作常规终止手段：检查与发信号之间不是原子的，子进程可能在检查通过后退出、其 pid 被内核复用，信号会落到无关进程上（Node 的子进程句柄同样最终按 pid 调用 `kill(2)`，无法消除该窗口）。等待子进程退出 MUST 基于子进程状态或事件，MUST NOT 用 `kill(pid, 0)` 轮询判活。仅在 fd 通道超时（进程卡死）时才允许用子进程句柄强杀作为兜底，兜底路径的残余风险 MUST 在实现中注明。
+**pid namespace 内的 /proc MUST 是新挂载的 procfs**：执行器作为 pid namespace 的 init，MUST 先把本 mount namespace 的挂载传播设为 private，再挂载新的 procfs——宿主 `/proc` 没有本 pid namespace 的进程视角（`/proc/self` 之类路径会指错），bwrap 这类靠 `/proc/<pid>/ns/*` 操作 namespace 的程序会因此失败；private 传播同时保证新挂载点不会顶掉宿主的 `/proc`。
 
-**停栈的幂等与兜底注销**：停止网络栈 MUST 幂等——重复调用不得重复终止。用于「调用方忘记停栈」的 GC 兜底 MUST 在正常停栈时注销，且该兜底 MUST 只走 fd 通道：对象被回收时记下的 pid 可能早已被内核复用给无关进程，兜底路径 MUST NOT 按 pid 发信号。
+**终止经进程身份而非 pid**：终止执行器及其子进程 MUST 通过内核持有的进程引用（pidfd）发送信号，MUST NOT 依赖「先检查进程是否已退出、再按 pid 发信号」——检查与发信号之间不是原子的，pid 可能已被内核复用给无关进程。等待退出 MUST 基于进程状态或事件，MUST NOT 用 `kill(pid, 0)` 轮询判活。内核不提供该能力时执行器 MUST 在启动阶段明确失败，MUST NOT 退回到按 pid 发信号。
+
+**终止通道的优先级**：结束一次执行 MUST 优先使用不依赖 pid 的通道——关闭执行器 stdin 触发其自我退出（内核随之清理 pid namespace），slirp4netns 由 exit-fd HUP 自行退出。仅在 fd 通道超时（进程卡死）时才允许对执行器进程强杀作为兜底，兜底路径的残余风险 MUST 在实现中注明。
+
+**停栈幂等**：结束一次执行（正常结束、超时或取消）MUST 幂等——重复触发不得重复终止。
 
 #### Scenario: 命令正常结束
 
@@ -96,7 +114,7 @@
 #### Scenario: 宿主进程被强制终止
 
 - **WHEN** 运行沙箱的宿主进程被 SIGKILL 或以其他方式崩溃
-- **THEN** 网络栈在毫秒级自动清理（stdin EOF 触发 holder 退出 → 内核清 pid namespace），namespace 不泄漏
+- **THEN** 网络栈在毫秒级自动清理（stdin EOF 触发执行器退出 → 内核清 pid namespace），namespace 不泄漏
 
 #### Scenario: 网络栈可重复创建
 
@@ -113,58 +131,39 @@
 - **WHEN** 调用方停止网络栈，且各进程正常存活（未卡死）
 - **THEN** 停栈只关闭 fd 通道让进程自行退出，不向任何 pid 发送信号
 
-#### Scenario: 停栈后兜底已注销
-
-- **WHEN** 网络栈正常停止后，其句柄对象被回收
-- **THEN** GC 兜底不再触发任何终止（它只关闭 fd 通道，且已注销），临时目录与正常停栈时一致地已删除
-
 #### Scenario: 子进程已自行退出时不再发信号
 
 - **WHEN** 承载网络栈的子进程在调用方停止它之前已自行退出（例如过滤进程崩溃）
 - **THEN** 停栈不对该 pid 发信号，仅做收尾
 
+#### Scenario: 终止只作用于本次执行的进程
+
+- **WHEN** 需要终止某次执行（超时或取消）
+- **THEN** 信号只发给本次执行器持有的进程引用，不会落到同 pid 的其他进程上
+
+#### Scenario: 内核不支持 pidfd 时明确失败
+
+- **WHEN** 内核不提供 pidfd（低于 Linux 5.3）
+- **THEN** 执行器在启动阶段以明确错误结束，调用方看到「内核不支持」类的提示，而不是静默退回到按 pid 发信号
+
 ### Requirement: 运行期失败诊断留档
 
-网络栈在命令运行期间异常终止时（承载进程在调用方停止它之前已自行退出），MUST 把已收集的子进程输出与失败原因落盘，并把日志路径交给调用方；该命令以失败结束时，调用方 MUST 把日志路径呈现给用户。正常停栈 MUST NOT 产生这类日志。
+网络栈在命令运行期间异常终止时（执行器在命令结束前退出），MUST 把已收集的诊断输出与失败状态交给调用方；该命令以失败结束时，调用方 MUST 把诊断落盘并把路径呈现给用户。正常结束 MUST NOT 产生这类日志。
 
 #### Scenario: 运行期异常退出留档
 
-- **WHEN** 命令运行期间过滤进程或 holder 崩溃，holder 在调用方停栈前已退出
-- **THEN** 已收集的子进程输出与退出状态落盘为日志文件，停栈结果里带有该路径
+- **WHEN** 命令运行期间过滤进程或执行器崩溃、执行器在命令结束前退出
+- **THEN** 已收集的诊断输出与退出状态落盘为日志文件，调用方拿到该路径
 
 #### Scenario: 命令失败时用户能看到日志路径
 
 - **WHEN** 网络栈在运行期间异常退出且该命令以失败结束
-- **THEN** 呈现给用户的错误信息里带有网络栈日志的路径
+- **THEN** 呈现给用户的错误信息里带有诊断日志的路径
 
-#### Scenario: 正常停栈不落盘
+#### Scenario: 正常结束不落盘
 
-- **WHEN** 命令正常结束、调用方主动停止网络栈
-- **THEN** 不产生网络栈日志文件，停栈结果里没有日志路径
-
-### Requirement: 临时工作目录不残留
-
-网络栈启动时为流量过滤进程创建独立的工作目录（每次启动一个，避免并发实例争抢同一份锁文件）。该目录 MUST 在网络栈正常停止时删除；启动失败时 MUST NOT 删除——失败路径本就要落盘诊断日志（holder / slirp 输出与错误本身），工作目录属于同一批现场材料，保留以便事后排查。目录内容只是过滤进程的运行时缓存，删除失败不影响命令结果。
-
-#### Scenario: 命令结束后目录被删除
-
-- **WHEN** 沙箱命令完成、调用方停止网络栈
-- **THEN** 本次启动创建的临时工作目录已不存在
-
-#### Scenario: 启动失败保留现场
-
-- **WHEN** 网络栈启动过程中任一组件失败
-- **THEN** 本次创建的临时工作目录被保留（与落盘的诊断日志一起供排查），不被清理
-
-#### Scenario: 多次执行不累积目录
-
-- **WHEN** 连续多次执行沙箱命令
-- **THEN** 每次命令各自创建并在结束时删除自己的临时工作目录，成功路径不在磁盘上累积
-
-#### Scenario: 删除失败不改变命令结果
-
-- **WHEN** 临时工作目录删除失败（如被其他进程占用、权限变化）
-- **THEN** 停栈仍然成功返回，命令结果不受影响
+- **WHEN** 命令正常结束
+- **THEN** 不产生这类诊断日志文件
 
 ### Requirement: 配置无落盘传递
 
@@ -179,54 +178,55 @@
 
 过滤进程完成网络接管后命令才开始执行。
 
-**egress 接口的就绪前提**：网络栈的 egress 接口（tap0）由宿主侧的 egress 进程创建，过滤进程的出站绑定在该接口上。接口未就绪时 MUST NOT 启动过滤进程：等待接口就绪 MUST 有明确的失败路径，未就绪时 MUST 立即以带原因的失败结束，使调用方在秒级内看到真实原因（egress 进程未能创建接口），而不是过滤进程的就绪超时。
+**egress 接口的就绪前提**：网络栈的 egress 接口（tap0）由宿主侧的 egress 进程创建，过滤进程的出站绑定在该接口上。接口未就绪时 MUST NOT 启动过滤进程：等待接口就绪 MUST 有明确的失败路径，未就绪时 MUST 以带原因的失败结束，使调用方在秒级内看到真实原因（egress 进程未能创建接口），而不是过滤进程的就绪超时。
+
+**就绪信号由执行器给出**：执行器自己判定过滤进程是否完成接管，并给出内部就绪信号。MUST NOT 靠匹配过滤进程的日志文案来判定就绪——那会把就绪判定绑死在第三方程序的日志格式上，升级即失效。
 
 #### Scenario: 就绪后执行命令
 
 - **WHEN** 网络栈启动
-- **THEN** 等待过滤进程就绪（TUN 接管完成）后才执行沙箱命令；过滤进程提前退出则命令失败
-
-#### Scenario: 就绪日志跨数据块
-
-- **WHEN** 过滤进程的就绪日志单行被输出流切分为多个数据块
-- **THEN** 就绪判定不受数据块边界影响，仍能正确识别
+- **THEN** 等待过滤进程就绪（TUN 接管完成）后才执行沙箱命令；过滤进程提前退出则这次执行失败
 
 #### Scenario: egress 接口未就绪时立即失败
 
 - **WHEN** egress 进程未能在超时内创建 tap0（版本、参数或权限问题）
-- **THEN** holder 立即以非零码退出并输出原因，调用方在秒级内看到「接口未创建」类的失败，而不是等待过滤进程就绪超时
+- **THEN** 执行器立即以非零码结束并输出原因，调用方在秒级内看到「接口未创建」类的失败，而不是等待过滤进程就绪超时
+
+#### Scenario: 就绪判定不依赖过滤进程日志文案
+
+- **WHEN** 过滤进程升级后改变了日志文案或日志级别
+- **THEN** 就绪判定不受影响，网络栈照常可用
 
 ## Implementation
 
-网络栈由以下进程构成：
+网络栈由**原生执行器**（`native/`，Go，单一可执行文件）构建；TS 侧只做命令级编排：配置解析与校验、挂载计划、审批、策略序列化、输出截断与诊断呈现。
 
 ```
-pi（Bash 工具进程，持有 stdin 写端）
- ├─ unshare -Urnp --fork --kill-child=SIGTERM          ← 包装进程，永久阻塞 SIGINT/SIGTERM
- │   └─ node holder.js <config-base64> <mihomo> <mtu> <mihomo-home>   ← pid ns 内的 init
- │       └─ mihomo -d <mihomo-home> -config <base64>   ← TUN + 白名单 fakeip + DNS 层拒绝
- └─ slirp4netns -c --mtu=1500 --userns-path=/proc/<holderPid>/ns/user \
-       --netns-type=pid <holderPid> tap0 -e 3          ← egress（宿主 netns），fd 3 是 exit-fd 读端
+pi（Bash 工具进程，持有执行器 stdin 写端）
+ └─ sandbox run --policy-base64 <能力描述>            ← 执行器（宿主侧 supervisor）
+     ├─ clone(CLONE_NEWUSER|NEWPID|NEWNS|NEWNET) → internal-init   ← pid ns 内的 PID 1
+     │    ├─ 挂载传播设 private + 重挂 procfs（等价 unshare --mount-proc）
+     │    ├─ mihomo -config <base64>                  ← TUN + 白名单 fakeip + DNS 层拒绝
+     │    └─ bwrap … -- shell -lc <command>           ← 文件沙箱 + 命令（已在目标 netns 内）
+     └─ slirp4netns（宿主 netns，fork 进 init 的 netns 提供 egress）
 ```
 
-命令通过 `nsenter -U -n --preserve-credentials -t <holderPid> -- bwrap ...` 进入 holder 的 userns + netns，再叠一层 bwrap 文件沙箱。这条命令行由执行层（`src/bwrap/exec.ts`）组装：网络栈对外只提供 holder pid 与停止，不参与 bwrap 参数怎么拼。
+策略是**能力描述**：调用方给 `root` + 有序 `mounts`（`ro` / `ro-try` / `rw-try` / `deny-dir` / `deny-file`，路径已归一化为绝对路径）+ 网络策略 + `command` / `shell` / `cwd` / `env` + 超时，不传 bwrap 命令行；用哪些 bwrap 参数表达由执行器决定（唯一构造点），路径语义（realpath、保护目录、工作区 `.git` 只读）留在调用方。
 
 关键机制：
 
-- **pid namespace 内核清理**：holder（node）是 pid ns 的 init，init 以任何方式退出（含 SIGKILL）时内核自动终止 pid ns 内全部进程（mihomo），userns/netns 引用随之归零——这是防僵尸 namespace 的根基，无需在每条退出路径手工清理。slirp4netns 不在该 pid ns 内（它必须在宿主 netns 启动才能让出站走宿主视角），不受这套内核清理覆盖，靠 exit-fd 与 holder 绑定生命周期。
-- **stdin EOF 父进程死亡检测**：pi spawn 时 stdin 用 pipe，pi 持有写端；pi 崩溃（含 SIGKILL）时内核关闭 fd（进程退出必然关 fd），holder 读到 EOF 即退出，走同一套内核清理。比轮询 `kill(pid, 0)` 精确（无延迟、无 pid 复用误判），也不依赖 `prctl(PR_SET_PDEATHSIG)`（node 未暴露该 API；且 PDEATHSIG 只监控直接父进程，而 holder 的直接父进程是 unshare 而非 pi）。
-- **停止信号**：holder 是 `unshare` 包装进程，util-linux 的 unshare 在 fork 前 `sigprocmask(SIG_BLOCK, {SIGINT, SIGTERM})` 且只在子进程里恢复掩码，父进程永久阻塞这两个信号——发给它的 SIGTERM 只会 pending 永不投递。停止网络栈必须对其用 SIGKILL（不可阻塞），unshare 立即退出后 init 经 `--kill-child=SIGTERM` 的 PDEATHSIG 收到 SIGTERM，优雅停 mihomo 后退出。
-- **--kill-child=SIGTERM**：语义是「unshare 死亡时子进程收到 SIGTERM」（util-linux 在 fork 出的子进程里 `prctl(PR_SET_PDEATHSIG, SIGTERM)`，并用 pidfd 处理 fork 后父进程已死的竞态），不是信号转发；stop / 失败清理用 `readChildPids` 拿 init 的宿主 pid 做 SIGKILL 兜底（PDEATHSIG 未生效时）。
-- **NSpid 取宿主 pid**：pid ns 内 `/proc` 挂载是宿主的（`-Urnp` 不含 `-m`，`/proc/1` 是宿主 init 而非本 pid ns 的 init），slirp4netns 的 setns 目标必须用 `/proc/self/status` 的 NSpid 第一项（宿主视角 pid）。
-- **配置 base64 直传**：mihomo 支持 `-config` 直接接收 base64 JSON，无临时文件；holder 内 `chdir("/")` 防止在宿主 cwd 意外落盘。
-- **就绪检测按行匹配**：`waitForMihomoStarted` 用 `src/lib/proc.ts` 的 `forEachLine` 按 `\n` 拼行后匹配 `"Tun adapter listening"`，正确处理跨 data chunk 的行。
+- **pid namespace 内核清理**：`internal-init` 是 pid ns 的 init，它以任何方式退出（含 SIGKILL）时内核自动终止 pid ns 内全部进程（mihomo），userns/netns 引用随之归零——防僵尸 namespace 的根基，无需在每条退出路径手工清理。slirp4netns 不在该 pid ns 内（它必须在宿主 netns 启动才能让出站走宿主视角），靠 exit-fd 与 init 绑定生命周期。
+- **stdin EOF 父进程死亡检测**：调用方 spawn 时 stdin 用 pipe，调用方持有写端；调用方崩溃（含 SIGKILL）时内核关闭 fd，执行器读到 EOF 即退出，走同一套内核清理。比轮询 `kill(pid, 0)` 精确（无延迟、无 pid 复用误判），也不依赖 `prctl(PR_SET_PDEATHSIG)`（它只监控直接父进程）。
+- **procfs**：init 作为 pid ns 的 PID 1 必须先把本 mount namespace 的挂载传播设为 private，再重挂 procfs（`unshare --mount-proc` 的等价物）：宿主 `/proc` 没有本 pid namespace 的进程视角，bwrap 这类靠 `/proc/<pid>/ns/*` 操作 namespace 的程序会因此失败；private 传播保证新挂载点不顶掉宿主的 `/proc`。
+- **终止走 pidfd**：对 init、slirp4netns、mihomo 的终止一律经 `pidfd_send_signal`，不用「先检查是否已退出、再按 pid 发信号」；pidfd 在启动子进程之后、任何等待之前打开（未 reap 的子进程仍占着 pid 号，映射唯一且稳定）；内核不支持 pidfd（低于 5.3）时启动阶段明确失败，不退回按 pid 发信号。常规结束仍优先走 fd 通道（关 stdin），强杀只作卡死兜底。
+- **配置 base64 直传**：mihomo 支持 `-config` 直接接收 base64 JSON，无临时配置文件、无临时工作目录。
+- **就绪判定**：init 拉起 lo → 等 tap0（10 秒未出现即 fail fast 并输出原因）→ 起 mihomo → 判定 TUN 接管完成后才执行命令；不匹配第三方程序的日志文案。
+- **IP 条目校验**：IP / CIDR 条目用真实的地址解析判定，不按字符形态匹配——`999.999.999.999`、`1.2.3.4.5` 这类条目直接报配置错误，不降级成域名。
 - **白名单 fakeip**：`fake-ip-filter-mode: whitelist` + `fake-ip-filter`（allowlist 的域名条目）——只有 allowlist 域名拿 fake IP，因此连接到达时能靠「fake IP ↔ 域名」一一对应的映射精确还原域名（不依赖嗅探、不受 DNS TTL 影响）；未命中白名单的域名落到 `nameserver`。
 - **DNS 层拒绝**：`nameserver` 设为伪服务器 `rcode://name_error`，未允许域名即时拿到 NXDOMAIN（客户端报 `Could not resolve host`），不查上游、不等超时。mihomo 的 fakeip 分支没有按域名拒绝的钩子，收窄白名单是把拒绝做到 DNS 层的唯一途径；`dns.rules` 不是 mihomo 的字段（会被静默忽略），不要用它表达 DNS 策略。
 - **DIRECT 出站解析**：`direct-nameserver` 指向配置的真实 DNS——连接由 fake IP 还原成域名后 DIRECT 要按域名重新解析，不指定会解析回 fake-ip 再进 TUN 成环。
-- **条目匹配两档**：裸域名条目在 DNS 侧写裸域名、连接层写 `DOMAIN,<host>`（只匹配该域名）；`*.` 条目在 DNS 侧写 `.example.com`（trie 的 dot-wildcard）、连接层写 `DOMAIN-WILDCARD,*.example.com`（glob 的 `*` 跨点），两者都是「任意深度子域名、不含 apex」。两层由同一个条目生成，保证 DNS 白名单与连接层规则表达同一集合；带端口条目在连接层用 `AND,(<域名规则>),(DST-PORT,<port>,DIRECT),DIRECT` 组合。
+- **条目匹配两档**：裸域名条目在 DNS 侧写裸域名、连接层写 `DOMAIN,<host>`（只匹配该域名）；`*.` 条目在 DNS 侧写 `.example.com`（trie 的 dot-wildcard）、连接层写 `DOMAIN-WILDCARD,*.example.com`（glob 的 `*` 跨点），两者都是「任意深度子域名、不含 apex」。两层由同一个条目生成，保证 DNS 白名单与连接层规则表达同一集合；带端口条目在连接层用 `AND,(<域名规则>),(DST-PORT,<port>,DIRECT),DIRECT` 组合；IPv6 条目的连接层规则用 `IP-CIDR6`，IPv4 用 `IP-CIDR`。
+- **失败诊断留档**：执行器在命令结束前异常退出（启动失败 125、内部错误 2、被信号杀死）时把诊断写到 stderr；调用方把诊断落盘到 agent 目录的 tmp 下，并把路径附进错误信息——正常结束不落盘。
+- **二进制分发**：Go 源码随仓库（不进 npm 包），交叉编译产物 `bin/native/linux-{x64,arm64}/sandbox` 随包分发，与 TS 包同版本发布。
 
-- **终止走 fd 通道**：停栈不按 pid 发信号，而是关闭 holder 的 stdin 写端——holder 读到 EOF 退出（`holder.ts` 的 stdin 监听），内核清理其 pid namespace（mihomo 随之消失），unshare waitpid 后退出，holder 持有的 exit-fd 写端关闭，slirp4netns 收到 HUP 自行退出。检查「子进程是否已退出」再发信号不是原子的（Node 的子进程 kill 最终按 pid 调 `kill(2)`），因此只作兜底：`waitForChildExit` 超时（进程卡死）才用句柄强杀，残余窗口在 `killChild` 注释里注明；等待退出用 `exit` 事件 + `AbortSignal.timeout`，不用 `kill(pid, 0)` 轮询。GC 兜底同样只关 fd（`FinalizationRegistry` 回调里不能 await，也绝不按 pid 发信号），正常停栈会注销它。
-- **运行期异常退出的留档**：holder 把 mihomo 的退出码作为自己的退出码；`stop()` 在关 fd 之前发现 holder 已自行退出即记 `exitedEarly`，此时把缓冲的 holder/slirp 输出落盘为 `agent-dir/tmp/bwrap-netstack-*.log`，路径经 `SandboxRunResult.networkStackLog` 交给调用方，运行时层把它附进 `sandboxHint`。
-- **egress 接口 fail fast**：holder 等 tap0 满 10 秒未出现时打印 `slirp4netns did not create tap0 within 10s` 并以退出码 1 退出，宿主侧的 exit 监听立即把它变成一条可诊断的启动失败，不再呈现为过滤进程就绪超时。
-
-涉及文件：`src/bwrap/network-stack.ts`、`src/bwrap/holder.ts`（esbuild 编译为 `holder.js`）、`src/bwrap/mihomo-config.ts`、`src/lib/proc.ts`；命令经 netns 执行的前缀由 `src/bwrap/exec.ts` 组装。
+涉及文件：执行器 `native/{main.go,init.go,bwrap.go,mihomo.go,policy.go,pidfd.go}`（argv 构造只在 `bwrap.go`）；调用方 `src/bwrap/{executor.ts,sandbox.ts,core.ts,runtime.ts}` 与 `bin/sandbox.ts`。

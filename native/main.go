@@ -1,19 +1,13 @@
-// sandbox：pi-extensions 的原生沙箱执行层原型（Go，无第三方依赖）。
+// sandbox：pi-extensions 的沙箱执行器（Go，无第三方依赖）。
 //
-// 用法：
+// 由 TS 侧调用（src/bwrap/executor.ts），也可以手工调试：
 //
-//	sandbox run --policy '<json>' --command 'curl -sS https://pypi.org/simple/'
-//	sandbox run --policy-base64 <base64> --command '...' --timeout 30
-//	sandbox run --policy @policy.json --command '...' --print-args
+//	sandbox run --policy '<json>'
+//	sandbox run --policy @policy.json --verbose
+//	sandbox run --policy-base64 <base64> --timeout 30
 //
-// 进程模型（见 design.md）：
-//
-//	supervisor（宿主 ns）
-//	 ├─ init（CLONE_NEWUSER|NEWPID|NEWNS|NEWNET，新 ns 的 PID 1）→ mihomo + bwrap
-//	 └─ slirp4netns（宿主 ns，fork 进 init 的 netns 提供 egress）
-//
-// 与 TS 版的区别集中在两处：命令直接在目标 netns 内执行（不需要 nsenter），
-// 所有终止都经 pidfd（不存在 pid 复用窗口）。
+// 调用方组装完整的 bwrap argv；执行器只负责 namespace、网络栈、进程身份（pidfd）
+// 与执行。进程模型见 native/README.md 与 openspec/changes/wire-native-sandbox-executor/。
 package main
 
 import (
@@ -37,8 +31,10 @@ const (
 	exitTimeout = 124
 	exitStartup = 125
 
-	// readyMarker 是 init 在自己的 stderr 上打印的就绪标记。
-	// 它取代了 TS 版"扫描 mihomo 的 Tun adapter listening 文案"的耦合。
+	// netstackPrefix 标记"网络栈自身的诊断输出"：调用方据此与命令的 stderr 分流
+	//（命令的 stderr 必须原样转发，诊断只在需要时展示）。
+	netstackPrefix = "[netstack] "
+	// readyMarker 是 init 打印的内部就绪信号——不依赖过滤进程的日志文案。
 	readyMarker  = "sandbox: network stack ready"
 	readyTimeout = 20 * time.Second
 	stopGrace    = 2 * time.Second
@@ -64,15 +60,16 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `sandbox run --policy <json|@file|-> --command '<shell command>'
+	fmt.Fprint(os.Stderr, `sandbox run --policy <json> [--timeout N] [--verbose]
 
-  --policy <json>        策略 JSON（@file 读文件，- 读 stdin）
+  --policy <json>        策略 JSON（调用方直接传 argv，不经文件或 stdin）
   --policy-base64 <b64>  策略的 base64(JSON)
-  --command <string>     沙箱内执行的 shell 命令
-  --cwd <dir>            命令执行目录（默认当前目录）
-  --timeout <seconds>    超时（超时退出码 124）
-  --print-args           只打印 bwrap 命令行，不执行
-  --verbose              转发网络栈诊断输出
+  --timeout <seconds>    命令超时（超时退出码 124）
+  --verbose              展示网络栈诊断输出（[netstack] 前缀行）
+
+策略是能力描述：root、mounts、extraArgs、network{mode,allowlist,dnsServers}、
+mihomo{path,mtu}、slirp4netns{path}、bwrap{path}、command、shell、cwd、env、uid、gid、
+timeoutSeconds。bwrap 参数与 namespace / 网络栈参数由执行器据此构造。
 `)
 }
 
@@ -80,10 +77,7 @@ func runSupervisor(args []string) int {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	policyArg := flags.String("policy", "", "")
 	policyBase64 := flags.String("policy-base64", "", "")
-	command := flags.String("command", "", "")
-	cwdFlag := flags.String("cwd", "", "")
 	timeoutFlag := flags.Int("timeout", 0, "")
-	printArgs := flags.Bool("print-args", false, "")
 	verbose := flags.Bool("verbose", false, "")
 	if err := flags.Parse(args); err != nil {
 		return exitUsage
@@ -94,26 +88,16 @@ func runSupervisor(args []string) int {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return exitUsage
 	}
-	if *command == "" {
-		fmt.Fprintln(os.Stderr, "--command 必填")
-		return exitUsage
-	}
 	if *timeoutFlag > 0 {
 		policy.TimeoutSeconds = *timeoutFlag
 	}
-	cwd := *cwdFlag
-	if cwd == "" {
-		if cwd, err = os.Getwd(); err != nil {
-			fmt.Fprintf(os.Stderr, "取当前目录失败: %v\n", err)
-			return exitUsage
-		}
-	}
-	// 可执行文件在宿主侧解析成绝对路径，init 里直接复用（它已经在 userns 内）
+	// 外部二进制在宿主侧解析成绝对路径：init 已经在新 namespace 里，
+	// argv 也在那里构造，PATH 可能与宿主不同
 	if policy.Bwrap.Path, err = resolveBinary(policy.Bwrap.Path); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return exitStartup
 	}
-	if policy.Net.Mode == NetworkLimited {
+	if policy.Network.Mode == NetworkLimited {
 		if policy.Mihomo.Path, err = resolveBinary(policy.Mihomo.Path); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			return exitStartup
@@ -123,11 +107,11 @@ func runSupervisor(args []string) int {
 			return exitStartup
 		}
 	}
-	if *printArgs {
-		fmt.Println(printableArgv(bwrapArgv(policy, *command)))
-		return 0
+	if err := requirePidfd(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return exitStartup
 	}
-	return runSandbox(policy, *command, cwd, *verbose)
+	return runSandbox(policy, *verbose)
 }
 
 func loadPolicy(arg string, encoded string) (Policy, error) {
@@ -135,14 +119,24 @@ func loadPolicy(arg string, encoded string) (Policy, error) {
 	case encoded != "":
 		return parsePolicyBase64(encoded)
 	case arg != "":
-		return parsePolicyArg(arg)
+		return parsePolicy(arg)
 	default:
 		return Policy{}, fmt.Errorf("--policy 或 --policy-base64 必填")
 	}
 }
 
+// requirePidfd 在启动阶段探测内核是否支持 pidfd。不支持就明确失败：退回"按 pid 发信号"
+// 会把误伤无关进程的路径带回来（见 pidfd.go 的说明）。
+func requirePidfd() error {
+	fd, err := pidfdOpen(os.Getpid())
+	if err != nil {
+		return fmt.Errorf("内核不支持 pidfd（需要 Linux 5.3 及以上），无法安全终止沙箱进程: %w", err)
+	}
+	return fd.Close()
+}
+
 // runSandbox 起一次完整的沙箱：init（新 ns 的 PID 1）+ slirp4netns，用 pidfd 管理两者。
-func runSandbox(policy Policy, command string, cwd string, verbose bool) int {
+func runSandbox(policy Policy, verbose bool) int {
 	self, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "定位自身可执行文件失败: %v\n", err)
@@ -154,8 +148,10 @@ func runSandbox(policy Policy, command string, cwd string, verbose bool) int {
 		return exitStartup
 	}
 
-	initCmd := exec.Command(self, "internal-init", "--policy-base64", policyBase64,
-		"--command", command, "--cwd", cwd)
+	initCmd := exec.Command(self, "internal-init", "--policy-base64", policyBase64)
+	if policy.Cwd != "" {
+		initCmd.Dir = policy.Cwd
+	}
 	initCmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET,
 		UidMappings: []syscall.SysProcIDMap{
@@ -185,8 +181,7 @@ func runSandbox(policy Policy, command string, cwd string, verbose bool) int {
 		fmt.Fprintf(os.Stderr, "建 stdin 管道失败: %v\n", err)
 		return exitStartup
 	}
-	// exit-fd：init 持写端（它退出即关闭 → HUP），slirp4netns 持读端（-e 3）。
-	// 用 ExtraFiles 传 fd 是语言层面的正常能力，不需要 TS 版那种 stdio[3]._handle.fd 私有字段。
+	// exit-fd：init 持写端（退出即关闭 → HUP），slirp4netns 持读端（-e 3）
 	exitRead, exitWrite, err := os.Pipe()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "建 exit-fd 管道失败: %v\n", err)
@@ -202,25 +197,21 @@ func runSandbox(policy Policy, command string, cwd string, verbose bool) int {
 	// 父进程必须放掉自己的写端副本，否则 slirp4netns 永远等不到 HUP
 	exitWrite.Close()
 
+	// pidfd 必须在任何 Wait 之前打开：未 reap 的子进程是僵尸，pid 不会被内核复用，
+	// 此时按 pid 打开内核引用一定指向这个子进程（顺序不能调换）。
 	initPid := initCmd.Process.Pid
 	initFd, err := pidfdOpen(initPid)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warn: %v（退回按 pid 终止，仅用于诊断）\n", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		_ = initCmd.Process.Kill()
+		return exitStartup
 	}
+	defer initFd.Close()
 
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- initCmd.Wait() }()
-	var waitErr error
-	exited := false
-	waitInit := func() error {
-		if !exited {
-			waitErr = <-waitCh
-			exited = true
-		}
-		return waitErr
-	}
 
-	// 输出转发：stdout 原样透传（命令输出），stderr 逐行透传（诊断 + 就绪标记）
+	// 输出流转发：stdout 原样透传（命令输出），stderr 逐行分流（诊断 vs 命令 stderr）
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -241,7 +232,6 @@ func runSandbox(policy Policy, command string, cwd string, verbose bool) int {
 				// 内部控制信号：不展示给用户
 				readyOnce.Do(func() { close(readyCh) })
 			case strings.HasPrefix(line, netstackPrefix):
-				// 网络栈自身日志：只在 --verbose 时展示
 				if verbose {
 					fmt.Fprintln(os.Stderr, line)
 				}
@@ -250,11 +240,14 @@ func runSandbox(policy Policy, command string, cwd string, verbose bool) int {
 				fmt.Fprintln(os.Stderr, line)
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "读取沙箱输出失败: %v\n", err)
+		}
 	}()
 
 	var slirpCmd *exec.Cmd
 	var slirpFd *pidfd
-	if policy.Net.Mode == NetworkLimited {
+	if policy.Network.Mode == NetworkLimited {
 		slirpCmd = exec.Command(policy.Slirp.Path,
 			"-c",
 			"--mtu="+strconv.Itoa(policy.Mihomo.MTU),
@@ -272,66 +265,59 @@ func runSandbox(policy Policy, command string, cwd string, verbose bool) int {
 		if err := slirpCmd.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "启动 slirp4netns 失败: %v\n", err)
 			_ = initFd.Send(syscall.SIGKILL)
-			waitInit()
+			<-waitCh
 			return exitStartup
 		}
 		exitRead.Close()
 		if fd, err := pidfdOpen(slirpCmd.Process.Pid); err == nil {
 			slirpFd = fd
+			defer slirpFd.Close()
 		}
 	} else {
 		exitRead.Close()
-		defer stopProcess(slirpFd, nil)
 	}
 
 	timedOut := false
-	if policy.Net.Mode == NetworkLimited {
+	if policy.Network.Mode == NetworkLimited {
 		select {
 		case <-readyCh:
 		case <-time.After(readyTimeout):
 			fmt.Fprintln(os.Stderr, "沙箱网络栈未在 20s 内就绪")
 			_ = initFd.Send(syscall.SIGKILL)
-			waitInit()
+			<-waitCh
 			wg.Wait()
 			return exitStartup
-		case <-waitCh:
-			exited = true
-			waitErr = <-waitCh
+		case waitErr := <-waitCh:
 			wg.Wait()
-			stopped := shutdownSandbox(initStdin, initFd, slirpFd, slirpCmd)
-			_ = stopped
-			fmt.Fprintf(os.Stderr, "沙箱 init 在就绪前退出（%v）\n", waitErr)
+			shutdownSandbox(initStdin, slirpCmd, slirpFd)
+			fmt.Fprintf(os.Stderr, "沙箱 init 在就绪前退出: %v\n", waitErr)
 			return exitCodeOf(waitErr, exitStartup)
 		}
 	}
 
 	// 命令阶段：超时先关 stdin（init 读到 EOF 自行退出 → 内核清理整个 ns），
 	// 仍不退再 pidfd_send_signal（原子，没有 pid 复用窗口）
+	var waitErr error
 	if policy.TimeoutSeconds > 0 {
 		select {
 		case waitErr = <-waitCh:
-			exited = true
 		case <-time.After(time.Duration(policy.TimeoutSeconds) * time.Second):
 			timedOut = true
 			_ = initStdin.Close()
 			select {
 			case waitErr = <-waitCh:
-				exited = true
 			case <-time.After(stopGrace):
 				if err := initFd.Send(syscall.SIGKILL); err != nil {
 					fmt.Fprintf(os.Stderr, "warn: 终止 init 失败: %v\n", err)
 				}
 				waitErr = <-waitCh
-				exited = true
 			}
 		}
 	} else {
 		waitErr = <-waitCh
-		exited = true
 	}
-	_ = exited
 
-	shutdownSandbox(initStdin, initFd, slirpFd, slirpCmd)
+	shutdownSandbox(initStdin, slirpCmd, slirpFd)
 	wg.Wait()
 	if timedOut {
 		fmt.Fprintf(os.Stderr, "命令超过 %ds 未结束，已终止沙箱\n", policy.TimeoutSeconds)
@@ -340,37 +326,27 @@ func runSandbox(policy Policy, command string, cwd string, verbose bool) int {
 	return exitCodeOf(waitErr, exitStartup)
 }
 
-// shutdownSandbox 释放两侧资源：init 的 stdin/pidfd、slirp4netns（先等 exit-fd HUP
-// 让它自己退，超时才 pidfd 强杀）。
-func shutdownSandbox(initStdin io.Closer, initFd *pidfd, slirpFd *pidfd, slirpCmd *exec.Cmd) bool {
+// shutdownSandbox 释放两侧资源：关掉 init 的 stdin（它读到 EOF 自行退出 → 内核清理
+// pid namespace → exit-fd HUP → slirp4netns 自行退出）；只在该进程迟迟不退时才用 pidfd
+// 强杀。等待用 exec.Cmd.Wait（标准库），不依赖 pidfd 的 poll。
+func shutdownSandbox(initStdin io.Closer, slirpCmd *exec.Cmd, slirpFd *pidfd) {
 	_ = initStdin.Close()
-	defer initFd.Close()
-	defer slirpFd.Close()
 	if slirpCmd == nil {
-		return true
-	}
-	if slirpFd != nil {
-		if exited, err := slirpFd.exited(int(stopGrace.Milliseconds())); err == nil && exited {
-			_ = slirpCmd.Wait()
-			return true
-		}
-		slirpFd.kill(int(stopGrace.Milliseconds()))
-	} else {
-		_ = slirpCmd.Process.Signal(syscall.SIGTERM)
-	}
-	_ = slirpCmd.Wait()
-	return true
-}
-
-// stopProcess 用于非 limited 模式（没有 slirp）时的收尾。
-func stopProcess(fd *pidfd, cmd *exec.Cmd) {
-	if cmd == nil {
 		return
 	}
-	if fd != nil {
-		defer fd.Close()
+	done := make(chan struct{})
+	go func() {
+		_ = slirpCmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(stopGrace):
+		if slirpFd != nil {
+			_ = slirpFd.Send(syscall.SIGKILL)
+		}
+		<-done
 	}
-	_ = cmd.Wait()
 }
 
 func encodePolicy(policy Policy) (string, error) {
@@ -386,22 +362,16 @@ func exitCodeOf(err error, fallback int) int {
 	if err == nil {
 		return 0
 	}
-	var exitErr *exec.ExitError
-	if ok := asExitError(err, &exitErr); ok {
-		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-			if status.Signaled() {
-				return 128 + int(status.Signal())
-			}
-			return status.ExitStatus()
-		}
-	}
-	return fallback
-}
-
-func asExitError(err error, target **exec.ExitError) bool {
 	exitErr, ok := err.(*exec.ExitError)
-	if ok {
-		*target = exitErr
+	if !ok {
+		return fallback
 	}
-	return ok
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok {
+		return fallback
+	}
+	if status.Signaled() {
+		return 128 + int(status.Signal())
+	}
+	return status.ExitStatus()
 }

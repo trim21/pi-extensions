@@ -1,6 +1,6 @@
 /**
  * Tests for bwrap core helpers:
- * - buildBwrapArgs: writable "." resolves against the workspace argument, so
+ * - buildMountPlan: writable "." resolves against the workspace argument, so
  *   a per-command workdir can never move the sandbox write boundary.
  */
 import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
@@ -11,21 +11,14 @@ import process from "node:process";
 import { describe, expect, it } from "vitest";
 
 import {
-  buildBwrapArgs,
+  buildMountPlan,
   completeBwrapConfig,
   findBwrap,
   findGitDirs,
-  findMihomo,
   resolveBwrap,
   type ResolvedBwrap,
+  type SandboxMount,
 } from "../src/bwrap/core.ts";
-
-/** 沙箱显式以调用进程的 uid/gid 运行（network limited 下避免在沙箱内自称 root）。 */
-function identityArgs(): string[] {
-  const uid = process.getuid?.();
-  const gid = process.getgid?.();
-  return uid === undefined || gid === undefined ? [] : ["--uid", String(uid), "--gid", String(gid)];
-}
 
 describe("findBwrap", () => {
   it("throws when the configured bwrapPath does not exist", () => {
@@ -34,34 +27,6 @@ describe("findBwrap", () => {
 
   it("returns an existing configured path", () => {
     expect(findBwrap(process.execPath)).toBe(process.execPath);
-  });
-});
-
-describe("findMihomo", () => {
-  it("throws when the configured mihomoPath does not exist", () => {
-    expect(() => findMihomo("/nonexistent/mihomo")).toThrow(/not found at configured path/);
-  });
-
-  it("returns mihomo found in PATH", () => {
-    const dir = mkdtempSync(join(tmpdir(), "bwrap-test-"));
-    symlinkSync(process.execPath, join(dir, "mihomo"));
-    const originalPath = process.env.PATH;
-    process.env.PATH = dir;
-    try {
-      expect(findMihomo()).toBe(join(dir, "mihomo"));
-    } finally {
-      process.env.PATH = originalPath;
-    }
-  });
-
-  it("throws when mihomo is not in PATH", () => {
-    const originalPath = process.env.PATH;
-    process.env.PATH = "";
-    try {
-      expect(() => findMihomo()).toThrow(/mihomo not found in PATH/);
-    } finally {
-      process.env.PATH = originalPath;
-    }
   });
 });
 
@@ -164,7 +129,12 @@ describe("completeBwrapConfig", () => {
   });
 });
 
-describe("buildBwrapArgs", () => {
+/** 取出指定模式的挂载目标路径，便于断言顺序与内容。 */
+function targets(mounts: SandboxMount[], mode: SandboxMount["mode"]): string[] {
+  return mounts.filter((mount) => mount.mode === mode).map((mount) => mount.path);
+}
+
+describe("buildMountPlan", () => {
   const base: ResolvedBwrap = {
     fs: "workspace-write",
     network: "block",
@@ -178,90 +148,32 @@ describe("buildBwrapArgs", () => {
   };
 
   it("binds writable '.' to the workspace argument, not the exec cwd", async () => {
-    const args = await buildBwrapArgs(base, "/ws");
+    const plan = await buildMountPlan(base, "/ws");
 
     // writablePaths 的 "." 解析为 workspace（/ws）；workspace 不存在时无 .git 等保护挂载。
-    // --bind-try / --ro-bind-try：配置路径不存在时忽略，而不是让整条命令失败。
-    expect(args).toEqual([
-      "--new-session",
-      "--die-with-parent",
-      "--unshare-user",
-      "--unshare-pid",
-      ...identityArgs(),
-      "--bind-try",
-      "/ws",
-      "/ws",
-      "--bind-try",
-      "/tmp",
-      "/tmp",
-      "--unshare-net",
-      "--ro-bind-try",
-      join("/ws", ".pi"),
-      join("/ws", ".pi"),
-      "--ro-bind-try",
-      join("/ws", ".agent"),
-      join("/ws", ".agent"),
+    expect(plan.root).toBe("/");
+    expect(plan.mounts).toEqual([
+      { path: "/ws", mode: "rw-try" },
+      { path: "/tmp", mode: "rw-try" },
+      { path: join("/ws", ".pi"), mode: "ro-try" },
+      { path: join("/ws", ".agent"), mode: "ro-try" },
     ]);
   });
 
-  it("runs the sandbox as the invoking uid/gid instead of ns root", async () => {
-    const args = await buildBwrapArgs(base, "/ws");
-    const uid = process.getuid?.();
-    const gid = process.getgid?.();
+  it("keeps extra writable paths in order after the writable paths", async () => {
+    const plan = await buildMountPlan({ ...base, extraWritablePaths: ["/data/x"] }, "/ws");
 
-    // network limited 模式下 holder 的 userns 把 pi 的 uid 映射成 0，不显式指定时
-    // 沙箱内 id/stat 会自称 root（落盘属主仍正确）；缺 uid/gid 的环境不应拼出半截参数。
-    if (uid === undefined || gid === undefined) {
-      expect(args).not.toContain("--uid");
-      expect(args).not.toContain("--gid");
-      return;
-    }
-    const index = args.indexOf("--uid");
-    expect(index).toBeGreaterThan(-1);
-    expect(args.slice(index, index + 4)).toEqual(["--uid", String(uid), "--gid", String(gid)]);
-  });
-
-  it("keeps extra writable paths as-is", async () => {
-    const args = await buildBwrapArgs({ ...base, extraWritablePaths: ["/data/x"] }, "/ws");
-
-    // 顺序：writable binds → extra binds → unshare-net
-    const bindsEnd = args.indexOf("--unshare-net");
-    expect(args.slice(0, bindsEnd)).toEqual([
-      "--new-session",
-      "--die-with-parent",
-      "--unshare-user",
-      "--unshare-pid",
-      ...identityArgs(),
-      "--bind-try",
-      "/ws",
-      "/ws",
-      "--bind-try",
-      "/tmp",
-      "/tmp",
-      "--bind-try",
-      "/data/x",
-      "/data/x",
-    ]);
+    expect(targets(plan.mounts, "rw-try")).toEqual(["/ws", "/tmp", "/data/x"]);
   });
 
   it("deny paths: trailing slash means dir, otherwise file", async () => {
-    const args = await buildBwrapArgs(
+    const plan = await buildMountPlan(
       { ...base, denyPaths: ["/etc/secret/", "/home/user/.git-credentials"] },
       "/ws",
     );
 
-    // 目录条目 → --tmpfs 挂空；文件条目 → --ro-bind-try /dev/null 覆盖
-    const tmpfsTargets = args
-      .flatMap((value, index) => (value === "--tmpfs" ? args[index + 1] : []))
-      .filter((path): path is string => path !== undefined);
-    expect(tmpfsTargets).toEqual(["/etc/secret/"]);
-
-    const devNullTargets = args
-      .flatMap((value, index) =>
-        value === "--ro-bind-try" && args[index + 1] === "/dev/null" ? args[index + 2] : [],
-      )
-      .filter((path): path is string => path !== undefined);
-    expect(devNullTargets).toEqual(["/home/user/.git-credentials"]);
+    expect(targets(plan.mounts, "deny-dir")).toEqual(["/etc/secret/"]);
+    expect(targets(plan.mounts, "deny-file")).toEqual(["/home/user/.git-credentials"]);
   });
 
   it("resolves symlink components in writable paths to their real path", async () => {
@@ -270,14 +182,14 @@ describe("buildBwrapArgs", () => {
     mkdirSync(join(root, "real-target", "data"), { recursive: true });
     symlinkSync(join(root, "real-target"), join(root, "link"));
 
-    const args = await buildBwrapArgs(
+    const plan = await buildMountPlan(
       { ...base, extraWritablePaths: [join(root, "link", "data/")] },
       "/ws",
     );
 
     const real = join(root, "real-target", "data");
-    expect(args).toEqual(expect.arrayContaining(["--bind-try", real, real]));
-    expect(args.filter((arg) => arg.includes("/link/"))).toEqual([]);
+    expect(targets(plan.mounts, "rw-try")).toContain(real);
+    expect(plan.mounts.filter((mount) => mount.path.includes("/link/"))).toEqual([]);
   });
 
   it("resolves symlink components in deny paths to their real path", async () => {
@@ -285,27 +197,21 @@ describe("buildBwrapArgs", () => {
     mkdirSync(join(root, "real-target", "secret"), { recursive: true });
     symlinkSync(join(root, "real-target"), join(root, "link"));
 
-    const args = await buildBwrapArgs(
+    const plan = await buildMountPlan(
       { ...base, denyPaths: [`${join(root, "link", "secret")}/`] },
       "/ws",
     );
 
-    const tmpfsTargets = args
-      .flatMap((value, index) => (value === "--tmpfs" ? args[index + 1] : []))
-      .filter((path): path is string => path !== undefined);
-    expect(tmpfsTargets).toEqual([join(root, "real-target", "secret")]);
+    expect(targets(plan.mounts, "deny-dir")).toEqual([join(root, "real-target", "secret")]);
   });
 
   it("protects workspace-internal dot dirs instead of the exec cwd's", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-args-"));
     mkdirSync(join(workspace, ".git"));
-    const args = await buildBwrapArgs(base, workspace);
+    const plan = await buildMountPlan(base, workspace);
 
     // 只保护 workspace 下的 dot dirs；exec cwd（/outside）不在保护列表
-    const roBindTargets = args.flatMap((value, index) =>
-      value === "--ro-bind-try" ? args[index + 1] : [],
-    );
-    expect(roBindTargets).toEqual([
+    expect(targets(plan.mounts, "ro-try")).toEqual([
       join(workspace, ".pi"),
       join(workspace, ".agent"),
       join(workspace, ".git"),
@@ -315,40 +221,35 @@ describe("buildBwrapArgs", () => {
   it("fs allow-all：整根可写、不做保护绑定", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-allowall-"));
     mkdirSync(join(workspace, ".git"));
-    const args = await buildBwrapArgs(
+    const plan = await buildMountPlan(
       { ...base, fs: "allow-all", writablePaths: ["/"] },
       workspace,
     );
 
-    expect(args).toEqual(expect.arrayContaining(["--bind-try", "/", "/"]));
-    const roBindTargets = args.flatMap((value, index) =>
-      value === "--ro-bind-try" ? args[index + 1] : [],
-    );
-    expect(roBindTargets).toEqual([]);
+    expect(plan.mounts).toContainEqual({ path: "/", mode: "rw-try" });
+    expect(targets(plan.mounts, "ro-try")).toEqual([]);
   });
 
   it("protects only the root .git when the workspace is a git repo", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-git-"));
     mkdirSync(join(workspace, ".git"));
     mkdirSync(join(workspace, "sub", ".git"), { recursive: true });
-    const args = await buildBwrapArgs(base, workspace);
+    const plan = await buildMountPlan(base, workspace);
 
     // 根 .git 存在：不递归扫描，嵌套仓库不在保护列表
-    const gitTargets = args
-      .flatMap((value, index) => (value === "--ro-bind-try" ? args[index + 1] : []))
-      .filter((path) => path.endsWith(".git"));
-    expect(gitTargets).toEqual([join(workspace, ".git")]);
+    expect(targets(plan.mounts, "ro-try").filter((path) => path.endsWith(".git"))).toEqual([
+      join(workspace, ".git"),
+    ]);
   });
 
   it("scans for nested .git when the workspace root is not a git repo", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "cc-bwrap-nested-"));
     mkdirSync(join(workspace, "sub", ".git"), { recursive: true });
-    const args = await buildBwrapArgs(base, workspace);
+    const plan = await buildMountPlan(base, workspace);
 
-    const gitTargets = args
-      .flatMap((value, index) => (value === "--ro-bind-try" ? args[index + 1] : []))
-      .filter((path) => path.endsWith(".git"));
-    expect(gitTargets).toEqual([join(workspace, "sub", ".git")]);
+    expect(targets(plan.mounts, "ro-try").filter((path) => path.endsWith(".git"))).toEqual([
+      join(workspace, "sub", ".git"),
+    ]);
   });
 });
 

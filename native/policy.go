@@ -1,5 +1,8 @@
-// 策略（policy）：这个原型与 pi 项目解耦的输入契约。
-// 命令行只吃一份自描述的 JSON，将来 TS 侧只需把 ResolvedBwrap 映射过来。
+// 策略（policy）：执行器与调用方之间的契约，描述"要什么能力"，不描述"用什么参数"。
+//
+// 边界：TS 侧负责策略与路径语义（realpath 归一化、工作区保护目录、`.git` 只读保护），
+// 因此这里的路径 MUST 已经是绝对路径；执行器负责把能力翻译成 bwrap 参数、namespace 与
+// 网络栈参数——这份知识只在执行器一处，预览（print-args）与实际执行共用同一个构造函数。
 package main
 
 import (
@@ -8,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -19,14 +23,26 @@ const (
 	NetworkAll     NetworkMode = "allow-all"
 )
 
-// FilePolicy 描述沙箱内的文件系统视角。
-type FilePolicy struct {
-	// Readonly 以 --ro-bind-try 绑定（默认整个 /）。
-	Readonly []string `json:"readonly"`
-	// Readwrite 以 --bind-try 绑定。
-	Readwrite []string `json:"readwrite"`
-	// Deny：以 / 结尾视为目录（挂空 tmpfs），否则视为文件（用 /dev/null 覆盖）。
-	Deny []string `json:"deny"`
+// MountMode 是挂载语义而不是 bwrap 参数名：翻译成参数是执行器的事。
+type MountMode string
+
+const (
+	// MountReadonly → 只读绑定该路径。
+	MountReadonly MountMode = "ro"
+	// MountReadonlyTry → 只读绑定，路径不存在时忽略该项。
+	MountReadonlyTry MountMode = "ro-try"
+	// MountReadwriteTry → 可写绑定，路径不存在时忽略该项。
+	MountReadwriteTry MountMode = "rw-try"
+	// MountDenyDir → 目录挂空（屏蔽目录内容）。
+	MountDenyDir MountMode = "deny-dir"
+	// MountDenyFile → 文件以空文件覆盖。
+	MountDenyFile MountMode = "deny-file"
+)
+
+// Mount 是一条挂载计划；列表中靠后的覆盖靠前的。
+type Mount struct {
+	Path string    `json:"path"`
+	Mode MountMode `json:"mode"`
 }
 
 type NetworkPolicy struct {
@@ -37,105 +53,81 @@ type NetworkPolicy struct {
 	DNSServers []string `json:"dnsServers"`
 }
 
-type BinaryPolicy struct {
-	Path      string   `json:"path"`
-	ExtraArgs []string `json:"extraArgs"`
-}
-
 type MihomoPolicy struct {
 	Path string `json:"path"`
 	MTU  int    `json:"mtu"`
 }
 
-// Policy 是一次 sandbox run 的完整输入。
-type Policy struct {
-	FS     FilePolicy    `json:"fs"`
-	Net    NetworkPolicy `json:"network"`
-	Bwrap  BinaryPolicy  `json:"bwrap"`
-	Mihomo MihomoPolicy  `json:"mihomo"`
-	Slirp  BinaryPolicy  `json:"slirp4netns"`
-	// UID/GID 是沙箱内进程的身份，缺省沿用当前进程（与 TS 版 --uid/--gid 语义一致）。
-	UID   *int   `json:"uid"`
-	GID   *int   `json:"gid"`
-	Shell string `json:"shell"`
-	// Env 是沙箱内的环境变量；缺省是一份干净环境（不继承父进程）。
-	Env            map[string]string `json:"env"`
-	TimeoutSeconds int               `json:"timeoutSeconds"`
+type BinaryPolicy struct {
+	Path string `json:"path"`
 }
 
-// parsePolicyArg 支持三种写法：JSON 文本、@文件、- 表示 stdin。
-func parsePolicyArg(arg string) (Policy, error) {
-	raw, err := readPolicyText(arg)
-	if err != nil {
+// Policy 是一次执行的完整输入。
+type Policy struct {
+	// Root 是基础只读根（默认 "/"）。
+	Root string `json:"root"`
+	// Mounts 是有序的附加挂载计划。
+	Mounts []Mount `json:"mounts"`
+	// ExtraArgs 是附加的 bwrap 参数（配置里的逃生口，追加在挂载计划之后）。
+	ExtraArgs []string      `json:"extraArgs"`
+	Network   NetworkPolicy `json:"network"`
+	Mihomo    MihomoPolicy  `json:"mihomo"`
+	Slirp     BinaryPolicy  `json:"slirp4netns"`
+	Bwrap     BinaryPolicy  `json:"bwrap"`
+
+	// Command 交给 `shell -lc` 执行的命令。
+	Command string `json:"command"`
+	Shell   string `json:"shell"`
+	// Cwd 是命令进程的工作目录。
+	Cwd string `json:"cwd"`
+	// Env 是命令的完整环境（不继承调用方环境）。
+	Env map[string]string `json:"env"`
+
+	UID            *int `json:"uid"`
+	GID            *int `json:"gid"`
+	TimeoutSeconds int  `json:"timeoutSeconds"`
+}
+
+// parsePolicy 解析策略 JSON。策略只经 argv 传入（`--policy` 的 JSON 文本或
+// `--policy-base64` 的 base64 文本）：调用方是程序，exec 直接传 argv 没有 shell 转义
+// 问题；手工调试用 `--policy "$(cat policy.json)"` 即可，执行器不必再做"读文件 / 读 stdin"
+// 这类额外入口。
+func parsePolicy(raw string) (Policy, error) {
+	var policy Policy
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	// 未知键直接报错：策略是"我们控制的 schema"，写错键名应当可见
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&policy); err != nil {
+		return Policy{}, fmt.Errorf("解析策略失败: %w", err)
+	}
+	policy.applyDefaults()
+	if err := policy.validate(); err != nil {
 		return Policy{}, err
 	}
-	return decodePolicy(raw)
+	return policy, nil
 }
 
+// parsePolicyBase64 接收 base64(JSON)，便于调用方把策略塞进单个 argv 元素。
 func parsePolicyBase64(arg string) (Policy, error) {
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(arg))
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(arg))
 	if err != nil {
 		return Policy{}, fmt.Errorf("--policy-base64 不是合法的 base64: %w", err)
 	}
-	return decodePolicy(raw)
-}
-
-func readPolicyText(arg string) ([]byte, error) {
-	switch {
-	case arg == "-":
-		return os.ReadFile("/dev/stdin")
-	case strings.HasPrefix(arg, "@"):
-		return os.ReadFile(strings.TrimPrefix(arg, "@"))
-	default:
-		return []byte(arg), nil
-	}
-}
-
-func decodePolicy(raw []byte) (Policy, error) {
-	var p Policy
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
-	// 未知键直接报错：策略是"我们控制的 schema"，写错键名应当可见
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&p); err != nil {
-		return Policy{}, fmt.Errorf("解析策略失败: %w", err)
-	}
-	p.applyDefaults()
-	if err := p.validate(); err != nil {
-		return Policy{}, err
-	}
-	return p, nil
+	return parsePolicy(string(decoded))
 }
 
 func (p *Policy) applyDefaults() {
-	if p.Net.Mode == "" {
-		p.Net.Mode = NetworkLimited
+	if p.Root == "" {
+		p.Root = "/"
 	}
-	if len(p.FS.Readonly) == 0 {
-		p.FS.Readonly = []string{"/"}
-	}
-	if p.Bwrap.Path == "" {
-		p.Bwrap.Path = "bwrap"
-	}
-	if p.Mihomo.Path == "" {
-		p.Mihomo.Path = "mihomo"
+	if p.Network.Mode == "" {
+		p.Network.Mode = NetworkLimited
 	}
 	if p.Mihomo.MTU == 0 {
 		p.Mihomo.MTU = 1500
 	}
-	if p.Slirp.Path == "" {
-		p.Slirp.Path = "slirp4netns"
-	}
 	if p.Shell == "" {
 		p.Shell = "/bin/bash"
-	}
-	if p.Env == nil {
-		p.Env = map[string]string{
-			"HOME":  os.Getenv("HOME"),
-			"SHELL": "/bin/bash",
-			"TERM":  "dumb",
-			"LANG":  "C.UTF-8",
-			"PATH":  "/usr/local/bin:/usr/bin:/bin",
-		}
 	}
 	if p.UID == nil {
 		uid := os.Getuid()
@@ -148,22 +140,56 @@ func (p *Policy) applyDefaults() {
 }
 
 func (p *Policy) validate() error {
-	switch p.Net.Mode {
+	if !filepath.IsAbs(p.Root) {
+		return fmt.Errorf("root 必须是绝对路径: %s", p.Root)
+	}
+	for _, mount := range p.Mounts {
+		if !filepath.IsAbs(mount.Path) {
+			return fmt.Errorf("挂载路径必须是绝对路径（路径语义由调用方归一化）: %s", mount.Path)
+		}
+		if _, err := mountArgs(mount); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(p.Command) == "" {
+		return fmt.Errorf("command 不能为空")
+	}
+	if !filepath.IsAbs(p.Shell) {
+		return fmt.Errorf("shell 必须是绝对路径: %s", p.Shell)
+	}
+	if p.Cwd != "" {
+		info, err := os.Stat(p.Cwd)
+		if err != nil {
+			return fmt.Errorf("cwd 不可用: %s: %w", p.Cwd, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("cwd 不是目录: %s", p.Cwd)
+		}
+	}
+	switch p.Network.Mode {
 	case NetworkLimited:
-		if len(p.Net.DNSServers) == 0 {
+		if len(p.Network.DNSServers) == 0 {
 			return fmt.Errorf("network.mode=limited 需要至少一个 network.dnsServers")
+		}
+		if p.Mihomo.Path == "" {
+			return fmt.Errorf("network.mode=limited 需要 mihomo.path")
+		}
+		if p.Slirp.Path == "" {
+			return fmt.Errorf("network.mode=limited 需要 slirp4netns.path")
 		}
 	case NetworkBlock, NetworkAll:
 	default:
-		return fmt.Errorf("network.mode 非法: %q（可选 limited / block / allow-all）", p.Net.Mode)
+		return fmt.Errorf("network.mode 非法: %q（可选 limited / block / allow-all）", p.Network.Mode)
 	}
-	for _, entry := range p.Net.Allowlist {
+	for _, entry := range p.Network.Allowlist {
 		if strings.TrimSpace(entry) == "" {
 			return fmt.Errorf("network.allowlist 含空条目")
 		}
 	}
-	if len(p.FS.Deny) > 0 && len(p.FS.Readonly) == 0 {
-		return fmt.Errorf("fs.deny 需要 fs.readonly 里至少有一个可绑定的根")
+	for key := range p.Env {
+		if strings.ContainsRune(key, '=') || strings.ContainsRune(key, '\x00') {
+			return fmt.Errorf("env 键非法: %q", key)
+		}
 	}
 	return nil
 }

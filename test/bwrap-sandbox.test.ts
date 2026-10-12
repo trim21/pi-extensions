@@ -1,28 +1,22 @@
 /**
  * 沙箱执行层（src/bwrap/sandbox.ts）测试：
  * - loadSandboxConfig：单文件配置、fs/network 覆盖、"." 归一化、缺失文件报错
- * - previewSandboxCommand：打印的 argv/环境 与实际执行语义一致（bind、--unshare-net、nsenter 包裹）
- * - runInSandbox / runSandboxCommand：本地（不经沙箱）与真实 bwrap 两条执行路径
+ * - runInSandbox / runSandboxCommand：本地（不经沙箱）执行路径
+ * - runInSandbox（原生执行器）：工作区可写 / 只读 / deny、symlink 挂载
  *
- * 真实 bwrap 用例需要可用的 unprivileged user namespace：先用一次最小 bwrap 探测，
- * 探测不通过则整组跳过（macOS、无 bubblewrap 或受限 CI 环境不应报假失败）。
+ * 真实沙箱用例需要随包分发的原生执行器 + 可用的 unprivileged user namespace：
+ * 先用一个最小策略实跑探测，探测不通过则整组跳过（macOS、缺二进制或受限 CI 环境
+ * 不应报假失败）。开发期可用 PI_SANDBOX_BINARY 指向 go build 的产物。
  */
-import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { type BwrapConfigFile, findBwrap } from "../src/bwrap/core.js";
-import { type BwrapInvocation, invocationArgv } from "../src/bwrap/exec.js";
-import {
-  HOLDER_PID_PLACEHOLDER,
-  loadSandboxConfig,
-  previewSandboxCommand,
-  runInSandbox,
-  runSandboxCommand,
-} from "../src/bwrap/sandbox.js";
+import { type BwrapConfigFile } from "../src/bwrap/core.js";
+import { loadSandboxConfig, runInSandbox, runSandboxCommand } from "../src/bwrap/sandbox.js";
+import { nativeSandboxUsable } from "./bwrap-native-probe.js";
 
 function workspace(): string {
   return mkdtempSync(join(tmpdir(), "bwrap-sandbox-"));
@@ -35,36 +29,7 @@ function config(directory: string, overrides: BwrapConfigFile): string {
   return path;
 }
 
-function bwrapUsable(): boolean {
-  if (process.platform !== "linux") {
-    return false;
-  }
-  let binary: string;
-  try {
-    binary = findBwrap();
-  } catch {
-    return false;
-  }
-  const probe = spawnSync(
-    binary,
-    [
-      "--ro-bind",
-      "/",
-      "/",
-      "--unshare-user",
-      "--dev",
-      "/dev",
-      "--proc",
-      "/proc",
-      "--",
-      "/bin/true",
-    ],
-    { timeout: 20000 },
-  );
-  return probe.status === 0;
-}
-
-const sandbox = bwrapUsable();
+const sandbox = nativeSandboxUsable();
 
 describe("loadSandboxConfig", () => {
   it("只读显式配置文件，并把 '.' 归一化成绝对工作区", () => {
@@ -105,81 +70,6 @@ describe("loadSandboxConfig", () => {
     expect(() =>
       loadSandboxConfig({ workspace: directory, configPath: join(directory, "missing.json") }),
     ).toThrow(/configuration file not found/);
-  });
-});
-
-describe("previewSandboxCommand", () => {
-  it("workspace-write：绑定工作区、禁网、命令落在 shell -lc 尾部", async () => {
-    const directory = workspace();
-    const strategy = loadSandboxConfig({
-      workspace: directory,
-      configPath: config(directory, { fs: { mode: "workspace-write" } }),
-    });
-
-    const preview = await previewSandboxCommand(strategy, {
-      workspace: directory,
-      command: "echo 1",
-    });
-
-    expect(preview.needsNetworkStack).toBe(false);
-    expect(preview.argv.slice(0, 3)).toEqual([expect.any(String), "--ro-bind", "/"]);
-    expect(preview.argv).toEqual(
-      expect.arrayContaining(["--bind-try", directory, directory, "--unshare-net"]),
-    );
-    expect(preview.argv.slice(-4)).toEqual([
-      "--",
-      expect.stringMatching(/bash$/u),
-      "-lc",
-      "echo 1",
-    ]);
-  });
-
-  it("干净环境只带 5 个变量，不继承父进程 PATH", async () => {
-    const directory = workspace();
-    const strategy = loadSandboxConfig({
-      workspace: directory,
-      configPath: config(directory, { fs: { mode: "workspace-write" } }),
-    });
-
-    const preview = await previewSandboxCommand(strategy, {
-      workspace: directory,
-      command: "true",
-    });
-
-    expect(Object.keys(preview.env).toSorted()).toEqual(["HOME", "LANG", "PATH", "SHELL", "TERM"]);
-    expect(preview.env.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
-  });
-
-  it("network limited：命令包在 nsenter 之内", async () => {
-    const directory = workspace();
-    const strategy = loadSandboxConfig({
-      workspace: directory,
-      configPath: config(directory, {
-        network: { mode: "limited", allowlist: ["pypi.org"] },
-      }),
-    });
-
-    const withoutHolder = await previewSandboxCommand(strategy, {
-      workspace: directory,
-      command: "curl -sS https://pypi.org/simple/",
-    });
-    const withHolder = await previewSandboxCommand(strategy, {
-      workspace: directory,
-      command: "curl -sS https://pypi.org/simple/",
-      holderPid: 4242,
-    });
-
-    expect(withoutHolder.needsNetworkStack).toBe(true);
-    expect(withoutHolder.argv.slice(0, 6)).toEqual([
-      "nsenter",
-      "-U",
-      "-n",
-      "--preserve-credentials",
-      "-t",
-      "<HOLDER_PID>",
-    ]);
-    expect(withHolder.argv[5]).toBe("4242");
-    expect(withHolder.argv).not.toContain("--unshare-net");
   });
 });
 
@@ -244,9 +134,26 @@ describe("runInSandbox（不经 bwrap）", () => {
       ),
     ).rejects.toThrow(/timeout:1/u);
   });
+
+  it("命令执行目录不存在时给出明确错误", async () => {
+    const directory = workspace();
+    const strategy = loadSandboxConfig({
+      workspace: directory,
+      configPath: config(directory, { fs: { mode: "readonly" } }),
+    });
+
+    await expect(
+      runInSandbox(strategy, {
+        workspace: directory,
+        commandCwd: join(directory, "missing"),
+        command: "true",
+        onData: () => {},
+      }),
+    ).rejects.toThrow(/Working directory does not exist/u);
+  });
 });
 
-describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
+describe.skipIf(!sandbox)("runInSandbox（原生执行器）", () => {
   it("workspace-write：工作区可写，输出与退出码回传", async () => {
     const directory = workspace();
     let output = "";
@@ -329,111 +236,4 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
     expect(result.exitCode).toBe(0);
     expect(readFileSync(join(target, "note.txt"), "utf8")).toBe("ok");
   }, 60000);
-});
-
-describe("invocationArgv", () => {
-  const invocation: BwrapInvocation = {
-    file: "/usr/bin/bwrap",
-    args: ["--ro-bind", "/", "/", "--unshare-net"],
-    shell: "/bin/bash",
-    command: "echo 1",
-    env: {},
-    needsNetworkStack: false,
-  };
-  const bwrapArgvOnly = [
-    "/usr/bin/bwrap",
-    "--ro-bind",
-    "/",
-    "/",
-    "--unshare-net",
-    "--",
-    "/bin/bash",
-    "-lc",
-    "echo 1",
-  ];
-
-  it("不传 holder pid：纯 bwrap 命令行", () => {
-    expect(invocationArgv(invocation)).toEqual(bwrapArgvOnly);
-  });
-
-  it("传 holder pid：前置 nsenter 前缀", () => {
-    expect(invocationArgv(invocation, 4242)).toEqual([
-      "nsenter",
-      "-U",
-      "-n",
-      "--preserve-credentials",
-      "-t",
-      "4242",
-      "--",
-      ...bwrapArgvOnly,
-    ]);
-  });
-
-  it("传占位符字符串：原样嵌入（预览 holder 未启动时用）", () => {
-    expect(invocationArgv(invocation, HOLDER_PID_PLACEHOLDER)[5]).toBe("<HOLDER_PID>");
-  });
-});
-
-/** 假 bwrap：只回显收到的 argv（$0 与全部参数），因此「真正跑的那条命令行」可见。 */
-function fakeBwrap(directory: string): string {
-  const path = join(directory, "fake-bwrap");
-  writeFileSync(path, '#!/bin/sh\nprintf "%s\\n" "$0" "$@"\n', { mode: 0o755 });
-  return path;
-}
-
-describe("命令行预览与实际执行一致", () => {
-  it("直接执行路径：spawn 的 argv 与预览逐项相同", async () => {
-    const directory = workspace();
-    const strategy = loadSandboxConfig({
-      workspace: directory,
-      configPath: config(directory, {
-        fs: { mode: "workspace-write", writablePaths: ["."] },
-        bwrapPath: fakeBwrap(directory),
-      }),
-    });
-
-    const preview = await previewSandboxCommand(strategy, {
-      workspace: directory,
-      command: "echo 1",
-    });
-    let output = "";
-    const result = await runInSandbox(strategy, {
-      workspace: directory,
-      command: "echo 1",
-      onData: (data) => {
-        output += data.toString();
-      },
-    });
-
-    expect(preview.needsNetworkStack).toBe(false);
-    expect(result.exitCode).toBe(0);
-    expect(output.trim().split("\n")).toEqual(preview.argv);
-  }, 30000);
-
-  it("启动失败立即结束，不残留超时定时器", async () => {
-    const directory = workspace();
-    const notExecutable = join(directory, "not-executable");
-    writeFileSync(notExecutable, "not a program");
-    const strategy = loadSandboxConfig({
-      workspace: directory,
-      configPath: config(directory, {
-        fs: { mode: "workspace-write", writablePaths: ["."] },
-        bwrapPath: notExecutable,
-      }),
-    });
-
-    const timersBefore = process.getActiveResourcesInfo().filter((name) => name === "Timeout");
-    await expect(
-      runInSandbox(strategy, {
-        workspace: directory,
-        command: "echo 1",
-        timeout: 60,
-        onData: () => {},
-      }),
-    ).rejects.toThrow(/EACCES|permission denied/u);
-    // 已排定的超时定时器必须在结束路径上清掉：挂着的会白占事件循环到超时那一刻
-    expect(process.getActiveResourcesInfo().filter((name) => name === "Timeout")).toHaveLength(
-      timersBefore.length,
-    );
-  }, 30000);
 });

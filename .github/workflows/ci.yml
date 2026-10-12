@@ -7,6 +7,24 @@ on:
     branches: [master]
 
 jobs:
+  # 原生沙箱执行器（Go）：vet / build / test 与 Node 版本无关，单独跑一份。
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/go.mod
+          cache-dependency-path: native/go.sum
+
+      - name: go vet / build / test
+        working-directory: native
+        run: |
+          go vet ./...
+          go build -o /tmp/sandbox .
+          go test ./...
+
   # lint / tsc / prettier 与 Node 版本无关，单独跑一份即可，不放进下面的矩阵。
   lint:
     runs-on: ubuntu-latest
@@ -48,6 +66,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # 构建原生执行器：bwrap-sandbox.test.ts 的"原生执行器"用例组用最小策略实跑探测，
+      # 二进制在位且环境允许嵌套 user/pid namespace 时才会真正执行（否则整组跳过）。
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/go.mod
+          cache-dependency-path: native/go.sum
+
+      - name: Build native sandbox executor
+        run: pnpm run build:native
+
       # bwrap.test.ts imports src/bwrap which resolves the bwrap binary at
       # module load time; bubblewrap is not preinstalled on ubuntu-latest.
       # The claude-code Glob tool and its tests spawn `rg` directly, which is
@@ -84,6 +112,7 @@ jobs:
   # 通过就成立；也不要加 `if: always()`，那会让它在矩阵失败时也成功。
   all-checks:
     needs:
+      - native
       - lint
       - test
     runs-on: ubuntu-slim # 只跑 echo，不需要 ubuntu-latest 的完整镜像与预装工具缓存

@@ -9,6 +9,7 @@ on:
       - "**/*.wasm"
       - "**/*.ts"
       - "**/*.bpf"
+      - "native/**"
       - .github/workflows/release.yaml
       - package.json
 
@@ -38,9 +39,18 @@ jobs:
       # npm >= 11 is required for OIDC trusted publishing
       - run: npm install -g npm@latest
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/go.mod
+          cache-dependency-path: native/go.sum
+
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm run check
+
+      # 原生执行器与 TS 包同版本发布：交叉编译两个架构后随包分发（见 design.md 的二进制分发）
+      - name: Build native sandbox executor
+        run: pnpm run build:native
 
       # package.json 的 major.minor 是发布版本线的唯一来源，patch 是 HEAD commit 的 committer 时间
       # （Asia/Shanghai）的 YYYYMMDDHHMMSS，形如 0.1.20260718031031；bump 版本线只改 package.json。
