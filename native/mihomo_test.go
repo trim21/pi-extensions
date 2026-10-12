@@ -210,7 +210,7 @@ func TestGenerateMihomoConfigGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("返回值不是合法 base64: %v", err)
 	}
-	want := `{"mixed-port":0,"mode":"rule","log-level":"info","ipv6":false,"interface-name":"tap0","dns":{"enable":true,"ipv6":false,"enhanced-mode":"fake-ip","fake-ip-range":"198.18.0.1/16","fake-ip-filter-mode":"whitelist","fake-ip-filter":["example.com",".pypi.org"],"nameserver":["rcode://name_error"],"default-nameserver":["223.5.5.5","1.1.1.1"],"direct-nameserver":["223.5.5.5","1.1.1.1"]},"tun":{"enable":true,"stack":"mixed","mtu":1400,"auto-route":true,"strict-route":true,"auto-detect-interface":true,"dns-hijack":["any:53"]},"rules":["DOMAIN,example.com,DIRECT","AND,(DOMAIN-WILDCARD,*.pypi.org,DIRECT),(DST-PORT,443,DIRECT),DIRECT","IP-CIDR,1.2.3.4/32,DIRECT,no-resolve","IP-CIDR,10.0.0.0/8,DIRECT,no-resolve","MATCH,REJECT"]}`
+	want := `{"mixed-port":0,"mode":"rule","log-level":"info","ipv6":false,"interface-name":"tap0","dns":{"enable":true,"ipv6":false,"listen":"0.0.0.0:53","enhanced-mode":"fake-ip","fake-ip-range":"198.18.0.1/16","fake-ip-filter-mode":"whitelist","fake-ip-filter":["example.com",".pypi.org"],"nameserver":["rcode://name_error"],"default-nameserver":["223.5.5.5","1.1.1.1"],"direct-nameserver":["223.5.5.5","1.1.1.1"]},"tun":{"enable":true,"stack":"mixed","mtu":1400,"auto-route":true,"strict-route":true,"auto-detect-interface":true,"dns-hijack":["any:53"]},"rules":["DOMAIN,example.com,DIRECT","AND,(DOMAIN-WILDCARD,*.pypi.org,DIRECT),(DST-PORT,443,DIRECT),DIRECT","IP-CIDR,1.2.3.4/32,DIRECT,no-resolve","IP-CIDR,10.0.0.0/8,DIRECT,no-resolve","MATCH,REJECT"]}`
 	if string(raw) != want {
 		t.Errorf("配置 JSON 不符:\n got = %s\nwant = %s", raw, want)
 	}
@@ -238,6 +238,9 @@ func TestGenerateMihomoConfigFields(t *testing.T) {
 	}
 	if config.DNS.FakeIPFilterMode != "whitelist" {
 		t.Errorf("fake-ip 过滤模式应为 whitelist: %+v", config.DNS)
+	}
+	if config.DNS.Listen != "0.0.0.0:53" {
+		t.Errorf("DNS 应监听本机地址的 53（宿主 loopback stub 的查询由此到达栈内）: %q", config.DNS.Listen)
 	}
 	if !slices.Equal(config.DNS.FakeIPFilter, []string{"pypi.org"}) {
 		t.Errorf("fake-ip 白名单不符: %v", config.DNS.FakeIPFilter)

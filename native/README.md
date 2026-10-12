@@ -63,7 +63,7 @@ sandbox run --policy '<json>' --timeout 30 --verbose
 ```
 supervisor（宿主 ns，CLI 进程）
  ├─ init（CLONE_NEWUSER|NEWPID|NEWNS|NEWNET，新 ns 内的 PID 1）
- │    ├─ mihomo                      TUN + 白名单 fakeip + DNS 层拒绝
+ │    ├─ mihomo                      TUN + 白名单 fakeip + DNS 层拒绝 + 本机 53 监听
  │    └─ bwrap → shell -lc <command>  命令本体（已在目标 netns 内，不需要 nsenter）
  └─ slirp4netns（宿主 netns，fork 进 init 的 netns 提供 egress）
 ```
