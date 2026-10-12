@@ -48,14 +48,43 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # bwrap.test.ts imports src/bwrap which resolves the bwrap binary at
-      # module load time; bubblewrap is not preinstalled on ubuntu-latest.
-      # The claude-code Glob tool and its tests spawn `rg` directly, which is
-      # also not preinstalled on ubuntu-latest.
-      # Cache the apt packages to avoid re-downloading on every run.
-      - uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+      # 沙箱用例需要 bwrap / mihomo / slirp4netns，claude-code 的 Glob 工具与它的测试直接
+      # spawn `rg`：这些都不预装在 ubuntu-latest，统一与开发机一致用 pixi 装到全局环境
+      # （mihomo 来自自建 channel）。装最新版而不钉版本：上游更新导致的失败会直接出现在
+      # CI 里，再决定是改代码还是收敛版本。
+      - uses: prefix-dev/setup-pixi@v0.11.0
         with:
-          packages: bubblewrap ripgrep
+          pixi-version: v0.76.2
+          # 仓库没有 pixi.toml：只装 pixi 本体，依赖走下面的 pixi global install
+          run-install: false
+
+      - name: Install sandbox runtime dependencies
+        run: |
+          pixi global install --channel https://prefix.dev/trim21-pkgs mihomo
+          pixi global install bubblewrap
+          pixi global install slirp4netns
+          pixi global install ripgrep
+          echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
+
+      # Ubuntu 24.04 起 AppArmor 默认限制非特权 user namespace，而 bwrap 与网络栈都要靠它
+      # 建 namespace；不放开的话真实沙箱用例会被探测整组跳过（CI 上一直是跳过的）。
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # 真实沙箱用例依赖宿主环境：DNS 指向 loopback stub（如 127.0.0.53）时沙箱内的查询
+      # 不进 TUN，过滤进程的 dns-hijack 拦不到。用例失败时要能看到这些事实。
+      - name: Sandbox environment facts
+        run: |
+          echo "--- /etc/resolv.conf ---"
+          cat /etc/resolv.conf
+          echo "--- host resolution ---"
+          getent ahostsv4 pypi.org | head -3 || echo "host cannot resolve pypi.org"
+          echo "--- /dev/net/tun ---"
+          ls -l /dev/net/tun || echo "missing"
+          echo "--- binaries ---"
+          command -v bwrap mihomo slirp4netns
+          echo "--- userns sysctl ---"
+          sysctl kernel.apparmor_restrict_unprivileged_userns || true
 
       # lsp-e2e-pyright-ruff.test.ts 需要真实的 pyright / ruff LSP server，
       # lsp-e2e-tsls.test.ts / lsp-e2e-rename.test.ts 需要真实的
@@ -69,7 +98,10 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       # coverage 在两个 Node 版本上都生成并上传，codecov 合并两次报告。
+      # 真实网络栈用例（allowlist 放行/拒绝、超时清理）需要显式开启。
       - run: pnpm test:coverage
+        env:
+          RUN_NETSTACK_INTEGRATION: "1"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
