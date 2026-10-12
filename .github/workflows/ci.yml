@@ -106,6 +106,21 @@ jobs:
       - name: Allow unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
+      # 真实沙箱用例依赖宿主环境：DNS 指向 loopback stub（如 127.0.0.53）时，沙箱内的
+      # 查询不进 TUN，mihomo 的 dns-hijack 拦不到，解析必然失败。用例失败时要能看到这些事实。
+      - name: Sandbox environment facts
+        run: |
+          echo "--- /etc/resolv.conf ---"
+          cat /etc/resolv.conf
+          echo "--- host resolution ---"
+          getent ahostsv4 pypi.org | head -3 || echo "host cannot resolve pypi.org"
+          echo "--- /dev/net/tun ---"
+          ls -l /dev/net/tun || echo "missing"
+          echo "--- binaries ---"
+          command -v bwrap mihomo slirp4netns
+          echo "--- userns sysctl ---"
+          sysctl kernel.apparmor_restrict_unprivileged_userns || true
+
       # lsp-e2e-pyright-ruff.test.ts 需要真实的 pyright / ruff LSP server，
       # lsp-e2e-tsls.test.ts / lsp-e2e-rename.test.ts 需要真实的
       # typescript-language-server（二进制缺失时对应测试组自动跳过）。
