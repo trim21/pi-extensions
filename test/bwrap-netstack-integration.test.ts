@@ -116,6 +116,10 @@ describe.skipIf(!enabled || !executorUsable())("native sandbox integration", () 
     const sandboxResolv = await runLimited(["pypi.org"], "cat /etc/resolv.conf");
     expect(sandboxResolv.exitCode).toBe(0);
     expect(sandboxResolv.output).toBe(hostResolv);
+
+    // 监听入口：宿主 resolv.conf 指向 loopback stub 时走的就是它
+    const viaLoopback = await runLimited(["pypi.org"], "dig +short @127.0.0.1 -p 53 pypi.org");
+    expect(viaLoopback.output).toMatch(/^198\.18\./);
   }, 120000);
 
   it("超时由执行器终止并以 TimeoutError 结束，且不残留网络栈进程", async () => {
