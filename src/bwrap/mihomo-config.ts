@@ -1,6 +1,12 @@
 const FAKEIP_RANGE = "198.18.0.1/16";
 /** mihomo 的拒绝伪 DNS 服务器：即时返回 NXDOMAIN，不查上游、不等超时。 */
 const REJECT_NAMESERVER = "rcode://name_error";
+/**
+ * 除 TUN 劫持外，DNS 还监听本机所有地址的 53：宿主 resolv.conf 指向 loopback stub
+ * （如 systemd-resolved 的 127.0.0.53）时，这类查询不出网络设备、进不了 TUN，
+ * dns-hijack 拦不到；监听本机地址让它们直达网络栈内的解析器。端口在 netns 内是隔离的。
+ */
+const DNS_LISTEN = "0.0.0.0:53";
 /** TUN 与 slirp4netns tap0 共用；不对齐时大包会在 slirp NAT 后 PMTU blackhole。 */
 export const TUN_MTU = 1500;
 
@@ -29,6 +35,8 @@ export interface MihomoConfig {
   dns: {
     enable: true;
     ipv6: false;
+    /** 监听本机地址的 53：宿主 resolv.conf 里的 loopback stub 解析器由此被接管。 */
+    listen: string;
     "enhanced-mode": "fake-ip";
     "fake-ip-range": string;
     /** whitelist：只有 fake-ip-filter 命中的域名才拿 fake IP，其余走 nameserver。 */
@@ -237,6 +245,7 @@ export function generateMihomoConfig(options: MihomoConfigOptions): MihomoConfig
     dns: {
       enable: true,
       ipv6: false,
+      listen: DNS_LISTEN,
       "enhanced-mode": "fake-ip",
       "fake-ip-range": FAKEIP_RANGE,
       "fake-ip-filter-mode": "whitelist",
