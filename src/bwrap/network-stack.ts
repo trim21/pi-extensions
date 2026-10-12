@@ -24,6 +24,10 @@ export interface NetworkStackOptions {
 }
 
 const NAMESERVER_PATTERN = /^\s*nameserver\s+(\S+)/;
+/** egress 通道自带的解析器（slirp4netns 的内置 DNS）：它在宿主侧解析。 */
+const SLIRP_DNS = "10.0.2.3";
+/** systemd-resolved 维护的真实上游列表：宿主 `/etc/resolv.conf` 只是 loopback stub 时用这个。 */
+const RESOLVED_UPSTREAM = "/run/systemd/resolve/resolv.conf";
 /** 停栈时等待单个子进程退出的上限（毫秒）。 */
 const STOP_WAIT_TIMEOUT_MS = 2000;
 
@@ -110,19 +114,48 @@ async function readChildPids(pid: number): Promise<number[]> {
   }
 }
 
-/** 读宿主机 /etc/resolv.conf 的全部 IPv4 nameserver，按声明顺序返回。 */
-export async function resolveDnsServers(): Promise<string[]> {
-  const content = await readFile("/etc/resolv.conf", "utf8");
-  const nameservers = content
+function parseNameservers(content: string): string[] {
+  return content
     .split("\n")
     .map((line) => NAMESERVER_PATTERN.exec(line)?.[1])
     .filter((value): value is string => value !== undefined);
-  // slirp4netns 出口仅 IPv4，IPv6 nameserver 无法出站，故只保留 IPv4
-  const ipv4 = nameservers.filter((value) => !value.includes(":"));
-  if (ipv4.length === 0) {
-    throw new Error("No IPv4 nameserver found in /etc/resolv.conf");
+}
+
+async function readNameservers(path: string): Promise<string[]> {
+  try {
+    return parseNameservers(await readFile(path, "utf8"));
+  } catch {
+    return [];
   }
-  return ipv4;
+}
+
+/**
+ * 挑出能当网络栈上游的地址。
+ *
+ * 两个排除条件：必须是 IPv4（egress 通道只提供 IPv4）；不能是 loopback——在沙箱内 loopback
+ * 指向网络栈自身（本机 53 上就是我们的监听），拿它当上游只会把域名解析回网络栈分配的地址
+ * 形成回环，DIRECT 出站于是连接超时。宿主用 systemd-resolved stub（`127.0.0.53`）时，
+ * `/etc/resolv.conf` 整份都会被排除。
+ */
+export function routableDnsServers(nameservers: readonly string[]): string[] {
+  return nameservers.filter((value) => !value.includes(":") && !isLoopback(value));
+}
+
+function isLoopback(address: string): boolean {
+  return address === "localhost" || address.startsWith("127.");
+}
+
+/**
+ * 网络栈的上游 DNS：宿主 `resolv.conf` 里可路由的地址优先；只剩 loopback stub 时用
+ * systemd-resolved 维护的真实上游；都拿不到才回退 egress 通道自带的解析器（宿主侧解析）。
+ */
+export async function resolveDnsServers(): Promise<string[]> {
+  const routable = routableDnsServers(await readNameservers("/etc/resolv.conf"));
+  if (routable.length > 0) {
+    return routable;
+  }
+  const resolved = routableDnsServers(await readNameservers(RESOLVED_UPSTREAM));
+  return resolved.length > 0 ? resolved : [SLIRP_DNS];
 }
 
 /** 等待目标进程进入新的 user namespace（unshare 完成），返回后命令才能 nsenter 进入。 */
