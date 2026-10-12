@@ -13,5 +13,5 @@
 - [x] 2.3 宿主上验证 loopback 入口：用执行器在沙箱内查询本机地址的 53（`dig @127.0.0.1 -p 53 pypi.org`），确认应答来自栈内解析器（fake-ip 地址段）。
 - [x] 2.4 `test/bwrap-netstack-integration.test.ts`：增加断言——沙箱内 `/etc/resolv.conf` 与宿主内容一致（未被改写）。
 - [x] 2.5 `pnpm run check`、`pnpm run lint`、`pnpm test` 全绿。
-- [ ] 2.6 CI：push 后 runner（systemd-resolved stub 环境）上 `test/bwrap-netstack-integration.test.ts` 不再有失败用例。
+- [x] 2.6 CI：push 后 runner（systemd-resolved stub 环境）上 `test/bwrap-netstack-integration.test.ts` 不再有失败用例。
 - [x] 2.7 归档：delta 合并进 `openspec/specs/bwrap-network/spec.md`（Implementation 段补充该机制），change 移入 `archive/`。
