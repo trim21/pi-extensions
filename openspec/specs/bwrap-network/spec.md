@@ -196,6 +196,36 @@
 - **WHEN** egress 进程未能在超时内创建 tap0（版本、参数或权限问题）
 - **THEN** holder 立即以非零码退出并输出原因，调用方在秒级内看到「接口未创建」类的失败，而不是等待过滤进程就绪超时
 
+### Requirement: 受限网络模式下的沙箱内 DNS
+
+`network: limited` 时，宿主 `/etc/resolv.conf` 里配置的 nameserver 查询 MUST 由网络栈处理：白名单域名 MUST 得到网络栈分配的地址，未允许域名 MUST 在 DNS 层被拒，解析结果 MUST 与连接层规则来自同一条目。
+
+**MUST 覆盖 loopback 形式的解析器**：宿主使用 stub 解析器（如 systemd-resolved 的 `127.0.0.53`）时，发往这类本机地址的查询 MUST 同样由网络栈处理。
+
+**MUST NOT 把 loopback 当作上游**：宿主 `resolv.conf` 里的 loopback 地址在沙箱内指向网络栈自身，MUST NOT 被用作解析上游——否则域名会被解析回网络栈分配的地址，出站连接因此超时。这类地址 MUST 被排除；全部被排除时 MUST 依次回退到宿主系统解析器维护的真实上游列表、egress 通道自带的解析器（它在宿主侧解析）。
+
+该行为 MUST 只作用于受限网络模式：`block` 与 `allow-all` MUST NOT 改变沙箱内的解析行为。
+
+#### Scenario: 宿主解析器是 loopback stub
+
+- **WHEN** 宿主 `/etc/resolv.conf` 的 nameserver 是 loopback 地址（如 `127.0.0.53`），且宿主自身可解析外部域名
+- **THEN** 沙箱内仍能解析 allowlist 域名，未允许域名仍在 DNS 层被拒
+
+#### Scenario: 宿主只有 loopback 解析器时仍能建立连接
+
+- **WHEN** 宿主 `/etc/resolv.conf` 只有 loopback 地址（如 `127.0.0.53`）
+- **THEN** 沙箱内访问 allowlist 域名能真正连上（而不是解析成网络栈分配的地址后连接超时），未允许域名仍被拒
+
+#### Scenario: 沙箱内的解析配置保持宿主原样
+
+- **WHEN** 受限网络模式启动沙箱
+- **THEN** 沙箱内 `/etc/resolv.conf` 与宿主一致，不被改写
+
+#### Scenario: 非受限模式不改变解析行为
+
+- **WHEN** 网络模式是 `block` 或 `allow-all`
+- **THEN** 沙箱内的解析行为与宿主一致
+
 ## Implementation
 
 网络栈由以下进程构成：
@@ -220,6 +250,7 @@ pi（Bash 工具进程，持有 stdin 写端）
 - **NSpid 取宿主 pid**：pid ns 内 `/proc` 挂载是宿主的（`-Urnp` 不含 `-m`，`/proc/1` 是宿主 init 而非本 pid ns 的 init），slirp4netns 的 setns 目标必须用 `/proc/self/status` 的 NSpid 第一项（宿主视角 pid）。
 - **配置 base64 直传**：mihomo 支持 `-config` 直接接收 base64 JSON，无临时文件；holder 内 `chdir("/")` 防止在宿主 cwd 意外落盘。
 - **就绪检测按行匹配**：`waitForMihomoStarted` 用 `src/lib/proc.ts` 的 `forEachLine` 按 `\n` 拼行后匹配 `"Tun adapter listening"`，正确处理跨 data chunk 的行。
+- **DNS 两条入口**：宿主 `resolv.conf` 指向 loopback stub（systemd-resolved 的 `127.0.0.53`）时，这类查询不出网络设备、进不了 TUN，过滤进程因此额外监听本机地址的 53（`listen: 0.0.0.0:53`）。上游 MUST NOT 用 loopback（netns 内它指向网络栈自身，会把域名解析回 fake IP 成环）：候选值排除 loopback 与 IPv6，全被排除时依次回退到 systemd-resolved 维护的真实上游列表、egress 通道自带的解析器（`10.0.2.3`，在宿主侧解析）。
 - **白名单 fakeip**：`fake-ip-filter-mode: whitelist` + `fake-ip-filter`（allowlist 的域名条目）——只有 allowlist 域名拿 fake IP，因此连接到达时能靠「fake IP ↔ 域名」一一对应的映射精确还原域名（不依赖嗅探、不受 DNS TTL 影响）；未命中白名单的域名落到 `nameserver`。
 - **DNS 层拒绝**：`nameserver` 设为伪服务器 `rcode://name_error`，未允许域名即时拿到 NXDOMAIN（客户端报 `Could not resolve host`），不查上游、不等超时。mihomo 的 fakeip 分支没有按域名拒绝的钩子，收窄白名单是把拒绝做到 DNS 层的唯一途径；`dns.rules` 不是 mihomo 的字段（会被静默忽略），不要用它表达 DNS 策略。
 - **DIRECT 出站解析**：`direct-nameserver` 指向配置的真实 DNS——连接由 fake IP 还原成域名后 DIRECT 要按域名重新解析，不指定会解析回 fake-ip 再进 TUN 成环。
