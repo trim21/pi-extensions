@@ -29,7 +29,7 @@ import { Value } from "typebox/value";
 import { completeText, type CompleteTextResult, type ModelRegistryLike } from "./lib/model-call.js";
 import { type ToolPendant } from "./lib/pendant.js";
 import type { ToolBus } from "./lib/tool-bus.js";
-import { createToolRegistration } from "./lib/tool-registration.js";
+import { registerToolsOnSessionStart, type ToolModule } from "./lib/tool-registration.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
 
@@ -299,7 +299,7 @@ export async function callVision(
 // ── extension ────────────────────────────────────────────────────────────────
 
 /** 视觉代理工具集（未配置视觉模型时返回 undefined）：入口从它取注册函数。 */
-export function createVisionTools(): { register(bus: ToolBus): void } | undefined {
+export function createVisionTools(): ToolModule | undefined {
   // 未配置视觉模型就不注册工具：agent 看不到也调不到。provider 的
   // baseUrl/apiKey 由 pi 的模型注册表在调用时解析（execute 里 find），
   // 配置好 settings.json / models.json 后重新加载（/reload）即可生效。
@@ -307,62 +307,26 @@ export function createVisionTools(): { register(bus: ToolBus): void } | undefine
     return undefined;
   }
   return {
-    register(bus) {
+    register(bus, ctx) {
+      // 主模型支持视觉时图片由 pi 原生透传，本工具是多余的：可见性只由「注册与否」
+      // 决定（不改 pi 的 active 列表），判定在每个会话启动时做一次。
+      if (isMultimodal(ctx.model)) {
+        return;
+      }
       registerVisionTool(bus);
     },
   };
 }
 
 export default function visionAgent(pi: ExtensionAPI): void {
-  const registration = createToolRegistration(pi);
-  // 只依赖 input 字段，不绑定 pi 内部类型
-  interface AnyModel {
-    id?: string;
-    input?: readonly string[];
-  }
-
-  /**
-   * 根据当前主模型能力同步工具可见性：
-   * - 多模态 → 隐藏 describe_image，图片由 pi 原生透传，零额外 API 调用
-   * - text-only → 启用 describe_image 代理
-   */
-  function syncVisionMode(model: AnyModel | undefined, notify?: (msg: string) => void) {
-    const active = pi.getActiveTools();
-    const hasTool = active.includes(TOOL_NAME);
-    if (hasTool && isMultimodal(model)) {
-      pi.setActiveTools(active.filter((t) => t !== TOOL_NAME));
-      if (notify) {
-        notify(`主模型 ${model?.id ?? "?"} 支持视觉 → 已隐藏 ${TOOL_NAME}，图片原生透传`);
-      }
-    } else if (!hasTool && !isMultimodal(model)) {
-      pi.setActiveTools([...active, TOOL_NAME]);
-      if (notify) {
-        notify(`主模型 ${model?.id ?? "?"} 不支持视觉 → 已启用 ${TOOL_NAME}，由视觉模型代理识别`);
-      }
-    }
-  }
-
-  // 模型切换时自动同步（/model、Ctrl+P、会话恢复都会触发）
-  pi.on("model_select", (event, ctx) => {
-    syncVisionMode(event.model, (msg) => ctx.ui.notify(msg, "info"));
-  });
-
-  // 启动 / 会话恢复时初始化
-  pi.on("session_start", (_event, ctx) => {
-    syncVisionMode(ctx.model);
-  });
-
   // 未配置视觉模型就不注册工具（见 createVisionTools）。
   const tools = createVisionTools();
   if (!tools) {
     return;
   }
 
-  // 工具在 session_start 里注册：禁用规则可以带 models，只有那时才知道本会话
-  // 的模型。
-  registration.onSessionStart(() => {
-    tools.register(registration.bus);
-  });
+  // 判定要看本会话的模型，因此注册必须发生在 session_start 里。
+  registerToolsOnSessionStart(pi, (bus, ctx) => tools.register(bus, ctx));
 }
 
 function registerVisionTool(bus: ToolBus): void {

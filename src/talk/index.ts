@@ -25,7 +25,7 @@ import { type TObject, Type } from "typebox";
 import { type CommandResult, type CommandSpec, parseCommand } from "../lib/cli.js";
 import { resolveHomePath } from "../lib/path.js";
 import type { ToolBus } from "../lib/tool-bus.js";
-import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
+import { registerToolsOnSessionStart, type ToolModule } from "../lib/tool-registration.js";
 import { restoreTalkAgentId, TALK_JOIN_ENTRY_TYPE, TalkCore } from "./core.js";
 import { age, formatDelivery } from "./format.js";
 import type { Letter } from "./mailbox.js";
@@ -175,7 +175,7 @@ function registerTalkTools(
  * talk 工具集：创建核心、注册会话接线与 /talk 命令，返回工具注册函数。
  * 入口与独立默认导出都用它，因此两种加载方式行为一致。
  */
-export function createTalkTools(pi: ExtensionAPI): { register(bus: ToolBus): void } {
+export function createTalkTools(pi: ExtensionAPI): ToolModule {
   const settings = readTalkSettings();
   const configured = process.env.PI_TALK_DB ?? settings.dbPath;
   const dbPath = configured
@@ -551,5 +551,5 @@ export function createTalkTools(pi: ExtensionAPI): { register(bus: ToolBus): voi
 
 export default function talk(pi: ExtensionAPI): void {
   const tools = createTalkTools(pi);
-  registerToolsOnSessionStart(pi, (bus) => tools.register(bus));
+  registerToolsOnSessionStart(pi, (bus, ctx) => tools.register(bus, ctx));
 }

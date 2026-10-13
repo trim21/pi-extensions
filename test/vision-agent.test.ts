@@ -3,7 +3,7 @@
  * - loadVisionConfig: config resolution
  * - resolveImagePaths: path list normalization
  * - callVision: model-registry based vision calls with base64 image content
- * - tool visibility sync on model_select
+ * - tool visibility: registered only when the session model cannot see images
  * - execute: end-to-end via mocked registry
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -11,9 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import type { ModelRegistryLike } from "../src/lib/model-call.js";
+import type { ToolBus } from "../src/lib/tool-bus.js";
 import {
   buildPendantMarkdown,
   buildPrompt,
@@ -63,22 +65,26 @@ async function loadVisionAgentWithHome(files: Record<string, string>) {
     const mod = await importOriginal<typeof import("node:os")>();
     return { ...mod, homedir: () => tempHome };
   });
-  const { default: visionAgent } = await import("../src/vision-agent.js");
-  return { visionAgent, tempHome };
+  const { default: visionAgent, createVisionTools } = await import("../src/vision-agent.js");
+  return { visionAgent, createVisionTools, tempHome };
+}
+
+/** 主模型视觉能力用的最小模型描述（isMultimodal 只看 input） */
+interface FakeModel {
+  id?: string;
+  input?: readonly string[];
 }
 
 /**
  * 装一个最小 pi：捕获 session_start 并立即触发一次（工具在 session_start 里
  * 按本会话模型注册），其余 API 由调用方按需提供。
  */
-function loadPi(overrides: Record<string, unknown>): never {
-  const sessionCtx = { model: undefined, ui: { notify: () => false } };
+function loadPi(overrides: Record<string, unknown>, model?: FakeModel): never {
+  const sessionCtx = { model, ui: { notify: () => false } };
   return {
     registerTool: () => false,
     registerFlag: () => false,
     registerCommand: () => false,
-    getActiveTools: () => [],
-    setActiveTools: () => false,
     ...overrides,
     // 注册即触发：等价于 session_start 事件按注册顺序串行派发
     on: (name: string, handler: (...args: never[]) => unknown) => {
@@ -431,31 +437,52 @@ describe("tool registration", () => {
     }
   });
 
-  it("hides describe_image for multimodal models and shows it for text-only models", async () => {
+  it("registers for text-only models and stays unregistered for multimodal models", async () => {
     const { visionAgent, tempHome } = await loadVisionAgentWithHome(CONFIGURED);
     try {
-      const events: Record<string, (event: never, ctx: { ui: { notify: () => boolean } }) => void> =
-        {};
-      let activeTools = ["read", "bash", TOOL_NAME];
-      visionAgent({
-        registerTool: () => false,
-        on: (name: string, handler: never) => {
-          events[name] = handler;
-        },
-        getActiveTools: () => [...activeTools],
-        setActiveTools: (tools: string[]) => {
-          activeTools = tools;
-        },
-      } as never);
+      const registerWith = (model: FakeModel): string[] => {
+        const registered: string[] = [];
+        visionAgent(
+          loadPi(
+            {
+              registerTool: (def: { name: string }) => {
+                registered.push(def.name);
+              },
+            },
+            model,
+          ),
+        );
+        return registered;
+      };
 
-      const ui = { notify: () => true };
-      events.model_select?.({ model: { id: "gpt-4o", input: ["text", "image"] } } as never, { ui });
-      expect(activeTools).not.toContain(TOOL_NAME);
+      expect(registerWith({ id: "gpt-4o", input: ["text", "image"] })).toEqual([]);
+      expect(registerWith({ id: "deepseek-v4-flash", input: ["text"] })).toEqual([TOOL_NAME]);
+    } finally {
+      vi.resetModules();
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 
-      events.model_select?.({ model: { id: "deepseek-v4-flash", input: ["text"] } } as never, {
-        ui,
-      });
-      expect(activeTools).toContain(TOOL_NAME);
+  it("decides on the session model when the entry registers the module", async () => {
+    const { createVisionTools, tempHome } = await loadVisionAgentWithHome(CONFIGURED);
+    try {
+      const tools = createVisionTools();
+      expect(tools).toBeDefined();
+
+      const registered: string[] = [];
+      const bus = {
+        register: (def: { name: string }) => {
+          registered.push(def.name);
+        },
+      } as unknown as ToolBus;
+      const ctxFor = (model: FakeModel): ExtensionContext =>
+        ({ model, ui: { notify: () => false } }) as unknown as ExtensionContext;
+
+      tools?.register(bus, ctxFor({ id: "gpt-4o", input: ["text", "image"] }));
+      expect(registered).toEqual([]);
+
+      tools?.register(bus, ctxFor({ id: "deepseek-v4-flash", input: ["text"] }));
+      expect(registered).toEqual([TOOL_NAME]);
     } finally {
       vi.resetModules();
       rmSync(tempHome, { recursive: true, force: true });

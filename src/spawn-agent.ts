@@ -72,8 +72,11 @@ import { Type } from "typebox";
 import { type BwrapConfig, completeBwrapConfig } from "./bwrap/core.js";
 import { createClaudeCodeFileTools } from "./claude-code/files.js";
 import { type ToolPendant } from "./lib/pendant.js";
-import type { ToolBus } from "./lib/tool-bus.js";
-import { createToolRegistration, registerToolsOnSessionStart } from "./lib/tool-registration.js";
+import {
+  createToolRegistration,
+  registerToolsOnSessionStart,
+  type ToolModule,
+} from "./lib/tool-registration.js";
 import { createToolServices } from "./lib/tool-services.js";
 import { toolsetsForToolNames, unitsForToolNames } from "./lib/tool-units.js";
 import { createOpencodeFileTools } from "./opencode/files.js";
@@ -523,7 +526,7 @@ export function formatAgentListSection(agents: AgentConfig[]): string {
 // ── extension ────────────────────────────────────────────────────────────────
 
 /** spawn-agent 工具集：入口从它取注册函数。 */
-export function createSpawnAgentTool(): { register(bus: ToolBus): void } {
+export function createSpawnAgentTool(): ToolModule {
   // Discover the available subagent types once at extension startup. The
   // extension owns this discovery: the model never has to guess agent names
   // or read the agent directory itself. Editing ~/.pi/agent/agents/*.md or
@@ -630,7 +633,7 @@ export default function spawnAgent(pi: ExtensionAPI): void {
   const tools = createSpawnAgentTool();
   // 工具在 session_start 里注册：禁用规则可以带 models，只有那时才知道本会话
   // 的模型。
-  registerToolsOnSessionStart(pi, (bus) => {
-    tools.register(bus);
+  registerToolsOnSessionStart(pi, (bus, ctx) => {
+    tools.register(bus, ctx);
   });
 }

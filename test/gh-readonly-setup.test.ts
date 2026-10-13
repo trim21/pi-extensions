@@ -73,7 +73,7 @@ describe.skipIf(process.platform === "win32")("gh-readonly setup", () => {
     expect(tools).toHaveLength(0);
 
     const bus = createToolBus({ registerTool: () => {} } as never);
-    createGithubTools()?.register(bus);
+    createGithubTools()?.register(bus, { model: undefined } as never);
     const registered = bus.list();
     expect(registered).toHaveLength(18);
     expect(registered.map((tool) => tool.name)).toEqual(

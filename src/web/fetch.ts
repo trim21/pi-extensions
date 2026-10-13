@@ -26,7 +26,7 @@ import { egress } from "../lib/egress.js";
 import { resolvePathArg } from "../lib/path.js";
 import { createRequestPolicy } from "../lib/request-policy.js";
 import type { ToolBus } from "../lib/tool-bus.js";
-import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
+import { registerToolsOnSessionStart, type ToolModule } from "../lib/tool-registration.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
 
 const MAX_REDIRECTS = 5;
@@ -442,7 +442,7 @@ export function createWebFetchTool(pi: ExtensionAPI): (bus: ToolBus) => void {
 }
 
 /** 工具集入口形态：入口用它取注册函数。 */
-export function createWebFetch(pi: ExtensionAPI): { register(bus: ToolBus): void } {
+export function createWebFetch(pi: ExtensionAPI): ToolModule {
   const registerTool = createWebFetchTool(pi);
   return { register: registerTool };
 }

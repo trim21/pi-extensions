@@ -39,8 +39,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import type { ToolBus } from "../lib/tool-bus.js";
-import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
+import { registerToolsOnSessionStart, type ToolModule } from "../lib/tool-registration.js";
 import { GhClient, isGhAvailable } from "./base.js";
 import { addDownloadReleaseAssetsTool } from "./tools/download-release-assets.js";
 import { addGetWorkflowJobsTool } from "./tools/get-workflow-jobs.js";
@@ -68,7 +67,7 @@ export * from "./tools/read-ci-logs.js";
 export * from "./tools/read-pr-status.js";
 
 /** 本工具集的工具：入口从它取注册函数（gh 不可用时返回 undefined）。 */
-export function createGithubTools(): { register(bus: ToolBus): void } | undefined {
+export function createGithubTools(): ToolModule | undefined {
   // Windows 上禁用：gh 可执行文件的探测（无扩展名 + POSIX 路径）与进程
   // 管理（SIGTERM 信号语义）都是 POSIX 假设，不做 Windows 适配。
   if (process.platform === "win32") {
@@ -128,7 +127,7 @@ export default function ghReadonlyTools(pi: ExtensionAPI): void {
     return;
   }
 
-  registerToolsOnSessionStart(pi, (bus) => {
-    tools.register(bus);
+  registerToolsOnSessionStart(pi, (bus, ctx) => {
+    tools.register(bus, ctx);
   });
 }
