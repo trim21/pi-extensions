@@ -66,19 +66,32 @@ export * from "./tools/download-release-assets.js";
 export * from "./tools/read-ci-logs.js";
 export * from "./tools/read-pr-status.js";
 
-/** 本工具集的工具：入口从它取注册函数（gh 不可用时返回 undefined）。 */
-export function createGithubTools(): ToolModule | undefined {
-  // Windows 上禁用：gh 可执行文件的探测（无扩展名 + POSIX 路径）与进程
-  // 管理（SIGTERM 信号语义）都是 POSIX 假设，不做 Windows 适配。
+/**
+ * 本工具集的工具：入口与默认导出都从它取注册函数。环境不支持或依赖缺失时返回的
+ * 模块在注册时说明原因、不注册任何工具 —— Windows 上禁用是因为 gh 可执行文件的
+ * 探测（无扩展名 + POSIX 路径）与进程管理（SIGTERM 信号语义）都是 POSIX 假设。
+ */
+export function createGithubTools(): ToolModule {
   if (process.platform === "win32") {
-    return undefined;
+    return {
+      register(_bus, ctx) {
+        ctx.ui.notify("gh-readonly tools are disabled on Windows.", "warning");
+      },
+    };
   }
 
   // Fail fast: the `gh` CLI is the only backend for these tools. Without it the
   // extension registers nothing and reports the problem at session start, so
   // the user gets one clear error instead of a dozen failing tool calls.
   if (!isGhAvailable()) {
-    return undefined;
+    return {
+      register(_bus, ctx) {
+        ctx.ui.notify(
+          "gh CLI not found in PATH: GitHub read-only tools are disabled. Install GitHub CLI (https://cli.github.com/) and reload the session.",
+          "error",
+        );
+      },
+    };
   }
 
   const gh = new GhClient();
@@ -107,26 +120,8 @@ export function createGithubTools(): ToolModule | undefined {
 }
 
 export default function ghReadonlyTools(pi: ExtensionAPI): void {
-  // Windows 上禁用：gh 可执行文件的探测与进程管理都是 POSIX 假设。
-  if (process.platform === "win32") {
-    pi.on("session_start", (_event, ctx) => {
-      ctx.ui.notify("gh-readonly tools are disabled on Windows.", "warning");
-    });
-    return;
-  }
-
-  // gh 不可用时一个工具都不注册，只在会话启动时报告一次问题。
+  // 不可用时的提示由工厂返回的模块在注册时发出，因此入口与独立加载两条路径都有。
   const tools = createGithubTools();
-  if (!tools) {
-    pi.on("session_start", (_event, ctx) => {
-      ctx.ui.notify(
-        "gh CLI not found in PATH: GitHub read-only tools are disabled. Install GitHub CLI (https://cli.github.com/) and reload the session.",
-        "error",
-      );
-    });
-    return;
-  }
-
   registerToolsOnSessionStart(pi, (bus, ctx) => {
     tools.register(bus, ctx);
   });

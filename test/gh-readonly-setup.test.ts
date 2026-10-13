@@ -54,7 +54,9 @@ describe.skipIf(process.platform === "win32")("gh-readonly setup", () => {
 
     expect(tools).toHaveLength(0);
 
-    const sessionStart = handlers.find(([event]) => event === "session_start");
+    // createToolRegistration 先挂一个「记录本会话模型」的 handler，注册（与提示）
+    // 发生在它之后那一个。
+    const sessionStart = handlers.findLast(([event]) => event === "session_start");
     expect(sessionStart).toBeDefined();
     const notify = vi.fn();
     (sessionStart?.[1] as (event: unknown, ctx: { ui: { notify: typeof notify } }) => void)(
@@ -73,7 +75,7 @@ describe.skipIf(process.platform === "win32")("gh-readonly setup", () => {
     expect(tools).toHaveLength(0);
 
     const bus = createToolBus({ registerTool: () => {} } as never);
-    createGithubTools()?.register(bus, { model: undefined } as never);
+    createGithubTools().register(bus, { model: undefined, ui: { notify: vi.fn() } } as never);
     const registered = bus.list();
     expect(registered).toHaveLength(18);
     expect(registered.map((tool) => tool.name)).toEqual(
@@ -100,7 +102,9 @@ describe("Windows: gh-readonly disabled", () => {
   it("notifies the disable reason at session start", () => {
     const { pi, handlers } = createPi();
     registerTools(pi as never);
-    const sessionStart = handlers.find(([event]) => event === "session_start");
+    // createToolRegistration 先挂一个「记录本会话模型」的 handler，注册（与提示）
+    // 发生在它之后那一个。
+    const sessionStart = handlers.findLast(([event]) => event === "session_start");
     expect(sessionStart).toBeDefined();
     const notify = vi.fn();
     (sessionStart?.[1] as (event: unknown, ctx: { ui: { notify: typeof notify } }) => void)(
