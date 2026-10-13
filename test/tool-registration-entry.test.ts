@@ -52,7 +52,19 @@ vi.mock("../src/spawn-agent.js", () => ({
   createSpawnAgentTool: () => fakeModule("spawn-agent", ["spawn-agent"]),
 }));
 vi.mock("../src/vision-agent.js", () => ({
-  createVisionTools: () => fakeModule("vision", ["describe_image"]),
+  // 与真实模块同样的契约：入口把本会话 ctx 传进来，支持视觉的模型不注册。
+  createVisionTools: () => ({
+    register: (
+      bus: { register: (tool: { name: string }) => void },
+      ctx: { model?: { input?: readonly string[] } },
+    ) => {
+      moduleRegistrations.push({ name: "vision", registered: ["describe_image"] });
+      if (ctx.model?.input?.includes("image")) {
+        return;
+      }
+      bus.register({ name: "describe_image" });
+    },
+  }),
 }));
 vi.mock("../src/web/search.js", () => ({
   createWebSearchTool: () => fakeModule("web_search", ["web_search"]),
@@ -75,7 +87,7 @@ const DEFAULT_MODEL = { id: "gpt-5.6" };
 
 async function loadEntry(
   config: unknown,
-  model: { id: string; provider?: string } | undefined = DEFAULT_MODEL,
+  model: { id: string; provider?: string; input?: readonly string[] } | undefined = DEFAULT_MODEL,
 ): Promise<Loaded> {
   writeFileSync(
     join(agentDir, "settings.json"),
@@ -238,6 +250,14 @@ describe("统一入口的注册行为", () => {
   it("报告匹配不到任何工具的模式", async () => {
     const { notifications } = await loadEntry({ disabledTools: ["no-such-tool"] });
     expect(notifications.join("\n")).toContain("no-such-tool");
+  });
+
+  it("按会话模型决定 describe_image 是否注册", async () => {
+    const textOnly = await loadEntry(undefined, { id: "deepseek-v4.1-flash", input: ["text"] });
+    expect(textOnly.toolNames).toContain("describe_image");
+
+    const multimodal = await loadEntry(undefined, { id: "gpt-5.6", input: ["text", "image"] });
+    expect(multimodal.toolNames).not.toContain("describe_image");
   });
 
   it("配置里的每个模块都注册一次", async () => {

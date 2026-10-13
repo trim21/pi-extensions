@@ -583,6 +583,8 @@ pi -e ./src/system-prompt/index.ts
 
 **未配置 `visionConfig`（或 provider 缺失）时扩展不注册 `describe_image` 工具**，agent 看不到也调不到，避免一个必然失败的僵尸工具；配置好后 `/reload` 即可生效。
 
+是否注册 `describe_image` 在**每个会话启动时**按该会话的主模型判定一次：主模型支持视觉（`input` 含 `image`）就不注册，图片由 pi 原生透传；不支持才注册。判定不走 pi 的 active 工具列表，也不会在会话过程中重新判定。
+
 ### 使用
 
 ```bash

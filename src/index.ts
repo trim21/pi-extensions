@@ -15,7 +15,7 @@
  * （手工 `-e`），本入口直接调用 createXxx，因此一个实例里只有一份模块状态。
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { createAftTools } from "./aft/index.js";
 import { createClaudeCodeFileTools } from "./claude-code/files.js";
@@ -35,7 +35,8 @@ import { createWebSearchTool } from "./web/search.js";
 
 /** 只做工具注册、以及自己那些与会话无关的钩子的模块。 */
 interface ToolModule {
-  register(bus: ToolBus): void;
+  /** `ctx` 是本会话的上下文：按模型决定可见性的模块（vision）在注册时看它。 */
+  register(bus: ToolBus, ctx: ExtensionContext): void;
 }
 
 export default function personalExtensions(pi: ExtensionAPI): void {
@@ -118,7 +119,7 @@ export default function personalExtensions(pi: ExtensionAPI): void {
     // aft 的二进制探测、bridge 状态与工具注册绑在一起（找不到二进制就不注册）。
     await runModule("aft", () => aft.registerForSession(bus, ctx));
     for (const { name, module } of modules) {
-      runModule(name, () => module.register(bus));
+      runModule(name, () => module.register(bus, ctx));
     }
     // codemode 最后注册：它把总线上已有的工具写进自己的描述，并在注册时编译 wasm。
     // 脚本的 fs 原语与文件工具共用请求策略与已读记账，所以这里把工具集那两份注入过去。
