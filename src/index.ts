@@ -15,14 +15,13 @@
  * （手工 `-e`），本入口直接调用 createXxx，因此一个实例里只有一份模块状态。
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { createAftTools } from "./aft/index.js";
 import { createClaudeCodeFileTools } from "./claude-code/files.js";
 import { createCodemodeTools } from "./codemode/tool.js";
 import { createGithubTools } from "./gh/index.js";
-import type { ToolBus } from "./lib/tool-bus.js";
-import { createToolRegistration } from "./lib/tool-registration.js";
+import { createToolRegistration, type ToolModule } from "./lib/tool-registration.js";
 import { createToolServices } from "./lib/tool-services.js";
 import { TOOL_UNITS, type ToolUnitDeps } from "./lib/tool-units.js";
 import { resolveFileIoToolset } from "./lib/tools-config.js";
@@ -32,12 +31,6 @@ import { createTalkTools } from "./talk/index.js";
 import { createVisionTools } from "./vision-agent.js";
 import { createWebFetch } from "./web/fetch.js";
 import { createWebSearchTool } from "./web/search.js";
-
-/** 只做工具注册、以及自己那些与会话无关的钩子的模块。 */
-interface ToolModule {
-  /** `ctx` 是本会话的上下文：按模型决定可见性的模块（vision）在注册时看它。 */
-  register(bus: ToolBus, ctx: ExtensionContext): void;
-}
 
 export default function personalExtensions(pi: ExtensionAPI): void {
   const registration = createToolRegistration(pi);

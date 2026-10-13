@@ -22,14 +22,14 @@ import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
 
 import { type Api, type ImageContent, type Model, type TextContent } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { completeText, type CompleteTextResult, type ModelRegistryLike } from "./lib/model-call.js";
 import { type ToolPendant } from "./lib/pendant.js";
 import type { ToolBus } from "./lib/tool-bus.js";
-import { registerToolsOnSessionStart } from "./lib/tool-registration.js";
+import { registerToolsOnSessionStart, type ToolModule } from "./lib/tool-registration.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
 
@@ -298,12 +298,8 @@ export async function callVision(
 
 // ── extension ────────────────────────────────────────────────────────────────
 
-interface VisionTools {
-  register(bus: ToolBus, ctx: ExtensionContext): void;
-}
-
 /** 视觉代理工具集（未配置视觉模型时返回 undefined）：入口从它取注册函数。 */
-export function createVisionTools(): VisionTools | undefined {
+export function createVisionTools(): ToolModule | undefined {
   // 未配置视觉模型就不注册工具：agent 看不到也调不到。provider 的
   // baseUrl/apiKey 由 pi 的模型注册表在调用时解析（execute 里 find），
   // 配置好 settings.json / models.json 后重新加载（/reload）即可生效。
