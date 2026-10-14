@@ -9,6 +9,8 @@ autoInstallPeers: true
 
 minimumReleaseAge: 0
 
+pmOnFail: ignore
+
 publicHoistPattern:
   - "*eslint*"
   - "*prettier*"
