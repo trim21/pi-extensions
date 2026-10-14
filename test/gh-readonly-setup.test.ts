@@ -47,7 +47,7 @@ describe.skipIf(process.platform === "win32")("gh-readonly setup", () => {
     existsMock.mockReset();
   });
 
-  it("registers no tools and reports an error at session start when gh is missing", async () => {
+  it("registers no tools and warns at session start when gh is missing", async () => {
     existsMock.mockReturnValue(false);
     const { pi, tools, handlers } = createPi();
     registerTools(pi as never);
@@ -63,7 +63,7 @@ describe.skipIf(process.platform === "win32")("gh-readonly setup", () => {
       {},
       { ui: { notify } },
     );
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("gh CLI not found"), "error");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("gh CLI not found"), "warning");
   });
 
   it("hands no gh tool to pi, but registers them as codemode-only on the bus", () => {

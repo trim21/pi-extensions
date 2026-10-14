@@ -82,13 +82,13 @@ export function createGithubTools(): ToolModule {
 
   // Fail fast: the `gh` CLI is the only backend for these tools. Without it the
   // extension registers nothing and reports the problem at session start, so
-  // the user gets one clear error instead of a dozen failing tool calls.
+  // the user gets one clear warning instead of a dozen failing tool calls.
   if (!isGhAvailable()) {
     return {
       register(_bus, ctx) {
         ctx.ui.notify(
           "gh CLI not found in PATH: GitHub read-only tools are disabled. Install GitHub CLI (https://cli.github.com/) and reload the session.",
-          "error",
+          "warning",
         );
       },
     };
