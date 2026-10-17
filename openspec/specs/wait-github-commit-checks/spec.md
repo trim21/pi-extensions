@@ -43,7 +43,7 @@
 #### Scenario: 共享语义不漂移
 
 - **WHEN** commit 等待轮询到 any(fail) / all(pass|skipped) / 超时
-- **THEN** 行为与 `wait-github-pr-checks` 一致（相同的载荷形状与判定结果），仅调用上下文标识为 `commit <短SHA>` 而非 `PR #N`
+- **THEN** 行为与 `wait-github-pr-checks` 一致：相同的载荷形状与判定结果，载荷不包含额外的调用上下文字段
 
 ## Implementation
 

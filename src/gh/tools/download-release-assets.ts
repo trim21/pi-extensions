@@ -156,9 +156,9 @@ export async function downloadReleaseAssets(
 
   const files = await listReleaseFiles(dir);
 
-  if (files.length === 0 && params.archive === undefined) {
+  if (view.assets.length === 0 && params.archive === undefined) {
     return structuredFailure(
-      `Nothing to download from ${effectiveRepo}@${view.tag_name}: the release has no assets (try archive for the source tarball). Available assets: ${assetNames.join(", ") || "(none)"}`,
+      `Nothing to download from ${effectiveRepo}@${view.tag_name}: the release has no assets (try archive for the source tarball).`,
     );
   }
 

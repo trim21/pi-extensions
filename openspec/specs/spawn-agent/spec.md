@@ -13,12 +13,12 @@
 #### Scenario: 从 markdown 加载
 
 - **WHEN** 读取 `~/.pi/agent/agents/*.md`
-- **THEN** 解析 YAML frontmatter（`name` / `description` / `tools` / `provider` / `model` / `thinkingLevel`）+ 正文作为 system prompt；校验失败的 md 被跳过
+- **THEN** 解析 YAML frontmatter（`name` / `description` / `tools` / `provider` / `model` / `thinkingLevel` / `sandbox`）+ 正文作为 system prompt；校验失败的 md 被跳过
 
 #### Scenario: 模型与工具解析
 
 - **WHEN** 解析子 agent 的模型与工具
-- **THEN** 按 frontmatter > `spawn-agent.json` 全局默认 > pi `settings.json` 默认的顺序解析
+- **THEN** 模型按 frontmatter > `spawn-agent.json` 全局默认 > pi `settings.json` 默认的顺序解析；工具只由 frontmatter 的 `tools` 声明决定，未声明时使用默认只读工具集，不存在全局默认或 settings 的二级回退
 
 ### Requirement: 只读默认
 
@@ -50,8 +50,8 @@
 
 #### Scenario: 工具描述给出返回契约与并发语义
 
-- **WHEN** 读取 `spawn-agent` 的工具描述
-- **THEN** 描述说明子 agent 看不到当前对话、只返回其最终回答（中间工具调用不可见）
+- **WHEN** 读取 `spawn-agent` 的工具描述与 `task` 参数描述
+- **THEN** 描述说明子 agent 在隔离 session 中运行、看不到当前对话、只返回其最终回答（中间工具调用不可见）
 - **AND** 描述说明同一条消息中的多个 `spawn-agent` 调用会并发执行
 
 #### Scenario: task 参数要求自包含
@@ -83,7 +83,7 @@
 #### Scenario: 输出截断
 
 - **WHEN** 结果超过 50KB
-- **THEN** 截断并注明，全量消息保留在 details
+- **THEN** 截断并注明；details 只保留折叠面板，不保留全量消息
 
 #### Scenario: 进度可见
 
@@ -123,13 +123,13 @@
 
 `src/spawn-agent.ts` 通过 pi SDK 的 `createAgentSession` 在**当前进程内**创建隔离 session（`SessionManager.inMemory`，非独立进程），`session.prompt("Task: " + task)` 阻塞到本轮 settle；session 内存态、不持久化。
 
-- **agent 清单**：`src/spawn-agent-agents.ts` 从 `~/.pi/agent/agents/*.md` 加载（仅用户级），YAML frontmatter（`name` / `description` / `tools` / `provider` / `model` / `thinkingLevel`）+ 正文作 system prompt；校验失败的 md 跳过；模型名列表启动时注入 `promptGuidelines`，改文件需 `/reload`。
+- **agent 清单**：`src/spawn-agent-agents.ts` 从 `~/.pi/agent/agents/*.md` 加载（仅用户级），YAML frontmatter（`name` / `description` / `tools` / `provider` / `model` / `thinkingLevel` / `sandbox`）+ 正文作 system prompt；校验失败的 md 跳过；模型名列表启动时注入 `promptGuidelines`，改文件需 `/reload`。
 - **模型 / 工具解析**：frontmatter > `spawn-agent.json` > pi `settings.json` 默认。
 - **面向模型的提示面**：工具带 `promptSnippet`（进入 system prompt 的 "Available tools" 清单）；工具描述写明「子 agent 看不到当前对话、只返回最终回答、同一条消息里的多个调用并发执行」；`task` 参数描述要求任务自包含（仓库路径、确切问题、期望返回的文件路径 + 行号）；`formatAgentListSection` 生成单条 guideline，先给委托判据（该委托 / 不该委托、并发发起、结论只作定位线索）再列可用子 agent 清单。
 - **工具映射**：frontmatter 声明的工具名经 `src/lib/tool-units.ts` 的 `TOOL_UNITS` 表挑出覆盖到的工具单元再由单个 inline 扩展工厂（`subagentToolsExtension`）注册：`read`/`edit`/`write` 与 `Read`/`Edit`/`Write` 分别落到两套文件工具集，`grep`/`glob`/`Grep`/`Glob` 落到搜索单元，`bash`/`Bash` 落到各自的 shell 单元；同一工具名不会重复注册；未声明 `tools` 时子 agent 只读。不再使用 `-e` 路径式加载（每个模块一份模块图，子代理里看不到完整工具集，且没有 per-agent 沙箱配置通道）。
 - **子代理的工具可用性**：`personalExtensions.disabledTools` / `enabledTools` 同样在子代理的总线里求值（子代理有自己的 `session_start` 与模型），被禁用的工具不会注册。
 - **子代理沙箱**：frontmatter `sandbox`（完整 bwrap 配置）作为固定沙箱注入 bash 的 runtime；未声明时用 `SUBAGENT_DEFAULT_SANDBOX`（`fs: readonly` + `network: block`）。两种情况下都不读用户 `sandbox.json`。
-- **输出**：结果截断 50KB（超出注明并保留全量消息在 details）；details 含 `messages`、`stderr`、`usage`、`model`、`stopReason`、`exitCode` 与折叠面板。
+- **输出**：结果截断 50KB（超出注明）；details 只含折叠面板 `pendant`（父 agent 看到的子 agent 结果），不再携带 `messages` / `stderr` / `usage` / `model` / `stopReason` / `exitCode` 等内部结果。
 - **中止**：父 signal → `session.abort()`，`stopReason ??= "aborted"`，exitCode 由 stopReason 推导。
 
-涉及文件：`src/spawn-agent.ts`、`src/spawn-agent-agents.ts`。
+涉及文件：`src/spawn-agent.ts`、`src/spawn-agent-agents.ts`、`src/spawn-agent-progress.ts`。

@@ -46,7 +46,7 @@ HTML 页面提取正文并转 markdown。
 #### Scenario: 文本/JSON 原样返回
 
 - **WHEN** 抓取到 `text/*`、JSON 或 XML
-- **THEN** 原样返回文本
+- **THEN** 返回文本内容，并去掉首尾空白
 
 ### Requirement: 文件落盘下载
 

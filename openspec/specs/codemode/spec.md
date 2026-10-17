@@ -2,7 +2,7 @@
 
 ## Purpose
 
-让模型用一段 JavaScript 编排本仓库的工具：脚本在没有宿主能力的 QuickJS VM 里执行，只有脚本的输出与返回值进入模型上下文，脚本发起的每次工具调用都与模型直接调用走同一套实现（含各自的审批）。
+让模型用一段 JavaScript 编排本仓库的工具：脚本在没有宿主能力的 QuickJS VM 里执行，只有脚本的输出与返回值进入模型上下文；脚本发起的工具调用与模型直接调用走同一套实现，需要人工授权的调用在脚本内直接失败。
 
 ## Requirements
 
@@ -114,7 +114,7 @@
 
 ### Requirement: 嵌套调用的执行
 
-脚本发起的每次嵌套调用 MUST 经本仓库工具总线的 `executeTool` 执行（参数校验与错误归一化由总线负责）。codemode 内 MUST NOT 出现任何审批：需要人工授权的嵌套调用（脚本 `fs.write` 写工作区外、`Bash` 申请沙箱外执行）MUST 在脚本内以 `CallFailedError` 直接失败，错误信息 MUST 说明该操作需要授权并建议改为直接调用该工具；这些调用 MUST NOT 产生宿主副作用。脚本之外的直接调用（模型直调同一工具）的审批 MUST 不受影响。本次调用的宿主上下文与调用方中止信号 MUST 传递给工具。工具结果的 `structuredResult.ok === true` 时，调用 MUST 在脚本内 resolve 为该结果的 `value`（解包后的结构化数据）；`ok === false` 时 MUST 在脚本内以 `CallFailedError` 失败，其 message 取自该结果的 `error`。结果不带 `structuredResult` 时 MUST resolve 为现有的文本（工具输出拍平）。调用失败 MUST 统一是 `CallFailedError`：工具抛出的异常、参数校验失败、结构化失败、工具名不可调用都走同一类型，脚本据此把「工具失败」与自身的运行期错误区分开。脚本可以选择捕获后继续执行。`structuredResult` MUST NOT 改变工具面向模型的文本输出、既有 `details` 或 `isError` 语义。
+脚本发起的每次嵌套调用 MUST 经本仓库工具总线的 `executeCodemodeTool` 执行（参数校验、结构化结果复核与错误归一化由总线负责）。codemode 内 MUST NOT 出现任何审批：需要人工授权的嵌套调用（脚本 `fs.write` 写工作区外、`Bash` 申请沙箱外执行）MUST 在脚本内以 `CallFailedError` 直接失败，错误信息 MUST 说明该操作需要授权并建议改为直接调用该工具；这些调用 MUST NOT 产生宿主副作用。脚本之外的直接调用（模型直调同一工具）的审批 MUST 不受影响。本次调用的宿主上下文与调用方中止信号 MUST 传递给工具。工具结果的 `structuredResult.ok === true` 时，调用 MUST 在脚本内 resolve 为该结果的 `value`（解包后的结构化数据）；`ok === false` 时 MUST 在脚本内以 `CallFailedError` 失败，其 message 取自该结果的 `error`。调用失败 MUST 统一是 `CallFailedError`：工具抛出的异常、参数校验失败、结构化失败、工具名不可调用都走同一类型，脚本据此把「工具失败」与自身的运行期错误区分开。脚本可以选择捕获后继续执行。`structuredResult` MUST NOT 改变工具面向模型的文本输出、既有 `details` 或 `isError` 语义。
 
 #### Scenario: 写类工具照常弹审批
 
@@ -135,11 +135,6 @@
 
 - **WHEN** 脚本调用一个结果的 `structuredResult.ok === false` 的工具
 - **THEN** 调用在脚本内以 `CallFailedError` reject，message 取自该结果的 `error`
-
-#### Scenario: 不带结构化结果的工具返回文本
-
-- **WHEN** 脚本调用一个结果不带 `structuredResult` 的工具并成功
-- **THEN** 调用 resolve 为该工具输出的文本
 
 #### Scenario: 工具失败在脚本内可捕获
 
@@ -332,7 +327,7 @@ toolcall 进度（`onUpdate`）MUST 复用同一块面板：脚本流式产生�
 
 `fs.read` MUST 返回文件全文的 UTF-8 文本，MUST NOT 加行号、MUST NOT 截断、MUST NOT 按大小设限（读到的内容不进模型上下文，放不下时以错误失败即可）；内容不是合法 UTF-8 时 MUST 以错误失败，MUST NOT 静默替换。读取成功 MUST 记入已读记账。
 
-`fs.write` MUST 只接受字符串内容、MUST 创建缺失的父目录。写入前 MUST 要求目标文件处于「已读且读后未变」状态（复用 `src/lib/file-reads.ts` 的记账，且与文件工具共用同一份 state：任一侧读过的文件另一侧都算已读），未读或读后内容被改 MUST 以错误失败；目标文件不存在时 MUST 允许直接写入。写入前的路径审批 MUST 复用 write-guard 的既有行为：工作区内与 `/tmp` 自动放行，工作区外弹审批并在预览里给出变更前后的 diff，headless 会话、Windows 与 `/bwrap-deny-request` 生效时 MUST 直接拒绝。写入成功后 MUST 把新内容记成已读，且脚本产生的已读 MUST 随 codemode 的工具结果持久化，使其在分支重放后仍然有效。
+`fs.write` MUST 只接受字符串内容、MUST 创建缺失的父目录。写入前 MUST 要求目标文件处于「已读且读后未变」状态（复用 `src/lib/file-reads.ts` 的记账，且与文件工具共用同一份 state：任一侧读过的文件另一侧都算已读），未读或读后内容被改 MUST 以错误失败；目标文件不存在时 MUST 允许直接写入。写入前的路径检查 MUST 复用 write-guard 的边界判定：工作区内与 `/tmp` 自动放行；工作区外的写入 MUST 在脚本内以 `CallFailedError` 直接失败，message MUST 说明需要授权并建议改为直接调用写类工具，MUST NOT 弹出审批框，MUST NOT 产生任何副作用；headless 会话、Windows 与 `/bwrap-deny-request` 生效时同样直接拒绝。写入成功后 MUST 把新内容记成已读，且脚本产生的已读 MUST 随 codemode 的工具结果持久化，使其在分支重放后仍然有效。
 
 `fs` 的声明 MUST 渲染进 codemode 的工具描述，使模型在写脚本前能看到这两个方法。
 
@@ -371,10 +366,10 @@ toolcall 进度（`onUpdate`）MUST 复用同一块面板：脚本流式产生�
 - **WHEN** 脚本 `fs.write` 一个不存在的路径
 - **THEN** 文件被创建，缺失的父目录一并创建，不要求先读
 
-#### Scenario: 写入沿用 write-guard 审批
+#### Scenario: 工作区外写入直接失败
 
 - **WHEN** 脚本 `fs.write` 一个工作区外的路径
-- **THEN** 与写类工具一致地弹出审批（预览包含变更前后的 diff），用户不批准时调用失败且文件不变
+- **THEN** 调用在脚本内以 `CallFailedError` 失败，错误信息说明需要授权并建议直接调用写类工具；不弹审批，文件不变
 
 #### Scenario: 受策略与平台约束
 
@@ -390,3 +385,9 @@ toolcall 进度（`onUpdate`）MUST 复用同一块面板：脚本流式产生�
 
 - **WHEN** 读取 codemode 的工具描述
 - **THEN** 描述里有 `fs.read` / `fs.write` 的声明，且 `ALL_TOOLS` 与工具重载列表里没有它们
+
+## Implementation
+
+- **store 容量**：`store.set` 单个值的 JSON 序列化上限 256 KiB，整表上限 1 MiB；超限抛 `RangeError`，不写入。
+- **VM 限制**：worker 里的 QuickJS 运行时堆上限 2 GiB，并设置 `maxStackSize` 把深递归变成脚本可捕获的 `RangeError`；不设置 `timeout_ms` 时脚本只受调用方中止约束。
+- **worker 产物**：`src/codemode/worker.js` 由 esbuild 打包为自包含单文件（`quickjs-wasi` 外部化），由 `new Worker(url)` 直接加载。

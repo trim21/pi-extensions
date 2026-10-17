@@ -22,12 +22,12 @@
 
 ### Requirement: 工具总线
 
-注册层 MUST 实现一个工具总线，提供：注册（按配置过滤后登记定义，并决定是否交给 pi 注册）、codemode-only 专用注册（登记一个永不交给 pi 的脚本工具）、codemode-only 执行入口、枚举（列出本次实际登记的工具定义）、按名查询、以及 `executeTool(name, args, options)`。经 codemode-only 路径注册的工具 MUST 以结构化结果作为结果：成功是 `{ ok: true; value }`（`value` 与该工具声明的 `structuredSchema` 匹配），结构化失败是 `{ ok: false; error }`；它的定义 MUST NOT 要求 pi 的 `AgentToolResult`（没有 `content` / `details`）。`executeTool` MUST 只服务交给 pi 的工具，收到 codemode-only 的工具名时 MUST 返回明确的错误结果。codemode-only 执行入口 MUST 能执行总线上的任意工具：脚本定义（`execute` 直接返回结构化结果）原样复核后返回，普通定义取其 `structuredResult`（工具结果里没有结构化结果时给 `{ ok: false, error }`）。命中 codemode-only 配置且声明了 `structuredSchema` 的工具 MUST 只登记进总线、MUST NOT 交给 pi 注册；命中 codemode-only 但没有 `structuredSchema` 的工具 MUST 照常直接注册，MUST NOT 被隐藏。其余通过过滤的工具 MUST 照常交给 pi 注册。枚举 MUST 同时包含为 pi 注册的工具与 codemode-only 工具。`executeTool` MUST 在调用前用工具自身的参数 schema 校验参数，MUST 把校验失败与工具抛出的异常归一化成错误结果返回，MUST NOT 把异常抛给调用方。总线 MUST 由工厂创建、状态由闭包持有，MUST NOT 使用模块级可变状态。工具总线 MUST 只包含本次实际登记（未命中无条件禁用、属于选中工具集）的工具。
+注册层 MUST 实现一个工具总线，提供：注册（按配置过滤后登记定义，并决定是否交给 pi 注册）、codemode-only 专用注册（登记一个永不交给 pi 的脚本工具）、codemode-only 执行入口、枚举（列出本次实际登记的工具定义）、按名查询、以及 `executeTool(name, args, options)`。经 codemode-only 路径注册的工具 MUST 以结构化结果作为结果：成功是 `{ ok: true; value }`（`value` 与该工具声明的 `structuredSchema` 匹配），结构化失败是 `{ ok: false; error }`；它的定义 MUST NOT 要求 pi 的 `AgentToolResult`（没有 `content` / `details`）。`executeTool` MUST 只服务有 pi 结果形状的工具：交给 pi 的普通工具，以及命中 `codemodeOnlyTools`、仍保留普通 pi 结果形状的工具；收到代码层 codemode-only 脚本工具时 MUST 返回明确的错误结果，脚本工具只能经 codemode-only 执行入口运行。codemode-only 执行入口 MUST 能执行总线上的任意工具：脚本定义（`execute` 直接返回结构化结果）原样复核后返回，普通定义取其 `structuredResult`（工具结果里没有结构化结果时给 `{ ok: false, error }`）。命中 codemode-only 配置且声明了 `structuredSchema` 的工具 MUST 只登记进总线、MUST NOT 交给 pi 注册；命中 codemode-only 但没有 `structuredSchema` 的工具 MUST 照常直接注册，MUST NOT 被隐藏。其余通过过滤的工具 MUST 照常交给 pi 注册。枚举 MUST 同时包含为 pi 注册的工具与 codemode-only 工具。`executeTool` MUST 在调用前用工具自身的参数 schema 校验参数，MUST 把校验失败与工具抛出的异常归一化成错误结果返回，MUST NOT 把异常抛给调用方；成功时 MUST 保留工具结果自身的 `isError` 标记，MUST NOT 无条件改成成功。总线 MUST 由工厂创建、状态由闭包持有，MUST NOT 使用模块级可变状态。工具总线 MUST 只包含本次实际登记（未命中无条件禁用、属于选中工具集）的工具。
 
 #### Scenario: 按名执行已注册工具
 
 - **WHEN** 同入口内的模块用 `executeTool` 调用某个已注册工具并传入合法参数
-- **THEN** 得到该工具的执行结果，等价于模型直接调用它
+- **THEN** 得到该工具的执行结果，等价于模型直接调用它（包括工具自己设置的 `isError`）
 
 #### Scenario: 参数不合法
 
@@ -46,8 +46,8 @@
 
 #### Scenario: codemode-only 工具只登记进总线
 
-- **WHEN** 一个声明了 `structuredSchema` 的工具命中 codemode-only 配置
-- **THEN** 它出现在总线的枚举与按名查询里，`executeTool` 能执行它，但它 MUST NOT 被交给 pi 注册
+- **WHEN** 一个声明了 `structuredSchema` 的普通工具命中 codemode-only 配置
+- **THEN** 它出现在总线的枚举与按名查询里，仍保留普通 pi 结果形状，`executeTool` 能执行它，但它 MUST NOT 被交给 pi 注册
 
 #### Scenario: 没有结构化输出的工具保持直接注册
 
@@ -66,7 +66,7 @@
 
 #### Scenario: executeTool 不执行 codemode-only 工具
 
-- **WHEN** 用 `executeTool` 调用一个 codemode-only 工具
+- **WHEN** 用 `executeTool` 调用一个代码层注册的 codemode-only 脚本工具
 - **THEN** 返回明确的错误结果（指明该工具只能经 codemode 调用），不执行工具
 
 #### Scenario: 专用注册路径仍受禁用过滤
@@ -112,7 +112,7 @@
 #### Scenario: 非法取值给出警告
 
 - **WHEN** `fileIo` 不是 `claude-code` / `opencode`，或某条目既不是字符串也不是 `{ tools, models }`
-- **THEN** 该条被忽略，其余配置照常生效，并给出指明该字段与取值的警告
+- **THEN** 该条被忽略，其余配置照常生效；`fileIo` 的警告带取值，数组条目的警告指明字段路径与下标
 
 #### Scenario: 未知工具名给出警告
 
@@ -173,7 +173,7 @@
 
 ### Requirement: 注册不建立资源
 
-注册工具定义 MUST 只登记定义：注册本身 MUST NOT 触发工具执行路径上的资源创建（子进程、引擎连接、LSP 服务器进程、外部命令）。会话启动时因注册而额外建立的资源 MUST 为零。模块既有的资源时机不变（例如 talk 在扩展加载期打开 SQLite、aft 在会话启动期创建 bridge 池、LSP 服务在会话启动期按配置创建，都是本变更之前的行为，本变更不改变它们）。
+注册工具定义 MUST 只登记定义：注册本身 MUST NOT 触发工具执行路径上的资源创建（子进程、引擎连接、LSP 服务器进程、外部命令）。会话启动时因注册而额外建立的资源 MUST 为零。模块既有的资源时机不变（例如 talk 在扩展加载期打开 SQLite、aft 在会话启动期创建 bridge 池、LSP 服务在会话启动期按配置创建、codemode 在注册时编译 quickjs wasm，都是本变更之前的行为，本变更不改变它们）。
 
 #### Scenario: 未使用的工具不产生副作用
 
@@ -208,3 +208,22 @@
 
 - **WHEN** 某工具经代码层 codemode-only 入口注册，且配置里没有提到它
 - **THEN** 它仍不交给 pi；配置只能禁用（`disabledTools`），不能让它变成模型可直接调用的工具
+
+### Requirement: 工具集不可用时的提示
+
+工具集因环境原因不可用时（依赖缺失、平台不支持），入口路径 MUST 在会话启动时提示一次原因，MUST NOT 静默跳过。提示由该工具集的工厂在不可用时返回的模块在注册时发出，因此入口与按路径独立加载两条路径行为一致。
+
+#### Scenario: 依赖缺失
+
+- **WHEN** `gh` 可执行文件不在 PATH
+- **THEN** 会话启动时提示一次 GitHub 只读工具已禁用及原因，且不注册这些工具
+
+#### Scenario: 平台不支持
+
+- **WHEN** 当前平台是 Windows（gh / spawn-agent 仅支持 POSIX）
+- **THEN** 会话启动时提示一次对应工具集已禁用，且不注册这些工具
+
+#### Scenario: 工具集可用时没有这类提示
+
+- **WHEN** 依赖与平台都满足
+- **THEN** 不产生任何不可用提示，工具照常注册

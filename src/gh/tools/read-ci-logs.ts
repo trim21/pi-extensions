@@ -27,6 +27,9 @@ import { ciLogsSchema } from "../schemas.js";
 // 缓存检查避免重复网络请求。闭包状态不与其他扩展共享，key 无需全局前缀。
 const seq = createSeqState();
 
+/** GitHub 尚未开始执行的 job 状态：此时还没有日志可下载。 */
+const NOT_STARTED_JOB_STATUSES = new Set(["queued", "waiting", "requested", "pending"]);
+
 /**
  * `OWNER/REPO` from a job's `run_url`
  * (`https://api.github.com/repos/OWNER/REPO/actions/runs/123`). The path is
@@ -375,9 +378,9 @@ async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<CiLogs
     );
   }
 
-  if (target.status === "queued") {
+  if (NOT_STARTED_JOB_STATUSES.has(target.status)) {
     return structuredFailure(
-      `Job "${target.name}" is still queued — no logs available yet. Use \`watch-github-run\` to wait for it to start, then retry.`,
+      `Job "${target.name}" has not started yet (status: ${target.status}) — no logs available. Use \`watch-github-run\` to wait for it to start, then retry.`,
     );
   }
 

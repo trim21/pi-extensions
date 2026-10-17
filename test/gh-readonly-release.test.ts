@@ -181,4 +181,19 @@ describe("downloadReleaseAssets", () => {
       }),
     ).rejects.toThrow("the release has: checksums.txt");
   });
+
+  it("reports a release with no assets even when the cache directory has old files", async () => {
+    const tag = `v0.0.0-test-${process.pid}-${Math.random().toString(36).slice(2)}`;
+    const dir = releaseAssetDir("cli/cli", tag);
+    dirs.push(dir);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "old.txt"), "old");
+
+    const result = await downloadReleaseAssets(stubGh({ assets: [] }), {
+      params: { repo: "cli/cli", tag },
+      ctx: {},
+    });
+
+    expect(result).toMatchObject({ ok: false });
+  });
 });

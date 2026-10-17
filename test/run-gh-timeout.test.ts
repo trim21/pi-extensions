@@ -31,11 +31,13 @@ import { runGh } from "../src/lib/gh-process.js";
 /** A fake gh child process that never produces output and only exits when told. */
 class FakeChildProcess extends EventEmitter {
   killed = false;
+  killSignals: (NodeJS.Signals | number | undefined)[] = [];
   stdout = new PassThrough();
   stderr = new PassThrough();
 
   kill(_signal?: NodeJS.Signals | number): boolean {
     this.killed = true;
+    this.killSignals.push(_signal);
     // Mimic real behavior: a signal-killed process reports code=null on close.
     this.emit("close", null, _signal);
     return true;
@@ -73,6 +75,7 @@ describe("runGh timeout", () => {
     expect(result.code).not.toBe(0);
     // -1 is the sentinel for "did not exit normally" (vs. gh's real failure code 1)
     expect(result.code).toBe(-1);
+    expect(fakeProc.killSignals).toEqual(["SIGTERM"]);
   });
 
   it("uses a 10-minute default timeout", async () => {

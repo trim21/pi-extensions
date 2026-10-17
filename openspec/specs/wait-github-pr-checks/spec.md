@@ -16,7 +16,7 @@
 - check run：未 `completed`（conclusion 为空）→ pending；`success` → pass；`skipped` / `neutral` / `stale` → skipped；`failure` / `timed_out` / `cancelled` / `startup_failure` → fail；`action_required` → action_required；未知 conclusion → pending
 - check suite：MUST 只纳入**已结束（`status: completed` 且 conclusion 非空）且没有任何 check run** 的 suite（未结束的 suite 是 app 在每个 commit 上预建的空壳，如 netlify / vercel / renovate，MUST NOT 单独立条；有 check run 的 suite 已由其 check run 代表，MUST NOT 重复计入）；`action_required` → action_required；`success` → pass；`skipped` / `neutral` / `stale` → skipped；`failure` / `timed_out` / `cancelled` / `startup_failure` → fail；未知 conclusion → pending
 
-`action_required` 表示「等待人工审批，不会自行开始」（fork PR 首次贡献者的 workflow 在批准前不创建 check run，只留下一个 `action_required` 的 suite 与 workflow run），与 `skipped`（终态、不会运行）区分。每个条目 MUST 带 `suite_id`（check run 与其所属 suite 摊平出来的条目为该 suite 的 id，commit status 为 null），使平坦列表可按 suite 分组。suite 条目的名字、触发事件、链接与 run id MUST 取自 `check_suite_id` 匹配到的 workflow run；匹配不到时事件留空、名字 MUST 退化为该 suite 的 app（MUST NOT 静默丢弃该条目）。
+`action_required` 表示「等待人工审批，不会自行开始」（fork PR 首次贡献者的 workflow 在批准前不创建 check run，只留下一个 `action_required` 的 suite 与 workflow run），与 `skipped`（终态、不会运行）区分。每个条目 MUST 带 `suiteId`（check run 与其所属 suite 摊平出来的条目为该 suite 的 id，commit status 为 null），使平坦列表可按 suite 分组。suite 条目的名字、触发事件、链接与 run id MUST 取自 `check_suite_id` 匹配到的 workflow run；匹配不到时事件留空、名字 MUST 退化为该 suite 的 app（MUST NOT 静默丢弃该条目）。
 
 #### Scenario: 同名不同来源分别保留
 
@@ -36,7 +36,7 @@
 #### Scenario: 无 check run 的 suite 单独成条
 
 - **WHEN** 某 commit 上存在已结束、且没有 check run 的 suite（等待维护者审批的 workflow）
-- **THEN** 它作为独立检查出现在快照里，`bucket` 为 `action_required`，`suite_id` 为该 suite 的 id，名字 / event / 链接 / run id 取自匹配到的 workflow run
+- **THEN** 它作为独立检查出现在快照里，`bucket` 为 `action_required`，`suiteId` 为该 suite 的 id，名字 / event / 链接 / run id 取自匹配到的 workflow run
 
 #### Scenario: 未结束的空壳 suite 不产生条目
 
@@ -46,7 +46,7 @@
 #### Scenario: 有 check run 的 suite 不重复计数
 
 - **WHEN** 某 suite 有它自己的 check runs
-- **THEN** 该 suite 本身不产生额外条目，快照里只有它的 check runs（各自带该 suite 的 `suite_id`），检查总数与引入 suite 数据源之前一致
+- **THEN** 该 suite 本身不产生额外条目，快照里只有它的 check runs（各自带该 suite 的 `suiteId`），检查总数与引入 suite 数据源之前一致
 
 ### Requirement: 等待与返回语义
 
@@ -74,8 +74,8 @@
 
 #### Scenario: 超时
 
-- **WHEN** 截止时仍有检查 pending（且没有 action_required，否则已按上一场景提前返回）
-- **THEN** 返回 `status: "pending"` 的在途快照（载荷列出未完成检查），不判 PASSED / FAILED，也不抛错
+- **WHEN** 截止时仍有检查 pending，且快照里没有 fail 或 action_required 检查
+- **THEN** 返回 `status: "pending"` 的在途快照（载荷列出未完成检查），不判 PASSED / FAILED，也不抛错；快照里已有 fail 时按「任一失败」返回 FAILED
 
 #### Scenario: 轮询容错
 
@@ -104,7 +104,7 @@ Actions jobs 详情只服务于 FAILED 载荷里的失败 job 明细（`failedJo
 ## Implementation
 
 - 分层（均在 `src/gh/base.ts`，后两层为纯函数、可独立单测）：`mergeChecks` 合并与 bucket 映射（commit statuses + check runs + 已结束且没有 check run 的 suites，后者的元数据由 `checkSuiteId` 匹配 workflow run 补齐）→ `pollPrChecks` 等待循环（返回 `completed / fail_fast / awaiting_approval / timeout` 与最终快照、`elapsedMs`）→ `checksVerdict` 判定汇总（`status` + `failedJobs`）；工具入口在 `src/gh/tools/wait-pr-checks.ts`，与 `wait-commit-checks.ts` 共享 `waitChecksReport` 编排核心。
-- API 客户端：`src/lib/github.ts` 的 `createGithubChecks(api)`（octokit；`api` 是与 search / reads 共用的 `createGithubApi` accessor，token 只取一次并闭包缓存，401 时丢弃缓存重试一次），提供 `statuses` / `checkRuns`（带 `checkSuiteId`）/ `suites` / `workflowRuns` / `actionJobs`（全部 `octokit.paginate` 分页，per_page=100）。check run 的 event 与 suite 的名字/event/链接都来自同一次 `workflowRuns`（`run.check_suite_id` 是 suite 的 join key）。
+- API 客户端：`src/lib/github.ts` 的 `createGithubChecks(api)`（octokit；`api` 是与 search / reads 共用的 `createGithubApi` accessor，token 只取一次并闭包缓存，401 时丢弃缓存重试一次），提供 `statuses` / `checkRuns`（带 `checkSuiteId`）/ `suites` / `workflowRuns` / `actionJobs`。`statuses` 用单次 `repos.getCombinedStatusForRef({ per_page: 100 })`，其余四个用 `octokit.paginate`（per_page=100）。check run 的 event 与 suite 的名字/event/链接都来自同一次 `workflowRuns`（`run.check_suite_id` 是 suite 的 join key）。
 - signal 由调用方构造并持有，轮询层只观察不取消；工具侧 `signal ?? new AbortController().signal`。
 - 单轮失败不终止轮询；截止时若从未成功取得任何一轮则抛出最后的错误。
 - 测试：`test/wait-pr-checks.test.ts`，不 mock API 客户端层，直接单测合并映射、等待循环与判定汇总；真实 PR 快照由 `test/pr-status.test.ts` 的 cassette（`test/fixtures/github/awaiting-approval-*.json`，录自 `valkey-io/libvalkey-py#89`）覆盖。

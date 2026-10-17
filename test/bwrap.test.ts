@@ -102,13 +102,19 @@ describe("resolveBwrap", () => {
 
   it("resolves fs readonly with network allow-all（旧 mode 矩阵表达不出的组合）", () => {
     const resolved = resolveBwrap({
-      fs: { mode: "readonly", writablePaths: [".", "/tmp"], extraWritablePaths: [], denyPaths: [] },
+      fs: {
+        mode: "readonly",
+        writablePaths: [".", "/tmp"],
+        extraWritablePaths: ["/data"],
+        denyPaths: [],
+      },
       network: { mode: "allow-all", allowlist: [] },
       extraArgs: [],
     });
 
     expect(resolved.bwrapEnabled).toBe(true);
     expect(resolved.writablePaths).toEqual([]);
+    expect(resolved.extraWritablePaths).toEqual([]);
   });
 
   it("resolves fs allow-all：沙箱内整根可写，但 network block 仍需包裹", () => {
@@ -242,6 +248,22 @@ describe("buildBwrapArgs", () => {
       "/data/x",
       "/data/x",
     ]);
+  });
+
+  it("readonly ignores extra writable paths end to end", async () => {
+    const resolved = resolveBwrap({
+      fs: {
+        mode: "readonly",
+        writablePaths: [".", "/tmp"],
+        extraWritablePaths: ["/data/x"],
+        denyPaths: [],
+      },
+      network: { mode: "block", allowlist: [] },
+      extraArgs: [],
+    });
+    const args = await buildBwrapArgs(resolved, "/ws");
+
+    expect(args).not.toContain("/data/x");
   });
 
   it("deny paths: trailing slash means dir, otherwise file", async () => {

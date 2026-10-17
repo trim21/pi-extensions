@@ -141,7 +141,7 @@ export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
     network: config.network.mode,
     bwrapEnabled: config.fs.mode !== "allow-all" || config.network.mode !== "allow-all",
     bwrapPath: config.bwrapPath,
-    // readonly 无条件去掉默认可写路径（extraWritablePaths 仍是显式开口，保留）；
+    // readonly 无条件清空全部可写路径（含 extraWritablePaths）；
     // allow-all 在沙箱内把整棵根挂成可写，保护绑定（.pi/.agent/.git）随之取消。
     writablePaths:
       config.fs.mode === "readonly"
@@ -149,7 +149,7 @@ export function resolveBwrap(config: BwrapConfig): ResolvedBwrap {
         : config.fs.mode === "allow-all"
           ? ["/"]
           : config.fs.writablePaths,
-    extraWritablePaths: config.fs.extraWritablePaths,
+    extraWritablePaths: config.fs.mode === "readonly" ? [] : config.fs.extraWritablePaths,
     denyPaths: config.fs.denyPaths,
     extraArgs: config.extraArgs,
     networkAllowlist: config.network.allowlist,
