@@ -1,34 +1,43 @@
 /**
- * 纯沙箱执行层：加载配置 → 解析执行策略 → 需要时现建 netns 网络栈 → 在 bwrap 里跑命令。
+ * 纯沙箱执行层：加载配置 → 解析执行策略 → 需要时驱动原生执行器跑命令。
  *
  * 这里刻意不含 UI、审批与会话上下文（那些属于扩展层 runtime.ts）：
  * pi 的 Bash 工具、`node bin/sandbox.ts` 和集成测试共用这条路径，
  * 因此沙箱行为可以脱离 agent 循环单独复现和验证。
  *
  * 唯一的调用方交互是 `onData`（流式输出）与 `signal` / `timeout`（取消）；
- * `log` / `onNetworkStack` 是诊断出口，用于看 holder（unshare + mihomo）与
- * slirp4netns 的原始日志——网络栈起不来时只有它们能说明原因。
+ * `log` 是诊断出口，用于看执行器（网络栈 / slirp4netns）的原始日志——网络栈起不来时
+ * 只有它们能说明原因。
  */
 
 import { existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
+import process from "node:process";
 
-import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
+import { createLocalBashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
 
 import { expandHome } from "../lib/path.js";
 import {
+  buildMountPlan,
   type BwrapConfig,
-  createNetworkStack,
+  type ExecutorDiagnostics,
+  findBwrap,
   type FsMode,
   getBwrapConfigPaths,
   loadBwrapConfig,
   type NetworkMode,
-  type NetworkStackLog,
   resolveBwrap,
   resolveBwrapPath,
   type ResolvedBwrap,
 } from "./core.js";
-import { buildBwrapInvocation, createBwrapBashOperations, invocationArgv } from "./exec.js";
-import type { NetworkStack, NetworkStackStopResult } from "./network-stack.js";
+import {
+  MIHOMO_TUN_MTU,
+  resolveDnsServers,
+  resolveMihomoPath,
+  resolveSlirp4netnsPath,
+  runSandboxExecutor,
+  type SandboxPolicy,
+} from "./executor.js";
 
 export interface SandboxConfigInput {
   /** 沙箱工作区：默认配置文件的查找目录，也是 writablePaths 中 "." 的解析基准。 */
@@ -50,23 +59,19 @@ export interface SandboxRunOptions {
   commandCwd?: string;
   /** 流式输出回调（stdout 与 stderr 已合并）。 */
   onData: (data: Buffer) => void;
-  /** 取消执行：kill 整个进程组并以 AbortError 结束。 */
+  /** 取消执行：关执行器 stdin 触发内核级清理，必要时再终止执行器进程。 */
   signal?: AbortSignal;
-  /** 超时秒数：kill 整个进程组并以 TimeoutError 结束。 */
+  /** 超时秒数：交给执行器处理（pidfd 终止），以 TimeoutError 结束。 */
   timeout?: number;
   /** 调用方已决定不经沙箱（审批通过的全权限、Windows）。fs 与 network 均 allow-all 时无需显式设置。 */
   unsandboxed?: boolean;
-  /** 网络栈子进程输出转发，仅诊断用（默认丢弃）。 */
-  log?: NetworkStackLog;
-  /** 网络栈就绪回调：取 holder pid 与 mihomo 配置路径手动排查。 */
-  onNetworkStack?: (stack: NetworkStack) => void;
+  /** 执行器诊断输出转发（`[netstack] ` 前缀行），默认丢弃。 */
+  log?: ExecutorDiagnostics;
 }
 
 export interface SandboxRunResult {
   /** 命令退出码；被信号杀死时为 null。 */
   exitCode: number | null;
-  /** 命令运行期间网络栈异常退出时落盘的诊断日志路径（正常停栈没有这个字段）。 */
-  networkStackLog?: string;
 }
 
 /** 把 "."/"~" 形式的路径收敛成绝对路径，使执行策略自成一体、可断言。 */
@@ -106,9 +111,66 @@ export function loadSandboxConfig(input: SandboxConfigInput): ResolvedBwrap {
   return resolveSandboxPaths(resolveBwrap(configured), workspace);
 }
 
+interface SandboxPolicyInput {
+  /** writablePaths 中 "." 与 PROTECTED_DIRS / .git 的解析基准。 */
+  workspace: string;
+  command: string;
+  commandCwd: string;
+  timeout?: number;
+}
+
 /**
- * 在 resolved 描述的沙箱里执行一条命令；network limited 模式下现建现停网络栈。
- * 超时与取消的错误语义由底层 operations.exec 抛出（TimeoutError / AbortError）。
+ * 把执行策略（ResolvedBwrap + 本次命令）翻译成执行器的能力描述。
+ * 路径语义（realpath、"." 展开、工作区保护）在这一步全部落地；执行器只按计划翻译 bwrap 参数。
+ */
+async function buildSandboxPolicy(
+  resolved: ResolvedBwrap,
+  input: SandboxPolicyInput,
+): Promise<SandboxPolicy> {
+  const home = process.env.HOME;
+  if (home === undefined) {
+    throw new Error("HOME is not set; refusing to run bash in a clean environment");
+  }
+  const plan = await buildMountPlan(resolved, input.workspace);
+  const limited = resolved.network === "limited";
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  return {
+    root: plan.root,
+    mounts: plan.mounts,
+    extraArgs: resolved.extraArgs,
+    network: {
+      mode: resolved.network,
+      allowlist: resolved.networkAllowlist,
+      // DNS 服务器由 TS 读取（执行器不自行发现）；只有 limited 模式用得上
+      dnsServers: limited ? await resolveDnsServers() : [],
+    },
+    mihomo: { path: limited ? resolveMihomoPath(resolved.mihomoPath) : "", mtu: MIHOMO_TUN_MTU },
+    slirp4netns: { path: limited ? resolveSlirp4netnsPath(resolved.slirp4netnsPath) : "" },
+    bwrap: { path: findBwrap(resolved.bwrapPath) },
+    command: input.command,
+    // 沙箱内不透传 PATH，execvp 的默认路径可能找不到 bash（如 NixOS），故在父进程解析绝对路径
+    shell: getShellConfig().shell,
+    cwd: input.commandCwd,
+    // 干净环境：不继承父进程 env/PATH，由 bash -lc 从 /etc/profile 与用户 profile 重建
+    env: {
+      HOME: home,
+      SHELL: "/bin/bash",
+      TERM: "dumb",
+      LANG: "C.UTF-8",
+      // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
+      PATH: "/usr/local/bin:/usr/bin:/bin",
+    },
+    ...(uid !== undefined && { uid }),
+    ...(gid !== undefined && { gid }),
+    // 执行器用整数秒；小数向上取整，避免 0 < timeout < 1 被折算成"无超时"
+    timeoutSeconds: input.timeout === undefined ? 0 : Math.max(1, Math.ceil(input.timeout)),
+  };
+}
+
+/**
+ * 在 resolved 描述的沙箱里执行一条命令；沙箱路径交给原生执行器（网络栈由它现建现停）。
+ * 超时与取消的错误语义由执行器与本地 operations 抛出（TimeoutError / AbortError）。
  */
 export async function runInSandbox(
   resolved: ResolvedBwrap,
@@ -117,54 +179,33 @@ export async function runInSandbox(
   const workspace = expandHome(options.workspace);
   const commandCwd = expandHome(options.commandCwd ?? workspace);
   const local = options.unsandboxed === true || !resolved.bwrapEnabled;
-  // 每次执行现建现停网络栈（起栈 ~40ms、停栈 ~100ms），作用域结束即停栈：allowlist 变更即时生效
-  const stack = local ? undefined : await createNetworkStack(resolved, options.log);
-  let result: SandboxRunResult | undefined;
-  let failure: unknown;
-  try {
-    if (stack) {
-      options.onNetworkStack?.(stack);
-    }
-    const operations = local
-      ? createLocalBashOperations()
-      : createBwrapBashOperations(resolved, workspace, stack);
+  if (local) {
+    const operations = createLocalBashOperations();
     const { exitCode } = await operations.exec(options.command, commandCwd, {
       onData: options.onData,
       signal: options.signal,
       timeout: options.timeout,
     });
-    result = { exitCode };
-  } catch (error) {
-    failure = error;
+    return { exitCode };
   }
-  // 停栈放在命令结束之后、结果返回之前：网络栈若在命令运行期间异常退出，停栈返回的
-  // 日志路径要能附到失败信息上（成功路径不打扰用户，也不改变命令结果）
-  let stopResult: NetworkStackStopResult | undefined;
-  try {
-    stopResult = await stack?.stop();
-  } catch {
-    // best-effort：停栈失败（进程已退出/目录删除失败）不掩盖命令结果
-  }
-  if (failure !== undefined) {
-    if (!(failure instanceof Error)) {
-      // 非 Error 抛出（字符串 / 对象）：保留字符串内容，其余不渲染成 [object Object]
-      throw new Error(
-        typeof failure === "string" ? failure : "Sandbox command failed (non-error value thrown)",
-      );
-    }
-    if (stopResult?.exitedEarly === true) {
-      const detail =
-        stopResult.logPath === undefined
-          ? "(network stack exited during the command; diagnostics could not be written)"
-          : `(network stack diagnostics: ${stopResult.logPath})`;
-      failure.message = `${failure.message}\n${detail}`;
-    }
-    throw failure;
-  }
-  return {
-    ...(result ?? { exitCode: null }),
-    ...(stopResult?.logPath !== undefined && { networkStackLog: stopResult.logPath }),
-  };
+  // cwd 不存在时执行器会以用法错误退出，这里先给出与本地执行一致的明确错误
+  await stat(commandCwd).catch(() => {
+    throw new Error(
+      `Working directory does not exist: ${commandCwd}\nCannot execute bash commands.`,
+    );
+  });
+  const policy = await buildSandboxPolicy(resolved, {
+    workspace,
+    command: options.command,
+    commandCwd,
+    ...(options.timeout !== undefined && { timeout: options.timeout }),
+  });
+  const { exitCode } = await runSandboxExecutor(policy, {
+    onData: options.onData,
+    ...(options.signal !== undefined && { signal: options.signal }),
+    ...(options.log?.diagnostic && { onDiagnostic: options.log.diagnostic }),
+  });
+  return { exitCode };
 }
 
 /** 一步式入口：按配置加载策略并在对应沙箱里执行命令（CLI 与集成测试用）。 */
@@ -172,39 +213,4 @@ export async function runSandboxCommand(
   options: SandboxConfigInput & Omit<SandboxRunOptions, "unsandboxed">,
 ): Promise<SandboxRunResult> {
   return runInSandbox(loadSandboxConfig(options), options);
-}
-
-/** holder 尚未启动时，预览 argv 中标记 holder pid 位置的占位符。 */
-export const HOLDER_PID_PLACEHOLDER = "<HOLDER_PID>";
-
-export interface SandboxPreview {
-  /** 完整 argv，逐项给出（结构化输出，不拼 shell 文本，无需 quoting 即可读懂）。 */
-  argv: string[];
-  /** 沙箱内环境（不继承父进程）。 */
-  env: Record<string, string>;
-  /** 需要先有 netns holder 才能真正执行（此时 argv 中的 pid 可能是 HOLDER_PID_PLACEHOLDER）。 */
-  needsNetworkStack: boolean;
-}
-
-/**
- * 打印将要执行的命令行（`--print-args`）。与 `execInvocation` 共用同一段组装，
- * 不存在「打印的是一回事、跑的是另一回事」的漂移。
- */
-export async function previewSandboxCommand(
-  resolved: ResolvedBwrap,
-  options: Pick<SandboxRunOptions, "workspace" | "command" | "commandCwd" | "unsandboxed"> & {
-    holderPid?: number;
-  },
-): Promise<SandboxPreview> {
-  const workspace = expandHome(options.workspace);
-  const invocation = await buildBwrapInvocation(resolved, workspace, options.command);
-  if (!invocation.needsNetworkStack || options.unsandboxed === true) {
-    return { argv: invocationArgv(invocation), env: invocation.env, needsNetworkStack: false };
-  }
-  return {
-    // holder 未启动时用占位符标出 pid 的位置
-    argv: invocationArgv(invocation, options.holderPid ?? HOLDER_PID_PLACEHOLDER),
-    env: invocation.env,
-    needsNetworkStack: true,
-  };
 }

@@ -7,6 +7,24 @@ on:
     branches: [master]
 
 jobs:
+  # 原生沙箱执行器（Go）：vet / build / test 与 Node 版本无关，单独跑一份。
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/go.mod
+          cache-dependency-path: native/go.sum
+
+      - name: go vet / build / test
+        working-directory: native
+        run: |
+          go vet ./...
+          go build -o /tmp/sandbox .
+          go test ./...
+
   # lint / tsc / prettier 与 Node 版本无关，单独跑一份即可，不放进下面的矩阵。
   lint:
     runs-on: ubuntu-latest
@@ -48,6 +66,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # 构建原生执行器：bwrap-sandbox.test.ts 的"原生执行器"用例组用最小策略实跑探测，
+      # 二进制在位且环境允许嵌套 user/pid namespace 时才会真正执行（否则整组跳过）。
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/go.mod
+          cache-dependency-path: native/go.sum
+
+      - name: Build native sandbox executor
+        run: pnpm run build:native
+
       # 沙箱用例需要 bwrap / mihomo / slirp4netns，claude-code 的 Glob 工具与它的测试直接
       # spawn `rg`：这些都不预装在 ubuntu-latest，统一与开发机一致用 pixi 装到全局环境
       # （mihomo 来自自建 channel）。装最新版而不钉版本：上游更新导致的失败会直接出现在
@@ -66,13 +94,13 @@ jobs:
           pixi global install ripgrep
           echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
 
-      # Ubuntu 24.04 起 AppArmor 默认限制非特权 user namespace，而 bwrap 与网络栈都要靠它
-      # 建 namespace；不放开的话真实沙箱用例会被探测整组跳过（CI 上一直是跳过的）。
+      # Ubuntu 24.04 起 AppArmor 默认限制非特权 user namespace，而 bwrap 与原生执行器
+      # 都要靠它建 namespace；不放开的话真实沙箱用例会被探测整组跳过（CI 上一直如此）。
       - name: Allow unprivileged user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      # 真实沙箱用例依赖宿主环境：DNS 指向 loopback stub（如 127.0.0.53）时沙箱内的查询
-      # 不进 TUN，过滤进程的 dns-hijack 拦不到。用例失败时要能看到这些事实。
+      # 真实沙箱用例依赖宿主环境：DNS 指向 loopback stub（如 127.0.0.53）时，沙箱内的
+      # 查询不进 TUN，mihomo 的 dns-hijack 拦不到，解析必然失败。用例失败时要能看到这些事实。
       - name: Sandbox environment facts
         run: |
           echo "--- /etc/resolv.conf ---"
@@ -116,6 +144,7 @@ jobs:
   # 通过就成立；也不要加 `if: always()`，那会让它在矩阵失败时也成功。
   all-checks:
     needs:
+      - native
       - lint
       - test
     runs-on: ubuntu-slim # 只跑 echo，不需要 ubuntu-latest 的完整镜像与预装工具缓存

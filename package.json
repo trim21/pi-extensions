@@ -14,6 +14,7 @@
   "files": [
     "src",
     "bin/typescript-options.mjs",
+    "bin/native",
     "README.md"
   ],
   "publishConfig": {
@@ -27,7 +28,7 @@
     "test:coverage": "vitest run --coverage",
     "sandbox": "jiti bin/sandbox.ts",
     "aft-search": "jiti bin/aft-search.ts",
-    "build:holder": "esbuild src/bwrap/holder.ts --format=esm --target=node24 --outfile=src/bwrap/holder.js",
+    "build:native": "cd native && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags \"-s -w\" -o ../bin/native/linux-x64/sandbox . && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags \"-s -w\" -o ../bin/native/linux-arm64/sandbox .",
     "prepare": "husky",
     "build:codemode-worker": "esbuild src/codemode/worker.ts --bundle --platform=node --external:quickjs-wasi --format=esm --target=node24 --outfile=src/codemode/worker.js"
   },

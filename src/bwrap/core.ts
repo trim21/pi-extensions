@@ -11,7 +11,6 @@ import { Value } from "typebox/value";
 import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { expandHome } from "../lib/path.js";
 import { type ApprovalRule } from "./approval-rules.js";
-import { type NetworkStack, resolveDnsServers, startNetworkStack } from "./network-stack.js";
 
 const PROTECTED_DIRS = [".pi", ".agent"];
 
@@ -271,7 +270,17 @@ export function findBwrap(override?: string): string {
   return findDefaultBwrap();
 }
 
-function findCommandInPath(name: string, hint: string): string {
+/**
+ * 在 PATH 中查找可执行文件；override 非空时改为使用配置指定的路径（并校验存在）。
+ * 沙箱执行器需要的 mihomo / slirp4netns 都经它解析——执行器自身不搜索 PATH。
+ */
+export function findExecutable(name: string, hint: string, override?: string): string {
+  if (override) {
+    if (!existsSync(override)) {
+      throw new Error(`${name} not found at configured path: ${override}`);
+    }
+    return override;
+  }
   const pathEnv = process.env.PATH ?? "";
   for (const directory of pathEnv.split(delimiter)) {
     const candidate = join(directory, name);
@@ -280,32 +289,6 @@ function findCommandInPath(name: string, hint: string): string {
     }
   }
   throw new Error(hint);
-}
-
-export function findMihomo(override?: string): string {
-  if (override) {
-    if (!existsSync(override)) {
-      throw new Error(`mihomo not found at configured path: ${override}`);
-    }
-    return override;
-  }
-  return findCommandInPath(
-    "mihomo",
-    "mihomo not found in PATH. Install it from https://github.com/MetaCubeX/mihomo",
-  );
-}
-
-export function findSlirp4netns(override?: string): string {
-  if (override) {
-    if (!existsSync(override)) {
-      throw new Error(`slirp4netns not found at configured path: ${override}`);
-    }
-    return override;
-  }
-  return findCommandInPath(
-    "slirp4netns",
-    "slirp4netns not found in PATH. Install it from https://github.com/rootless-containers/slirp4netns",
-  );
 }
 
 /** 扫描 .git 时跳过的目录：包/依赖/构建产物，嵌套 git 仓库几乎不会出现在这里。 */
@@ -387,46 +370,54 @@ async function realpathOrSelf(path: string): Promise<string> {
   }
 }
 
-export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Promise<string[]> {
-  const args = ["--new-session", "--die-with-parent", "--unshare-user", "--unshare-pid"];
-  // 沙箱进程以调用方（pi）的 uid/gid 运行，而不是 userns 里的 0。
-  // network limited 模式下命令先经 nsenter 进入 holder 的 userns（unshare -r 把 pi 的 uid 映射成 0），
-  // bwrap 默认继承该 uid 会让沙箱内 id/stat 自称 root、与宿主视角不一致；
-  // 直接模式（无 holder）下这两个值本就等于 bwrap 的 real uid，等价于默认行为。
-  const uid = process.getuid?.();
-  const gid = process.getgid?.();
-  if (uid !== undefined && gid !== undefined) {
-    args.push("--uid", String(uid), "--gid", String(gid));
-  }
+/**
+ * 挂载能力：描述"这块路径以什么语义挂进沙箱"，而不是 bwrap 参数名。
+ * `*-try` 表示路径不存在时忽略该项；`deny-dir` 挂空目录、`deny-file` 以空文件覆盖。
+ * 原始 bwrap 参数由原生执行器翻译（这份知识只在 native/bwrap.go 一处）。
+ */
+export const MOUNT_MODES = ["ro", "ro-try", "rw-try", "deny-dir", "deny-file"] as const;
+
+export type MountMode = (typeof MOUNT_MODES)[number];
+
+/** 一条挂载计划项；列表中靠后的覆盖靠前的。 */
+export interface SandboxMount {
+  path: string;
+  mode: MountMode;
+}
+
+/** 挂载计划：基础只读根 + 有序挂载项，路径全部绝对化。 */
+export interface MountPlan {
+  root: string;
+  mounts: SandboxMount[];
+}
+
+/**
+ * 把 fs 策略翻译成挂载计划（`root` + 有序 `mounts`）：realpath 归一化、"." / "~" 展开、
+ * PROTECTED_DIRS 与工作区 `.git` 的识别都在这里完成，执行器只按顺序翻译成 bwrap 参数。
+ */
+export async function buildMountPlan(resolved: ResolvedBwrap, cwd: string): Promise<MountPlan> {
+  const mounts: SandboxMount[] = [];
   // --*-bind-try：配置的路径不存在时忽略该项而不是让整条命令失败
+  const addWritable = async (path: string): Promise<void> => {
+    mounts.push({ path: await realpathOrSelf(resolveBwrapPath(path, cwd)), mode: "rw-try" });
+  };
   for (const path of resolved.writablePaths) {
-    const absolutePath = await realpathOrSelf(resolveBwrapPath(path, cwd));
-    args.push("--bind-try", absolutePath, absolutePath);
+    await addWritable(path);
   }
   for (const path of resolved.extraWritablePaths) {
-    const absolutePath = await realpathOrSelf(resolveBwrapPath(path, cwd));
-    args.push("--bind-try", absolutePath, absolutePath);
+    await addWritable(path);
   }
-  // denyPaths：以 / 结尾的条目视为目录（挂空 tmpfs），否则视为文件（--ro-bind-try /dev/null 覆盖）
+  // denyPaths：以 / 结尾的条目视为目录（挂空），否则视为文件（空文件覆盖）
   for (const path of resolved.denyPaths) {
     const target = await realpathOrSelf(resolveBwrapPath(path, cwd));
-    if (path.endsWith("/")) {
-      args.push("--tmpfs", target);
-    } else {
-      args.push("--ro-bind-try", "/dev/null", target);
-    }
-  }
-  if (resolved.network === "block") {
-    args.push("--unshare-net");
+    mounts.push({ path: target, mode: path.endsWith("/") ? "deny-dir" : "deny-file" });
   }
   // fs allow-all：整棵根可写，不做保护绑定（.pi/.agent/.git 的只读覆盖与「完整可写」矛盾）。
   if (resolved.fs !== "allow-all") {
-    // --ro-bind-try：目录不存在（或已被删除）时自动忽略
     for (const name of PROTECTED_DIRS) {
-      const absolutePath = await realpathOrSelf(join(cwd, name));
-      args.push("--ro-bind-try", absolutePath, absolutePath);
+      mounts.push({ path: await realpathOrSelf(join(cwd, name)), mode: "ro-try" });
     }
-    // 工作区下所有 .git 一律只读：可写 bind 之上的覆盖绑定，防止命令篡改仓库元数据。
+    // 工作区下所有 .git 一律只读：可写绑定之上的覆盖绑定，防止命令篡改仓库元数据。
     // 根目录本身是 git 仓库时只保护根 .git（递归扫描有成本，绝大多数情况根即唯一仓库）；
     // 根不是 git 仓库时才递归扫描嵌套仓库（如 monorepo 子仓库）。
     const rootGit = await realpathOrSelf(join(cwd, ".git"));
@@ -438,32 +429,13 @@ export async function buildBwrapArgs(resolved: ResolvedBwrap, cwd: string): Prom
       gitDirs = await findGitDirs(cwd);
     }
     for (const gitDir of gitDirs) {
-      const realGitDir = await realpathOrSelf(gitDir);
-      args.push("--ro-bind-try", realGitDir, realGitDir);
+      mounts.push({ path: await realpathOrSelf(gitDir), mode: "ro-try" });
     }
   }
-  args.push(...resolved.extraArgs);
-  return args;
+  return { root: "/", mounts };
 }
 
-/** 网络栈子进程输出转发通道，仅用于诊断（默认丢弃）。 */
-export interface NetworkStackLog {
-  holder?: (chunk: string) => void;
-}
-
-/** 为 network limited 模式创建网络栈；其余模式返回 undefined。每次命令现建现停。 */
-export async function createNetworkStack(
-  resolved: ResolvedBwrap,
-  log?: NetworkStackLog,
-): Promise<NetworkStack | undefined> {
-  if (resolved.network !== "limited") {
-    return undefined;
-  }
-  return startNetworkStack({
-    allowlist: resolved.networkAllowlist,
-    dnsServers: await resolveDnsServers(),
-    mihomoPath: findMihomo(resolved.mihomoPath),
-    slirp4netnsPath: findSlirp4netns(resolved.slirp4netnsPath),
-    ...(log?.holder && { onHolderOutput: log.holder }),
-  });
+/** 执行器诊断输出转发通道（`[netstack] ` 前缀行），仅用于诊断，默认丢弃。 */
+export interface ExecutorDiagnostics {
+  diagnostic?: (line: string) => void;
 }

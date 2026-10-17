@@ -2,36 +2,39 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createEventBus, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { localCreateMock, runSandboxExecutorMock, findBwrapMock } = vi.hoisted(() => ({
+  localCreateMock: vi.fn(),
+  runSandboxExecutorMock: vi.fn(),
+  findBwrapMock: vi.fn(),
+}));
 
 vi.mock("../src/bwrap/core.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/bwrap/core.js")>();
+  return { ...actual, findBwrap: (...args: unknown[]): string => findBwrapMock(...args) as string };
+});
+
+// 本文件只验证审批流与结果拼装：沙箱执行路径降级为本地执行（真实执行器行为由
+// bwrap-sandbox.test.ts / bwrap-netstack-integration.test.ts 覆盖），
+// runSandboxExecutorMock 记录调用供「走了沙箱路径」断言。
+vi.mock("../src/bwrap/executor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/bwrap/executor.js")>();
   return {
     ...actual,
-    findBwrap: () => {
-      throw new Error("bwrap (bubblewrap) not found in PATH");
+    runSandboxExecutor: async (policy: SandboxPolicy, options: ExecutorRunOptions) => {
+      runSandboxExecutorMock(policy, options);
+      const { createLocalBashOperations } = await import("@earendil-works/pi-coding-agent");
+      const { exitCode } = await createLocalBashOperations().exec(policy.command, policy.cwd, {
+        onData: options.onData,
+        signal: options.signal,
+        ...(policy.timeoutSeconds > 0 && { timeout: policy.timeoutSeconds }),
+      });
+      return { exitCode };
     },
   };
 });
-
-// 本文件只验证审批流与结果拼装：沙箱执行路径降级为本地执行（真实 bwrap 行为由
-// bwrap-sandbox.test.ts 覆盖），bwrapOpsCreateMock 记录调用供「走了沙箱路径」断言
-vi.mock("../src/bwrap/exec.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/bwrap/exec.js")>();
-  return {
-    ...actual,
-    createBwrapBashOperations: (...args: unknown[]) => {
-      bwrapOpsCreateMock(...args);
-      return createLocalBashOperations();
-    },
-  };
-});
-
-const { localCreateMock, bwrapOpsCreateMock } = vi.hoisted(() => ({
-  localCreateMock: vi.fn(),
-  bwrapOpsCreateMock: vi.fn(),
-}));
 
 // createLocalBashOperations 默认走真实实现（Linux 上的 bash 测试），
 // Windows 语义测试通过 localCreateMock 覆盖为记录式 fake：mock win32 时
@@ -54,6 +57,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 });
 
 import { type BwrapConfig, resolveBwrap } from "../src/bwrap/core.js";
+import type { ExecutorRunOptions, SandboxPolicy } from "../src/bwrap/executor.js";
 import {
   ALLOW_ONCE,
   BACK,
@@ -71,6 +75,11 @@ import { createRequestPolicy, type RequestPolicy } from "../src/lib/request-poli
 beforeAll(() => {
   // Bash 输出运行时落盘到 agent-dir/tmp：测试环境指向可写的临时目录
   process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "cc-bwrap-agent-dir-"));
+});
+
+beforeEach(() => {
+  // 默认视作 bwrap 存在；缺 bwrap 的 fail-closed 用例在自身内部改成抛错
+  findBwrapMock.mockReturnValue("/usr/bin/bwrap");
 });
 
 function setupRuntime(policy: RequestPolicy = createRequestPolicy(), config?: BwrapConfig) {
@@ -146,7 +155,8 @@ describe("BwrapRuntime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     localCreateMock.mockReset();
-    bwrapOpsCreateMock.mockReset();
+    runSandboxExecutorMock.mockReset();
+    findBwrapMock.mockReset();
   });
 
   it("registers lifecycle handlers and bwrap commands in setup", () => {
@@ -166,6 +176,9 @@ describe("BwrapRuntime", () => {
     it.skipIf(process.platform === "win32")(
       "refuses all commands instead of degrading to allow-all",
       async () => {
+        findBwrapMock.mockImplementation(() => {
+          throw new Error("bwrap (bubblewrap) not found in PATH");
+        });
         const { runtime, pi } = setupRuntime();
         startSession(runtime, pi);
         await expect(
@@ -501,7 +514,7 @@ describe("BwrapRuntime", () => {
         ctx: fullAccessContext({ select, input: vi.fn() }),
       });
       // 提权被拒：命令走沙箱执行路径，而不是审批放行的本地路径
-      expect(bwrapOpsCreateMock).toHaveBeenCalled();
+      expect(runSandboxExecutorMock).toHaveBeenCalled();
       expect(result).toMatchObject({ exitCode: 0, output: "sandboxed" });
       // 沙箱作用域由提醒块说明：不再附失败时的状态块（会再提示 dangerouslyDisableSandbox）
       expect(result.sandboxHint).toBeUndefined();
