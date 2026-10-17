@@ -61,6 +61,14 @@ describe("parseBashCommands", () => {
     expect((await parseBashCommands("echo hi 2>&1")).hasFileOutputRedirect).toBe(false);
     expect((await parseBashCommands("echo hi < /etc/passwd")).hasFileOutputRedirect).toBe(false);
   });
+
+  it("treats >& with a non-fd target as a file output redirect", async () => {
+    expect((await parseBashCommands("echo hi >& file")).hasFileOutputRedirect).toBe(true);
+    expect((await parseBashCommands("echo hi >&$fd")).hasFileOutputRedirect).toBe(true);
+    expect((await parseBashCommands("echo hi >&2")).hasFileOutputRedirect).toBe(false);
+    expect((await parseBashCommands("echo hi >& 2")).hasFileOutputRedirect).toBe(false);
+    expect((await parseBashCommands("echo hi >& -")).hasFileOutputRedirect).toBe(false);
+  });
 });
 
 describe("matchRule", () => {
@@ -150,6 +158,8 @@ describe("createApprovalRuleSet", () => {
       expect(await ruleSet(echoAllow).evaluate("echo hi >> file")).toBeUndefined();
       expect(await ruleSet(echoAllow).evaluate("{ echo hi; } > file")).toBeUndefined();
       expect(await ruleSet(echoAllow).evaluate("( echo hi ) > file")).toBeUndefined();
+      expect(await ruleSet(echoAllow).evaluate("echo hi >& file")).toBeUndefined();
+      expect(await ruleSet(echoAllow).evaluate("echo hi >&$fd")).toBeUndefined();
     });
 
     it("still allows pipelines when every command matches an allow rule", async () => {
@@ -164,6 +174,8 @@ describe("createApprovalRuleSet", () => {
     it("still allows fd copies and input redirects under an echo * rule", async () => {
       const echoAllow: readonly ApprovalRule[] = [{ action: "allow", pattern: "echo *" }];
       expect(await ruleSet(echoAllow).evaluate("echo hi 2>&1")).toBe("allow");
+      expect(await ruleSet(echoAllow).evaluate("echo hi >&2")).toBe("allow");
+      expect(await ruleSet(echoAllow).evaluate("echo hi >& -")).toBe("allow");
       expect(await ruleSet(echoAllow).evaluate("echo hi < /etc/passwd")).toBe("allow");
     });
 

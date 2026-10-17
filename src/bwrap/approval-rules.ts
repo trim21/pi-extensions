@@ -115,8 +115,13 @@ function extractParts(node: Node): { name: string; args: string[] } {
   return { name: name.join(" "), args };
 }
 
-/** 会打开/截断/追加文件的重定向算子；`>&` / `<&` 是 fd 复制，不算。 */
+/** 会打开/截断/追加文件的重定向算子；`>&` 需要看右操作数，`<&` 是输入 fd 复制。 */
 const FILE_OUTPUT_REDIRECT_OPS = new Set([">", ">>", ">|", "&>", "&>>"]);
+
+/** `>&word` 只在 word 是 fd 号或 `-` 时复制/关闭 fd，否则等价于 `&>word`（写文件）。 */
+function isFdTarget(node: Node | null): boolean {
+  return node !== null && (node.type === "number" || node.text === "-");
+}
 
 function fileRedirectWritesToFile(node: Node): boolean {
   for (let i = 0; i < node.childCount; i++) {
@@ -125,6 +130,9 @@ function fileRedirectWritesToFile(node: Node): boolean {
       continue;
     }
     if (FILE_OUTPUT_REDIRECT_OPS.has(child.type)) {
+      return true;
+    }
+    if (child.type === ">&" && !isFdTarget(node.child(i + 1))) {
       return true;
     }
     // `<>` 被解析成 `<` + 含 `>` 的 ERROR
