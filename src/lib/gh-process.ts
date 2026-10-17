@@ -42,24 +42,17 @@ export function runGh(args: string[], ctx: GhRunContext): Promise<GhResult> {
     let stdout = "";
     let stderr = "";
     const combined: string[] = [];
-    let killed = false;
     let killReason: "timeout" | "abort" | undefined;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
 
     const killProcess = (reason: "timeout" | "abort") => {
-      if (killed) {
+      if (killReason !== undefined) {
         return;
       }
 
-      killed = true;
       killReason = reason;
       proc.kill("SIGTERM");
-      setTimeout(() => {
-        if (!proc.killed) {
-          proc.kill("SIGKILL");
-        }
-      }, 5000);
     };
 
     if (ctx.signal) {
@@ -106,7 +99,7 @@ export function runGh(args: string[], ctx: GhRunContext): Promise<GhResult> {
         // succeeded. -1 is a sentinel for "did not exit normally" — distinct
         // from a real gh failure exit code (1), which is always in 0-255.
         code: code ?? -1,
-        killed,
+        killed: killReason !== undefined,
         combined: combined.join(""),
         reason: killReason,
       });
@@ -125,7 +118,7 @@ export function runGh(args: string[], ctx: GhRunContext): Promise<GhResult> {
         stdout,
         stderr,
         code: 1,
-        killed,
+        killed: killReason !== undefined,
         combined: combined.join(""),
         reason: killReason,
         spawnError: err.message,

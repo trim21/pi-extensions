@@ -591,6 +591,22 @@ describe("ConfigAdapter.spawn", () => {
     }
   });
 
+  it("只配置 setup 没有 bin 时仍执行 setup", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const logFile = join(dir, "setup.log");
+    const append = `require("node:fs").appendFileSync(${JSON.stringify(logFile)}, ${JSON.stringify(
+      "ran\n",
+    )})`;
+    try {
+      const adapter = new ConfigAdapter("mock", parse({ setup: [process.execPath, "-e", append] }));
+      const handle = await adapter.spawn(dir, dir);
+      expect(handle).toBeUndefined();
+      expect(await readFile(logFile, "utf8")).toBe("ran\n");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("setup argv 支持 {root} / {cwd} 模板与 ${VAR} 插值，cwd 为服务器 root，环境含 env 解析结果", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
     const root = join(dir, "project");

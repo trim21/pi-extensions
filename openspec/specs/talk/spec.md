@@ -68,8 +68,8 @@ session 的在线状态由 `offline` 标志与进程存活判定，不依赖心�
 
 #### Scenario: 超限消息被拒
 
-- **WHEN** 消息超过 32KB、10 秒内重复、30 秒内超过 8 条或积压超过 50 条
-- **THEN** 消息被拒绝（防环与限速）
+- **WHEN** 消息超过 32KB、10 秒内重复、30 秒内超过 8 条，或目标未读积压已达到 50 条
+- **THEN** 消息被拒绝（防环与限速）；积压为 50 条时尝试发送的第 51 条即被拒
 
 #### Scenario: 来源标注
 
@@ -118,7 +118,7 @@ storage.ts   —— 存储层：TalkStorage 接口 + SqliteTalkStorage（node:sq
 registry.ts  —— agent registry：地址（cwd + agent id 的哈希）、presence、sweep 回收
 mailbox.ts   —— 信件收发与投递可靠性（投递成功才消费）
 group.ts     —— 带 uuid 的私有房间与成员关系（单组不变量）
-policy.ts    —— 环破除与入站限流（去重 / 限速 / 积压上限）
+policy.ts    —— 环破除与本 agent 出站门禁（去重 / 限速 / 目标积压上限）
 format.ts    —— 模型与用户读到的原文文案（由测试钉住）
 core.ts      —— TalkCore 协调器：组合上述模块，只依赖存储层，
                 通过事件回调 yield 投递 / 通知
@@ -132,7 +132,9 @@ index.ts     —— pi adapter：把 core 接到 pi 的 sendMessage / 生命周�
 - **投递可靠**：信件只在成功交给 `sendMessage` 后才从 inbox 删除，投递失败保留重试——不因 `sendMessage` 吞异常而静默丢信。
 - **presence 不靠心跳**：`offline` 标志 + 进程 pid 存活判定；pid 存活时校验 `/proc/<pid>/stat` 启动时间，排除 pid 回卷复用误判。
 - **双向 ask 仲裁**：按信件 `ts` 字段仲裁（先 ask 者主导继续等，后 ask 者让位先回复）；同毫秒碰撞用 `cwd + agent id` 字符串比较兜底，双方读到同一对值结论对称。
-- **安全**：纯文本 ≤32KB、10s 去重、30s 限速 8 条、50 积压上限；投递标注来源。
+- **安全**：纯文本 ≤32KB、10s 去重、30s 限速 8 条、目标未读积压达到 50 条即拒绝后续发送；投递标注来源。
+- **存储**：共享 SQLite 默认 `~/.pi/agent/talk.db`，可用 `PI_TALK_DB` 或 `settings.json` 的 `talk.db_path` 覆盖；表为 `talk_kv(namespace, key, value)` 与 `talk_log(name, seq, line)`，启用 WAL 与 `busy_timeout = 5000`。
+- **投递方式**：`settings.json` 的 `talk.deliver` 取 `queue`（默认，下一自然轮次投递）或 `steer`（唤醒/打断对端），值原样传给 pi 的 `sendMessage`。
 - **存储校验**：所有从存储读出的值经 typebox schema 校验，损坏 / 伪造数据被拒绝。
 - **定期清理**：进程存活永不回收；进程已死且最后活跃超 24h 且无未投递 mail 的记录 30 分钟 sweep 一次，有 mail 保留 30 天。
 - **group**：带 uuid 的私有房间，成员关系存共享 DB，实时生效；一个 session 只能属于一个 group。

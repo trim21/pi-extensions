@@ -296,10 +296,10 @@ LSP 配置 SHALL 在 `session_start` 时加载并校验（pi await 该事件）�
 
 实现位于 `src/lib/lsp/`：read / edit / write 工具读取或写入文件后经 LSP 客户端请求诊断并报告 ERROR / WARN 诊断。
 
-- **配置解析**（`server-config.ts`）：`~/.pi/agent/lsp.json`（全局）与 `.pi/lsp.json`（项目）合并——顶层字段本地覆盖全局，`servers` 按 id 合并（同名整体覆盖、新 id 新增、全局其余保留）；无内置默认服务器，服务器全部来自配置，禁用某服务器用顶层 `disabled: [id]`。
+- **配置解析**（`server-config.ts`）：`~/.pi/agent/lsp.json`（全局）与 `.pi/lsp.json`（项目）合并——顶层字段本地覆盖全局，`servers` 按 id 合并（同名整体覆盖、新 id 新增、全局其余保留）；无内置默认服务器，服务器全部来自配置，禁用某服务器用顶层 `disabled: [id]`。顶层字段还包括 `version`、`watch`（`enabled` 缺省 true、`debounceMs` 缺省 300、`maxBatch` 缺省 500、`ignore` glob 与内置忽略取并集）以及诊断批处理的 `diagnosticsDebounceMs` / `diagnosticsDocumentWaitTimeoutMs` / `diagnosticsSilentWaitTimeoutMs` / `diagnosticsFullWaitTimeoutMs` / `diagnosticsRequestTimeoutMs`；per-server 还支持 `args`、`languageIdByExtension`、`setup`、`enabled`。
 - **服务器启动**（`adapter.ts` / `server-config.ts`）：按 `include` glob 匹配启用（`!` 否定排除）；root 由 `serverRoot` 解析——配置 `rootMarkers` 时从调用 cwd 沿文件路径向下找第一个含标记的目录（cwd 自身命中即 cwd，未命中回退 cwd），否则即 `workingDir`（相对调用 cwd 解析）或调用 cwd；两者互斥，同时配置在 `resolveConfig` 报错。同一服务器可为不同 root 各启动一个实例。`bin` 按绝对路径 / 相对调用 cwd / 名字（先项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin`，再 PATH）解析，`env` 的 `{root}` / `{cwd}` 模板按该文件的 root 生效。`env` 的 `{sh}`（cwd 为调用 cwd）与 `initializationOptionsCommand`（cwd 为该项目根、环境含已解析的 `env`）都在 spawn 前执行，后者 stdout 的 JSON 对象与静态 `initializationOptions` 深合并（命令输出优先）。
 - **协议**：`initializationOptions` 进 initialize 请求，`settings` 进 didChangeConfiguration / workspace/configuration；languageId 按扩展名映射（缺省内置映射表）。
-- **超时**：per-server `startupTimeoutMs` / `diagnosticsWaitMs` 覆盖全局与默认值。
+- **超时**：per-server `startupTimeoutMs` / `diagnosticsWaitMs` 覆盖全局与默认值；`diagnosticsWaitMs` 只覆盖文档等待上限，上一份 push 为空的文档另有 `diagnosticsSilentWaitTimeoutMs`（全局缺省 1500ms）的安静期，实际等待取两者较小值。
 - **文件监听**（`watcher.ts` / `lsp.ts`）：`@parcel/watcher` 递归监听**活跃 client 的项目根**（root 去重、不越 cwd，无活跃 client 不监听；内核层 ignore 使被忽略目录不建 watch），尾部去抖 + 最长 flush 批量回调；事件按各 client 的 root 前缀 / 注册 pattern / 扩展名过滤后以 `workspace/didChangeWatchedFiles` 投递（created=1 / changed=2 / deleted=3）；监听器失败降级提示（ENOSPC 等资源耗尽时停用该 root 直到 `/lsp-reload`），不影响诊断链路。
 - **驻留与退场**（`client.ts`）：read / edit / write 进入有界 LRU（`maxOpenDocuments`，缺省 32），淘汰时 `didClose`；驻留文档被外部改动时先 `didClose` 再发 changed 事件，内容一致的自身写入 echo 完全忽略。
 

@@ -27,8 +27,8 @@ const text = Type.String({ description: "引擎渲染的文本，与工具输出
 /** 行号区间（zoom）：引擎的 Range 序列化时行号从 1 开始。 */
 const rangeSchema = Type.Object(
   {
-    start_line: Type.Number(),
-    end_line: Type.Number(),
+    start_line: Type.Optional(Type.Number()),
+    end_line: Type.Optional(Type.Number()),
     start_col: Type.Optional(Type.Number()),
     end_col: Type.Optional(Type.Number()),
   },
@@ -38,8 +38,8 @@ const rangeSchema = Type.Object(
 /** 调用图注解里的一条引用（zoom 的 calls_out / called_by）。 */
 const callRefSchema = Type.Object(
   {
-    name: Type.String(),
-    line: Type.Number(),
+    name: Type.Optional(Type.String()),
+    line: Type.Optional(Type.Number()),
     /** 同一行上还有多少条同类引用被折叠。 */
     extra_count: Type.Optional(Type.Number()),
   },
@@ -57,12 +57,12 @@ export const aftOutlineStructuredSchema = Type.Object(
       Type.Array(
         Type.Object(
           {
-            path: Type.String(),
-            language: Type.String(),
+            path: Type.Optional(Type.String()),
+            language: Type.Optional(Type.String()),
             /** 顶层符号数；未知时引擎省略该字段。 */
             symbols: Type.Optional(Type.Number()),
             /** 行数；null 表示不在索引里（line_count_gaps 列出这些文件）。 */
-            lines: Type.Union([Type.Number(), Type.Null()]),
+            lines: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
           },
           { additionalProperties: true },
         ),

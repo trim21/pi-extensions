@@ -141,12 +141,14 @@ async function fetchWithRedirects(
   signal: AbortSignal | undefined,
   fetchFn: typeof fetch = egress.fetch,
 ): Promise<{ response: Response; url: URL }> {
+  // 30 秒预算覆盖整次抓取（含所有重定向跳），不是每跳重新计时。
+  const timeoutSignal = withTimeoutSignal(signal, TIMEOUT_MS);
   let current = url;
   for (let redirects = 0; ; redirects++) {
     await assertPublicHostname(current.hostname);
     const response = await fetchFn(current, {
       redirect: "manual",
-      signal: withTimeoutSignal(signal, TIMEOUT_MS),
+      signal: timeoutSignal,
       headers: { "user-agent": "Mozilla/5.0 (compatible; pi-web-fetch/1.0)" },
     });
     const location = response.headers.get("location");

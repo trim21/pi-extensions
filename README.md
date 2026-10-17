@@ -167,7 +167,7 @@ fs（文件系统）与 network（网络）各自独立取值，可任意组合�
 
 | 轴        | 取值              | 含义                                                                    |
 | --------- | ----------------- | ----------------------------------------------------------------------- |
-| `fs`      | `readonly`        | 文件系统只读（`fs.extraWritablePaths` 仍是显式开口）                    |
+| `fs`      | `readonly`        | 文件系统只读（忽略 `writablePaths` / `extraWritablePaths`）             |
 | `fs`      | `workspace-write` | workspace + `/tmp` 可写，其余只读（`.pi` / `.agent` / `.git` 始终只读） |
 | `fs`      | `allow-all`       | 完全可写（沙箱内整根可写，不做 `.pi` / `.agent` / `.git` 保护绑定）     |
 | `network` | `block`           | 断网                                                                    |

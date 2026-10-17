@@ -561,6 +561,8 @@ export function createLspService(
   const watchers = new Map<string, WorkspaceWatcher>();
   /** 因资源耗尽（ENOSPC / EMFILE）停用的监听目录；/lsp-reload 后重试。 */
   const watcherFailed = new Set<string>();
+  /** 已提示过监听器失败的目录：失败后重建前不重复刷屏；重建成功后移除。 */
+  const watcherErrorNotified = new Set<string>();
 
   /**
    * client root 的有效监听目录：root 在 cwd 内即 root；root 是 cwd 的祖先时
@@ -609,20 +611,29 @@ export function createLspService(
     notify?: ExtensionUIContext["notify"],
   ): Promise<WorkspaceWatcher | undefined> {
     const report = notify ?? sessionNotify;
+    // 用对象承载跨 await 的状态，避免 TS 把回调里修改的 let 收窄成字面量 false。
+    const watcherStatus = { startFailed: false };
     const onError = (message: string): void => {
-      // 资源耗尽不可恢复：停用该目录直到 /lsp-reload（对齐 VS Code 对 ENOSPC 的处理）
-      if (!/ENOSPC|EMFILE|No space left on device/i.test(message)) {
-        report?.(message, "error");
-        return;
+      watcherStatus.startFailed = true;
+      // 资源耗尽不可恢复：停用该目录直到 /lsp-reload（对齐 VS Code 对 ENOSPC 的处理）；
+      // 其他失败只关闭本次监听器，下次 reconcile 仍会重建。
+      const exhausted = /ENOSPC|EMFILE|No space left on device/i.test(message);
+      if (exhausted) {
+        watcherFailed.add(root);
       }
-      watcherFailed.add(root);
       const current = watchers.get(root);
       watchers.delete(root);
       void current?.stop().catch(() => {
         // 停止失败不影响流程
       });
+      if (watcherErrorNotified.has(root)) {
+        return;
+      }
+      watcherErrorNotified.add(root);
       report?.(
-        `${message}; stopped watching ${root} until /lsp-reload (raise fs.inotify.max_user_watches first)`,
+        exhausted
+          ? `${message}; stopped watching ${root} until /lsp-reload (raise fs.inotify.max_user_watches first)`
+          : `${message}; stopped watching ${root}`,
         "error",
       );
     };
@@ -639,13 +650,14 @@ export function createLspService(
             "warning",
           ),
       });
-      // 建立过程中已报不可恢复错误：直接停掉，不进监听表
-      if (watcherFailed.has(root)) {
+      // 建立过程中已报错：直接停掉，不进监听表
+      if (watcherStatus.startFailed || watcherFailed.has(root)) {
         await watcher.stop().catch(() => {
           // 停止失败不影响流程
         });
         return undefined;
       }
+      watcherErrorNotified.delete(root);
       return watcher;
     } catch (error) {
       report?.(
@@ -1136,6 +1148,7 @@ export function createLspService(
     state.servers.clear();
     await stopWatchers();
     watcherFailed.clear();
+    watcherErrorNotified.clear();
     updateStatusText();
   }
 
@@ -1157,6 +1170,7 @@ export function createLspService(
     state.brokenFailAt.clear();
     state.brokenNotifiedAt.clear();
     watcherFailed.clear();
+    watcherErrorNotified.clear();
     updateStatusText();
   }
 
@@ -1226,6 +1240,7 @@ export function createLspService(
     state.disabled = false;
     // reload 是资源耗尽后的重试入口：清掉停用记录并按新配置重算监听范围
     watcherFailed.clear();
+    watcherErrorNotified.clear();
     if (state.cwd) {
       await reconcileWatchers(state.cwd);
     }
@@ -1255,6 +1270,7 @@ export function createLspService(
     state.closing = false;
     state.disabled = false;
     watcherFailed.clear();
+    watcherErrorNotified.clear();
     if (state.cwd) {
       await reconcileWatchers(state.cwd);
     }

@@ -146,6 +146,14 @@ describe("extractFirstUserPrompt", () => {
     expect(extractFirstUserPrompt(branch, "当前")).toBe("纯文本");
   });
 
+  it("skips assistant messages when resuming", () => {
+    const branch = [
+      { type: "message", message: { role: "assistant", content: "回复" } },
+      { type: "message", message: { role: "user", content: "第一条用户消息" } },
+    ];
+    expect(extractFirstUserPrompt(branch, "当前")).toBe("第一条用户消息");
+  });
+
   it("falls back to the current prompt when history has no user message", () => {
     const branch = [{ type: "compaction", summary: "..." }];
     expect(extractFirstUserPrompt(branch, "当前消息")).toBe("当前消息");

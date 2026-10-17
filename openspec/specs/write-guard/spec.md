@@ -22,7 +22,7 @@
 
 ### Requirement: 外部路径审批
 
-workspace 外部的写入需经确认对话框由用户审批，对话框展示变更预览。
+workspace 外部的写入需经确认对话框由用户审批，对话框展示变更预览。路径按词法解析（`resolve` 后与 cwd 比较），MUST NOT 跟随 symlink：工作区内指向外部的 symlink 仍视为工作区内。
 
 #### Scenario: 外部写入弹审批框
 
@@ -32,7 +32,12 @@ workspace 外部的写入需经确认对话框由用户审批，对话框展示�
 #### Scenario: 审批框展示 diff 预览
 
 - **WHEN** 外部写入触发审批
-- **THEN** 对话框以 diff 代码块展示变更预览（能定位时显示带行号的真实 patch，否则退化为参数 diff）
+- **THEN** 对话框以 diff 代码块展示变更预览；没有变更前后内容时只展示工具名、路径与审批选项
+
+#### Scenario: symlink 按词法判断
+
+- **WHEN** 工作区内存在指向外部的 symlink，写工具的目标路径经过该 symlink
+- **THEN** 路径按词法视为工作区内，自动放行；工具 MUST NOT 为解析 symlink 目标而额外读取文件系统
 
 ### Requirement: headless 会话拒绝外部写入
 
@@ -71,8 +76,8 @@ workspace 外部的写入需经确认对话框由用户审批，对话框展示�
 
 写保护在 `src/lib/write-guard.ts` 的 `guardWriteAccess` 实现，内置在各写工具（opencode `write`/`edit`、Claude Code `Write`/`Edit`、`lsp-rename`、`web_fetch` 的 `output_path` 落盘）内部。
 
-- **边界判定**：workspace 内或 `/tmp` 下的路径自动放行；外部路径进入审批流程。
-- **审批交互**：外部写入弹确认对话框，用 diff 代码块展示变更预览——预览由 `renderMutationPreview` 从调用方给的「变更前后完整内容」直接算出（`FileMutation { contentOld, contentNew }`），因此预览即将要写入的内容；模块不读盘、不持有匹配引擎，匹配与读盘都在各写工具里先行完成（匹配失败在读盘之后、弹窗之前就报错）。
+- **边界判定**：workspace 内或 `/tmp` 下的路径自动放行；外部路径进入审批流程。判定用 `relative()` 做词法比较，不 realpath、不跟随 symlink（与 Claude Code 的 `resolveToolFilePath` 一致）。
+- **审批交互**：外部写入弹确认对话框，用 diff 代码块展示变更预览——预览由 `renderMutationPreview` 从调用方给的「变更前后完整内容」直接算出（`FileMutation { contentOld, contentNew }`），因此预览即将要写入的内容；模块除批准时的指纹复查外不读盘、不持有匹配引擎，匹配与读盘都在各写工具里先行完成（匹配失败在读盘之后、弹窗之前就报错）。
 - **批准后的复查**：用户从看到 diff 到点批准之间文件可能被外部改动，批准时重新取一次磁盘指纹（`digestIfExists`，文件不存在视作空内容）与审批所用的变更前内容比对，不一致则拒写并提示重新读取。
 - **headless**：无 UI 会话直接拒绝外部写入，不走审批交互。
 - 读取工具不受写保护约束。

@@ -176,7 +176,9 @@ describe.skipIf(!sandbox)("runInSandbox（原生执行器）", () => {
     const directory = workspace();
     const readable = join(directory, "exists.txt");
     writeFileSync(readable, "host-content");
-    const configPath = config(directory, { fs: { mode: "readonly" } });
+    const configPath = config(directory, {
+      fs: { mode: "readonly", extraWritablePaths: [directory] },
+    });
 
     const read = await runSandboxCommand({
       workspace: directory,

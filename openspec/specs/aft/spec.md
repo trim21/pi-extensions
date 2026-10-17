@@ -13,7 +13,12 @@
 #### Scenario: 二进制缺失不注册
 
 - **WHEN** 无法解析到 AFT 二进制（缓存、npm 平台包、PATH、cargo、GitHub release 均不可用）
-- **THEN** 不注册任何工具，session 开始时 notify error
+- **THEN** 不注册任何工具，session 开始时 notify warning
+
+#### Scenario: 配置禁用不注册
+
+- **WHEN** 用户级配置的 `enabled` 为 `false`
+- **THEN** 不注册任何工具，也不产生缺失提示
 
 ### Requirement: 项目根取自会话工作目录
 
@@ -41,7 +46,7 @@ outline / zoom / callgraph / search 为纯只读查询，MUST NOT 经过写保�
 #### Scenario: 符号大纲
 
 - **WHEN** `aft_outline` 分析文件或目录
-- **THEN** 文件返回符号大纲（签名 + 行号），目录默认返回扁平文件树（`files: false` 切换为符号大纲，30KB 截断）；目录递归上限 200 文件
+- **THEN** 文件返回符号大纲（签名 + 行号），目录默认返回扁平文件树（`files: false` 切换为符号大纲）；输出由引擎渲染与截断，目录遍历上限由引擎的 `walk_limit` 决定（当前 10000 文件）
 
 #### Scenario: 符号查看
 
@@ -158,7 +163,7 @@ aft 引擎自带备份、undo 栈、命名 checkpoint 以及 `safety` / `delete`
 #### Scenario: 巡检工具不注册
 
 - **WHEN** 模型需要 dead code / unused exports 结论
-- **THEN** 本仓库不注册 `aft_inspect`：其结论依赖与 callgraph 同一个存储，且锁定的 0.53 引擎不报告尚未扫描的分类，空结果无法与"确实没有"区分
+- **THEN** 本仓库不注册 `aft_inspect`：其结论依赖与 callgraph 同一个存储，且锁定的 0.59 引擎不报告尚未扫描的分类，空结果无法与"确实没有"区分
 
 ### Requirement: 工具清单与 prompt 文档一致
 
@@ -229,12 +234,13 @@ aft 引擎自带备份、undo 栈、命名 checkpoint 以及 `safety` / `delete`
 
 ## Implementation
 
-AFT 工具基于常驻 Rust bridge 进程池（`src/aft/bridge.ts`）：每项目根一个 bridge 进程、跨 session 共享；二进制解析顺序为缓存 → npm 平台包（`@cortexkit/aft-linux-x64`）→ PATH → cargo → GitHub release 兜底；二进制缺失时不注册工具。
+AFT 工具基于 Rust bridge 进程池（`src/aft/bridge.ts`）：每个扩展实例（即每个会话）创建一份 pool，`session_start` 时创建、`session_shutdown` 时关闭；池内按项目根复用连接。二进制解析顺序为缓存 → npm 平台包（`@cortexkit/aft-linux-x64`）→ PATH → cargo → GitHub release 兜底；二进制缺失时不注册工具。
 
 - **项目根**（`src/aft/index.ts`）：取当前会话的工作目录（`session_start` 的 `ctx.cwd`），不取进程启动目录；配置读取、bridge 创建与工具取 bridge 共用同一份项目根。
 
 - **配置**（`src/aft/config.ts`）：用户级 `aft.jsonc`——`enabled`（默认 true）、`semantic_search`（默认 false，涉及外部 embedding 后端，仅用户级可开）。
 - **感知工具只读**：outline / zoom / callgraph / search 均为纯只读查询，不经过写保护审批；写类能力（符号重命名、跨文件引用更新）由 LSP 侧的 `lsp-rename` 承接。
+- **callgraph 冷构建**：Rust 侧内联等待窗口之外，扩展侧每 3 秒重试、总预算 90 秒；预算耗尽才把 `callgraph_building` 软结果交给模型。
 - **语义搜索**：`semantic_search: true` 时注册 `aft_search`，首次调用阻塞至多 3600 秒（1 小时，`SEMANTIC_INDEX_WAIT_TIMEOUT_MS`，与 Rust 侧 `AFT_WAIT_FOR_SEMANTIC_READY_MS` 一致）等索引构建完成。
 - sessionId 传给 Rust 侧做 undo / checkpoint 作用域。
 

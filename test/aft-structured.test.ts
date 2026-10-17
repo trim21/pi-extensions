@@ -209,4 +209,46 @@ describe("schema 的宽松度", () => {
     expect(value.brand_new_field).toEqual({ nested: [1, 2, 3] });
     expect(value.another).toBe("value");
   });
+
+  it("引擎省略文件条目的字段时仍通过复核", async () => {
+    const response = { success: true, text: "a.ts", complete: true, files: [{ path: "a.ts" }] };
+    mockCallAftTool.mockResolvedValue({ text: "a.ts", response });
+
+    const { value } = await run(registerOutlineTool, "aft_outline", {
+      target: "/tmp",
+      files: true,
+    });
+
+    expect(value.files).toEqual([{ path: "a.ts" }]);
+  });
+
+  it("引擎省略 range 的行号时仍通过复核", async () => {
+    const response = { success: true, text: "greet", name: "greet", range: { start_col: 1 } };
+    mockCallAftTool.mockResolvedValue({ text: "greet", response });
+
+    const { value } = await run(registerZoomTool, "aft_zoom", {
+      path: "/tmp/a.ts",
+      symbols: "greet",
+    });
+
+    expect(value.range).toEqual({ start_col: 1 });
+  });
+
+  it("把引擎的否定答案作为 softCodes 传给 callAftTool", async () => {
+    const response = { success: true, text: "ok" };
+    mockCallAftTool.mockResolvedValue({ text: "ok", response });
+
+    await run(registerOutlineTool, "aft_outline", { target: "/tmp/a.ts" });
+    await run(registerZoomTool, "aft_zoom", { path: "/tmp/a.ts", symbols: "greet" });
+    await run(registerSearchTool, "aft_search", { query: "x" });
+
+    const softCodes = new Set([
+      "symbol_not_found",
+      "callgraph_building",
+      "search_lanes_unavailable",
+    ]);
+    for (const call of mockCallAftTool.mock.calls) {
+      expect(call[5]).toEqual(softCodes);
+    }
+  });
 });

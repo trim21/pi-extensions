@@ -13,7 +13,7 @@ GitHub 只读工具集：issue / PR / release / 仓库信息查询与 CI 日志�
 #### Scenario: gh 缺失不注册
 
 - **WHEN** PATH 中找不到 `gh`
-- **THEN** 不注册任何工具，session 开始时 notify error
+- **THEN** 不注册任何工具，session 开始时 notify warning
 
 #### Scenario: Windows 不注册
 
@@ -41,24 +41,26 @@ gh 工具集 MUST 经工具总线的 codemode-only 注册路径注册，曝光�
 
 ### Requirement: 命令失败契约
 
-GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST 抛出带上下文的错误：HTTP 状态、GitHub 的 message，并保留「调用输入」以便定位。认证失败（401）MUST 丢缓存 token 重试一次，仍失败才报错。调用方中止 MUST 通过 `signal` 传给请求，被中止的请求 MUST 记为失败而不是成功。
+GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST 抛出带上下文的错误：HTTP 状态、GitHub 的 message；搜索请求带触发请求的参数。认证失败（401）MUST 丢缓存 token 重试一次，仍失败才报错。调用方中止 MUST 通过 `signal` 传给请求，被中止的请求 MUST 记为失败而不是成功。
 
-取数据路径 MUST NOT 再依赖 `gh` 的退出码与 stderr 文本构造错误；`gh` 子进程只剩「当前仓库」解析与 token 获取两处，它们失败时抛 `GhError`（argv + 输出上下文）。
+取数据路径 MUST NOT 再依赖 `gh` 的退出码与 stderr 文本构造错误；`gh` 子进程只剩「当前仓库」解析与 token 获取两处：前者失败抛 `GhError`（argv + 输出上下文），后者失败抛带 stderr 的普通 `Error` 并提示 `gh auth login`。REST 请求 MUST NOT 设应用层超时：长任务由调用方用 `signal` 取消（等待类工具另有自己的轮询上限），`gh` 子进程的默认超时只覆盖 repo 解析与 token 获取。
 
 #### Scenario: REST 请求失败报错
 
 - **WHEN** 一次 GitHub 请求返回错误状态（例如 404 / 403 / 500）
-- **THEN** 抛出 `GithubApiError`，带 HTTP 状态、GitHub 的 message 与触发该请求的工具参数；`status` 为 404 时调用方可用 `isNotFound` 区分「不存在」与真失败
+- **THEN** 抛出 `GithubApiError`，带 HTTP 状态与 GitHub 的 message；搜索分支额外带触发该请求的工具参数，`status` 为 404 时调用方可用 `isNotFound` 区分「不存在」与真失败
 
 #### Scenario: gh 子进程失败报错
 
-- **WHEN** `gh repo view` / `gh auth token` 非零退出
+- **WHEN** `gh repo view` 非零退出
 - **THEN** 抛出带完整调用输入与输出上下文的 `GhError`
+- **WHEN** `gh auth token` 非零退出
+- **THEN** 抛出带 stderr 的普通 `Error`，提示先执行 `gh auth login`
 
 #### Scenario: 超时/中止标注
 
-- **WHEN** 调用方中止（Esc）、请求超时，或 `gh` 子进程超过 10 分钟预算
-- **THEN** 该次调用以失败结束（不是把空结果当成成功）；`gh` 子进程超时 / 中止先 SIGTERM、5 秒后 SIGKILL，被 kill 的进程退出码记为失败而非成功
+- **WHEN** 调用方中止（Esc），或 `gh` 子进程超过预算（默认 10 分钟，`auth token` 为 10 秒）
+- **THEN** 该次调用以失败结束（不是把空结果当成成功）；REST 请求只由调用方中止信号取消，没有应用层请求超时；`gh` 子进程超时 / 中止发送 SIGTERM，被杀的进程退出码记为失败而非成功
 
 ### Requirement: issue 与 PR 查询
 
@@ -67,7 +69,7 @@ GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST
 #### Scenario: 按编号查询详情
 
 - **WHEN** 指定 repo 与编号查询 issue 或 PR
-- **THEN** 返回 `issues.get` / `pulls.get` 的 JSON（标题、状态、正文、作者、时间、labels、assignees、comments 等；PR 含变更统计），文本与结构化载荷同源
+- **THEN** 返回 `issues.get` / `pulls.get` 的 JSON（标题、状态、正文、作者、时间、labels、assignees、comments 等；PR 含变更统计）作为唯一输出
 
 #### Scenario: 列表与跨仓库搜索
 
@@ -122,7 +124,7 @@ GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST
 
 ### Requirement: workflow run 与 job 查询
 
-`get-github-workflow-jobs` 列出一个 workflow run 的全部 job（octokit `actions.listJobsForWorkflowRun` 分页），`list-github-workflow-runs` 列出仓库的 run（octokit `actions.listWorkflowRunsForRepo`，`workflow` 参数先经 `actions.listRepoWorkflows` 按名字或文件名解析成 id）。两者都 MUST NOT spawn `gh`。`watch-github-run` MUST 轮询 `actions.getWorkflowRun` 直到运行结束（`status` 为 `completed`），不再执行 `gh run watch`。
+`get-github-workflow-jobs` 列出一个 workflow run 的全部 job（octokit `actions.listJobsForWorkflowRun` 分页），`list-github-workflow-runs` 列出仓库的 run：不带 `workflow` 时走 `actions.listWorkflowRunsForRepo`，带 `workflow` 时先经 `actions.listRepoWorkflows` 按名字或文件名解析成 id，再走 `actions.listWorkflowRuns`。两者都 MUST NOT spawn `gh`。`watch-github-run` MUST 轮询 `actions.getWorkflowRun` 直到运行结束（`status` 为 `completed`），不再执行 `gh run watch`。
 
 #### Scenario: 列出 run 的全部 job
 
@@ -191,7 +193,7 @@ GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST
 
 ### Requirement: release 资产下载
 
-`download-github-release-assets` MUST 走 octokit：先 `releases.getReleaseByTag`（缺 `tag` 时 `getLatestRelease`）解析真实 tag 与该 release 的资产清单，再用 `repos.getReleaseAsset`（`Accept: application/octet-stream`）流式写入 `~/.cache/pi/github/releases/<owner>/<repo>/<tag>/`；`archive` 参数改用 `repos.downloadZipballArchive` / `downloadTarballArchive`（仓库源码归档）。`pattern` MUST 由本仓库按 glob 匹配资产名（逗号分隔多个）。结果 MUST 由目录实读得出（文件名 + `stat` 大小，按名排序），不信上传方的响应。同名文件已存在且大小一致 MUST 跳过，否则 MUST 覆盖（避免把半截文件当成已完成）。`pattern` 未命中时 MUST 给出该 release 的可选资产名。
+`download-github-release-assets` MUST 走 octokit：先 `releases.getReleaseByTag`（缺 `tag` 时 `getLatestRelease`）解析真实 tag 与该 release 的资产清单，再按资产 id 用 `rawFetch` + `Accept: application/octet-stream` 流式写入 `~/.cache/pi/github/releases/<owner>/<repo>/<tag>/`；`archive` 参数改用 zipball / tarball 端点（仓库源码归档）。`pattern` MUST 由本仓库按 glob 匹配资产名（逗号分隔多个）。结果 MUST 由目录实读得出（文件名 + `stat` 大小，按名排序），不信上传方的响应。同名文件已存在且大小一致 MUST 跳过，否则 MUST 覆盖（避免把半截文件当成已完成）。`pattern` 未命中时 MUST 给出该 release 的可选资产名。
 
 结构化载荷的 `value`：
 
@@ -238,7 +240,7 @@ GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST
 #### Scenario: 状态快照
 
 - **WHEN** 调用 `read-github-pr-status`（`number` 必填、`repo` 可选）
-- **THEN** 走 octokit 读该 PR head commit 的 commit statuses、check runs 与 check suites，立即返回 JSON `{pr, repo, head_sha, checks:[{name, bucket, event, run_id, job_id, url, suite_id}]}`，不等待；`bucket` 为 pass / fail / pending / skipped / action_required，Actions 来源的 check 带 `run_id` / `job_id`（check run 由 `details_url` 解析，suite 条目取自 `check_suite_id` 匹配到的 workflow run），非 Actions 的 check 两者为 null；`suite_id` 为该检查所属 suite（commit status 为 null）
+- **THEN** 走 octokit 读该 PR head commit 的 commit statuses、check runs 与 check suites，立即返回 JSON `{pr, repo, head_sha, checks:[{name, bucket, event, run_id, job_id, url, suite_id}]}`，不等待；`bucket` 为 pass / fail / pending / skipped / action_required；check run 条目的 `run_id` / `job_id` 由 `details_url` 解析，suite 条目取自匹配到的 workflow run、`job_id` 为 null，非 Actions 的 check 两者为 null；`suite_id` 为该检查所属 suite（commit status 为 null）
 
 #### Scenario: 等待审批的 workflow 也在快照里
 
@@ -276,17 +278,17 @@ gh 工具 MUST 只用结构化结果交付数据：成功是 `{ ok: true; value 
 
 ## Implementation
 
-取数全部经 `src/lib/github.ts` 的 `createGithubApi`（octokit + token 缓存，401 丢缓存重试一次）：`GhClient`（`src/gh/base.ts`）构造**一个** accessor，`createGithubSearch` / `createGithubChecks` / `createGithubReads` 共用它，因此一个会话只 spawn 一次 `gh auth token`、只持有一个 Octokit。系统 `gh` 子进程只剩两处：`gh repo view --json nameWithOwner`（repo 缺省解析）与 `gh auth token`（token 获取），都经 `src/lib/gh-process.ts`，失败抛 `GhError`（`spawn("gh", args, { shell: false })`，env 注入 `GH_PAGER=cat` 与代理变量，默认超时 10 分钟，超时 / 中止先 SIGTERM、5 秒后 SIGKILL）。
+取数全部经 `src/lib/github.ts` 的 `createGithubApi`（octokit + token 缓存，401 丢缓存重试一次）：`GhClient`（`src/gh/base.ts`）构造**一个** accessor，`createGithubSearch` / `createGithubChecks` / `createGithubReads` 共用它，因此一个会话只 spawn 一次 `gh auth token`、只持有一个 Octokit。系统 `gh` 子进程只剩两处：`gh repo view --json nameWithOwner`（repo 缺省解析，失败抛 `GhError`）与 `gh auth token`（token 获取，失败抛带 stderr 的 `Error` 并提示 `gh auth login`），都经 `src/lib/gh-process.ts`（`spawn("gh", args, { shell: false })`，env 注入 `GH_PAGER=cat` 与代理变量，默认超时 10 分钟，超时 / 中止发送 SIGTERM；`auth token` 使用 10 秒超时）。
 
-- **注册门控**：Windows 或 PATH 无 `gh` 时不注册工具（notify warning / error）。18 个工具全部经 `bus.registerCodemodeOnly` 注册（见 `openspec/specs/tool-registration/spec.md`），只登记在总线上、不交给 pi；`disabledTools` 命中时不注册。
+- **注册门控**：Windows 或 PATH 无 `gh` 时不注册工具（notify 均为 warning）。18 个工具全部经 `bus.registerCodemodeOnly` 注册（见 `openspec/specs/tool-registration/spec.md`），只登记在总线上、不交给 pi；`disabledTools` 命中时不注册。
 - **结果形状**：工具只返回结构化结果（`structuredResult` 的 Result 信封），没有面向模型的 `content` / `details`，也没有文本渲染层与输出预算；`read-github-pr-diff` 的变更统计由 `parseDiffStats`（`src/gh/diff-stats.ts`）从同一份 diff 解析。
-- **错误契约**：`gh` 子进程非零退出抛 `GhError`，消息带调用输入与输出上下文，标注 `(command timed out)` / `(command aborted)` / `spawn failed`；被 kill 的进程退出码记为失败而非成功。REST 失败抛 `GithubApiError`（`src/lib/github.ts`，带 `status` 与触发请求的工具参数，`isNotFound` 判 404），由 `createGithubApi` 的 `call` / `rawFetch` 统一产出，调用方不再各自去剥错误对象上的 status。
+- **错误契约**：`gh repo view` 非零退出抛 `GhError`，消息带调用输入与输出上下文，标注 `(command timed out)` / `(command aborted)` / `spawn failed`；`gh auth token` 非零退出抛带 stderr 的普通 `Error` 并提示 `gh auth login`；被 kill 的进程退出码记为失败而非成功。REST 失败抛 `GithubApiError`（`src/lib/github.ts`，带 `status`，搜索分支带触发请求的参数，`isNotFound` 判 404），由 `createGithubApi` 的 `call` / `rawFetch` 统一产出，调用方不再各自去剥错误对象上的 status。
 - **repo 缺省**：未指定 `repo` 时用当前目录解析（`resolveRepoTarget`：`gh repo view --json nameWithOwner` 取全名后拆开 `OWNER/REPO`）。
-- **octokit 读取**：`src/lib/github-reads.ts` 的 `GithubReads` 提供 issue / PR / comments / diff / releases / runs / repository / job logs 与资产下载；`read-github-pr-status` / `wait-github-pr-checks` / `wait-github-commit-checks` 的 checks 与 `get-github-workflow-jobs` / `read-github-ci-logs` 的 job 元数据经 `GithubChecksClient`（`pullHead` / `headSha` / `statuses` / `checkRuns` / `suites` / `workflowRuns` / `runJobs` / `job`）；job 列表用 `octokit.paginate` 跟随 Link 分页，因此没有 30 条上限；`run_id` / `job_id` 由 check run 的 `details_url`（`/actions/runs/<run_id>/job/<job_id>`）解析，check run 的 `suite_id` 取 `check_suite.id`，suite 条目的名字/event/链接由 `run.check_suite_id` 匹配 workflow run 得出（`workflowRuns` 与 check run 的 event 标注共用同一次请求）。
+- **octokit 读取**：`src/lib/github-reads.ts` 的 `GithubReads` 提供 issue / PR / comments / diff / releases / runs / repository / job logs 与资产下载；`read-github-pr-status` / `wait-github-pr-checks` / `wait-github-commit-checks` 的 checks 与 `get-github-workflow-jobs` / `read-github-ci-logs` 的 job 元数据经 `GithubChecksClient`（`pullHead` / `headSha` / `statuses` / `checkRuns` / `suites` / `workflowRuns` / `runJobs` / `job`）；job 列表用 `octokit.paginate` 跟随 Link 分页，因此没有 30 条上限；`statuses` 用单次 `repos.getCombinedStatusForRef({ per_page: 100 })`，不跟随 Link（单 commit 超过 100 条 commit status 时截断）；`run_id` / `job_id` 由 check run 的 `details_url`（`/actions/runs/<run_id>/job/<job_id>`）解析，check run 的 `suite_id` 取 `check_suite.id`，suite 条目的名字/event/链接由 `run.check_suite_id` 匹配 workflow run 得出（`workflowRuns` 与 check run 的 event 标注共用同一次请求）。
 - **CI 日志**：`read-github-ci-logs` 只取 `job_id` / `repo?`；job 元数据走 octokit（`actions.getJobForWorkflowRun`），日志走 `actions.downloadJobLogsForWorkflowRun`（GitHub 只有按 job id 取日志的端点，没有按 job 名称的），响应原样写入 `~/.cache/pi/github/ci-logs/<owner>/<repo>/<runId>/<jobId>.log`（`jobLogPath` 统一计算；owner/repo 由 `repoFromRunUrl` 解析 job 的 `run_url` 得出，用 GitHub 规范化后的仓库大小写，不受调用方传入的 `repo` 字符串影响），同一 job 的请求经 `createSeqState` 串行化。step 行号由 `stepLineSpans` 得出：先收集深度 1 的 `##[group]Run …` / `##[group]Post Run …` header（每个真正执行过的 step 一个），再与 API steps 做**保序最优匹配**——名字相等记 4 分，header 时间戳落在 step `started_at` 之后 5s 内按距离记分（runner 约在 0.01–1.6s 后写 header，而 API 时间戳只到秒），只有得分大于 0 才配对，匹配不到就不给行号（不猜）。因此：自定义 `name:` 的 step 没有名字证据仍能靠时间戳命中；skipped 的 step 不参与匹配（它不会产生 header，否则会抢走同名的、真正跑过的 step 的块）；复合 action 的内部 step header 对任何 API step 都没有证据，不被认领，自然归入外层 step 的区间；「Set up job」拥有第一个 header 之前的 runner 前言。工具不清洗、不截断、不回显日志内容。
 - **release 资产**：`download-github-release-assets` 先 `gh.reads.release`（`repos.getLatestRelease` / `repos.getReleaseByTag`）解析出真实 tag 与该 release 的资产清单（tag 不存在就在这里报错），再按资产 id 逐个下载（`getReleaseAsset` → `rawFetch` + `Accept: application/octet-stream` 流式落盘；源码归档走 `zipball` / `tarball` 端点）；pattern 由 `releasePatterns` 按逗号切分、`matchAsset` 用 `matchesGlob` 匹配；结果由目录实读得出（`listReleaseFiles`：普通文件 + `stat` 大小，按名排序），同名同大小视为已下载。pattern 未命中时由工具自己报出该 release 的实际资产名。
 - **代理**：`gh` 子进程与 octokit 请求共用 `src/lib/proxy.ts` 解析的代理配置（配置 `~/.pi/agent/proxy.json`，回退 `HTTPS_PROXY` 等环境变量），经共享出网层 `src/lib/egress.ts` 的 `env` / `fetch` 取用，在扩展加载时读一次；配置写错直接抛，不带着被忽略的配置静默直连。`web_fetch` / `web_search` 经同一层出网（见 `openspec/specs/web/spec.md`）。
 - **等待工具**：`wait-github-pr-checks` 的轮询、判定与载荷见 `openspec/specs/wait-github-pr-checks/spec.md`（octokit 客户端在 `src/lib/github.ts`）；`watch-github-run` 轮询 `actions.getWorkflowRun`（30 秒间隔、600 秒上限）直到运行结束，不输出进度。
-- 重试只限「401 时换新 token 重试一次」（octokit 调用与 `rawFetch` 共用这套逻辑，见 `createGithubApi`）；`read-github-pr-comments` 的 `reviews=true` 并行取 reviews + review comments（都走 octokit）。
+- 重试只限「401 时换新 token 重试一次」（octokit 调用与 `rawFetch` 共用这套逻辑，见 `createGithubApi`）；`read-github-pr-comments` 的 `reviews=true` 依次取 reviews 与 review comments（都走 octokit，不并行）。
 
 涉及文件：`src/gh/`（`base.ts` 共享层与 checks 等待、`diff-stats.ts` 变更统计解析、`index.ts` 注册、`schemas.ts` 结构化 schema、`tools/<name>.ts` 每工具一个文件）、`src/lib/github.ts`、`src/lib/github-reads.ts`、`src/lib/gh-process.ts`、`src/lib/egress.ts`、`src/lib/proxy.ts`。工具使用路径（PR / commit → 失败 check → job → 日志）见 skill `src/skills/github-ci-logs/SKILL.md`。

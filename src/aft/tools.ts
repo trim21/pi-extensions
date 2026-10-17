@@ -133,7 +133,7 @@ const OutlineParams = Type.Object(
   {
     target: Type.String({
       description:
-        "要 outline 的对象：文件路径或目录路径。只接受单个 target；目录递归上限 200 个文件。",
+        "要 outline 的对象：文件路径或目录路径。只接受单个 target；目录遍历上限由引擎决定（当前 10000 个文件）。",
     }),
     files: Type.Optional(
       Type.Boolean({
@@ -159,7 +159,7 @@ export function registerOutlineTool(bus: ToolBus, ctx: AftToolContext): void {
         "输出代码文件、目录的结构化大纲：函数/类/类型等符号及其行号范围；Markdown/HTML 返回标题层级。",
         "用它在读取具体内容之前先了解文件结构。",
         "深入了解某个符号用 aft_zoom；看跨文件调用关系用 aft_callgraph。",
-        "target 支持：文件路径（带签名的符号大纲）、目录路径（递归最多 200 文件）。只接受单个 target。",
+        "target 支持：文件路径（带签名的符号大纲）、目录路径（遍历上限由引擎决定，当前 10000 文件）。只接受单个 target。",
         "target 为目录时默认返回扁平文件树（语言、顶层符号数、字节大小）；传 files: false 可改回符号大纲。",
       ].join("\n"),
       promptSnippet: "Output structural outline of a file/directory",
@@ -191,7 +191,7 @@ export function registerOutlineTool(bus: ToolBus, ctx: AftToolContext): void {
           rawArgs,
           resolveSessionId(extCtx),
           undefined,
-          undefined,
+          AFT_SOFT_CODES,
           signal,
         );
         const truncated = response.truncated === true;
@@ -274,7 +274,7 @@ export function registerZoomTool(bus: ToolBus, ctx: AftToolContext): void {
           rawArgs,
           resolveSessionId(extCtx),
           undefined,
-          undefined,
+          AFT_SOFT_CODES,
           signal,
         );
         const truncated = response.truncated === true;
@@ -349,6 +349,13 @@ const CallgraphParams = Type.Object(
   },
   { additionalProperties: false },
 );
+
+/** 引擎的否定答案：这些码是一等结果，不应变成调用失败。 */
+const AFT_SOFT_CODES = new Set([
+  "symbol_not_found",
+  "callgraph_building",
+  "search_lanes_unavailable",
+]);
 
 /** 只读导航的合法"否定答案"：符号未定义或索引仍在构建——返回文本而非报错。 */
 const CALLGRAPH_SOFT_CODES = new Set(["symbol_not_found", "callgraph_building"]);
@@ -698,7 +705,7 @@ export function registerSearchTool(bus: ToolBus, ctx: AftToolContext): void {
               transportTimeoutMs: SEMANTIC_INDEX_WAIT_TIMEOUT_MS + 60_000,
               keepBridgeOnTimeout: true,
             },
-            undefined,
+            AFT_SOFT_CODES,
             signal,
           ));
         } finally {

@@ -324,6 +324,35 @@ describe("tool bus 执行", () => {
     expect(textOf(result)).toContain("executeCodemodeTool");
   });
 
+  it("executeTool 执行配置路径的 codemode-only 普通工具", async () => {
+    const { pi } = createFakePi();
+    const bus = createToolBus(pi, { isCodemodeOnly: (name) => name === "echo" });
+    bus.register(structuredEcho());
+
+    const result = await bus.executeTool("echo", { text: "hi" }, { ctx });
+
+    expect(result.isError).toBe(false);
+    expect(textOf(result)).toBe("hi");
+    expect(result.structuredResult).toEqual({ ok: true, value: { text: "hi" } });
+  });
+
+  it("executeTool 保留工具返回的错误标记", async () => {
+    const { pi } = createFakePi();
+    const bus = createToolBus(pi);
+    bus.register(
+      echoTool(async () => ({
+        content: [{ type: "text", text: "failed" }],
+        details: {},
+        isError: true,
+      })),
+    );
+
+    const result = await bus.executeTool("echo", { text: "hi" }, { ctx });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe("failed");
+  });
+
   it("executeCodemodeTool 也能执行配置路径的 codemode-only 普通工具", async () => {
     const { pi, registered } = createFakePi();
     const bus = createToolBus(pi, { isCodemodeOnly: (name) => name === "echo" });
