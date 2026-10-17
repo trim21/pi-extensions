@@ -29,6 +29,14 @@ import {
   type UnmatchedPattern,
 } from "./tools-config.js";
 
+/**
+ * 工具集入口形态：工具模块从它取注册函数，入口在 `session_start` 里连带本会话的
+ * `ctx` 调用它（按模型决定可见性的模块看 `ctx.model`）。
+ */
+export interface ToolModule {
+  register(bus: ToolBus, ctx: ExtensionContext): void;
+}
+
 export interface ToolRegistration {
   /** 与同入口其他模块共享的总线。 */
   readonly bus: ToolBus;

@@ -21,8 +21,7 @@ import { createAftTools } from "./aft/index.js";
 import { createClaudeCodeFileTools } from "./claude-code/files.js";
 import { createCodemodeTools } from "./codemode/tool.js";
 import { createGithubTools } from "./gh/index.js";
-import type { ToolBus } from "./lib/tool-bus.js";
-import { createToolRegistration } from "./lib/tool-registration.js";
+import { createToolRegistration, type ToolModule } from "./lib/tool-registration.js";
 import { createToolServices } from "./lib/tool-services.js";
 import { TOOL_UNITS, type ToolUnitDeps } from "./lib/tool-units.js";
 import { resolveFileIoToolset } from "./lib/tools-config.js";
@@ -32,11 +31,6 @@ import { createTalkTools } from "./talk/index.js";
 import { createVisionTools } from "./vision-agent.js";
 import { createWebFetch } from "./web/fetch.js";
 import { createWebSearchTool } from "./web/search.js";
-
-/** 只做工具注册、以及自己那些与会话无关的钩子的模块。 */
-interface ToolModule {
-  register(bus: ToolBus): void;
-}
 
 export default function personalExtensions(pi: ExtensionAPI): void {
   const registration = createToolRegistration(pi);
@@ -118,7 +112,7 @@ export default function personalExtensions(pi: ExtensionAPI): void {
     // aft 的二进制探测、bridge 状态与工具注册绑在一起（找不到二进制就不注册）。
     await runModule("aft", () => aft.registerForSession(bus, ctx));
     for (const { name, module } of modules) {
-      runModule(name, () => module.register(bus));
+      runModule(name, () => module.register(bus, ctx));
     }
     // codemode 最后注册：它把总线上已有的工具写进自己的描述，并在注册时编译 wasm。
     // 脚本的 fs 原语与文件工具共用请求策略与已读记账，所以这里把工具集那两份注入过去。

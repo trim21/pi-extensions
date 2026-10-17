@@ -72,8 +72,11 @@ import { Type } from "typebox";
 import { type BwrapConfig, completeBwrapConfig } from "./bwrap/core.js";
 import { createClaudeCodeFileTools } from "./claude-code/files.js";
 import { type ToolPendant } from "./lib/pendant.js";
-import type { ToolBus } from "./lib/tool-bus.js";
-import { createToolRegistration, registerToolsOnSessionStart } from "./lib/tool-registration.js";
+import {
+  createToolRegistration,
+  registerToolsOnSessionStart,
+  type ToolModule,
+} from "./lib/tool-registration.js";
 import { createToolServices } from "./lib/tool-services.js";
 import { toolsetsForToolNames, unitsForToolNames } from "./lib/tool-units.js";
 import { createOpencodeFileTools } from "./opencode/files.js";
@@ -522,8 +525,20 @@ export function formatAgentListSection(agents: AgentConfig[]): string {
 
 // ── extension ────────────────────────────────────────────────────────────────
 
-/** spawn-agent 工具集：入口从它取注册函数。 */
-export function createSpawnAgentTool(): { register(bus: ToolBus): void } {
+/**
+ * spawn-agent 工具集：入口与默认导出都从它取注册函数。Windows 上返回的模块在
+ * 注册时只说明原因 —— 子代理的工具集依赖 POSIX 设施（opencode bash 的 bwrap
+ * 沙箱、信号处理），不做 Windows 适配。
+ */
+export function createSpawnAgentTool(): ToolModule {
+  if (process.platform === "win32") {
+    return {
+      register(_bus, ctx) {
+        ctx.ui.notify("spawn-agent is disabled on Windows.", "warning");
+      },
+    };
+  }
+
   // Discover the available subagent types once at extension startup. The
   // extension owns this discovery: the model never has to guess agent names
   // or read the agent directory itself. Editing ~/.pi/agent/agents/*.md or
@@ -618,19 +633,10 @@ export function createSpawnAgentTool(): { register(bus: ToolBus): void } {
 }
 
 export default function spawnAgent(pi: ExtensionAPI): void {
-  // Windows 上禁用：子代理的工具集依赖 POSIX 设施（opencode bash 的
-  // bwrap 沙箱、信号处理），不做 Windows 适配。
-  if (process.platform === "win32") {
-    pi.on("session_start", (_event, ctx) => {
-      ctx.ui.notify("spawn-agent is disabled on Windows.", "warning");
-    });
-    return;
-  }
-
   const tools = createSpawnAgentTool();
   // 工具在 session_start 里注册：禁用规则可以带 models，只有那时才知道本会话
   // 的模型。
-  registerToolsOnSessionStart(pi, (bus) => {
-    tools.register(bus);
+  registerToolsOnSessionStart(pi, (bus, ctx) => {
+    tools.register(bus, ctx);
   });
 }

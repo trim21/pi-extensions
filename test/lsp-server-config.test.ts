@@ -107,6 +107,16 @@ describe("serverConfigSchema", () => {
     expect(() => parse({ bin: "x", initializationOptionsCommand: "node" })).toThrow();
     expect(() => parse({ bin: "x", initializationOptionsCommand: [] })).toThrow();
   });
+
+  it("setup 解析为字符串数组，非数组与空数组被拒绝", () => {
+    expect(parse({ bin: "x", setup: ["rustup", "component", "add"] }).setup).toEqual([
+      "rustup",
+      "component",
+      "add",
+    ]);
+    expect(() => parse({ bin: "x", setup: "rustup" })).toThrow();
+    expect(() => parse({ bin: "x", setup: [] })).toThrow();
+  });
 });
 
 describe("ConfigAdapter.kind", () => {
@@ -546,6 +556,164 @@ describe("ConfigAdapter.spawn", () => {
       });
       handle?.process.kill();
       await new Promise((resolve) => handle!.process.once("exit", resolve));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("setup 每次启动前无条件执行（binary 存在也执行），stdout 被忽略", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const logFile = join(dir, "setup.log");
+    const append = `require("node:fs").appendFileSync(${JSON.stringify(logFile)}, ${JSON.stringify(
+      "ran\n",
+    )})`;
+    try {
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          setup: [process.execPath, "-e", append],
+        }),
+      );
+      const first = await adapter.spawn(dir, dir);
+      expect(first).toBeDefined();
+      expect(await readFile(logFile, "utf8")).toBe("ran\n");
+      first?.process.kill();
+      await new Promise((resolve) => first!.process.once("exit", resolve));
+      const second = await adapter.spawn(dir, dir);
+      expect(second).toBeDefined();
+      expect(await readFile(logFile, "utf8")).toBe("ran\nran\n");
+      second?.process.kill();
+      await new Promise((resolve) => second!.process.once("exit", resolve));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("setup argv 支持 {root} / {cwd} 模板与 ${VAR} 插值，cwd 为服务器 root，环境含 env 解析结果", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const root = join(dir, "project");
+    await mkdir(root);
+    const logFile = join(dir, "setup.json");
+    try {
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          env: {
+            MOCK_SETUP_ROOT: "{root}",
+            MOCK_SETUP_TOKEN: { sh: [process.execPath, "-e", 'console.log("secret")'] },
+          },
+          setup: [
+            process.execPath,
+            "-e",
+            `require("node:fs").writeFileSync(${JSON.stringify(logFile)}, JSON.stringify({cwd: process.cwd(), argCwd: process.argv[1], root: process.env.MOCK_SETUP_ROOT, token: process.env.MOCK_SETUP_TOKEN, interpolated: process.argv[2]}))`,
+            "{cwd}",
+            "${MOCK_SETUP_ROOT}/bin",
+          ],
+        }),
+      );
+      const handle = await adapter.spawn(root, dir);
+      expect(handle).toBeDefined();
+      expect(JSON.parse(await readFile(logFile, "utf8"))).toEqual({
+        cwd: root,
+        argCwd: dir,
+        root,
+        token: "secret",
+        interpolated: `${root}/bin`,
+      });
+      handle?.process.kill();
+      await new Promise((resolve) => handle!.process.once("exit", resolve));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("setup 安装的可执行文件可被解析并启动", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const binDir = join(dir, "bin");
+    await mkdir(binDir);
+    const target = join(binDir, process.platform === "win32" ? "my-lsp.cmd" : "my-lsp");
+    const script =
+      process.platform === "win32" ? "@echo off\r\nping -n 60 127.0.0.1 >nul\r\n" : "#!/bin/sh\n";
+    const install =
+      `const fs = require("node:fs"); fs.writeFileSync(${JSON.stringify(target)}, ` +
+      `${JSON.stringify(script)}); fs.chmodSync(${JSON.stringify(target)}, 0o755)`;
+    try {
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: "my-lsp",
+          setup: [process.execPath, "-e", install],
+        }),
+      );
+      vi.stubEnv("PATH", binDir);
+      try {
+        const handle = await adapter.spawn(dir, dir);
+        expect(handle).toBeDefined();
+        handle?.process.kill();
+        await new Promise((resolve) => handle!.process.once("exit", resolve));
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("setup 非零退出时启动失败，报错含命令、退出码与 stderr（binary 能解析到也不豁免）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    try {
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          setup: [process.execPath, "-e", "console.error('boom');process.exit(3)"],
+        }),
+      );
+      await expect(adapter.spawn(dir, dir)).rejects.toThrow(
+        /setup command failed \(.*\): exit code 3: boom/,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("setup spawn 失败时报错含命令", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    try {
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 10000)"],
+          setup: ["definitely-not-a-real-setup-cmd"],
+        }),
+      );
+      await expect(adapter.spawn(dir, dir)).rejects.toThrow(
+        /setup command failed \(definitely-not-a-real-setup-cmd\)/,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("setup 成功后 bin 仍解析不到时报错说明 setup 已执行", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    try {
+      const adapter = new ConfigAdapter(
+        "mock",
+        parse({
+          bin: "definitely-not-a-real-lsp-bin",
+          setup: [process.execPath, "-e", "process.exit(0)"],
+        }),
+      );
+      await expect(adapter.spawn(dir, dir)).rejects.toThrow(
+        /setup command \(.*\) succeeded but binary "definitely-not-a-real-lsp-bin" is still not found/,
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
