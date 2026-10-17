@@ -46,7 +46,7 @@ outline / zoom / callgraph / search 为纯只读查询，MUST NOT 经过写保�
 #### Scenario: 符号大纲
 
 - **WHEN** `aft_outline` 分析文件或目录
-- **THEN** 文件返回符号大纲（签名 + 行号），目录默认返回扁平文件树（`files: false` 切换为符号大纲，30KB 截断）；目录遍历上限由引擎的 `walk_limit` 决定（当前 10000 文件）
+- **THEN** 文件返回符号大纲（签名 + 行号），目录默认返回扁平文件树（`files: false` 切换为符号大纲）；输出由引擎渲染与截断，目录遍历上限由引擎的 `walk_limit` 决定（当前 10000 文件）
 
 #### Scenario: 符号查看
 
