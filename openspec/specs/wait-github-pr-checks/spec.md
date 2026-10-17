@@ -74,8 +74,8 @@
 
 #### Scenario: 超时
 
-- **WHEN** 截止时仍有检查 pending（且没有 action_required，否则已按上一场景提前返回）
-- **THEN** 返回 `status: "pending"` 的在途快照（载荷列出未完成检查），不判 PASSED / FAILED，也不抛错
+- **WHEN** 截止时仍有检查 pending，且快照里没有 fail 或 action_required 检查
+- **THEN** 返回 `status: "pending"` 的在途快照（载荷列出未完成检查），不判 PASSED / FAILED，也不抛错；快照里已有 fail 时按「任一失败」返回 FAILED
 
 #### Scenario: 轮询容错
 

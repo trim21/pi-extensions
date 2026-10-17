@@ -77,8 +77,8 @@ interface CallableTool {
 /** 只在 pi 有 active 工具概念时才求交（子代理、`--tools` 等场景）。 */
 function allowedToolNames(pi: ExtensionAPI): Set<string> | undefined {
   try {
-    const active = pi.getActiveTools();
-    return active.length > 0 ? new Set(active) : undefined;
+    // 空列表也是合法值（例如 --tools 排除了全部工具），不能被当成「取不到」。
+    return new Set(pi.getActiveTools());
   } catch {
     return undefined;
   }
@@ -114,9 +114,9 @@ function buildDescription(tools: readonly CallableTool[]): string {
     "- Do not stringify whole results (`JSON.stringify(result)`) or print every field the tool happened to",
     "  return: urls, ids and metadata you will not use cost context and buy nothing.",
     "- `await sleep(seconds)` waits that many seconds (fractions allowed). It is the only way to",
-    '  wait: the sandbox has no timers, and it beats `call("Bash", { command: "sleep 1" })`.',
+    "  wait: the sandbox has no timers, and it beats shelling out to a tool just to sleep.",
     "- Nested calls cannot ask for user approval: a call that would need it (writing outside the",
-    "  workspace, unsandboxed Bash) fails. Make those calls directly instead of from a script.",
+    "  workspace, unsandboxed shell) fails. Make those calls directly instead of from a script.",
     '- `// @options: {"timeout_ms": N}` bounds the whole run in milliseconds; without it the script',
     "  has no time limit beyond the user aborting it.",
     "- `store.set(key, value)`, `store.get(key)` and `store.list()` are a small key/value store that",

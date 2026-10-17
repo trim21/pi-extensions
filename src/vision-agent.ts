@@ -300,10 +300,11 @@ export async function callVision(
 
 /** 视觉代理工具集（未配置视觉模型时返回 undefined）：入口从它取注册函数。 */
 export function createVisionTools(): ToolModule | undefined {
-  // 未配置视觉模型就不注册工具：agent 看不到也调不到。provider 的
-  // baseUrl/apiKey 由 pi 的模型注册表在调用时解析（execute 里 find），
-  // 配置好 settings.json / models.json 后重新加载（/reload）即可生效。
-  if (!loadVisionConfig()?.model) {
+  // 未配置 provider 或 model 就不注册工具：agent 看不到也调不到，避免出现必然失败的
+  // 僵尸工具。provider 的 baseUrl/apiKey 由 pi 的模型注册表在调用时解析（execute 里
+  // find），配置好 settings.json / models.json 后重新加载（/reload）即可生效。
+  const config = loadVisionConfig();
+  if (!config?.provider || !config.model) {
     return undefined;
   }
   return {

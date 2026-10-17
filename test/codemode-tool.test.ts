@@ -618,6 +618,14 @@ describe("codemode 工具", () => {
     expect(h.echoTool).not.toHaveBeenCalled();
   });
 
+  it("active 列表为空时普通工具也不可调用", async () => {
+    const h = await harness({ active: [] });
+    const result = await runScript(h, `return await call("echo", { message: "hi" });`);
+
+    expect(result.isError).toBe(true);
+    expect(h.echoTool).not.toHaveBeenCalled();
+  });
+
   it("codemode-only 工具不在 active 列表里也进描述并可调用", async () => {
     const githubTool = vi.fn(async (_id: string, params: { repo?: string }) => ({
       content: [{ type: "text" as const, text: "repo info" }],

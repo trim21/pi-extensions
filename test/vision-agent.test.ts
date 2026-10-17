@@ -416,6 +416,27 @@ describe("tool registration", () => {
     }
   });
 
+  it("skips registration when visionConfig has no provider", async () => {
+    const { visionAgent, tempHome } = await loadVisionAgentWithHome({
+      "settings.json": JSON.stringify({ visionConfig: { model: "m" } }),
+    });
+    try {
+      let tool: { name: string } | undefined;
+      visionAgent(
+        loadPi({
+          registerTool: (def: { name: string }) => {
+            tool = def;
+          },
+        }),
+      );
+
+      expect(tool).toBeUndefined();
+    } finally {
+      vi.resetModules();
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
   it("registers even when the provider is missing from models.json (resolved at execute time)", async () => {
     const { visionAgent, tempHome } = await loadVisionAgentWithHome({
       "settings.json": JSON.stringify({ visionConfig: { provider: "nope", model: "m" } }),

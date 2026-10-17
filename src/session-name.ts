@@ -163,10 +163,10 @@ export function extractFirstUserPrompt(
 ): string | undefined {
   const trimmed = currentPrompt.trim();
   for (const entry of branch) {
-    if (entry.type !== "message") {
+    if (entry.type !== "message" || entry.message?.role !== "user") {
       continue;
     }
-    const text = messageText(entry.message?.content);
+    const text = messageText(entry.message.content);
     if (text) {
       return text;
     }

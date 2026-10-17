@@ -18,8 +18,16 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { jobLogIndex, jobLogPath, repoFromRunUrl, stepLineSpans } from "../src/gh/index.js";
+import type { GhClient } from "../src/gh/base.js";
+import {
+  addReadCiLogsTool,
+  jobLogIndex,
+  jobLogPath,
+  repoFromRunUrl,
+  stepLineSpans,
+} from "../src/gh/index.js";
 import { type RunJob } from "../src/lib/github.js";
+import type { ToolBus } from "../src/lib/tool-bus.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, "fixtures");
@@ -435,4 +443,40 @@ describe("overlay-s3 — several steps starting in the same second", () => {
       [23, null],
     ]);
   });
+});
+
+function executeReadCiLogs(status: string) {
+  let run: ((params: { job_id: number; repo: string }) => Promise<unknown>) | undefined;
+  const bus = {
+    registerCodemodeOnly: (definition: { execute: (...args: never[]) => Promise<unknown> }) => {
+      run = (params) =>
+        definition.execute(
+          "call-1" as never,
+          params as never,
+          undefined as never,
+          { cwd: "/tmp" } as never,
+        );
+    },
+  } as unknown as ToolBus;
+  const gh = {
+    checks: { job: async () => ({ ...lintJob, status }) },
+  } as unknown as GhClient;
+  addReadCiLogsTool(gh, bus);
+  return run!;
+}
+
+describe("read-github-ci-logs 尚未开始的 job", () => {
+  it.each(["queued", "waiting", "requested", "pending"])(
+    "returns a structured failure for %s",
+    async (status) => {
+      const result = await executeReadCiLogs(status)({
+        job_id: lintJob.id,
+        repo: "trim21/php-serialize",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("has not started yet"),
+      });
+    },
+  );
 });

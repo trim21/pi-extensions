@@ -1050,6 +1050,31 @@ describe("lsp service watcher", () => {
     }
   });
 
+  it("监听器非资源耗尽失败时关闭，并在下次 reconcile 重建", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+    const fakes = installFakeWatcher();
+    const notify = vi.fn();
+    const spy = spyAdapter("a", dir);
+    const service = createLspService([spy.adapter], join(dir, "no-global.json"), { notify });
+    try {
+      await service.touchFile(file, dir);
+      await vi.waitFor(() => expect(fakes.length).toBe(1));
+
+      fakes[0].fail(`workspace watcher failed for ${dir}: Error: EACCES`);
+      await vi.waitFor(() => expect(fakes[0].stop).toHaveBeenCalledOnce());
+      expect(notify.mock.calls.some(([message]) => String(message).includes("EACCES"))).toBe(true);
+
+      // 失败后监听器已移出监听表；后续 reconcile（reload 是其中一个入口）会重建
+      await service.reload("a");
+      await vi.waitFor(() => expect(fakes.length).toBe(2));
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("会话 cwd 变化时重建 watcher（旧 watcher 停止）", async () => {
     const dir1 = await mkdtemp(join(tmpdir(), "lsp-config-"));
     const dir2 = await mkdtemp(join(tmpdir(), "lsp-config-"));

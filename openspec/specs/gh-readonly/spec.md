@@ -43,7 +43,7 @@ gh 工具集 MUST 经工具总线的 codemode-only 注册路径注册，曝光�
 
 GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST 抛出带上下文的错误：HTTP 状态、GitHub 的 message；搜索请求带触发请求的参数。认证失败（401）MUST 丢缓存 token 重试一次，仍失败才报错。调用方中止 MUST 通过 `signal` 传给请求，被中止的请求 MUST 记为失败而不是成功。
 
-取数据路径 MUST NOT 再依赖 `gh` 的退出码与 stderr 文本构造错误；`gh` 子进程只剩「当前仓库」解析与 token 获取两处：前者失败抛 `GhError`（argv + 输出上下文），后者失败抛带 stderr 的普通 `Error` 并提示 `gh auth login`。
+取数据路径 MUST NOT 再依赖 `gh` 的退出码与 stderr 文本构造错误；`gh` 子进程只剩「当前仓库」解析与 token 获取两处：前者失败抛 `GhError`（argv + 输出上下文），后者失败抛带 stderr 的普通 `Error` 并提示 `gh auth login`。REST 请求 MUST NOT 设应用层超时：长任务由调用方用 `signal` 取消（等待类工具另有自己的轮询上限），`gh` 子进程的默认超时只覆盖 repo 解析与 token 获取。
 
 #### Scenario: REST 请求失败报错
 
@@ -59,8 +59,8 @@ GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST
 
 #### Scenario: 超时/中止标注
 
-- **WHEN** 调用方中止（Esc）、请求超时，或 `gh` 子进程超过 10 分钟预算
-- **THEN** 该次调用以失败结束（不是把空结果当成成功）；`gh` 子进程超时 / 中止先 SIGTERM、5 秒后 SIGKILL，被 kill 的进程退出码记为失败而非成功（`auth token` 使用 10 秒超时）
+- **WHEN** 调用方中止（Esc），或 `gh` 子进程超过预算（默认 10 分钟，`auth token` 为 10 秒）
+- **THEN** 该次调用以失败结束（不是把空结果当成成功）；REST 请求只由调用方中止信号取消，没有应用层请求超时；`gh` 子进程超时 / 中止发送 SIGTERM，被杀的进程退出码记为失败而非成功
 
 ### Requirement: issue 与 PR 查询
 
@@ -278,7 +278,7 @@ gh 工具 MUST 只用结构化结果交付数据：成功是 `{ ok: true; value 
 
 ## Implementation
 
-取数全部经 `src/lib/github.ts` 的 `createGithubApi`（octokit + token 缓存，401 丢缓存重试一次）：`GhClient`（`src/gh/base.ts`）构造**一个** accessor，`createGithubSearch` / `createGithubChecks` / `createGithubReads` 共用它，因此一个会话只 spawn 一次 `gh auth token`、只持有一个 Octokit。系统 `gh` 子进程只剩两处：`gh repo view --json nameWithOwner`（repo 缺省解析，失败抛 `GhError`）与 `gh auth token`（token 获取，失败抛带 stderr 的 `Error` 并提示 `gh auth login`），都经 `src/lib/gh-process.ts`（`spawn("gh", args, { shell: false })`，env 注入 `GH_PAGER=cat` 与代理变量，默认超时 10 分钟，超时 / 中止先 SIGTERM、5 秒后 SIGKILL；`auth token` 使用 10 秒超时）。
+取数全部经 `src/lib/github.ts` 的 `createGithubApi`（octokit + token 缓存，401 丢缓存重试一次）：`GhClient`（`src/gh/base.ts`）构造**一个** accessor，`createGithubSearch` / `createGithubChecks` / `createGithubReads` 共用它，因此一个会话只 spawn 一次 `gh auth token`、只持有一个 Octokit。系统 `gh` 子进程只剩两处：`gh repo view --json nameWithOwner`（repo 缺省解析，失败抛 `GhError`）与 `gh auth token`（token 获取，失败抛带 stderr 的 `Error` 并提示 `gh auth login`），都经 `src/lib/gh-process.ts`（`spawn("gh", args, { shell: false })`，env 注入 `GH_PAGER=cat` 与代理变量，默认超时 10 分钟，超时 / 中止发送 SIGTERM；`auth token` 使用 10 秒超时）。
 
 - **注册门控**：Windows 或 PATH 无 `gh` 时不注册工具（notify 均为 warning）。18 个工具全部经 `bus.registerCodemodeOnly` 注册（见 `openspec/specs/tool-registration/spec.md`），只登记在总线上、不交给 pi；`disabledTools` 命中时不注册。
 - **结果形状**：工具只返回结构化结果（`structuredResult` 的 Result 信封），没有面向模型的 `content` / `details`，也没有文本渲染层与输出预算；`read-github-pr-diff` 的变更统计由 `parseDiffStats`（`src/gh/diff-stats.ts`）从同一份 diff 解析。

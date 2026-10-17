@@ -373,18 +373,18 @@ export class ConfigAdapter implements LspServerAdapter {
 
   async spawn(root: string, cwd: string): Promise<LspServerHandle | undefined> {
     const bin = this.config.bin;
-    if (!bin) {
-      return undefined;
-    }
     const setup = this.config.setup;
-    // setup 的环境与 initializationOptionsCommand 同构（process env + 已解析 env），
-    // 配置了 setup 时先解析 env；未配置时保持原顺序，bin 缺失不执行 env 命令。
+    // setup 的环境与 initializationOptionsCommand 同构（process env + 已解析 env）。
+    // 它无条件先执行：即使没配 bin 或 bin 解析不到，也要先跑 setup。
     let env = setup ? await resolveEnv(this.config.env, root, cwd) : undefined;
     let setupArgv: string[] | undefined;
     if (setup) {
       const variables = { ...process.env, ...env };
       setupArgv = resolveCommandArgv(setup, root, cwd, variables);
       await runSetupCommand(setupArgv, { cwd: root, env: variables });
+    }
+    if (!bin) {
+      return undefined;
     }
     const resolved = await resolveBinary(bin, root, cwd);
     if (!resolved) {
