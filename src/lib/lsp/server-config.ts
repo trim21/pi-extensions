@@ -13,7 +13,8 @@
  *
  * executable 发现统一由用户配置：bin 支持绝对路径 / 项目工作区
  * （node_modules/.bin、.venv/bin、venv/bin）/ PATH，不再内置各语言的
- * 特殊探测逻辑（tsserver 路径、venv python 等）。
+ * 特殊探测逻辑（tsserver 路径、venv python 等）。servers.<id> 可声明
+ * `setup`：启动前无条件执行的准备命令（binary 能解析到时也执行，须幂等）。
  */
 
 import { execFile as nodeExecFile } from "node:child_process";
@@ -50,6 +51,13 @@ export const serverConfigSchema = Type.Object({
   /** 可执行文件：绝对路径、相对调用 cwd 的路径，或名字（项目工作区优先，PATH 兜底）。 */
   bin: Type.Optional(Type.String()),
   args: Type.Optional(Type.Array(Type.String())),
+  /**
+   * 启动服务器实例前无条件执行的准备命令（argv 直接执行、不经 shell，每项支持
+   * {root} / {cwd} 模板与 ${VAR} / ${VAR:-default} 插值）：用于补装可执行文件等，
+   * binary 能解析到时也执行，命令须幂等。stdout 被忽略；失败（spawn 错误 / 非零退出）
+   * 或执行后 bin 仍解析不到时服务器启动失败并报错。
+   */
+  setup: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
   /**
    * 追加到子进程的环境变量。string 值支持 {root} / {cwd} 模板与 ${VAR} 引用；
    * {sh: [...]} 在启动时执行命令（argv 直接执行、不经 shell），stdout trim 后作为值，
@@ -169,13 +177,13 @@ interface ConfigCommandOptions {
 /**
  * argv 直接执行（不经 shell，避免注入面；需要 shell 特性时配置里自行包
  * ["bash", "-c", "..."]），stdout trim 后返回。
- * 失败（spawn 错误 / 非零退出 / 空输出）时抛错，由 lsp.ts 捕获后 notify 给用户。
+ * 失败（spawn 错误 / 非零退出）时抛错，由 lsp.ts 捕获后 notify 给用户。
  */
-async function runConfigCommand(argv: string[], options: ConfigCommandOptions): Promise<string> {
+async function execConfigCommand(argv: string[], options: ConfigCommandOptions): Promise<string> {
   const { cwd, env, label } = options;
-  let stdout: string;
   try {
-    ({ stdout } = await execFile(argv[0], argv.slice(1), { cwd, env }));
+    const { stdout } = await execFile(argv[0], argv.slice(1), { cwd, env });
+    return stdout.trim();
   } catch (error) {
     const err = error as NodeJS.ErrnoException & { stderr?: string };
     const reason = typeof err.code === "number" ? `exit code ${err.code}` : err.message;
@@ -185,11 +193,33 @@ async function runConfigCommand(argv: string[], options: ConfigCommandOptions): 
       { cause: error },
     );
   }
-  const output = stdout.trim();
+}
+
+/** stdout 即命令结果（env 命令 / initializationOptionsCommand）：空输出视为失败。 */
+async function runConfigCommand(argv: string[], options: ConfigCommandOptions): Promise<string> {
+  const output = await execConfigCommand(argv, options);
   if (!output) {
-    throw new Error(`${label} (${argv.join(" ")}) produced empty output`);
+    throw new Error(`${options.label} (${argv.join(" ")}) produced empty output`);
   }
   return output;
+}
+
+/** setup 命令：stdout 无意义（允许为空），只要求零退出。 */
+async function runSetupCommand(
+  argv: string[],
+  options: Omit<ConfigCommandOptions, "label">,
+): Promise<void> {
+  await execConfigCommand(argv, { ...options, label: "setup command" });
+}
+
+/** 命令 argv：{root} / {cwd} 模板 + ${VAR} / ${VAR:-default} 插值。 */
+function resolveCommandArgv(
+  command: readonly string[],
+  root: string,
+  cwd: string,
+  variables: NodeJS.ProcessEnv,
+): string[] {
+  return command.map((arg) => interpolateEnvVars(resolveTemplate(arg, root, cwd), variables));
 }
 
 /** 命令 stdout 即 initializationOptions：JSON 对象，经 typebox 校验后作为配置值。 */
@@ -262,7 +292,7 @@ async function resolveInitializationOptions(
   if (!command) {
     return staticOptions;
   }
-  const argv = command.map((arg) => interpolateEnvVars(resolveTemplate(arg, root, cwd), variables));
+  const argv = resolveCommandArgv(command, root, cwd, variables);
   const output = await runConfigCommand(argv, {
     cwd: root,
     env: variables,
@@ -346,11 +376,26 @@ export class ConfigAdapter implements LspServerAdapter {
     if (!bin) {
       return undefined;
     }
+    const setup = this.config.setup;
+    // setup 的环境与 initializationOptionsCommand 同构（process env + 已解析 env），
+    // 配置了 setup 时先解析 env；未配置时保持原顺序，bin 缺失不执行 env 命令。
+    let env = setup ? await resolveEnv(this.config.env, root, cwd) : undefined;
+    let setupArgv: string[] | undefined;
+    if (setup) {
+      const variables = { ...process.env, ...env };
+      setupArgv = resolveCommandArgv(setup, root, cwd, variables);
+      await runSetupCommand(setupArgv, { cwd: root, env: variables });
+    }
     const resolved = await resolveBinary(bin, root, cwd);
     if (!resolved) {
+      if (setupArgv) {
+        throw new Error(
+          `setup command (${setupArgv.join(" ")}) succeeded but binary "${bin}" is still not found`,
+        );
+      }
       return undefined;
     }
-    const env = await resolveEnv(this.config.env, root, cwd);
+    env ??= await resolveEnv(this.config.env, root, cwd);
     const initialization = await resolveInitializationOptions(this.config, root, cwd, env);
     return {
       process: spawnProcess(resolved, this.config.args ?? [], {
