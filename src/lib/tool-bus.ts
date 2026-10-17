@@ -408,7 +408,7 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
         }
         return {
           ...result,
-          isError: false,
+          isError: result.isError === true,
           ...(checked.result !== undefined && { structuredResult: checked.result }),
         };
       } catch (error) {

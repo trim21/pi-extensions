@@ -245,9 +245,9 @@ pi（Bash 工具进程，持有 stdin 写端）
 
 - **pid namespace 内核清理**：holder（node）是 pid ns 的 init，init 以任何方式退出（含 SIGKILL）时内核自动终止 pid ns 内全部进程（mihomo），userns/netns 引用随之归零——这是防僵尸 namespace 的根基，无需在每条退出路径手工清理。slirp4netns 不在该 pid ns 内（它必须在宿主 netns 启动才能让出站走宿主视角），不受这套内核清理覆盖，靠 exit-fd 与 holder 绑定生命周期。
 - **stdin EOF 父进程死亡检测**：pi spawn 时 stdin 用 pipe，pi 持有写端；pi 崩溃（含 SIGKILL）时内核关闭 fd（进程退出必然关 fd），holder 读到 EOF 即退出，走同一套内核清理。比轮询 `kill(pid, 0)` 精确（无延迟、无 pid 复用误判），也不依赖 `prctl(PR_SET_PDEATHSIG)`（node 未暴露该 API；且 PDEATHSIG 只监控直接父进程，而 holder 的直接父进程是 unshare 而非 pi）。
-- **停止信号**：holder 是 `unshare` 包装进程，util-linux 的 unshare 在 fork 前 `sigprocmask(SIG_BLOCK, {SIGINT, SIGTERM})` 且只在子进程里恢复掩码，父进程永久阻塞这两个信号——发给它的 SIGTERM 只会 pending 永不投递。停止网络栈必须对其用 SIGKILL（不可阻塞），unshare 立即退出后 init 经 `--kill-child=SIGTERM` 的 PDEATHSIG 收到 SIGTERM，优雅停 mihomo 后退出。
-- **--kill-child=SIGTERM**：语义是「unshare 死亡时子进程收到 SIGTERM」（util-linux 在 fork 出的子进程里 `prctl(PR_SET_PDEATHSIG, SIGTERM)`，并用 pidfd 处理 fork 后父进程已死的竞态），不是信号转发；stop / 失败清理用 `readChildPids` 拿 init 的宿主 pid 做 SIGKILL 兜底（PDEATHSIG 未生效时）。
-- **NSpid 取宿主 pid**：pid ns 内 `/proc` 挂载是宿主的（`-Urnp` 不含 `-m`，`/proc/1` 是宿主 init 而非本 pid ns 的 init），slirp4netns 的 setns 目标必须用 `/proc/self/status` 的 NSpid 第一项（宿主视角 pid）。
+- **停止信号**：正常停栈走 fd 通道（见下），不按 pid 发信号；holder 是 `unshare` 包装进程，util-linux 的 unshare 在 fork 前 `sigprocmask(SIG_BLOCK, {SIGINT, SIGTERM})` 且只在子进程里恢复掩码，父进程永久阻塞这两个信号——发给它的 SIGTERM 只会 pending 永不投递。只有 fd 通道超时、需要兜底强杀时才用 SIGKILL（不可阻塞），unshare 立即退出后 init 经 `--kill-child=SIGTERM` 的 PDEATHSIG 收到 SIGTERM，优雅停 mihomo 后退出。
+- **--kill-child=SIGTERM**：语义是「unshare 死亡时子进程收到 SIGTERM」（util-linux 在 fork 出的子进程里 `prctl(PR_SET_PDEATHSIG, SIGTERM)`，并用 pidfd 处理 fork 后父进程已死的竞态），不是信号转发；兜底强杀时用 `readChildPids` 拿 init 的宿主 pid 做 SIGKILL。
+- **holder pid 用宿主侧 pid**：`spawn("unshare", ...)` 返回的进程 pid 直接作为 slirp4netns 的 `--userns-path` / `--netns-type=pid` 目标与 `nsenter -t` 的参数；不读 `/proc/self/status` 的 NSpid。
 - **配置 base64 直传**：mihomo 支持 `-config` 直接接收 base64 JSON，无临时文件；holder 内 `chdir("/")` 防止在宿主 cwd 意外落盘。
 - **就绪检测按行匹配**：`waitForMihomoStarted` 用 `src/lib/proc.ts` 的 `forEachLine` 按 `\n` 拼行后匹配 `"Tun adapter listening"`，正确处理跨 data chunk 的行。
 - **DNS 两条入口**：宿主 `resolv.conf` 指向 loopback stub（systemd-resolved 的 `127.0.0.53`）时，这类查询不出网络设备、进不了 TUN，过滤进程因此额外监听本机地址的 53（`listen: 0.0.0.0:53`）。上游 MUST NOT 用 loopback（netns 内它指向网络栈自身，会把域名解析回 fake IP 成环）：候选值排除 loopback 与 IPv6，全被排除时依次回退到 systemd-resolved 维护的真实上游列表、egress 通道自带的解析器（`10.0.2.3`，在宿主侧解析）。

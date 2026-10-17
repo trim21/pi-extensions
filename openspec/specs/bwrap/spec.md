@@ -144,7 +144,7 @@ bash 命令在沙箱内执行，可写文件系统边界由 **fs 模式**决定�
 #### Scenario: 模式可经命令切换
 
 - **WHEN** 运行 `/bwrap-fs-readonly`、`/bwrap-fs-workspace-write`、`/bwrap-fs-allow-all`、`/bwrap-network-block`、`/bwrap-network-limited`、`/bwrap-network-allow-all`
-- **THEN** 对应轴当前会话的取值即时切换（`/bwrap` 查看现状，`/bwrap-reload` 重读配置并重建网络栈）
+- **THEN** 对应轴当前会话的取值即时切换（`/bwrap` 查看现状，`/bwrap-reload` 重读配置文件；网络栈由每条命令按当前配置现建现停，没有常驻实例需要重建）
 
 ### Requirement: 沙箱命令的预览与执行一致
 
@@ -184,12 +184,12 @@ bash 命令在沙箱内执行，可写文件系统边界由 **fs 模式**决定�
 
 ## Implementation
 
-沙箱执行路径：`BwrapRuntime.execute` → `runInSandbox`（`src/bwrap/sandbox.ts`）→ 组装 bwrap 调用（`buildBwrapInvocation`）→ 执行（`execInvocation`），两者都在 `src/bwrap/exec.ts`；`network: "limited"` 模式先经 `createNetworkStack`（`src/bwrap/core.ts`）建网络栈，执行时再由执行层加上 `nsenter` 前缀进入 holder 的 userns + netns。配置解析（`core.ts`）与执行（`exec.ts`）分开：前者不碰进程，后者不知道配置从哪来。
+沙箱执行路径：`BwrapRuntime.execute` → `runInSandbox`（`src/bwrap/sandbox.ts`）→ 组装 bwrap 调用（`buildBwrapInvocation`）→ 执行（`execInvocation`），两者都在 `src/bwrap/exec.ts`；`network: "limited"` 模式先经 `createNetworkStack`（`src/bwrap/core.ts`）建网络栈，执行时再由执行层加上 `nsenter` 前缀进入 holder 的 userns + netns。配置解析与 bwrap argv 组装在 `core.ts`，子进程生命周期在 `exec.ts`；`core.ts` 的 `createNetworkStack` 会按需启动 holder / slirp / mihomo，`exec.ts` 不关心配置来源。
 
-- **bwrap argv 组装**：`--ro-bind / /` 只读挂载整个根，然后按配置叠加 `--bind-try`（可写路径，不存在自动忽略）、`--ro-bind-try`（保护目录）、`--tmpfs` / `/dev/null` 覆盖（denyPaths）；`--unshare-user --unshare-pid` 提供 user/pid namespace 隔离。完整命令行（含 `nsenter` 前缀）由 `invocationArgv` 一处产出，`--print-args` 预览与实际执行共用它。
+- **bwrap argv 组装**：`--new-session --die-with-parent --unshare-user --unshare-pid` 建立独立会话与 user/pid namespace，`--dev /dev --proc /proc` 挂载设备与 procfs，`--ro-bind / /` 只读挂载整个根，然后按配置叠加 `--bind-try`（可写路径，不存在自动忽略）、`--ro-bind-try`（保护目录）、`--tmpfs` / `/dev/null` 覆盖（denyPaths）；指定 uid/gid 时追加 `--uid` / `--gid`，`network: "block"` 追加 `--unshare-net`。完整命令行（含 `nsenter` 前缀）由 `invocationArgv` 一处产出，`--print-args` 预览与实际执行共用它。
 - **执行路径的错误语义**：`execInvocation` 是唯一的子进程生命周期实现——命令以独立进程组启动，超时与取消都终止整组，超时抛 `TimeoutError`（`message` 为 `timeout:<秒>`）、取消抛 `signal.reason`（默认 AbortError）；启动失败立即结束并清掉已排定的超时定时器。经 netns 与不经 netns 两条路径共用它，语义不因网络模式而变。
-- **模式解析**（`resolveBwrap`）：fs 与 network 是两个独立轴；仅当两者都为 `allow-all` 时 `bwrapEnabled` 为 false、命令不经 bwrap 直接本地执行。`readonly` 清空可写路径，`workspace-write` 用配置的可写路径，`allow-all` 把整棵根挂成可写（保护绑定随之取消）。headless 会话不强制模式，只在需要用户审批时按拒绝处理（无 UI 可弹框）。
-- **审批**：`dangerouslyDisableSandbox` 命令的判定由 `createApprovalRuleSet`（`src/bwrap/approval-rules.ts`）独占——`evaluate` 给出 allow / deny / 交人审（用 tree-sitter 解析命令并按 BashArity 生成模式，`git checkout main` → `git checkout *`，含嵌套 `$(...)` 内的命令；deny 优先、allow 需全链命中、含输出重定向 `>` / `>>` / `&>` 时不自动放行、单条命令上靠后的规则优先）；审批子菜单只列 `pendingPatterns`（候选模式去重后仍未命中 allow 的）；用户勾选后由 `addAllowRules` 追加并调用注入的 `persist` 落盘。规则集的三条协作方（规则 getter、候选模式生成、持久化实现）都由 runtime 注入：规则 getter 让它跟随 `resolved` 的替换（`/bwrap-reload`、`/bwrap-fs-*`）而不必重建，持久化实现把项目配置文件写回与缓存刷新留在 runtime。
-- **配置加载**：`~/.pi/agent/sandbox.json`（全局）与 `.pi/sandbox.json`（项目）合并，项目优先；fs / network 可用 `/bwrap-fs-*` / `/bwrap-network-*` 命令运行时切换。固定沙箱（子代理 frontmatter 声明的配置）不注册 `/bwrap-*` 命令，避免切模式放宽声明的沙箱。
+- **模式解析**（`resolveBwrap`）：fs 与 network 是两个独立轴；仅当两者都为 `allow-all` 时 `bwrapEnabled` 为 false、命令不经 bwrap 直接本地执行。`readonly` 清空 `writablePaths` 与 `extraWritablePaths`，`workspace-write` 用配置的可写路径，`allow-all` 把整棵根挂成可写（保护绑定随之取消）。headless 会话不强制模式，只在需要用户审批时按拒绝处理（无 UI 可弹框）。Windows 上每条命令都走审批；bwrap 缺失时 fail-closed。
+- **审批**：`dangerouslyDisableSandbox` 命令的判定由 `createApprovalRuleSet`（`src/bwrap/approval-rules.ts`）独占——`evaluate` 给出 allow / deny / 交人审（用 tree-sitter 解析命令并按命令原文做通配匹配，含嵌套 `$(...)` 内的命令；deny 优先、allow 需全链命中、含输出重定向 `>` / `>>` / `&>` / `>&file` 时不自动放行、单条命令上靠后的规则优先）；审批子菜单只列 `pendingPatterns`（候选模式去重后仍未命中 allow 的），候选模式由 BashArity 归一生成（`git checkout main` → `git checkout *`），只用于建议、不参与 `evaluate` 匹配；用户勾选后由 `addAllowRules` 追加并调用注入的 `persist` 落盘。规则集的三条协作方（规则 getter、候选模式生成、持久化实现）都由 runtime 注入：规则 getter 让它跟随 `resolved` 的替换（`/bwrap-reload`、`/bwrap-fs-*`）而不必重建，持久化实现把项目配置文件写回与缓存刷新留在 runtime。
+- **配置加载**：`~/.pi/agent/sandbox.json`（全局）与 `.pi/sandbox.json`（项目）合并，项目优先；fs / network 可用 `/bwrap-fs-*` / `/bwrap-network-*` 命令运行时切换。默认值为 `fs.mode: workspace-write`、`fs.writablePaths: [".", "/tmp"]`、`network.mode: block`、`extraArgs: []`；`bwrapPath`、`network.mihomoPath`、`network.slirp4netnsPath` 可覆盖二进制路径。审批规则可经 `/bwrap-deny-request` 与 `/bwrap-allow-request` 切换本会话的拒绝/放行策略。固定沙箱（子代理 frontmatter 声明的配置）不注册 `/bwrap-*` 命令，避免切模式放宽声明的沙箱。
 
 涉及文件：`src/bwrap/core.ts`、`src/bwrap/exec.ts`、`src/bwrap/sandbox.ts`、`src/bwrap/runtime.ts`。
