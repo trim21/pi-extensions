@@ -140,15 +140,44 @@ LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，
 
 #### Scenario: 忽略规则
 
-- **WHEN** 事件路径命中内置忽略（`node_modules`、`.git`、`dist`、`build`、`.venv`、`venv`、`target`、`coverage`）或配置追加的忽略 glob
+- **WHEN** 事件路径命中内置忽略（`node_modules`、`.git`、`dist`、`build`、`.venv`、`venv`、`target`、`coverage`、`__pycache__`、`.mypy_cache`、`.pytest_cache`、`.ruff_cache`、`.cache`、`.next`、`.turbo`、`.gradle`、`.tox`、`.nox`、`.idea`）或配置追加的忽略 glob
 - **THEN** 不转发该路径
+- **WHEN** 目录名是 `out`、`bin` 或 `obj`
+- **THEN** 默认不排除（这些名字可能是源码或构建输入目录），只有命中上述清单、gitignore 或配置 `ignore` 时才排除
+
+#### Scenario: 遵循 gitignore 的整体忽略目录
+
+- **WHEN** 监听 root 位于 git 工作树内，且 `watch.useGitignore` 未关闭（缺省开启）
+- **THEN** 按 git 自身的忽略判定（含嵌套 `.gitignore`、`.git/info/exclude`、全局 excludesfile 与取反规则）找出被整体忽略的目录，这些目录 MUST NOT 建立文件监听，其下事件也不投递
+- **WHEN** 被 gitignore 匹配的只是单个文件而非整个目录
+- **THEN** 该路径不因此被排除，仍按内置忽略与配置 `ignore` 决定是否投递
+
+#### Scenario: gitignore 不可用或配置关闭
+
+- **WHEN** 监听 root 不是 git 工作树、系统没有可用的 git、git 扫描失败或超时，或 `watch.useGitignore` 为 `false`
+- **THEN** 监听器按内置忽略与配置 `ignore` 正常工作，不报错、不阻断监听器启动
+
+#### Scenario: .gitignore 变更后刷新
+
+- **WHEN** 监听范围内的 `.gitignore` 被创建、修改或删除
+- **THEN** 该 root 的忽略集合按新规则重建监听器，后续事件遵循新规则；`.git/info/exclude` 与全局 excludesfile 的变更不要求自动刷新
+
+#### Scenario: 监听器资源耗尽时降级到轮询
+
+- **WHEN** 监听器无法建立或中途失败，原因是资源耗尽（ENOSPC / EMFILE 等系统级限制），且 `watch.pollingFallback` 未关闭（缺省开启）
+- **THEN** 该 root MUST NOT 停止监听：改用快照轮询按 `watch.pollingIntervalMs`（缺省 5000ms）对比文件树并继续投递文件事件，同时一次性提示已降级
 
 #### Scenario: 监听器不可用时降级
 
 - **WHEN** 监听器无法启动或中途失败（如系统 watch 资源耗尽）
 - **THEN** 关闭该 root 的监听器并一次性提示，写后诊断链路保持原有行为，不使工具调用失败
-- **WHEN** 失败原因是资源耗尽（ENOSPC / EMFILE 等系统级限制）
-- **THEN** 在 `/lsp-reload` 之前不再为该 root 重建监听器（重试前须先提高系统限制）
+- **WHEN** 失败原因是资源耗尽（ENOSPC / EMFILE 等系统级限制）且 `watch.pollingFallback` 为 `false`
+- **THEN** 保持原有行为：关闭该 root 的监听器并一次性提示，在 `/lsp-reload` 之前不再重建
+
+#### Scenario: 轮询失败
+
+- **WHEN** 轮询期间快照读写失败
+- **THEN** 停止轮询并回落到监听器停用与降级提示，不使工具调用失败
 
 #### Scenario: 生命周期跟随服务器
 
