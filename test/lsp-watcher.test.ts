@@ -242,6 +242,33 @@ describe("workspace watcher", () => {
     }
   });
 
+  it("ignoreDirs 绝对路径目录在内核层生效（新建嵌套子树无事件）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
+    const ignored = join(dir, "gitignored");
+    const { watcher, batches } = await collect(dir, {
+      debounceMs: 50,
+      flushMs: 200,
+      ignoreDirs: [ignored],
+    });
+    try {
+      await mkdir(join(ignored, "inner"), { recursive: true });
+      await sleep(150);
+      await writeFile(join(ignored, "inner", "f.txt"), "x");
+      await writeFile(join(dir, "keep.txt"), "x");
+      await sleep(250);
+      await watcher.stop();
+      const all = batches.flat();
+      expect(all.filter((c) => c.path.includes("gitignored"))).toHaveLength(0);
+      expect(all).toContainEqual({
+        path: join(dir, "keep.txt"),
+        type: "created",
+        isDirectory: false,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   itLinux(
     "忽略目录不创建内核 watch（inotify fdinfo inode 断言）",
     async () => {
@@ -295,6 +322,47 @@ describe("workspace watcher", () => {
       await watcher.stop();
       expect(truncated).toBe(1);
       expect(batches.flat()).toHaveLength(3);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("常见缓存 / 工具产物目录被忽略，out / bin / obj 不忽略", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
+    const { watcher, batches } = await collect(dir, { debounceMs: 50, flushMs: 200 });
+    // out / bin / obj 可能是源码或构建输入目录，默认不排除
+    const ignored = [
+      "__pycache__",
+      ".mypy_cache",
+      ".pytest_cache",
+      ".ruff_cache",
+      ".cache",
+      ".next",
+      ".turbo",
+      ".gradle",
+      ".tox",
+      ".nox",
+      ".idea",
+    ];
+    const kept = ["out", "bin", "obj"];
+    try {
+      for (const name of [...ignored, ...kept]) {
+        await mkdir(join(dir, name), { recursive: true });
+        await writeFile(join(dir, name, "x.txt"), "x");
+      }
+      // 等待非忽略目录的事件到齐，确保忽略目录的事件（若有）也已经投递过
+      await waitFor(() =>
+        kept.every((name) => batches.flat().some((c) => c.path === join(dir, name, "x.txt"))),
+      );
+      await watcher.stop();
+      const all = batches.flat();
+      for (const name of ignored) {
+        expect(all.filter((c) => c.path.includes(join(dir, name)))).toHaveLength(0);
+      }
+      for (const name of kept) {
+        // parcel 的 create 与首次写入可能合并成 update，只断言路径可见
+        expect(all.some((c) => c.path === join(dir, name, "x.txt"))).toBe(true);
+      }
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

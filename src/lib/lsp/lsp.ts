@@ -22,9 +22,10 @@
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { extname, join, normalize, relative, sep } from "node:path";
+import { basename, extname, join, normalize, relative, resolve, sep } from "node:path";
 
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { debounce, type DebouncedFunc } from "lodash-es";
 import { minimatch } from "minimatch";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
@@ -45,6 +46,7 @@ import {
   WATCH_KIND_DELETE,
 } from "./client.js";
 import { type DiagnosticReport, EMPTY_DIAGNOSTIC_REPORT, report } from "./diagnostic.js";
+import { gitignoredDirectories } from "./gitignore.js";
 import {
   createAdapters,
   matchesInclude,
@@ -67,6 +69,12 @@ const watchConfigSchema = Type.Object({
   maxBatch: Type.Optional(Type.Number({ minimum: 1 })),
   /** 追加忽略 glob（相对工作区根的 POSIX 路径）。 */
   ignore: Type.Optional(Type.Array(Type.String())),
+  /** 是否把 git 判定为整体忽略的目录排除在监听范围外（缺省 true）。 */
+  useGitignore: Type.Optional(Type.Boolean()),
+  /** inotify 资源耗尽时是否降级为快照轮询（缺省 true）。 */
+  pollingFallback: Type.Optional(Type.Boolean()),
+  /** 降级轮询的间隔（ms，沿用 timeoutValue 字符串写法，缺省 5000）。 */
+  pollingIntervalMs: Type.Optional(timeoutValue),
 });
 
 /** lsp.json 的配置项（全局与本地同构；只描述用户可写的原始形态，缺省见 watchDefaults / clientDefaults）。 */
@@ -106,12 +114,17 @@ const watchDefaults = {
   debounceMs: 300,
   flushMs: 1_000,
   maxBatch: 500,
+  useGitignore: true,
+  pollingFallback: true,
+  pollingIntervalMs: 5_000,
 } as const;
 
 /** 服务器启动失败后自动重试的冷却（ms）；冷却内跳过，之后下次触碰自动重试。 */
 const RETRY_COOLDOWN_MS = 60_000;
 /** 同一服务器启动失败错误通知的最小间隔（ms），冷却重试反复失败时不刷屏。 */
 const NOTIFY_INTERVAL_MS = 5 * 60_000;
+/** .gitignore 变更后重建监听的去抖窗口（ms）。 */
+const WATCHER_REBUILD_DEBOUNCE_MS = 500;
 
 /** 生效的工作区监听配置（缺省值已应用）。 */
 interface EffectiveWatchConfig {
@@ -120,6 +133,9 @@ interface EffectiveWatchConfig {
   flushMs: number;
   maxBatch: number;
   ignore: string[];
+  useGitignore: boolean;
+  pollingFallback: boolean;
+  pollingIntervalMs: number;
 }
 
 /**
@@ -190,6 +206,9 @@ export function resolveConfig(raw: LspConfig): ResolvedLspConfig {
       flushMs: watchDefaults.flushMs,
       maxBatch: raw.watch?.maxBatch ?? watchDefaults.maxBatch,
       ignore: raw.watch?.ignore ?? [],
+      useGitignore: raw.watch?.useGitignore ?? watchDefaults.useGitignore,
+      pollingFallback: raw.watch?.pollingFallback ?? watchDefaults.pollingFallback,
+      pollingIntervalMs: toMs(raw.watch?.pollingIntervalMs) ?? watchDefaults.pollingIntervalMs,
     },
     maxOpenDocuments: raw.maxOpenDocuments ?? clientDefaults.maxOpenDocuments,
     diagnosticsDebounceMs: toMs(raw.diagnosticsDebounceMs) ?? clientDefaults.diagnosticsDebounceMs,
@@ -563,6 +582,8 @@ export function createLspService(
   const watcherFailed = new Set<string>();
   /** 已提示过监听器失败的目录：失败后重建前不重复刷屏；重建成功后移除。 */
   const watcherErrorNotified = new Set<string>();
+  /** 待重建的监听目录 → 去抖函数（.gitignore 变更后重算忽略集合）。 */
+  const rebuildWatcherDebounced = new Map<string, DebouncedFunc<() => void>>();
 
   /**
    * client root 的有效监听目录：root 在 cwd 内即 root；root 是 cwd 的祖先时
@@ -604,6 +625,36 @@ export function createLspService(
     );
   }
 
+  /** .gitignore 变更后重建该 root 的监听器：忽略集合由 git 现算，必须重新扫描。 */
+  async function rebuildWatcher(root: string): Promise<void> {
+    if (state.closing || state.disabled) {
+      return;
+    }
+    const current = watchers.get(root);
+    watchers.delete(root);
+    if (current) {
+      await current.stop().catch(() => {
+        // 停止失败不影响重建
+      });
+    }
+    if (state.cwd) {
+      await reconcileWatchers(state.cwd);
+    }
+  }
+
+  /** 短时间内的多次 .gitignore 改动合并成一次重建。 */
+  function scheduleWatcherRebuild(root: string): void {
+    let schedule = rebuildWatcherDebounced.get(root);
+    if (!schedule) {
+      schedule = debounce(() => {
+        rebuildWatcherDebounced.delete(root);
+        void rebuildWatcher(root);
+      }, WATCHER_REBUILD_DEBOUNCE_MS);
+      rebuildWatcherDebounced.set(root, schedule);
+    }
+    schedule();
+  }
+
   /** 为单个目录建立监听器；启动失败返回 undefined（已提示）。 */
   async function startWatcher(
     root: string,
@@ -615,7 +666,8 @@ export function createLspService(
     const watcherStatus = { startFailed: false };
     const onError = (message: string): void => {
       watcherStatus.startFailed = true;
-      // 资源耗尽不可恢复：停用该目录直到 /lsp-reload（对齐 VS Code 对 ENOSPC 的处理）；
+      // 到这里说明没有可用的降级（pollingFallback 关闭，或轮询自身失败）：
+      // 资源耗尽时停用该目录直到 /lsp-reload（对齐 VS Code 对 ENOSPC 的处理）；
       // 其他失败只关闭本次监听器，下次 reconcile 仍会重建。
       const exhausted = /ENOSPC|EMFILE|No space left on device/i.test(message);
       if (exhausted) {
@@ -637,12 +689,27 @@ export function createLspService(
         "error",
       );
     };
+    // gitignore 过滤是优化路径：扫描失败时退回内置忽略，不影响监听器启动
+    let ignoreDirs: string[] = [];
+    if (watch.useGitignore) {
+      const ignored = await gitignoredDirectories(root);
+      ignoreDirs = ignored.map((dir) => resolve(root, dir));
+    }
+    const onChanges = (changes: FileChange[]): void => {
+      void fanOut(changes);
+      if (watch.useGitignore && changes.some((change) => basename(change.path) === ".gitignore")) {
+        scheduleWatcherRebuild(root);
+      }
+    };
     try {
-      const watcher = await watchWorkspace(root, (changes) => void fanOut(changes), {
+      const watcher = await watchWorkspace(root, onChanges, {
         debounceMs: watch.debounceMs,
         flushMs: watch.flushMs,
         maxBatch: watch.maxBatch,
         ignore: watch.ignore,
+        ignoreDirs,
+        pollingIntervalMs: watch.pollingFallback ? watch.pollingIntervalMs : undefined,
+        onDegraded: (message) => report?.(message, "warning"),
         onError,
         onTruncated: () =>
           report?.(
@@ -1146,6 +1213,10 @@ export function createLspService(
     state.brokenFailAt.clear();
     state.brokenNotifiedAt.clear();
     state.servers.clear();
+    for (const schedule of rebuildWatcherDebounced.values()) {
+      schedule.cancel();
+    }
+    rebuildWatcherDebounced.clear();
     await stopWatchers();
     watcherFailed.clear();
     watcherErrorNotified.clear();

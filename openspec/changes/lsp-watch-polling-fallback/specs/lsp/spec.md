@@ -1,0 +1,79 @@
+# Spec Delta
+
+## MODIFIED Requirements
+
+### Requirement: 工作区文件事件同步
+
+系统 SHALL 为当前活跃服务器实例的项目根维护递归文件监听器，把监听范围内的文件创建 / 修改 / 删除事件以 `workspace/didChangeWatchedFiles` 批量通知给已启动的语言服务器。事件源不限于本 agent 自己写入的文件。同一目录只监听一次：被其他活跃 root 包含的 root 不单独建立监听器；root 不在会话 cwd 内时退化为监听 cwd。
+
+#### Scenario: 事件类型映射
+
+- **WHEN** 监听范围内文件被创建、内容被修改、或被删除
+- **THEN** 分别以 `didChangeWatchedFiles` type 1（created）、2（changed）、3（deleted）通知；删除与创建须能区分（底层事件不区分二者时按文件当前是否存在判定）
+
+#### Scenario: 工作区之外不跟踪
+
+- **WHEN** 变更路径不在会话 `cwd` 之内（含服务器 root 位于 `cwd` 之上的情况）
+- **THEN** 不产生任何通知，保持现有仅由工具触发的同步行为
+
+#### Scenario: 按活跃项目根限定监听范围
+
+- **WHEN** 活跃 client 的 root 是会话 cwd 的子目录（`rootMarkers` / `workingDir` 场景）
+- **THEN** 只对活跃 root 建立递归监听器，cwd 下没有活跃 client 的其他目录 MUST NOT 产生任何文件监听；投递仍按各 client 的 root 与注册 pattern 过滤
+- **WHEN** 多个活跃 client 的 root 存在包含关系（如 `/repo` 与 `/repo/packages/a`）
+- **THEN** 只监听最外层 root，不为被包含的 root 重复建立监听器
+
+#### Scenario: 去抖与批量上限
+
+- **WHEN** 短时间内产生大量事件（安装依赖、构建、分支切换）
+- **THEN** 事件合并为有限批次发送；单批超过上限时截断并一次性提示，不逐条刷屏
+
+#### Scenario: 忽略规则
+
+- **WHEN** 事件路径命中内置忽略（`node_modules`、`.git`、`dist`、`build`、`.venv`、`venv`、`target`、`coverage`、`__pycache__`、`.mypy_cache`、`.pytest_cache`、`.ruff_cache`、`.cache`、`.next`、`.turbo`、`.gradle`、`.tox`、`.nox`、`.idea`）或配置追加的忽略 glob
+- **THEN** 不转发该路径
+- **WHEN** 目录名是 `out`、`bin` 或 `obj`
+- **THEN** 默认不排除（这些名字可能是源码或构建输入目录），只有命中上述清单、gitignore 或配置 `ignore` 时才排除
+
+#### Scenario: 遵循 gitignore 的整体忽略目录
+
+- **WHEN** 监听 root 位于 git 工作树内，且 `watch.useGitignore` 未关闭（缺省开启）
+- **THEN** 按 git 自身的忽略判定（含嵌套 `.gitignore`、`.git/info/exclude`、全局 excludesfile 与取反规则）找出被整体忽略的目录，这些目录 MUST NOT 建立文件监听，其下事件也不投递
+- **WHEN** 被 gitignore 匹配的只是单个文件而非整个目录
+- **THEN** 该路径不因此被排除，仍按内置忽略与配置 `ignore` 决定是否投递
+
+#### Scenario: gitignore 不可用或配置关闭
+
+- **WHEN** 监听 root 不是 git 工作树、系统没有可用的 git、git 扫描失败或超时，或 `watch.useGitignore` 为 `false`
+- **THEN** 监听器按内置忽略与配置 `ignore` 正常工作，不报错、不阻断监听器启动
+
+#### Scenario: .gitignore 变更后刷新
+
+- **WHEN** 监听范围内的 `.gitignore` 被创建、修改或删除
+- **THEN** 该 root 的忽略集合按新规则重建监听器，后续事件遵循新规则；`.git/info/exclude` 与全局 excludesfile 的变更不要求自动刷新
+
+#### Scenario: 监听器资源耗尽时降级到轮询
+
+- **WHEN** 监听器无法建立或中途失败，原因是资源耗尽（ENOSPC / EMFILE 等系统级限制），且 `watch.pollingFallback` 未关闭（缺省开启）
+- **THEN** 该 root MUST NOT 停止监听：改用快照轮询按 `watch.pollingIntervalMs`（缺省 5000ms）对比文件树并继续投递文件事件，同时一次性提示已降级
+
+#### Scenario: 监听器不可用时降级
+
+- **WHEN** 监听器无法启动或中途失败（如系统 watch 资源耗尽）
+- **THEN** 关闭该 root 的监听器并一次性提示，写后诊断链路保持原有行为，不使工具调用失败
+- **WHEN** 失败原因是资源耗尽（ENOSPC / EMFILE 等系统级限制）且 `watch.pollingFallback` 为 `false`
+- **THEN** 保持原有行为：关闭该 root 的监听器并一次性提示，在 `/lsp-reload` 之前不再重建
+
+#### Scenario: 轮询失败
+
+- **WHEN** 轮询期间快照读写失败
+- **THEN** 停止轮询并回落到监听器停用与降级提示，不使工具调用失败
+
+#### Scenario: 生命周期跟随服务器
+
+- **WHEN** 服务器 client 启动
+- **THEN** 其项目根纳入监听范围（已被其他 root 覆盖时不重复监听）
+- **WHEN** 工作区内最后一个使用某 root 的服务器 client 关闭（`/lsp-stop`、`/lsp-reload`、session 结束）
+- **THEN** 该 root 的监听器停止；服务器再次启动时重新建立
+- **WHEN** 会话工作目录变化
+- **THEN** 按新的 cwd 重算监听范围

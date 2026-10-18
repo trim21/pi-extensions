@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LspServerAdapter } from "../src/lib/lsp/adapter.js";
 import { clientDefaults } from "../src/lib/lsp/client.js";
+import { gitignoredDirectories } from "../src/lib/lsp/gitignore.js";
 import {
   createLspManager,
   createLspService,
@@ -32,6 +33,10 @@ import { type FileChange, watchWorkspace } from "../src/lib/lsp/watcher.js";
 
 vi.mock("../src/lib/lsp/watcher.js", () => ({
   watchWorkspace: vi.fn(),
+}));
+
+vi.mock("../src/lib/lsp/gitignore.js", () => ({
+  gitignoredDirectories: vi.fn(async () => []),
 }));
 
 const fixture = fileURLToPath(new URL("fixtures/mock-lsp-server.mjs", import.meta.url));
@@ -110,6 +115,9 @@ describe("mergeConfig + resolveConfig", () => {
           "flushMs": 1000,
           "ignore": [],
           "maxBatch": 500,
+          "pollingFallback": true,
+          "pollingIntervalMs": 5000,
+          "useGitignore": true,
         },
       }
     `);
@@ -151,6 +159,9 @@ describe("mergeConfig + resolveConfig", () => {
           "flushMs": 1000,
           "ignore": [],
           "maxBatch": 500,
+          "pollingFallback": true,
+          "pollingIntervalMs": 5000,
+          "useGitignore": true,
         },
       }
     `);
@@ -202,6 +213,9 @@ describe("mergeConfig + resolveConfig", () => {
           "flushMs": 1000,
           "ignore": [],
           "maxBatch": 500,
+          "pollingFallback": true,
+          "pollingIntervalMs": 5000,
+          "useGitignore": true,
         },
       }
     `);
@@ -229,6 +243,9 @@ describe("mergeConfig + resolveConfig", () => {
           "flushMs": 1000,
           "ignore": [],
           "maxBatch": 500,
+          "pollingFallback": true,
+          "pollingIntervalMs": 5000,
+          "useGitignore": true,
         },
       }
     `);
@@ -259,10 +276,45 @@ describe("mergeConfig + resolveConfig", () => {
             "**/.git/**",
           ],
           "maxBatch": 500,
+          "pollingFallback": true,
+          "pollingIntervalMs": 5000,
+          "useGitignore": true,
         },
       }
     `);
     expect(client).toEqual(clientDefaults);
+  });
+
+  it("watch.useGitignore 缺省开启，本地可覆盖全局", () => {
+    expect(resolveConfig({}).watch.useGitignore).toBe(true);
+    expect(resolveConfig({ watch: { useGitignore: false } }).watch.useGitignore).toBe(false);
+    expect(
+      resolveConfig(
+        mergeConfig({ watch: { useGitignore: true } }, { watch: { useGitignore: false } }),
+      ).watch.useGitignore,
+    ).toBe(false);
+    expect(
+      resolveConfig(mergeConfig({ watch: { useGitignore: false } }, { watch: { maxBatch: 10 } }))
+        .watch.useGitignore,
+    ).toBe(false);
+  });
+
+  it("watch.pollingFallback 与 pollingIntervalMs 缺省值及本地覆盖", () => {
+    expect(resolveConfig({}).watch.pollingFallback).toBe(true);
+    expect(resolveConfig({}).watch.pollingIntervalMs).toBe(5_000);
+    expect(resolveConfig({ watch: { pollingIntervalMs: "2s" } }).watch.pollingIntervalMs).toBe(
+      2_000,
+    );
+    expect(resolveConfig({ watch: { pollingFallback: false } }).watch.pollingFallback).toBe(false);
+    expect(
+      resolveConfig(
+        mergeConfig({ watch: { pollingIntervalMs: 1_000 } }, { watch: { pollingFallback: false } }),
+      ).watch,
+    ).toMatchObject({ pollingIntervalMs: 1_000, pollingFallback: false });
+    expect(
+      resolveConfig(mergeConfig({ watch: { pollingFallback: false } }, { watch: { maxBatch: 10 } }))
+        .watch.pollingFallback,
+    ).toBe(false);
   });
 
   it("watch 本地与全局按字段合并：本地逐字段覆盖，ignore 取并集去重（全局在前）", () => {
@@ -297,6 +349,9 @@ describe("mergeConfig + resolveConfig", () => {
             "**/dist/**",
           ],
           "maxBatch": 100,
+          "pollingFallback": true,
+          "pollingIntervalMs": 5000,
+          "useGitignore": true,
         },
       }
     `);
@@ -323,6 +378,9 @@ describe("mergeConfig + resolveConfig", () => {
             "**/*.log",
           ],
           "maxBatch": 100,
+          "pollingFallback": true,
+          "pollingIntervalMs": 5000,
+          "useGitignore": true,
         },
       }
     `);
@@ -357,6 +415,9 @@ describe("mergeConfig + resolveConfig", () => {
           "flushMs": 1000,
           "ignore": [],
           "maxBatch": 500,
+          "pollingFallback": true,
+          "pollingIntervalMs": 5000,
+          "useGitignore": true,
         },
       }
     `);
@@ -886,6 +947,7 @@ describe("lsp service watcher", () => {
 
   beforeEach(() => {
     watchWorkspaceMock.mockClear();
+    vi.mocked(gitignoredDirectories).mockClear();
   });
 
   /** 每次启动返回一个可手动 emit / fail 的 fake watcher，记录监听目录与 stop 调用。 */
@@ -959,6 +1021,55 @@ describe("lsp service watcher", () => {
       expect(fakes[0].dir).toBe(dir);
       await service.shutdownAll();
       expect(fakes[0].stop).toHaveBeenCalledOnce();
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("gitignore 目录作为 ignoreDirs 下传，.gitignore 变更后重建监听器", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+    const fakes = installFakeWatcher();
+    const spy = spyAdapter("a", dir);
+    vi.mocked(gitignoredDirectories).mockResolvedValueOnce(["cache"]);
+    const service = createLspService([spy.adapter], join(dir, "no-global.json"));
+    try {
+      await service.touchFile(file, dir);
+      await vi.waitFor(() => expect(watchWorkspaceMock).toHaveBeenCalledOnce());
+      expect(watchWorkspaceMock.mock.calls[0][2]?.ignoreDirs).toEqual([join(dir, "cache")]);
+      expect(watchWorkspaceMock.mock.calls[0][2]?.pollingIntervalMs).toBe(5_000);
+
+      fakes[0].emit([{ path: join(dir, ".gitignore"), type: "changed", isDirectory: false }]);
+      await vi.waitFor(() => expect(fakes.length).toBe(2), { timeout: 2_000 });
+      expect(fakes[0].stop).toHaveBeenCalledOnce();
+      expect(vi.mocked(gitignoredDirectories).mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("watch.useGitignore / pollingFallback 关闭时不扫描 gitignore、不传轮询", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-config-"));
+    const file = join(dir, "x.py");
+    await writeFile(file, "x = 1\n");
+    await mkdir(join(dir, ".pi"), { recursive: true });
+    await writeFile(
+      join(dir, ".pi", "lsp.json"),
+      JSON.stringify({ watch: { useGitignore: false, pollingFallback: false } }),
+    );
+    const fakes = installFakeWatcher();
+    const spy = spyAdapter("a", dir);
+    const service = createLspService([spy.adapter], join(dir, "no-global.json"));
+    try {
+      await service.touchFile(file, dir);
+      await vi.waitFor(() => expect(watchWorkspaceMock).toHaveBeenCalledOnce());
+      expect(fakes[0].dir).toBe(dir);
+      expect(watchWorkspaceMock.mock.calls[0][2]?.ignoreDirs).toEqual([]);
+      expect(watchWorkspaceMock.mock.calls[0][2]?.pollingIntervalMs).toBeUndefined();
+      expect(gitignoredDirectories).not.toHaveBeenCalled();
     } finally {
       await service.shutdownAll();
       await rm(dir, { recursive: true, force: true });
