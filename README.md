@@ -21,6 +21,7 @@
 | [system-prompt](#system-prompt)           | 完全替换 pi 默认 system prompt                                                                |
 | [vision-agent](#vision-agent)             | 视觉代理：主模型不支持视觉时提供 `describe_image`，调用视觉模型识别图片                       |
 | [session-name](#session-name)             | 首个 user prompt 自动生成会话名，失败仅告警不命名                                             |
+| [request-headers](#request-headers)       | 给每个 provider 请求附加 `Thread-Id: <会话 id>` 请求头                                        |
 | [talk](#talk)                             | session 间消息传递，SQLite 邮箱 + 双向 ask 时间戳仲裁                                         |
 | [web](#web)                               | `web_search`（Search1API 搜索）与 `web_fetch`（正文提取 / 原样落盘）                          |
 | [openai-cost](#openai-cost)               | OpenAI Chat Completions，费用取自响应 `usage.cost`                                            |
@@ -86,7 +87,7 @@
 ## 工具启用配置
 
 所有工具由单一扩展入口 `src/index.ts` 注册（`package.json` 的 `pi.extensions` 只列
-`src/index.ts`、`src/session-name.ts`、`src/system-prompt/index.ts`）。启用的工具由
+`src/index.ts`、`src/request-headers.ts`、`src/session-name.ts`、`src/system-prompt/index.ts`）。启用的工具由
 `~/.pi/agent/settings.json` 的 `personalExtensions` section 决定：
 
 ```jsonc
@@ -622,6 +623,20 @@ pi -e ./src/vision-agent.ts
 
 ```bash
 pi -e ./src/session-name.ts
+```
+
+---
+
+## request-headers
+
+给每个发往 provider 的请求附加 `Thread-Id` 请求头，值为当前会话 id，便于网关按会话追踪与归属请求。已存在的 `Thread-Id` 会被覆盖；会话 id 在每次请求时读取，resume、fork 或 `/new` 后自动跟随。
+
+该扩展不注册工具，作为独立入口随包加载，不经过 `src/index.ts` 的工具总线。
+
+### 使用
+
+```bash
+pi -e ./src/request-headers.ts
 ```
 
 ---

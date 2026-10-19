@@ -67,6 +67,7 @@
   "pi": {
     "extensions": [
       "src/index.ts",
+      "src/request-headers.ts",
       "src/session-name.ts",
       "src/system-prompt/index.ts"
     ],
