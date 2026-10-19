@@ -14,6 +14,10 @@
  *   的 `ignore` 选项做后端层排除（忽略目录不递归、不建 watch），事件层再用
  *   minimatch 过滤一遍兜底语义差异；`ignoreDirs` 里的绝对路径目录只下传后端
  *   （被忽略目录不会产生事件，无需事件层重复过滤）；
+ * - 目录创建事件（`create`，含整树移入）到达后递归扫描该目录，把已存在的文件
+ *   补投为 created：parcel 给新目录建 watch 之前写入的文件没有内核事件；
+ * - 新建目录内已有子目录时补挂一个递归子订阅，覆盖整树移入后嵌套目录的后续
+ *   变更；父订阅与子订阅可能对同一路径各投递一次，重复投递是允许的；
  * - 单批超过 maxBatch（缺省 500）截断并回调 onTruncated 提示一次；
  * - 目录事件默认丢弃；目录被删除时上报（isDirectory: true）；
  * - 订阅因资源耗尽（ENOSPC / EMFILE）失败时，若配置了 pollingIntervalMs，
@@ -23,7 +27,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { lstat, mkdir, rename, rm } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { lstat, mkdir, readdir, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize, relative, sep } from "node:path";
 
@@ -94,16 +99,35 @@ export interface WorkspaceWatcher {
   stop(): Promise<void>;
 }
 
-function isIgnored(path: string, dir: string, patterns: string[]): boolean {
+function relativeCandidate(path: string, dir: string): string | undefined {
   const candidate = relative(dir, path).split(sep).join("/");
-  if (candidate.startsWith("..")) {
+  return candidate.startsWith("..") ? undefined : candidate;
+}
+
+function isIgnored(path: string, dir: string, patterns: string[]): boolean {
+  const candidate = relativeCandidate(path, dir);
+  return candidate !== undefined && patterns.some((pattern) => minimatch(candidate, pattern));
+}
+
+/** `**\/x/**` 只有按带尾斜杠的目录形式才能匹配目录本身。 */
+function isIgnoredDirectory(path: string, dir: string, patterns: string[]): boolean {
+  const candidate = relativeCandidate(path, dir);
+  if (candidate === undefined) {
     return false;
   }
-  return patterns.some((pattern) => minimatch(candidate, pattern));
+  return patterns.some(
+    (pattern) => minimatch(candidate, pattern) || minimatch(`${candidate}/`, pattern),
+  );
 }
+
+type ClassifiedEvent =
+  { kind: "change"; change: FileChange } | { kind: "directory"; path: string; created: boolean };
 
 /** inotify 资源耗尽：可降级为快照轮询；其他错误一律走 onError。 */
 const EXHAUSTED_ERROR = /ENOSPC|EMFILE|No space left on device/i;
+
+/** 目录在订阅前已被删除：跳过即可，不是监听器故障。 */
+const MISSING_PATH_ERROR = /ENOENT|ENOTDIR/;
 
 function snapshotPathFor(dir: string): string {
   const hash = createHash("sha1").update(dir).digest("hex");
@@ -132,6 +156,7 @@ export function watchWorkspace(
 
   let stopped = false;
   let subscription: AsyncSubscription | undefined;
+  const childSubscriptions = new Map<string, AsyncSubscription>();
 
   let pending: FileChange[] = [];
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -185,7 +210,122 @@ export function watchWorkspace(
     flushTimer = setTimeout(flush, debounceMs);
   };
 
-  const classify = async (path: string, type: FileChangeType): Promise<FileChange | undefined> => {
+  const readDirectory = async (path: string): Promise<Dirent[]> => {
+    try {
+      return await readdir(path, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+  };
+
+  const isInIgnoredDirectory = (path: string): boolean =>
+    ignoreDirs.some((ignored) => path === ignored || path.startsWith(ignored + sep));
+
+  const coveredByChildSubscription = (path: string): boolean => {
+    for (const root of childSubscriptions.keys()) {
+      if (path === root || path.startsWith(root + sep)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const removeChildSubscriptions = (path: string): void => {
+    for (const [root, child] of childSubscriptions) {
+      if (root !== path && !root.startsWith(path + sep)) {
+        continue;
+      }
+      childSubscriptions.delete(root);
+      void child.unsubscribe().catch(() => {
+        // 订阅已失败或已退订
+      });
+    }
+  };
+
+  const stopChildSubscriptions = async (): Promise<void> => {
+    const children = [...childSubscriptions.values()];
+    childSubscriptions.clear();
+    await Promise.all(
+      children.map((child) =>
+        child.unsubscribe().catch(() => {
+          // 订阅已失败或重复 stop
+        }),
+      ),
+    );
+  };
+
+  /** 递归补投新目录 / 移入子树里已经存在的文件。 */
+  const scanCreatedDirectory = async (path: string): Promise<void> => {
+    const entries = await readDirectory(path);
+    for (const entry of entries) {
+      if (stopped) {
+        return;
+      }
+      const child = join(path, entry.name);
+      if (entry.isDirectory()) {
+        if (isIgnoredDirectory(child, dir, ignorePatterns) || isInIgnoredDirectory(child)) {
+          continue;
+        }
+        seenDirectories.add(child);
+        await scanCreatedDirectory(child);
+        continue;
+      }
+      if (isIgnored(child, dir, ignorePatterns) || isInIgnoredDirectory(child)) {
+        continue;
+      }
+      push({ path: child, type: "created", isDirectory: false });
+    }
+  };
+
+  /**
+   * 新建目录里已有子目录时补挂递归子订阅：parcel 只给移入的顶层目录建 watch，
+   * 嵌套目录后续的变更不会产生内核事件。
+   */
+  const ensureChildSubscription = async (path: string): Promise<void> => {
+    if (snapshotFile !== undefined || pollingStarting || coveredByChildSubscription(path)) {
+      return;
+    }
+    const entries = await readDirectory(path);
+    const hasSubdirectory = entries.some((entry) => {
+      if (!entry.isDirectory()) {
+        return false;
+      }
+      const child = join(path, entry.name);
+      return !isIgnoredDirectory(child, dir, ignorePatterns) && !isInIgnoredDirectory(child);
+    });
+    if (!hasSubdirectory) {
+      return;
+    }
+    let child: AsyncSubscription;
+    try {
+      child = await subscribe(path, handleEvents, { ignore: [...ignorePatterns, ...ignoreDirs] });
+    } catch (error) {
+      // 目录在订阅前已被删除：扫描仍然会补齐它消失前的内容
+      if (MISSING_PATH_ERROR.test(String(error))) {
+        return;
+      }
+      handleError(error);
+      return;
+    }
+    if (stopped) {
+      await child.unsubscribe();
+      return;
+    }
+    childSubscriptions.set(path, child);
+  };
+
+  const handleCreatedDirectory = async (path: string): Promise<void> => {
+    if (isIgnoredDirectory(path, dir, ignorePatterns) || isInIgnoredDirectory(path)) {
+      return;
+    }
+    await ensureChildSubscription(path);
+    await scanCreatedDirectory(path);
+  };
+
+  const classify = async (
+    path: string,
+    type: FileChangeType,
+  ): Promise<ClassifiedEvent | undefined> => {
     if (path === dir) {
       return undefined;
     }
@@ -204,16 +344,16 @@ export function watchWorkspace(
       }
     }
     if (type === "deleted") {
-      return { path, type, isDirectory };
+      return { kind: "change", change: { path, type, isDirectory } };
     }
     // 事件与 lstat 之间的竞态：目标已消失按删除处理
     if (!exists) {
-      return { path, type: "deleted", isDirectory };
+      return { kind: "change", change: { path, type: "deleted", isDirectory } };
     }
     if (isDirectory) {
-      return undefined;
+      return { kind: "directory", path, created: type === "created" };
     }
-    return { path, type, isDirectory };
+    return { kind: "change", change: { path, type, isDirectory } };
   };
 
   /** 逐事件分类与忽略过滤；订阅路径不等待，轮询路径等待以避免两轮重叠。 */
@@ -225,9 +365,19 @@ export function watchWorkspace(
       const path = normalize(event.path);
       const type: FileChangeType =
         event.type === "create" ? "created" : event.type === "update" ? "changed" : "deleted";
-      const change = await classify(path, type);
-      if (!change) {
+      const classified = await classify(path, type);
+      if (!classified) {
         continue;
+      }
+      if (classified.kind === "directory") {
+        if (classified.created) {
+          await handleCreatedDirectory(classified.path);
+        }
+        continue;
+      }
+      const change = classified.change;
+      if (change.type === "deleted") {
+        removeChildSubscriptions(change.path);
       }
       if (isIgnored(change.path, dir, ignorePatterns)) {
         continue;
@@ -371,6 +521,7 @@ export function watchWorkspace(
       stopped = true;
       clearTimers();
       stopPolling();
+      await stopChildSubscriptions();
       if (subscription) {
         try {
           await subscription.unsubscribe();

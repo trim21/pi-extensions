@@ -2,10 +2,21 @@
  * 工作区文件监听器测试（watcher.ts）：
  * - created / changed / deleted 三类映射
  * - 新建子目录内文件可见、目录删除上报 isDirectory
+ * - 目录创建后立即写入、整树移入后的嵌套变更不丢事件
  * - 去抖合并成单批、忽略规则、超限截断只提示一次
  * - stop() 后不再回调
  */
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -96,15 +107,88 @@ describe("workspace watcher", () => {
       const sub = join(dir, "sub");
       const file = join(sub, "b.txt");
       await mkdir(sub);
-      // 递归 watcher 异步挂载新目录；立刻写文件会丢失 created 的 rename 事件，
-      // 只留下内容写入的 change 事件（被 classify 报成 changed）
-      await sleep(100);
+      // 不等待 watch 挂载：目录创建后的补扫负责补齐这段时间写入的文件
       await writeFile(file, "x");
-      await sleep(250);
+      await waitFor(() => batches.flat().some((c) => c.path === file));
       await watcher.stop();
       expect(batches.flat()).toContainEqual({ path: file, type: "created", isDirectory: false });
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("目录创建后立即写入的文件不会丢事件", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
+    const { watcher, batches } = await collect(dir, { debounceMs: 50, flushMs: 200 });
+    const names = Array.from({ length: 10 }, (_, i) => `fresh-${i}`);
+    const files = names.map((name) => join(dir, name, "x.txt"));
+    try {
+      // 连写 10 组 mkdir + writeFile，放大 parcel 建立 watch 前进写入的窗口
+      for (const name of names) {
+        await mkdir(join(dir, name));
+        await writeFile(join(dir, name, "x.txt"), "x");
+      }
+      await waitFor(() => files.every((file) => batches.flat().some((c) => c.path === file)));
+      await watcher.stop();
+      for (const file of files) {
+        expect(batches.flat().some((c) => c.path === file)).toBe(true);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("整树移入后补投已有文件，且嵌套目录的后续变更可见", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
+    const source = await mkdtemp(join(tmpdir(), "lsp-watcher-src-"));
+    const tree = join(dir, "tree");
+    const oldFile = join(tree, "nested", "old.txt");
+    const newFile = join(tree, "nested", "new.txt");
+    const { watcher, batches } = await collect(dir, { debounceMs: 50, flushMs: 200 });
+    try {
+      await mkdir(join(source, "tree", "nested"), { recursive: true });
+      await writeFile(join(source, "tree", "nested", "old.txt"), "x");
+      await rename(join(source, "tree"), tree);
+      await waitFor(() => batches.flat().some((c) => c.path === oldFile));
+      expect(batches.flat().some((c) => c.path === oldFile)).toBe(true);
+
+      // parcel 只给移入的顶层目录建 watch，嵌套目录靠补挂的子订阅
+      await writeFile(newFile, "y");
+      await waitFor(() => batches.flat().some((c) => c.path === newFile));
+      expect(batches.flat().some((c) => c.path === newFile)).toBe(true);
+
+      // 子订阅根被删除后父监听器仍然工作
+      await rm(tree, { recursive: true });
+      const afterDelete = join(dir, "after.txt");
+      await writeFile(afterDelete, "z");
+      await waitFor(() => batches.flat().some((c) => c.path === afterDelete));
+      await watcher.stop();
+      expect(batches.flat().some((c) => c.path === afterDelete)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(source, { recursive: true, force: true });
+    }
+  });
+
+  it("整树移入时忽略目录中的文件不投递", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-watcher-"));
+    const source = await mkdtemp(join(tmpdir(), "lsp-watcher-src-"));
+    const tree = join(dir, "tree");
+    const keptFile = join(tree, "src", "a.ts");
+    const { watcher, batches } = await collect(dir, { debounceMs: 50, flushMs: 200 });
+    try {
+      await mkdir(join(source, "tree", "node_modules", "pkg"), { recursive: true });
+      await mkdir(join(source, "tree", "src"), { recursive: true });
+      await writeFile(join(source, "tree", "node_modules", "pkg", "a.js"), "x");
+      await writeFile(join(source, "tree", "src", "a.ts"), "x");
+      await rename(join(source, "tree"), tree);
+      await waitFor(() => batches.flat().some((c) => c.path === keptFile));
+      await watcher.stop();
+      expect(batches.flat().some((c) => c.path === keptFile)).toBe(true);
+      expect(batches.flat().filter((c) => c.path.includes("node_modules"))).toHaveLength(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(source, { recursive: true, force: true });
     }
   });
 

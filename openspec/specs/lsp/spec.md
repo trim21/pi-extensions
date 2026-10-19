@@ -188,6 +188,40 @@ LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，
 - **WHEN** 会话工作目录变化
 - **THEN** 按新的 cwd 重算监听范围
 
+### Requirement: 新建目录与移入子树的文件事件
+
+目录创建事件（包括整棵目录树被 move 进监听范围）到达后，系统 MUST 补投该目录内已存在文件的事件，并 MUST 保证移入子树内的后续变更继续产生事件。
+
+#### Scenario: 新目录内已存在的文件补投
+
+- **WHEN** 监听范围内目录被创建，且在其子路径的内核 watch 生效之前已有文件写入
+- **THEN** 这些文件仍以 created 事件（type 1）投递，不得因内核事件缺失而静默丢弃
+
+#### Scenario: 整树移入补投
+
+- **WHEN** 一棵已包含文件的目录树被整体 move 进监听范围
+- **THEN** 树内已存在的文件按 created 事件投递，目录结构本身不单独投递
+
+#### Scenario: 移入子树的后续变更
+
+- **WHEN** 整树移入后，其嵌套目录内的文件被创建、修改或删除
+- **THEN** 仍正常产生 created / changed / deleted 事件，不得因只有顶层目录被监听而丢失
+
+#### Scenario: 扫描遵循忽略规则
+
+- **WHEN** 补扫遇到内置忽略目录、配置 `ignore` 命中路径或 `ignoreDirs` 中的目录
+- **THEN** 不扫描该子树、不投递其中路径，与现有事件层忽略语义一致
+
+#### Scenario: 重复事件
+
+- **WHEN** 同一路径同时被补扫与内核事件观察到
+- **THEN** 允许重复投递同一路径的事件，不要求去重
+
+#### Scenario: 监听停止
+
+- **WHEN** 监听器停止
+- **THEN** 为移入子树建立的监听一并停止，不再投递任何事件
+
 ### Requirement: 尊重服务器注册的监听 pattern
 
 系统 SHALL 记录服务器通过 `client/registerCapability` 注册的 `workspace/didChangeWatchedFiles` watchers glob（`client/unregisterCapability` 时移除），并按各服务器的 pattern 及其处理语言的扩展名过滤待投递事件。MUST NOT 在 ack 注册请求之后丢弃其 pattern 而不投递。
@@ -329,7 +363,7 @@ LSP 配置 SHALL 在 `session_start` 时加载并校验（pi await 该事件）�
 - **服务器启动**（`adapter.ts` / `server-config.ts`）：按 `include` glob 匹配启用（`!` 否定排除）；root 由 `serverRoot` 解析——配置 `rootMarkers` 时从调用 cwd 沿文件路径向下找第一个含标记的目录（cwd 自身命中即 cwd，未命中回退 cwd），否则即 `workingDir`（相对调用 cwd 解析）或调用 cwd；两者互斥，同时配置在 `resolveConfig` 报错。同一服务器可为不同 root 各启动一个实例。`bin` 按绝对路径 / 相对调用 cwd / 名字（先项目内 `node_modules/.bin`、`.venv/bin`、`venv/bin`，再 PATH）解析，`env` 的 `{root}` / `{cwd}` 模板按该文件的 root 生效。`env` 的 `{sh}`（cwd 为调用 cwd）与 `initializationOptionsCommand`（cwd 为该项目根、环境含已解析的 `env`）都在 spawn 前执行，后者 stdout 的 JSON 对象与静态 `initializationOptions` 深合并（命令输出优先）。
 - **协议**：`initializationOptions` 进 initialize 请求，`settings` 进 didChangeConfiguration / workspace/configuration；languageId 按扩展名映射（缺省内置映射表）。
 - **超时**：per-server `startupTimeoutMs` / `diagnosticsWaitMs` 覆盖全局与默认值；`diagnosticsWaitMs` 只覆盖文档等待上限，上一份 push 为空的文档另有 `diagnosticsSilentWaitTimeoutMs`（全局缺省 1500ms）的安静期，实际等待取两者较小值。
-- **文件监听**（`watcher.ts` / `lsp.ts` / `gitignore.ts`）：`@parcel/watcher` 递归监听**活跃 client 的项目根**（root 去重、不越 cwd，无活跃 client 不监听；内核层 ignore 使被忽略目录不建 watch，内置清单为 `node_modules`、`.git`、`dist`、`build`、`.venv`、`venv`、`target`、`coverage` 与常见缓存目录 `__pycache__`、`.mypy_cache`、`.pytest_cache`、`.ruff_cache`、`.cache`、`.next`、`.turbo`、`.gradle`、`.tox`、`.nox`、`.idea`；`out` / `bin` / `obj` 可能承载源码，不默认排除）；`watch.useGitignore` 开启（缺省）时用 `git ls-files --others --ignored --exclude-standard --directory` 把整体被忽略目录以绝对路径加入内核层 ignore（只取目录、3s 超时，非 git 或失败退回内置忽略），`.gitignore` 变更后重建该 root 的监听器；尾部去抖 + 最长 flush 批量回调；事件按各 client 的 root 前缀 / 注册 pattern / 扩展名过滤后以 `workspace/didChangeWatchedFiles` 投递（created=1 / changed=2 / deleted=3）；监听器因资源耗尽（ENOSPC / EMFILE）失败时，`watch.pollingFallback` 开启（缺省）则改用 `getEventsSince` + `writeSnapshot` 快照轮询（间隔 `pollingIntervalMs`，快照放在系统临时目录、stop 时删除，轮询失败回落到停用），否则停用该 root 直到 `/lsp-reload`；降级与失败均一次性提示，不影响诊断链路。
+- **文件监听**（`watcher.ts` / `lsp.ts` / `gitignore.ts`）：`@parcel/watcher` 递归监听**活跃 client 的项目根**（root 去重、不越 cwd，无活跃 client 不监听；内核层 ignore 使被忽略目录不建 watch，内置清单为 `node_modules`、`.git`、`dist`、`build`、`.venv`、`venv`、`target`、`coverage` 与常见缓存目录 `__pycache__`、`.mypy_cache`、`.pytest_cache`、`.ruff_cache`、`.cache`、`.next`、`.turbo`、`.gradle`、`.tox`、`.nox`、`.idea`；`out` / `bin` / `obj` 可能承载源码，不默认排除）；`watch.useGitignore` 开启（缺省）时用 `git ls-files --others --ignored --exclude-standard --directory` 把整体被忽略目录以绝对路径加入内核层 ignore（只取目录、3s 超时，非 git 或失败退回内置忽略），`.gitignore` 变更后重建该 root 的监听器；目录创建 / 整树移入后递归补扫该目录并补投已存在文件，移入子树含嵌套目录时补挂递归子订阅（父/子订阅允许重复投递）；尾部去抖 + 最长 flush 批量回调；事件按各 client 的 root 前缀 / 注册 pattern / 扩展名过滤后以 `workspace/didChangeWatchedFiles` 投递（created=1 / changed=2 / deleted=3）；监听器因资源耗尽（ENOSPC / EMFILE）失败时，`watch.pollingFallback` 开启（缺省）则改用 `getEventsSince` + `writeSnapshot` 快照轮询（间隔 `pollingIntervalMs`，快照放在系统临时目录、stop 时删除，轮询失败回落到停用），否则停用该 root 直到 `/lsp-reload`；降级与失败均一次性提示，不影响诊断链路。
 - **驻留与退场**（`client.ts`）：read / edit / write 进入有界 LRU（`maxOpenDocuments`，缺省 32），淘汰时 `didClose`；驻留文档被外部改动时先 `didClose` 再发 changed 事件，内容一致的自身写入 echo 完全忽略。
 
 涉及文件：`src/lib/lsp/`（lsp.ts / server-config.ts / adapter.ts / client.ts / watcher.ts / gitignore.ts / launch.ts / bin.ts / language.ts / diagnostic.ts / rename.ts / rename-tool.ts / inspect-tool.ts）。
