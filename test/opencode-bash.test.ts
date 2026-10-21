@@ -184,14 +184,10 @@ describe("opencode bash", () => {
       undefined,
       context(process.cwd()),
     );
-    expect(result.content.map((block: { text: string }) => block.text)).toMatchInlineSnapshot(`
-      [
-        "partial
-
-      Command exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
-        "sandbox status",
-      ]
-    `);
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "partial\n\n<system-reminder>\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.\n</system-reminder>",
+      "sandbox status",
+    ]);
   });
 
   it("appends the user sandbox reminder after a timeout", async () => {
@@ -215,7 +211,7 @@ describe("opencode bash", () => {
       context(process.cwd()),
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "partial\n\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
+      "partial\n\n<system-reminder>\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.\n</system-reminder>",
       "user sandbox reminder",
     ]);
   });
@@ -230,7 +226,7 @@ describe("opencode bash", () => {
       context(process.cwd()),
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "Command exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
+      "<system-reminder>\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.\n</system-reminder>",
     ]);
     expect(result.details).toEqual({ timeout: true });
   });
@@ -245,7 +241,7 @@ describe("opencode bash", () => {
       context(process.cwd()),
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "partial\n\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
+      "partial\n\n<system-reminder>\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.\n</system-reminder>",
     ]);
     expect(result.details).toEqual({ timeout: true });
   });
@@ -264,7 +260,9 @@ describe("opencode bash", () => {
     controller.abort();
     const result = await promise;
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      expect.stringMatching(/^partial\n\nCommand aborted by user after \d+\.\d seconds$/),
+      expect.stringMatching(
+        /^partial\n\n<system-reminder>\nCommand aborted by user after \d+\.\d seconds\n<\/system-reminder>$/,
+      ),
     ]);
     expect(result.details).toEqual({});
   });

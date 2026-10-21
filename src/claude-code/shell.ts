@@ -21,6 +21,7 @@ import {
   BASH_MAX_TIMEOUT_MS,
   bashStructuredSchema,
   spilledOutput,
+  systemReminder,
 } from "../lib/bash-tool.js";
 import { resolveWorkdir } from "../lib/path.js";
 import { defineStructuredTool, type ToolBus } from "../lib/tool-bus.js";
@@ -163,7 +164,9 @@ export function registerShellTools(bus: ToolBus, pi: ExtensionAPI, runtime: Bwra
             if (error.kind === "aborted") {
               // 用户取消：直接返回已捕获的输出，不抛错；时长只算命令真正运行的时间，
               // 不含审批弹窗等 UI 交互
-              const status = `Command aborted by user after ${formatElapsedSeconds(error.elapsedMs)}`;
+              const status = systemReminder(
+                `Command aborted by user after ${formatElapsedSeconds(error.elapsedMs)}`,
+              );
               return {
                 content: [
                   { type: "text" as const, text: text ? `${text}\n\n${status}` : status },
@@ -183,9 +186,8 @@ export function registerShellTools(bus: ToolBus, pi: ExtensionAPI, runtime: Bwra
                 },
               };
             }
-            const full = text
-              ? `${text}\n\nCommand timed out after ${timeout} milliseconds`
-              : `Command timed out after ${timeout} milliseconds`;
+            const status = systemReminder(`Command timed out after ${timeout} milliseconds`);
+            const full = text ? `${text}\n\n${status}` : status;
             return {
               content: [
                 { type: "text" as const, text: full },

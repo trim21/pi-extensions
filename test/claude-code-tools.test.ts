@@ -1352,7 +1352,9 @@ describe("Bash", () => {
       { command: "sleep 1", timeout: 20 },
       context(process.cwd()),
     );
-    expect(result.content[0].text).toBe("Command timed out after 20 milliseconds");
+    expect(result.content[0].text).toBe(
+      "<system-reminder>\nCommand timed out after 20 milliseconds\n</system-reminder>",
+    );
   });
 
   it("force-stops commands that ignore SIGTERM", async () => {
@@ -1370,7 +1372,9 @@ describe("Bash", () => {
       { command: "printf partial; sleep 1", timeout: 20 },
       context(process.cwd()),
     );
-    expect(result.content[0].text).toBe("partial\n\nCommand timed out after 20 milliseconds");
+    expect(result.content[0].text).toBe(
+      "partial\n\n<system-reminder>\nCommand timed out after 20 milliseconds\n</system-reminder>",
+    );
     expect(result.details).toBeUndefined();
     expect(result.structuredResult).toEqual({
       ok: true,
@@ -1390,7 +1394,7 @@ describe("Bash", () => {
     controller.abort();
     const result = await promise;
     expect(result.content[0].text).toMatch(
-      /^partial\n\nCommand aborted by user after \d+\.\d seconds$/,
+      /^partial\n\n<system-reminder>\nCommand aborted by user after \d+\.\d seconds\n<\/system-reminder>$/,
     );
     expect(result.structuredResult).toEqual({
       ok: true,
@@ -1482,7 +1486,7 @@ describe("Bash", () => {
       context(process.cwd()),
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "partial\n\nCommand timed out after 20 milliseconds",
+      "partial\n\n<system-reminder>\nCommand timed out after 20 milliseconds\n</system-reminder>",
       "user sandbox reminder",
     ]);
   });
