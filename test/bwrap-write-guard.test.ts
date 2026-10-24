@@ -1,30 +1,18 @@
 /**
- * 集成测试：真实 bwrap 沙箱下，可写边界恒为 session 工作区（ctx.cwd），
+ * 集成测试：原生执行器沙箱下，可写边界恒为 session 工作区（ctx.cwd），
  * Bash 的 workdir 参数只改变进程执行目录，不能把可写范围带出工作区。
- * 需要本机 bwrap 可用（user namespace 允许），否则整组跳过。
+ * 需要随包分发的原生执行器且环境允许嵌套 user/pid namespace，否则整组跳过。
  */
-import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { findBwrap } from "../src/bwrap/core.ts";
 import { createBwrapRuntime } from "../src/bwrap/runtime.js";
+import { nativeSandboxUsable } from "./bwrap-native-probe.js";
 
-const bwrapWorks = (() => {
-  try {
-    const probe = spawnSync(
-      findBwrap(),
-      ["--new-session", "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--", "true"],
-      { timeout: 10_000 },
-    );
-    return probe.status === 0;
-  } catch {
-    return false;
-  }
-})();
+const sandbox = nativeSandboxUsable();
 
 beforeAll(() => {
   // Bash 输出运行时落盘到 agent-dir/tmp：测试环境指向可写的临时目录
@@ -40,7 +28,7 @@ function workspaceRuntime(workspace: string) {
   return runtime;
 }
 
-describe.skipIf(!bwrapWorks)("bwrap write guard (workspace is ctx.cwd, not workdir)", () => {
+describe.skipIf(!sandbox)("bwrap write guard (workspace is ctx.cwd, not workdir)", () => {
   it("writes freely inside the workspace", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "cc-guard-in-"));
     const runtime = workspaceRuntime(workspace);

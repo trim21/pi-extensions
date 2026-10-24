@@ -33,7 +33,6 @@ import {
   type BwrapConfig,
   bwrapConfigFileSchema,
   findBwrap,
-  findMihomo,
   type FsMode,
   getBwrapConfigPaths,
   loadBwrapConfig,
@@ -42,6 +41,7 @@ import {
   resolveBwrapPath,
   type ResolvedBwrap,
 } from "./core.js";
+import { resolveMihomoPath } from "./executor.js";
 import { escapeHtml } from "./html.js";
 import { loadSandboxConfig, runInSandbox } from "./sandbox.js";
 
@@ -389,18 +389,6 @@ export function sandboxHintBlock(hint: string | undefined): { type: "text"; text
   return hint === undefined ? [] : [{ type: "text", text: hint }];
 }
 
-/** 网络栈在命令运行期间异常退出时，把落盘的诊断日志路径附进沙箱状态提示。 */
-function withNetworkStackLog(
-  hint: string | undefined,
-  logPath: string | undefined,
-): string | undefined {
-  if (logPath === undefined) {
-    return hint;
-  }
-  const line = `The sandbox network stack exited during the command; diagnostics: ${logPath}`;
-  return hint === undefined ? line : `${hint}\n${line}`;
-}
-
 /**
  * 项目配置文件形状非法时的错误：消息带文件路径与字段位置，cause 保留校验错误
  * （Value.Check 只回答是否合法，详情用同一 schema 解析一次取到）。
@@ -600,9 +588,9 @@ export class BwrapRuntime {
     // allow-all；例外是用户选「Run this in sandbox」：提权被拒，命令照常进沙箱
     const local = !userChoseSandbox && (isWindows || needsApproval || !runtime.bwrapEnabled);
     // mihomoPath 是 ResolvedBwrap 的 override 语义：首次 limited 执行时解析
-    // 一次存入私有字段，之后写回 resolved 直达 createNetworkStack，不逐命令扫描 PATH
+    // 一次存入私有字段，之后写回 resolved 直达策略组装，不逐命令扫描 PATH
     if (runtime.network === "limited") {
-      runtime.mihomoPath ??= this.mihomoPath ?? findMihomo();
+      runtime.mihomoPath ??= this.mihomoPath ?? resolveMihomoPath();
       this.mihomoPath = runtime.mihomoPath;
     }
     // 命令失败时附带的沙箱状态（写边界 + 网络层级），由上层拼进错误文本。
@@ -630,7 +618,7 @@ export class BwrapRuntime {
     );
 
     try {
-      const { exitCode, networkStackLog } = await runInSandbox(runtime, {
+      const { exitCode } = await runInSandbox(runtime, {
         workspace,
         commandCwd: execCwd,
         command: request.command,
@@ -645,7 +633,7 @@ export class BwrapRuntime {
       const partial = await this.finalizeOutput(output);
       return {
         exitCode,
-        sandboxHint: withNetworkStackLog(sandboxHint, networkStackLog),
+        sandboxHint,
         ...(sandboxReminder && { sandboxReminder }),
         output: partial.output,
         ...(partial.fullOutputPath && { fullOutputPath: partial.fullOutputPath }),
