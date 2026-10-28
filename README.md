@@ -104,6 +104,8 @@
     "enabledTools": [{ "tools": ["web_search"], "models": ["glm-*"] }],
     // 只进 codemode、不交给模型的工具（须声明结构化输出才会生效）
     "codemodeOnlyTools": [{ "tools": ["aft_*"], "models": ["deepseek-*"] }],
+    // bash 命令的额外环境变量：沙箱内外都生效，同名变量覆盖基础值
+    "shell": { "env": { "GIT_EDITOR": "true", "GIT_SEQUENCE_EDITOR": "true" } },
   },
 }
 ```
@@ -120,6 +122,11 @@
 
 有些工具由代码固定为 codemode-only（例如 gh-readonly 那一组，见
 [GitHub 只读工具](#github-只读工具)），不需要这条配置；`disabledTools` 对它们同样生效。
+
+`shell.env` 是 bash 工具的额外环境变量表，沙箱内执行与不经沙箱的本地执行都注入，同名
+变量以它为准（可以覆盖沙箱默认的 `HOME` / `PATH` / `LANG` 等；`bash -lc` 之后 profile
+仍可能再改动）。典型用法是让命令不要拉起编辑器。它只影响 bash 工具，LSP、`gh`、codemode
+脚本等其它子进程的环境不变。
 
 **判定时机是每个会话启动**：pi 在启动 / `/new` / `resume` / `/fork` / `/reload` 时重建
 扩展，注册就发生在 `session_start` 里（模型在扩展加载期读不到），因此新会话按自己的

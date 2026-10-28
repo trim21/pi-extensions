@@ -44,11 +44,14 @@ export interface BwrapInvocation {
 /**
  * 组装一次 bwrap 调用。实际执行（`execInvocation`）与调试打印共用这里，
  * 保证 `--print-args` 输出的命令行与真正跑的那条完全一致。
+ *
+ * `extraEnv` 是配置注入的额外环境变量：合并进这份干净环境，同名时覆盖基础值。
  */
 export async function buildBwrapInvocation(
   resolved: ResolvedBwrap,
   workspace: string,
   command: string,
+  extraEnv?: Readonly<Record<string, string>>,
 ): Promise<BwrapInvocation> {
   // 干净环境：不继承父进程 env/PATH，由 bash -lc 从 /etc/profile 与用户 profile 重建
   const home = process.env.HOME;
@@ -77,6 +80,7 @@ export async function buildBwrapInvocation(
       LANG: "C.UTF-8",
       // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
       PATH: "/usr/local/bin:/usr/bin:/bin",
+      ...extraEnv,
     },
     needsNetworkStack: resolved.network === "limited",
   };
@@ -219,11 +223,13 @@ export function execInvocation(
 /**
  * @param workspace session 工作区：writablePaths 的 "." 与 PROTECTED_DIRS 都基于它解析，
  *   与当次命令的 cwd（仅作为进程执行目录）解耦，避免 workdir 参数漂移可写边界。
+ * @param extraEnv 配置注入的额外环境变量，覆盖沙箱环境里的同名基础值。
  */
 export function createBwrapBashOperations(
   resolved: ResolvedBwrap,
   workspace: string,
   networkStack?: NetworkStack,
+  extraEnv?: Readonly<Record<string, string>>,
 ): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout }) {
@@ -233,7 +239,7 @@ export function createBwrapBashOperations(
       // 已中断（signal.reason 是 name=AbortError 的 DOMException）：直接抛，不再执行
       signal?.throwIfAborted();
 
-      const invocation = await buildBwrapInvocation(resolved, workspace, command);
+      const invocation = await buildBwrapInvocation(resolved, workspace, command, extraEnv);
       return execInvocation(invocation, {
         cwd,
         holderPid: networkStack?.holderPid,

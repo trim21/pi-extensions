@@ -229,7 +229,10 @@ export function subagentToolsExtension(
 ): ExtensionFactory {
   return (pi) => {
     const registration = createToolRegistration(pi);
-    const services = createToolServices(pi, { sandbox: agent.sandbox ?? SUBAGENT_DEFAULT_SANDBOX });
+    const services = createToolServices(pi, {
+      sandbox: agent.sandbox ?? SUBAGENT_DEFAULT_SANDBOX,
+      shellEnv: registration.config.shellEnv,
+    });
     const kind = toolsetsForToolNames(tools);
     if (!kind) {
       return;

@@ -22,6 +22,7 @@ import { resolveWorkdir } from "../lib/path.js";
 import { createRequestPolicy } from "../lib/request-policy.js";
 import { defineStructuredTool, type ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
+import { readToolsConfig } from "../lib/tools-config.js";
 
 /** 对齐上游 opencode 的截断提示文案（tools/BashTool/bash.ts）。 */
 const CAPTURE_TRUNCATED_NOTICE = "[output capture truncated at the in-memory safety limit]";
@@ -52,7 +53,11 @@ function appendTruncationNotice(
  */
 export default function opencodeBash(
   pi: ExtensionAPI,
-  runtime: BwrapRuntime = createBwrapRuntime(createRequestPolicy(pi.events)),
+  runtime: BwrapRuntime = createBwrapRuntime(
+    createRequestPolicy(pi.events),
+    undefined,
+    readToolsConfig().shellEnv,
+  ),
 ): void {
   registerToolsOnSessionStart(pi, (bus) => registerBashTool(bus, pi, runtime));
 }

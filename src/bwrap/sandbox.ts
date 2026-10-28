@@ -12,7 +12,7 @@
 
 import { existsSync } from "node:fs";
 
-import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
+import { type BashOperations, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 
 import { expandHome } from "../lib/path.js";
 import {
@@ -56,6 +56,11 @@ export interface SandboxRunOptions {
   timeout?: number;
   /** 调用方已决定不经沙箱（审批通过的全权限、Windows）。fs 与 network 均 allow-all 时无需显式设置。 */
   unsandboxed?: boolean;
+  /**
+   * 额外环境变量（`personalExtensions.shell.env`）：沙箱路径合并进沙箱环境并覆盖同名基础值，
+   * 本地路径以父进程环境为基底合并——两条执行方式都要注入。
+   */
+  env?: Readonly<Record<string, string>>;
   /** 网络栈子进程输出转发，仅诊断用（默认丢弃）。 */
   log?: NetworkStackLog;
   /** 网络栈就绪回调：取 holder pid 与 mihomo 配置路径手动排查。 */
@@ -106,6 +111,20 @@ export function loadSandboxConfig(input: SandboxConfigInput): ResolvedBwrap {
   return resolveSandboxPaths(resolveBwrap(configured), workspace);
 }
 
+/** 本地执行路径注入 env：没配置时保持 pi 的默认环境（含它补的 bin 目录）。 */
+function withExtraEnv(
+  operations: BashOperations,
+  env: Readonly<Record<string, string>> | undefined,
+): BashOperations {
+  if (env === undefined || Object.keys(env).length === 0) {
+    return operations;
+  }
+  return {
+    exec: (command, cwd, options) =>
+      operations.exec(command, cwd, { ...options, env: { ...process.env, ...env } }),
+  };
+}
+
 /**
  * 在 resolved 描述的沙箱里执行一条命令；network limited 模式下现建现停网络栈。
  * 超时与取消的错误语义由底层 operations.exec 抛出（TimeoutError / AbortError）。
@@ -126,8 +145,8 @@ export async function runInSandbox(
       options.onNetworkStack?.(stack);
     }
     const operations = local
-      ? createLocalBashOperations()
-      : createBwrapBashOperations(resolved, workspace, stack);
+      ? withExtraEnv(createLocalBashOperations(), options.env)
+      : createBwrapBashOperations(resolved, workspace, stack, options.env);
     const { exitCode } = await operations.exec(options.command, commandCwd, {
       onData: options.onData,
       signal: options.signal,
@@ -192,12 +211,15 @@ export interface SandboxPreview {
  */
 export async function previewSandboxCommand(
   resolved: ResolvedBwrap,
-  options: Pick<SandboxRunOptions, "workspace" | "command" | "commandCwd" | "unsandboxed"> & {
+  options: Pick<
+    SandboxRunOptions,
+    "workspace" | "command" | "commandCwd" | "unsandboxed" | "env"
+  > & {
     holderPid?: number;
   },
 ): Promise<SandboxPreview> {
   const workspace = expandHome(options.workspace);
-  const invocation = await buildBwrapInvocation(resolved, workspace, options.command);
+  const invocation = await buildBwrapInvocation(resolved, workspace, options.command, options.env);
   if (!invocation.needsNetworkStack || options.unsandboxed === true) {
     return { argv: invocationArgv(invocation), env: invocation.env, needsNetworkStack: false };
   }

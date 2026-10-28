@@ -73,8 +73,12 @@ beforeAll(() => {
   process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "cc-bwrap-agent-dir-"));
 });
 
-function setupRuntime(policy: RequestPolicy = createRequestPolicy(), config?: BwrapConfig) {
-  const runtime = createBwrapRuntime(policy, config);
+function setupRuntime(
+  policy: RequestPolicy = createRequestPolicy(),
+  config?: BwrapConfig,
+  env?: Readonly<Record<string, string>>,
+) {
+  const runtime = createBwrapRuntime(policy, config, env);
   const pi = {
     getFlag: vi.fn(() => false),
     registerFlag: vi.fn(),
@@ -197,6 +201,49 @@ describe("BwrapRuntime", () => {
       });
       expect(result).toMatchObject({ exitCode: 0, output: "runtime" });
     });
+  });
+
+  it("配置注入的 env 同时到达沙箱与本地执行路径", async () => {
+    const env = { GIT_EDITOR: "true" };
+    const { runtime } = setupRuntime(createRequestPolicy(), undefined, env);
+    runtime.setMode(process.cwd(), { fs: "workspace-write" });
+
+    // 沙箱路径：用户在审批框选「Run this in sandbox」，命令进 bwrap
+    await runtime.execute({
+      toolCallId: "sandbox",
+      command: "printf sandboxed",
+      requestFullAccess: true,
+      ctx: fullAccessContext({ select: vi.fn(async () => RUN_IN_SANDBOX), input: vi.fn() }),
+    });
+    expect(bwrapOpsCreateMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      env,
+    );
+
+    // 本地路径：fs 与 network 均 allow-all，执行层把 env 合并进本地进程环境
+    let localEnv: NodeJS.ProcessEnv | undefined;
+    localCreateMock.mockReturnValue({
+      exec: (
+        _command: string,
+        _cwd: string,
+        options: { env?: NodeJS.ProcessEnv; onData: (data: Buffer) => void },
+      ) => {
+        localEnv = options.env;
+        options.onData(Buffer.from("local"));
+        return Promise.resolve({ exitCode: 0 });
+      },
+    });
+    runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
+    const result = await runtime.execute({
+      toolCallId: "local",
+      command: "printf local",
+      ctx: fullAccessContext({ select: vi.fn(), input: vi.fn() }),
+    });
+
+    expect(localEnv).toMatchObject(env);
+    expect(result).toMatchObject({ exitCode: 0, output: "local" });
   });
 
   it("executes through its selected allow-all policy", async () => {

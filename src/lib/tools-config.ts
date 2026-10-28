@@ -8,7 +8,8 @@
  *     "fileIoByModel": [{ "models": ["glm-*"], "fileIo": "opencode" }],
  *     "disabledTools": ["talk-*", { "tools": ["web_*"], "models": ["gpt-*"] }],
  *     "enabledTools": [{ "tools": ["web_search"], "models": ["glm-*"] }],
- *     "codemodeOnlyTools": [{ "tools": ["read-github-*"], "models": ["glm-*"] }]
+ *     "codemodeOnlyTools": [{ "tools": ["read-github-*"], "models": ["glm-*"] }],
+ *     "shell": { "env": { "GIT_EDITOR": "true", "GIT_SEQUENCE_EDITOR": "true" } }
  *   }
  * }
  * ```
@@ -45,6 +46,9 @@ const toolRuleSchema = Type.Object({
   models: Type.Optional(Type.Array(Type.String())),
 });
 
+/** `shell.env`：环境变量名 → 值，注入给 bash 工具执行的命令。 */
+const shellEnvSchema = Type.Record(Type.String(), Type.String());
+
 // ── 类型 ─────────────────────────────────────────────────────────────────────
 
 export type FileIoToolset = "claude-code" | "opencode";
@@ -71,6 +75,8 @@ export interface ToolsConfig {
   enabledTools: readonly ToolPatternRule[];
   /** 命中且声明了 `structuredSchema` 的工具只进 codemode、不交给 pi。 */
   codemodeOnlyTools: readonly ToolPatternRule[];
+  /** `shell.env`：注入给 bash 命令的额外环境变量（沙箱内外都生效）。 */
+  shellEnv: Readonly<Record<string, string>>;
   /** 解析阶段发现的问题，由调用方在能提示用户时上报。 */
   warnings: readonly string[];
 }
@@ -163,6 +169,47 @@ function parseToolRules(value: unknown, fieldPath: string, warnings: string[]): 
   return rules;
 }
 
+/** 解析 `shell.env`：非法条目逐键告警并跳过，其余键照常生效。 */
+function parseShellEnv(value: unknown, field: string, warnings: string[]): Record<string, string> {
+  if (value === undefined) {
+    return {};
+  }
+  if (Value.Check(shellEnvSchema, value)) {
+    return { ...value };
+  }
+  if (!isRecord(value)) {
+    warnings.push(`${field}: expected an object mapping names to string values, ignored`);
+    return {};
+  }
+
+  const env: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "string") {
+      env[key] = entry;
+      continue;
+    }
+    warnings.push(
+      `${field}.${key}: invalid value ${JSON.stringify(entry)} ignored (expected a string)`,
+    );
+  }
+  return env;
+}
+
+function parseShellSection(
+  value: unknown,
+  field: string,
+  warnings: string[],
+): Record<string, string> {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    warnings.push(`${field}: expected an object, ignored`);
+    return {};
+  }
+  return parseShellEnv(value.env, `${field}.env`, warnings);
+}
+
 /** 解析 `personalExtensions` section（纯函数，便于测试）。 */
 export function parseToolsConfig(section: unknown, source = "personalExtensions"): ToolsConfig {
   const warnings: string[] = [];
@@ -174,6 +221,7 @@ export function parseToolsConfig(section: unknown, source = "personalExtensions"
       disabledTools: [],
       enabledTools: [],
       codemodeOnlyTools: [],
+      shellEnv: {},
       warnings,
     };
   }
@@ -185,6 +233,7 @@ export function parseToolsConfig(section: unknown, source = "personalExtensions"
       disabledTools: [],
       enabledTools: [],
       codemodeOnlyTools: [],
+      shellEnv: {},
       warnings,
     };
   }
@@ -199,6 +248,7 @@ export function parseToolsConfig(section: unknown, source = "personalExtensions"
       `${source}.codemodeOnlyTools`,
       warnings,
     ),
+    shellEnv: parseShellSection(section.shell, `${source}.shell`, warnings),
     warnings,
   };
 }

@@ -5,6 +5,7 @@ import type { LspManager } from "../lib/lsp/lsp.js";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
+import { readToolsConfig } from "../lib/tools-config.js";
 import { createClaudeCodeFileTools } from "./files.js";
 import { registerSearchTools } from "./search.js";
 import { registerSessionTools } from "./session-tools.js";
@@ -29,7 +30,8 @@ export interface ClaudeCodeToolsetOptions {
 /** claude-code 风格工具集的共享部件：入口与独立默认导出都从这里取。 */
 export function createClaudeCodeTools(pi: ExtensionAPI, options?: ClaudeCodeToolsetOptions) {
   const policy = options?.policy ?? createRequestPolicy(pi.events);
-  const runtime = options?.runtime ?? createBwrapRuntime(policy);
+  const runtime =
+    options?.runtime ?? createBwrapRuntime(policy, undefined, readToolsConfig().shellEnv);
   // 独立入口（不经 src/index.ts 的共享服务）要自己接上 bwrap 的会话钩子与 /bwrap* 命令。
   if (options?.runtime === undefined) {
     runtime.setup(pi);

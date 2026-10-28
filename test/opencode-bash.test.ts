@@ -72,6 +72,27 @@ describe("opencode bash", () => {
     });
   });
 
+  it("injects personalExtensions shell env into the command", async () => {
+    const runtime = createBwrapRuntime(undefined, undefined, { GIT_EDITOR: "true" });
+    runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
+    const recorder = createToolRecorder<RegisteredTool>();
+    registerBashTool(recorder.bus, recorder.pi, runtime);
+    const tool = requireTool(recorder, "bash");
+
+    const result = await tool.execute(
+      "id",
+      { command: 'printf %s "$GIT_EDITOR"', timeout: 5_000 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: 0, output: "true" },
+    });
+  });
+
   it("does not throw on non-zero exit: returns output plus exit code text", async () => {
     const { tool } = loadBashTool();
     const result = await tool.execute(

@@ -150,6 +150,24 @@ describe("previewSandboxCommand", () => {
     expect(preview.env.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
   });
 
+  it("shell.env 合并进预览环境，同名变量以配置为准", async () => {
+    const directory = workspace();
+    const strategy = loadSandboxConfig({
+      workspace: directory,
+      configPath: config(directory, { fs: { mode: "workspace-write" } }),
+    });
+
+    const preview = await previewSandboxCommand(strategy, {
+      workspace: directory,
+      command: "true",
+      env: { GIT_EDITOR: "true", LANG: "C" },
+    });
+
+    expect(preview.env.GIT_EDITOR).toBe("true");
+    expect(preview.env.LANG).toBe("C");
+    expect(preview.env.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
+  });
+
   it("network limited：命令包在 nsenter 之内", async () => {
     const directory = workspace();
     const strategy = loadSandboxConfig({
@@ -203,6 +221,28 @@ describe("runInSandbox（不经 bwrap）", () => {
 
     expect(output).toContain("local-path");
     expect(result.exitCode).toBe(7);
+  });
+
+  it("unsandboxed 路径同样注入额外环境变量", async () => {
+    const directory = workspace();
+    const strategy = loadSandboxConfig({
+      workspace: directory,
+      configPath: config(directory, { fs: { mode: "readonly" } }),
+    });
+    let output = "";
+
+    const result = await runInSandbox(strategy, {
+      workspace: directory,
+      command: 'printf %s "$GIT_EDITOR"',
+      unsandboxed: true,
+      env: { GIT_EDITOR: "true" },
+      onData: (data) => {
+        output += data.toString();
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(output).toBe("true");
   });
 
   it("fs 与 network 均 allow-all 时无需显式 unsandboxed 即可执行", async () => {
@@ -263,6 +303,29 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
     expect(result.exitCode).toBe(0);
     expect(output).toContain("written");
     expect(readFileSync(join(directory, "note.txt"), "utf8")).toBe("written");
+  }, 60000);
+
+  it("沙箱内命令拿到注入的环境变量", async () => {
+    const directory = workspace();
+    let output = "";
+
+    const result = await runInSandbox(
+      loadSandboxConfig({
+        workspace: directory,
+        configPath: config(directory, { fs: { mode: "workspace-write", writablePaths: ["."] } }),
+      }),
+      {
+        workspace: directory,
+        command: 'printf %s "$GIT_EDITOR"',
+        env: { GIT_EDITOR: "true" },
+        onData: (data) => {
+          output += data.toString();
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(output).toBe("true");
   }, 60000);
 
   it("readonly：读得到宿主文件，写不进去", async () => {

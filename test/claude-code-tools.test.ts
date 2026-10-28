@@ -1314,6 +1314,23 @@ describe("Bash", () => {
     });
   });
 
+  it("injects personalExtensions shell env into the command", async () => {
+    const runtime = createBwrapRuntime(undefined, undefined, { GIT_EDITOR: "true" });
+    runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
+    const tool = loadBashTool(runtime);
+
+    const result = await call(
+      tool,
+      { command: 'printf %s "$GIT_EDITOR"', timeout: 5_000 },
+      context(process.cwd()),
+    );
+
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: 0, output: "true" },
+    });
+  });
+
   // Git Bash 的 pwd 输出 POSIX 风格路径（/c/...），与 Windows 绝对路径断言
   // 不兼容：此用例只跑 Unix。
   it.skipIf(process.platform === "win32")("runs commands in the given workdir", async () => {
