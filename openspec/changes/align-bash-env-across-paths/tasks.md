@@ -16,7 +16,7 @@
 
 - [x] 3.1 `test/bwrap-sandbox.test.ts` 新增：临时 `HOME` 下写 `.bash_profile`（`export LOGIN_MARKER=from-profile`），断言非沙箱路径的命令能读到 `LOGIN_MARKER`（证明 `bash -lc` 生效）
 - [x] 3.2 同上文件新增：父进程环境注入标记变量（`PI_TEST_SECRET=leak`）与假 `PATH` 目录，断言非沙箱命令的 `env` 里看不到它们（证明干净环境生效）
-- [x] 3.3 同上文件（真实 bwrap 分组）新增：同一条命令在沙箱路径与非沙箱路径下 `env` 一致——变量集合逐项相等，且 `HOME` / `SHELL` / `TERM` / `LANG` / `PATH` 与 `shell.env` 注入项取值相同；profile 自己导出、取值会漂移的变量（如 mise 的会话状态）只比对变量名
+- [x] 3.3 同上文件（真实 bwrap 分组）新增：同一条命令在沙箱路径与非沙箱路径下 `env` 逐项相同；用临时 `HOME` 隔离机器自己的 profile（那里按能否写盘/联网分支的 hook 在沙箱里会走另一条路），使失败只可能来自执行层
 
 ## 4. 整体验证
 

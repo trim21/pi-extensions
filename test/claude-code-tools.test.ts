@@ -1534,9 +1534,11 @@ describe("Bash", () => {
   });
 
   it("reports the exit code of the last command in a pipeline", async () => {
+    // 用 grep 而不是 rg：bash 工具的环境由执行层构造（不继承父进程 PATH），
+    // 只有 profile 里的 PATH 能决定命令看到哪些工具，grep 一定在基础 PATH 上
     const result = await call(
       bashTool,
-      { command: "printf x | rg definitely-not-present", timeout: 5_000 },
+      { command: "printf x | grep definitely-not-present", timeout: 5_000 },
       context(process.cwd()),
     );
     expect(result.content[0].text).toBe("Exit code 1");

@@ -49,6 +49,8 @@ const operations = local
 ## Risks / Trade-offs
 
 - **非沙箱命令失去父进程环境**：`git push`（SSH agent）、`pnpm publish`、私有 registry 认证会失败。缓解方式是把需要转发的变量显式写进 `personalExtensions.shell.env`（该配置已存在），后续如需自动化再单独提案。
+- **父进程 PATH 上的工具不再可达**：`bash -lc` 重建的 `PATH` 只有 profile 的条目，靠 `$GITHUB_PATH` 或其它外部方式注入 `PATH` 的工具（CI 里 pixi 装的 `~/.pixi/bin`、`~/.cargo/bin`）在命令里都找不到。命令要用的工具必须能由 profile 的 `PATH` 解析；CI 上那条用 `rg` 验证管道退出码的用例因此换成基础 `PATH` 上必然存在的 `grep`。
+- **两条路径的 profile 可能走不同分支**：profile 里的 hook 若依赖写盘或联网，在沙箱（只读挂载 / 断网）里会走另一条路径，产生变量差异。执行层保证的是交给 shell 的同一份环境与同一条登录 shell 路径；比对两条路径环境的测试用临时 `HOME` 隔离机器自己的 profile，避免把 profile 行为当成执行层回归。
 - **每条命令多一次 profile 加载**：`bash -lc` 会读 `/etc/profile` 与 `~/.bash_profile`，约 10–30ms。依赖「命令开跑后极短时间内就有输出」的测试（部分输出 + 20ms 超时/中断）要把窗口放大到能容下 profile 加载，否则断言的是 profile 加载时长而不是执行层行为。
 - **Windows 分支失去测试覆盖**：`BwrapRuntime` 里「mock win32 → 无 bwrap → 逐条审批 + 本地执行」那组测试的前提是本地路径沿用父进程环境，本次改造后 mock win32 下解析不到 shell，整组删除。runtime 的 win32 分支本身未改动（不在本次范围），后续若要彻底移除 Windows 支持需单独提案。
 - **profile 里的 `cd` 会改工作目录**：若用户的 profile 在登录时 `cd`，命令实际执行目录会偏离 `cwd`。当前机器没有这种 profile；如需防御，可在 `-lc` 之后显式 `cd -- "$PWD"`（本提案暂不做）。

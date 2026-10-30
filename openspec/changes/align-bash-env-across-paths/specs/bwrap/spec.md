@@ -4,7 +4,7 @@
 
 ### Requirement: 命令执行环境
 
-Bash 工具执行命令时的环境 MUST 由执行层自己的基础值（`HOME` / `SHELL` / `TERM` / `LANG` / `PATH`）与该会话配置的 `personalExtensions.shell.env` 合并而成，并用登录 shell（`shell -lc`）执行，由 profile 按当前工作目录重建 `PATH`。沙箱内执行与不经沙箱的本地执行两条路径 MUST 使用同一份环境构造与同一段 spawn 实现：两条路径的差异 MUST 只有权限（bwrap 的只读挂载、netns、逐条审批），MUST NOT 在变量集合或工具版本解析上不同。同一变量名同时存在于基础值与 `shell.env` 时，`shell.env` 的值优先。
+Bash 工具执行命令时的环境 MUST 由执行层自己的基础值（`HOME` / `SHELL` / `TERM` / `LANG` / `PATH`）与该会话配置的 `personalExtensions.shell.env` 合并而成，并用登录 shell（`shell -lc`）执行，由 profile 按当前工作目录重建 `PATH`。沙箱内执行与不经沙箱的本地执行两条路径 MUST 使用同一份环境构造与同一段 spawn 实现：交给 shell 的进程环境 MUST 逐项相同，差异 MUST 只有权限（bwrap 的只读挂载、netns、逐条审批），MUST NOT 因为继承父进程环境而在变量集合或工具版本解析上不同。同一变量名同时存在于基础值与 `shell.env` 时，`shell.env` 的值优先。profile 自身在沙箱的只读挂载 / 断网下走了不同分支（例如依赖写盘或联网的 shell hook）时，由此产生的变量差异属于 profile 行为，不由执行层保证——执行层保证的是交给 shell 的同一份环境与同一条登录 shell 路径。
 
 #### Scenario: 未配置时不改变现有环境
 
@@ -14,7 +14,7 @@ Bash 工具执行命令时的环境 MUST 由执行层自己的基础值（`HOME`
 #### Scenario: 两条路径的环境一致
 
 - **WHEN** 同一条命令分别经沙箱与不经沙箱执行
-- **THEN** 两条路径的进程环境逐项相同（`HOME` / `SHELL` / `TERM` / `LANG` / `PATH` 及 `shell.env` 注入项），且都由 `bash -lc` 的 profile 调整 `PATH`
+- **THEN** 两条路径 spawn 出的进程环境逐项相同（`HOME` / `SHELL` / `TERM` / `LANG` / `PATH` 及 `shell.env` 注入项），且都由 `bash -lc` 的 profile 调整 `PATH`
 
 #### Scenario: 不继承父进程环境
 

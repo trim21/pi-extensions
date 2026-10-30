@@ -398,7 +398,15 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
       workspace: directory,
       configPath: config(directory, { fs: { mode: "workspace-write", writablePaths: ["."] } }),
     });
-    const collectEnv = async (unsandboxed: boolean): Promise<Record<string, string>> => {
+    // 临时 HOME 隔离机器自己的 profile：两条路径读到的 profile 相同，剩下的差异只能来自
+    // 执行层。机器 profile 里按「能否写盘 / 能否联网」分支的 hook 会在沙箱里走另一条路，
+    // 那不是执行层行为。
+    const home = workspace();
+    writeFileSync(join(home, ".bash_profile"), "export LOGIN_MARKER=1\n");
+    const originalHome = process.env.HOME;
+    process.env.HOME = home;
+
+    const collectEnv = async (unsandboxed: boolean): Promise<string[]> => {
       let output = "";
       const result = await runInSandbox(strategy, {
         workspace: directory,
@@ -410,26 +418,14 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
         },
       });
       expect(result.exitCode).toBe(0);
-      const entries = output
-        .trim()
-        .split("\n")
-        .map((line) => {
-          const index = line.indexOf("=");
-          return [line.slice(0, index), line.slice(index + 1)] as const;
-        });
-      return Object.fromEntries(entries);
+      return output.trim().split("\n").toSorted();
     };
-    // profile 自己导出的变量（如 mise 的会话状态）值可能随调用漂移，只比对变量集合与
-    // 执行层控制的那些项，见 spec 的「两条路径的环境一致」场景
-    const controlled = ["HOME", "SHELL", "TERM", "LANG", "PATH", "GIT_EDITOR"];
-    const pick = (env: Record<string, string>): Record<string, string> =>
-      Object.fromEntries(controlled.map((key) => [key, env[key] ?? "<unset>"]));
 
-    const local = await collectEnv(true);
-    const sandboxEnv = await collectEnv(false);
-
-    expect(Object.keys(local).toSorted()).toEqual(Object.keys(sandboxEnv).toSorted());
-    expect(pick(local)).toEqual(pick(sandboxEnv));
+    try {
+      expect(await collectEnv(true)).toEqual(await collectEnv(false));
+    } finally {
+      process.env.HOME = originalHome;
+    }
   }, 60000);
 
   it("readonly：读得到宿主文件，写不进去", async () => {
