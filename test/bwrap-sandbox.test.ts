@@ -223,6 +223,70 @@ describe("runInSandbox（不经 bwrap）", () => {
     expect(result.exitCode).toBe(7);
   });
 
+  it("unsandboxed 走登录 shell：profile 导出的变量对命令可见", async () => {
+    const directory = workspace();
+    const home = workspace();
+    writeFileSync(join(home, ".bash_profile"), "export LOGIN_MARKER=from-profile\n");
+    const originalHome = process.env.HOME;
+    process.env.HOME = home;
+    let output = "";
+
+    try {
+      const result = await runInSandbox(
+        loadSandboxConfig({ workspace: directory, configPath: config(directory, {}) }),
+        {
+          workspace: directory,
+          command: 'printf %s "$LOGIN_MARKER"',
+          unsandboxed: true,
+          onData: (data) => {
+            output += data.toString();
+          },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(output).toBe("from-profile");
+    } finally {
+      process.env.HOME = originalHome;
+    }
+  });
+
+  it("unsandboxed 不继承父进程环境与 PATH", async () => {
+    const directory = workspace();
+    const fakeBin = workspace();
+    const originalPath = process.env.PATH;
+    const originalSecret = process.env.PI_TEST_SECRET;
+    process.env.PI_TEST_SECRET = "leak";
+    process.env.PATH = `${fakeBin}:${originalPath ?? ""}`;
+    let output = "";
+
+    try {
+      const result = await runInSandbox(
+        loadSandboxConfig({ workspace: directory, configPath: config(directory, {}) }),
+        {
+          workspace: directory,
+          command: 'printf "%s\\n%s" "${PI_TEST_SECRET-unset}" "$PATH"',
+          unsandboxed: true,
+          onData: (data) => {
+            output += data.toString();
+          },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      const [secret, path] = output.split("\n", 2);
+      expect(secret).toBe("unset");
+      expect(path).not.toContain(fakeBin);
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalSecret === undefined) {
+        delete process.env.PI_TEST_SECRET;
+      } else {
+        process.env.PI_TEST_SECRET = originalSecret;
+      }
+    }
+  });
+
   it("unsandboxed 路径同样注入额外环境变量", async () => {
     const directory = workspace();
     const strategy = loadSandboxConfig({
@@ -326,6 +390,46 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
 
     expect(result.exitCode).toBe(0);
     expect(output).toBe("true");
+  }, 60000);
+
+  it("两条路径的命令环境逐项相同", async () => {
+    const directory = workspace();
+    const strategy = loadSandboxConfig({
+      workspace: directory,
+      configPath: config(directory, { fs: { mode: "workspace-write", writablePaths: ["."] } }),
+    });
+    const collectEnv = async (unsandboxed: boolean): Promise<Record<string, string>> => {
+      let output = "";
+      const result = await runInSandbox(strategy, {
+        workspace: directory,
+        command: "env",
+        unsandboxed,
+        env: { GIT_EDITOR: "true" },
+        onData: (data) => {
+          output += data.toString();
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      const entries = output
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const index = line.indexOf("=");
+          return [line.slice(0, index), line.slice(index + 1)] as const;
+        });
+      return Object.fromEntries(entries);
+    };
+    // profile 自己导出的变量（如 mise 的会话状态）值可能随调用漂移，只比对变量集合与
+    // 执行层控制的那些项，见 spec 的「两条路径的环境一致」场景
+    const controlled = ["HOME", "SHELL", "TERM", "LANG", "PATH", "GIT_EDITOR"];
+    const pick = (env: Record<string, string>): Record<string, string> =>
+      Object.fromEntries(controlled.map((key) => [key, env[key] ?? "<unset>"]));
+
+    const local = await collectEnv(true);
+    const sandboxEnv = await collectEnv(false);
+
+    expect(Object.keys(local).toSorted()).toEqual(Object.keys(sandboxEnv).toSorted());
+    expect(pick(local)).toEqual(pick(sandboxEnv));
   }, 60000);
 
   it("readonly：读得到宿主文件，写不进去", async () => {

@@ -254,15 +254,16 @@ describe("opencode bash", () => {
 
   it("includes partial output before the timeout message", async () => {
     const { tool } = loadBashTool();
+    // 超时窗口要容得下登录 shell 加载 profile 的开销，否则 printf 还没跑就被杀了
     const result = await tool.execute(
       "id",
-      { command: "printf partial; sleep 1", timeout: 20 },
+      { command: "printf partial; sleep 5", timeout: 500 },
       undefined,
       undefined,
       context(process.cwd()),
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "partial\n\n<system-reminder>\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.\n</system-reminder>",
+      "partial\n\n<system-reminder>\nCommand exceeded timeout of 500 ms. Retry with a larger timeout if the command is expected to take longer.\n</system-reminder>",
     ]);
     expect(result.details).toEqual({ timeout: true });
   });
@@ -277,7 +278,8 @@ describe("opencode bash", () => {
       undefined,
       context(process.cwd()),
     );
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 等待窗口要容得下登录 shell 加载 profile 的开销，否则 printf 还没跑就被中断了
+    await new Promise((resolve) => setTimeout(resolve, 300));
     controller.abort();
     const result = await promise;
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([

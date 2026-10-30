@@ -12,8 +12,6 @@
 
 import { existsSync } from "node:fs";
 
-import { type BashOperations, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
-
 import { expandHome } from "../lib/path.js";
 import {
   type BwrapConfig,
@@ -27,7 +25,12 @@ import {
   resolveBwrapPath,
   type ResolvedBwrap,
 } from "./core.js";
-import { buildBwrapInvocation, createBwrapBashOperations, invocationArgv } from "./exec.js";
+import {
+  buildBwrapInvocation,
+  createBwrapBashOperations,
+  createLocalBashOperations,
+  invocationArgv,
+} from "./exec.js";
 import type { NetworkStack, NetworkStackStopResult } from "./network-stack.js";
 
 export interface SandboxConfigInput {
@@ -54,11 +57,14 @@ export interface SandboxRunOptions {
   signal?: AbortSignal;
   /** 超时秒数：kill 整个进程组并以 TimeoutError 结束。 */
   timeout?: number;
-  /** 调用方已决定不经沙箱（审批通过的全权限、Windows）。fs 与 network 均 allow-all 时无需显式设置。 */
+  /**
+   * 调用方已决定不经沙箱（审批通过的全权限；fs 与 network 均 allow-all 时无需显式设置）。
+   * 两条路径的环境构造与 spawn 实现相同，差异只有权限。
+   */
   unsandboxed?: boolean;
   /**
-   * 额外环境变量（`personalExtensions.shell.env`）：沙箱路径合并进沙箱环境并覆盖同名基础值，
-   * 本地路径以父进程环境为基底合并——两条执行方式都要注入。
+   * 额外环境变量（`personalExtensions.shell.env`）：两条路径共用同一份干净环境，
+   * 注入项覆盖同名基础值。
    */
   env?: Readonly<Record<string, string>>;
   /** 网络栈子进程输出转发，仅诊断用（默认丢弃）。 */
@@ -111,20 +117,6 @@ export function loadSandboxConfig(input: SandboxConfigInput): ResolvedBwrap {
   return resolveSandboxPaths(resolveBwrap(configured), workspace);
 }
 
-/** 本地执行路径注入 env：没配置时保持 pi 的默认环境（含它补的 bin 目录）。 */
-function withExtraEnv(
-  operations: BashOperations,
-  env: Readonly<Record<string, string>> | undefined,
-): BashOperations {
-  if (env === undefined || Object.keys(env).length === 0) {
-    return operations;
-  }
-  return {
-    exec: (command, cwd, options) =>
-      operations.exec(command, cwd, { ...options, env: { ...process.env, ...env } }),
-  };
-}
-
 /**
  * 在 resolved 描述的沙箱里执行一条命令；network limited 模式下现建现停网络栈。
  * 超时与取消的错误语义由底层 operations.exec 抛出（TimeoutError / AbortError）。
@@ -145,7 +137,7 @@ export async function runInSandbox(
       options.onNetworkStack?.(stack);
     }
     const operations = local
-      ? withExtraEnv(createLocalBashOperations(), options.env)
+      ? createLocalBashOperations(options.env)
       : createBwrapBashOperations(resolved, workspace, stack, options.env);
     const { exitCode } = await operations.exec(options.command, commandCwd, {
       onData: options.onData,

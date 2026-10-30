@@ -1384,13 +1384,14 @@ describe("Bash", () => {
   });
 
   it("includes partial output before the timeout message", async () => {
+    // 超时窗口要容得下登录 shell 加载 profile 的开销，否则 printf 还没跑就被杀了
     const result = await call(
       bashTool,
-      { command: "printf partial; sleep 1", timeout: 20 },
+      { command: "printf partial; sleep 5", timeout: 500 },
       context(process.cwd()),
     );
     expect(result.content[0].text).toBe(
-      "partial\n\n<system-reminder>\nCommand timed out after 20 milliseconds\n</system-reminder>",
+      "partial\n\n<system-reminder>\nCommand timed out after 500 milliseconds\n</system-reminder>",
     );
     expect(result.details).toBeUndefined();
     expect(result.structuredResult).toEqual({
