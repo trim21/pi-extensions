@@ -184,12 +184,27 @@ bash 命令在沙箱内执行，可写文件系统边界由 **fs 模式**决定�
 
 ### Requirement: 命令执行环境
 
-Bash 工具执行命令时的环境 MUST 由执行层自己的基础值与该会话配置的 `personalExtensions.shell.env` 合并而成，且 MUST 对沙箱内执行与不经沙箱的本地执行两条路径一致生效。同一变量名同时存在于两边时，`shell.env` 的值优先。
+Bash 工具执行命令时的环境 MUST 由执行层自己的基础值（`HOME` / `SHELL` / `TERM` / `LANG` / `PATH`）与该会话配置的 `personalExtensions.shell.env` 合并而成，并用登录 shell（`shell -lc`）执行，由 profile 按当前工作目录重建 `PATH`。沙箱内执行与不经沙箱的本地执行两条路径 MUST 使用同一份环境构造与同一段 spawn 实现：交给 shell 的进程环境 MUST 逐项相同，差异 MUST 只有权限（bwrap 的只读挂载、netns、逐条审批），MUST NOT 因为继承父进程环境而在变量集合或工具版本解析上不同。同一变量名同时存在于基础值与 `shell.env` 时，`shell.env` 的值优先。profile 自身在沙箱的只读挂载 / 断网下走了不同分支（例如依赖写盘或联网的 shell hook）时，由此产生的变量差异属于 profile 行为，不由执行层保证——执行层保证的是交给 shell 的同一份环境与同一条登录 shell 路径。
 
 #### Scenario: 未配置时不改变现有环境
 
 - **WHEN** 未配置 `personalExtensions.shell.env`
-- **THEN** 沙箱内命令的环境仍是 `HOME` / `SHELL` / `TERM` / `LANG` / `PATH` 这组基础值（再由 `bash -lc` 的 profile 调整），本地执行路径的环境与不注入时完全相同
+- **THEN** 两条路径的命令环境都只有 `HOME` / `SHELL` / `TERM` / `LANG` / `PATH` 这组基础值（再由 `bash -lc` 的 profile 调整），与配置了 `shell.env` 时相比只差注入项
+
+#### Scenario: 两条路径的环境一致
+
+- **WHEN** 同一条命令分别经沙箱与不经沙箱执行
+- **THEN** 两条路径 spawn 出的进程环境逐项相同（`HOME` / `SHELL` / `TERM` / `LANG` / `PATH` 及 `shell.env` 注入项），且都由 `bash -lc` 的 profile 调整 `PATH`
+
+#### Scenario: 不继承父进程环境
+
+- **WHEN** pi 进程环境里存在 `SSH_AUTH_SOCK`、`UV_PUBLISH_TOKEN` 等变量，且命令不经沙箱执行
+- **THEN** 命令进程中 MUST NOT 出现这些变量，除非它们由 `personalExtensions.shell.env` 显式注入
+
+#### Scenario: 工具版本按工作目录解析
+
+- **WHEN** 工作区的 `mise.toml` pin 了某个工具版本，且命令在沙箱内或沙箱外执行
+- **THEN** 两条路径都解析到项目 pin 的版本（`PATH` 由登录 shell 的 profile 重建，而不是沿用父进程的 `PATH`）
 
 #### Scenario: 沙箱内命令拿到注入的变量
 
@@ -198,18 +213,23 @@ Bash 工具执行命令时的环境 MUST 由执行层自己的基础值与该会
 
 #### Scenario: 非沙箱路径同样拿到注入的变量
 
-- **WHEN** `shell.env` 含 `{ "GIT_EDITOR": "true" }`，且本次执行不经沙箱（Windows、审批通过的全权限、或 fs 与 network 都是 `allow-all`）
-- **THEN** 命令进程中 `GIT_EDITOR` 同样为 `true`
+- **WHEN** `shell.env` 含 `{ "GIT_EDITOR": "true" }`，且本次执行不经沙箱（审批通过的全权限，或 fs 与 network 都是 `allow-all`）
+- **THEN** 命令进程中 `GIT_EDITOR` 同样为 `true`，且其余环境与沙箱路径一致
 
 #### Scenario: 注入值覆盖基础值
 
 - **WHEN** `shell.env` 里的变量名与基础环境同名（如 `LANG`）
-- **THEN** 该变量以 `shell.env` 的值为准
+- **THEN** 该变量以 `shell.env` 的值为准，两条路径表现一致
 
 #### Scenario: 预览与执行的环境合并规则一致
 
 - **WHEN** 同一组 env 分别用于预览一条沙箱命令与实际执行该命令
 - **THEN** 预览给出的环境与实际 spawn 的环境一致（两者由同一段组装产生）
+
+#### Scenario: 错误语义一致
+
+- **WHEN** 工作目录不存在，或执行前 signal 已 abort
+- **THEN** 沙箱路径与本地路径给出相同的错误（目录不存在的提示文本相同；已中断时都不启动进程）
 
 #### Scenario: 其它工具不受影响
 
@@ -221,7 +241,7 @@ Bash 工具执行命令时的环境 MUST 由执行层自己的基础值与该会
 沙箱执行路径：`BwrapRuntime.execute` → `runInSandbox`（`src/bwrap/sandbox.ts`）→ 组装 bwrap 调用（`buildBwrapInvocation`）→ 执行（`execInvocation`），两者都在 `src/bwrap/exec.ts`；`network: "limited"` 模式先经 `createNetworkStack`（`src/bwrap/core.ts`）建网络栈，执行时再由执行层加上 `nsenter` 前缀进入 holder 的 userns + netns。配置解析与 bwrap argv 组装在 `core.ts`，子进程生命周期在 `exec.ts`；`core.ts` 的 `createNetworkStack` 会按需启动 holder / slirp / mihomo，`exec.ts` 不关心配置来源。
 
 - **bwrap argv 组装**：`--new-session --die-with-parent --unshare-user --unshare-pid` 建立独立会话与 user/pid namespace，`--dev /dev --proc /proc` 挂载设备与 procfs，`--ro-bind / /` 只读挂载整个根，然后按配置叠加 `--bind-try`（可写路径，不存在自动忽略）、`--ro-bind-try`（保护目录）、`--tmpfs` / `/dev/null` 覆盖（denyPaths）；指定 uid/gid 时追加 `--uid` / `--gid`，`network: "block"` 追加 `--unshare-net`。完整命令行（含 `nsenter` 前缀）由 `invocationArgv` 一处产出，`--print-args` 预览与实际执行共用它。
-- **执行路径的错误语义**：`execInvocation` 是唯一的子进程生命周期实现——命令以独立进程组启动，超时与取消都终止整组，超时抛 `TimeoutError`（`message` 为 `timeout:<秒>`）、取消抛 `signal.reason`（默认 AbortError）；启动失败立即结束并清掉已排定的超时定时器。经 netns 与不经 netns 两条路径共用它，语义不因网络模式而变。
+- **执行路径的错误语义**：`execArgv` 是唯一的子进程生命周期实现——命令以独立进程组启动，超时与取消都终止整组，超时抛 `TimeoutError`（`message` 为 `timeout:<秒>`）、取消抛 `signal.reason`（默认 AbortError）；启动失败立即结束并清掉已排定的超时定时器。沙箱路径的 `execInvocation` 与不经沙箱的 `createLocalBashOperations` 共用它，语义不因网络模式或是否沙箱而变；两边的环境都取自 `shellBaseEnv`。
 - **模式解析**（`resolveBwrap`）：fs 与 network 是两个独立轴；仅当两者都为 `allow-all` 时 `bwrapEnabled` 为 false、命令不经 bwrap 直接本地执行。`readonly` 清空 `writablePaths` 与 `extraWritablePaths`，`workspace-write` 用配置的可写路径，`allow-all` 把整棵根挂成可写（保护绑定随之取消）。headless 会话不强制模式，只在需要用户审批时按拒绝处理（无 UI 可弹框）。Windows 上每条命令都走审批；bwrap 缺失时 fail-closed。
 - **审批**：`dangerouslyDisableSandbox` 命令的判定由 `createApprovalRuleSet`（`src/bwrap/approval-rules.ts`）独占——`evaluate` 给出 allow / deny / 交人审（用 tree-sitter 解析命令并按命令原文做通配匹配，含嵌套 `$(...)` 内的命令；deny 优先、allow 需全链命中、含输出重定向 `>` / `>>` / `&>` / `>&file` 时不自动放行、单条命令上靠后的规则优先）；审批子菜单只列 `pendingPatterns`（候选模式去重后仍未命中 allow 的），候选模式由 BashArity 归一生成（`git checkout main` → `git checkout *`），只用于建议、不参与 `evaluate` 匹配；用户勾选后由 `addAllowRules` 追加并调用注入的 `persist` 落盘。规则集的三条协作方（规则 getter、候选模式生成、持久化实现）都由 runtime 注入：规则 getter 让它跟随 `resolved` 的替换（`/bwrap-reload`、`/bwrap-fs-*`）而不必重建，持久化实现把项目配置文件写回与缓存刷新留在 runtime。
 - **配置加载**：`~/.pi/agent/sandbox.json`（全局）与 `.pi/sandbox.json`（项目）合并，项目优先；fs / network 可用 `/bwrap-fs-*` / `/bwrap-network-*` 命令运行时切换。默认值为 `fs.mode: workspace-write`、`fs.writablePaths: [".", "/tmp"]`、`network.mode: block`、`extraArgs: []`；`bwrapPath`、`network.mihomoPath`、`network.slirp4netnsPath` 可覆盖二进制路径。审批规则可经 `/bwrap-deny-request` 与 `/bwrap-allow-request` 切换本会话的拒绝/放行策略。固定沙箱（子代理 frontmatter 声明的配置）不注册 `/bwrap-*` 命令，避免切模式放宽声明的沙箱。
