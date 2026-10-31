@@ -150,6 +150,24 @@ describe("previewSandboxCommand", () => {
     expect(preview.env.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
   });
 
+  it("shell.env 合并进预览环境，同名变量以配置为准", async () => {
+    const directory = workspace();
+    const strategy = loadSandboxConfig({
+      workspace: directory,
+      configPath: config(directory, { fs: { mode: "workspace-write" } }),
+    });
+
+    const preview = await previewSandboxCommand(strategy, {
+      workspace: directory,
+      command: "true",
+      env: { GIT_EDITOR: "true", LANG: "C" },
+    });
+
+    expect(preview.env.GIT_EDITOR).toBe("true");
+    expect(preview.env.LANG).toBe("C");
+    expect(preview.env.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
+  });
+
   it("network limited：命令包在 nsenter 之内", async () => {
     const directory = workspace();
     const strategy = loadSandboxConfig({
@@ -203,6 +221,92 @@ describe("runInSandbox（不经 bwrap）", () => {
 
     expect(output).toContain("local-path");
     expect(result.exitCode).toBe(7);
+  });
+
+  it("unsandboxed 走登录 shell：profile 导出的变量对命令可见", async () => {
+    const directory = workspace();
+    const home = workspace();
+    writeFileSync(join(home, ".bash_profile"), "export LOGIN_MARKER=from-profile\n");
+    const originalHome = process.env.HOME;
+    process.env.HOME = home;
+    let output = "";
+
+    try {
+      const result = await runInSandbox(
+        loadSandboxConfig({ workspace: directory, configPath: config(directory, {}) }),
+        {
+          workspace: directory,
+          command: 'printf %s "$LOGIN_MARKER"',
+          unsandboxed: true,
+          onData: (data) => {
+            output += data.toString();
+          },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(output).toBe("from-profile");
+    } finally {
+      process.env.HOME = originalHome;
+    }
+  });
+
+  it("unsandboxed 不继承父进程环境与 PATH", async () => {
+    const directory = workspace();
+    const fakeBin = workspace();
+    const originalPath = process.env.PATH;
+    const originalSecret = process.env.PI_TEST_SECRET;
+    process.env.PI_TEST_SECRET = "leak";
+    process.env.PATH = `${fakeBin}:${originalPath ?? ""}`;
+    let output = "";
+
+    try {
+      const result = await runInSandbox(
+        loadSandboxConfig({ workspace: directory, configPath: config(directory, {}) }),
+        {
+          workspace: directory,
+          command: 'printf "%s\\n%s" "${PI_TEST_SECRET-unset}" "$PATH"',
+          unsandboxed: true,
+          onData: (data) => {
+            output += data.toString();
+          },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      const [secret, path] = output.split("\n", 2);
+      expect(secret).toBe("unset");
+      expect(path).not.toContain(fakeBin);
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalSecret === undefined) {
+        delete process.env.PI_TEST_SECRET;
+      } else {
+        process.env.PI_TEST_SECRET = originalSecret;
+      }
+    }
+  });
+
+  it("unsandboxed 路径同样注入额外环境变量", async () => {
+    const directory = workspace();
+    const strategy = loadSandboxConfig({
+      workspace: directory,
+      configPath: config(directory, { fs: { mode: "readonly" } }),
+    });
+    let output = "";
+
+    const result = await runInSandbox(strategy, {
+      workspace: directory,
+      command: 'printf %s "$GIT_EDITOR"',
+      unsandboxed: true,
+      env: { GIT_EDITOR: "true" },
+      onData: (data) => {
+        output += data.toString();
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(output).toBe("true");
   });
 
   it("fs 与 network 均 allow-all 时无需显式 unsandboxed 即可执行", async () => {
@@ -263,6 +367,65 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
     expect(result.exitCode).toBe(0);
     expect(output).toContain("written");
     expect(readFileSync(join(directory, "note.txt"), "utf8")).toBe("written");
+  }, 60000);
+
+  it("沙箱内命令拿到注入的环境变量", async () => {
+    const directory = workspace();
+    let output = "";
+
+    const result = await runInSandbox(
+      loadSandboxConfig({
+        workspace: directory,
+        configPath: config(directory, { fs: { mode: "workspace-write", writablePaths: ["."] } }),
+      }),
+      {
+        workspace: directory,
+        command: 'printf %s "$GIT_EDITOR"',
+        env: { GIT_EDITOR: "true" },
+        onData: (data) => {
+          output += data.toString();
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(output).toBe("true");
+  }, 60000);
+
+  it("两条路径的命令环境逐项相同", async () => {
+    const directory = workspace();
+    const strategy = loadSandboxConfig({
+      workspace: directory,
+      configPath: config(directory, { fs: { mode: "workspace-write", writablePaths: ["."] } }),
+    });
+    // 临时 HOME 隔离机器自己的 profile：两条路径读到的 profile 相同，剩下的差异只能来自
+    // 执行层。机器 profile 里按「能否写盘 / 能否联网」分支的 hook 会在沙箱里走另一条路，
+    // 那不是执行层行为。
+    const home = workspace();
+    writeFileSync(join(home, ".bash_profile"), "export LOGIN_MARKER=1\n");
+    const originalHome = process.env.HOME;
+    process.env.HOME = home;
+
+    const collectEnv = async (unsandboxed: boolean): Promise<string[]> => {
+      let output = "";
+      const result = await runInSandbox(strategy, {
+        workspace: directory,
+        command: "env",
+        unsandboxed,
+        env: { GIT_EDITOR: "true" },
+        onData: (data) => {
+          output += data.toString();
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      return output.trim().split("\n").toSorted();
+    };
+
+    try {
+      expect(await collectEnv(true)).toEqual(await collectEnv(false));
+    } finally {
+      process.env.HOME = originalHome;
+    }
   }, 60000);
 
   it("readonly：读得到宿主文件，写不进去", async () => {

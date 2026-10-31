@@ -42,19 +42,39 @@ export interface BwrapInvocation {
 }
 
 /**
+ * 执行层自己的基础环境：不继承父进程 env/PATH，由 `bash -lc` 从 /etc/profile
+ * 与用户 profile 重建。沙箱与本地两条路径共用这一份，差异只在权限。
+ *
+ * `extraEnv` 是配置注入的额外环境变量（`personalExtensions.shell.env`），同名时覆盖基础值。
+ */
+export function shellBaseEnv(extraEnv?: Readonly<Record<string, string>>): Record<string, string> {
+  const home = process.env.HOME;
+  if (home === undefined) {
+    throw new Error("HOME is not set; refusing to run bash in a clean environment");
+  }
+  return {
+    HOME: home,
+    SHELL: "/bin/bash",
+    TERM: "dumb",
+    LANG: "C.UTF-8",
+    // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
+    PATH: "/usr/local/bin:/usr/bin:/bin",
+    ...extraEnv,
+  };
+}
+
+/**
  * 组装一次 bwrap 调用。实际执行（`execInvocation`）与调试打印共用这里，
  * 保证 `--print-args` 输出的命令行与真正跑的那条完全一致。
+ *
+ * `extraEnv` 是配置注入的额外环境变量：合并进这份干净环境，同名时覆盖基础值。
  */
 export async function buildBwrapInvocation(
   resolved: ResolvedBwrap,
   workspace: string,
   command: string,
+  extraEnv?: Readonly<Record<string, string>>,
 ): Promise<BwrapInvocation> {
-  // 干净环境：不继承父进程 env/PATH，由 bash -lc 从 /etc/profile 与用户 profile 重建
-  const home = process.env.HOME;
-  if (home === undefined) {
-    throw new Error("HOME is not set; refusing to run bash in a clean environment");
-  }
   return {
     // 沙箱内不透传 PATH，execvp 的默认路径可能找不到 bash（如 NixOS），故在父进程解析绝对路径
     shell: getShellConfig().shell,
@@ -70,14 +90,7 @@ export async function buildBwrapInvocation(
       "/proc",
     ],
     command,
-    env: {
-      HOME: home,
-      SHELL: "/bin/bash",
-      TERM: "dumb",
-      LANG: "C.UTF-8",
-      // 基础 PATH：profile 加载阶段（设置 PATH 前）需要系统命令（如 id），由 profile 随后覆盖；不含 sbin
-      PATH: "/usr/local/bin:/usr/bin:/bin",
-    },
+    env: shellBaseEnv(extraEnv),
     needsNetworkStack: resolved.network === "limited",
   };
 }
@@ -122,11 +135,9 @@ function killChild(pid: number | undefined): void {
   }
 }
 
-export interface ExecInvocationOptions {
-  /** 命令执行目录（进程 cwd）；沙箱内可写边界由 invocation 的挂载项决定，与此无关。 */
+export interface ExecOptions {
+  /** 命令执行目录（进程 cwd）。 */
   cwd: string;
-  /** netns holder pid：invocation 需要网络栈时必填，缺失即抛错。 */
-  holderPid?: number;
   /** 流式输出回调（stdout 与 stderr 已合并）。 */
   onData: (data: Buffer) => void;
   /** 取消：终止整个进程组并以 signal.reason（默认 AbortError）结束。 */
@@ -135,28 +146,28 @@ export interface ExecInvocationOptions {
   timeout?: number;
 }
 
+export interface ExecInvocationOptions extends ExecOptions {
+  /** netns holder pid：invocation 需要网络栈时必填，缺失即抛错。 */
+  holderPid?: number;
+}
+
 /**
- * 执行一次组装好的调用（唯一一处 spawn 与生命周期）。
+ * 执行一条组装好的 argv（唯一一处 spawn 与生命周期）。沙箱路径传 bwrap 形式的
+ * argv，本地路径传 `[shell, "-lc", command]`，超时 / 中断 / 进程组 kill 语义共用。
  *
- * 需要网络栈时自动前置 `nsenter` 前缀；进程以独立进程组启动，超时与取消都
- * 终止整组，启动失败（spawn error）立即结束且不残留超时定时器。
+ * 进程以独立进程组启动，超时与取消都终止整组，启动失败（spawn error）立即结束
+ * 且不残留超时定时器。
  */
-export function execInvocation(
-  invocation: BwrapInvocation,
-  options: ExecInvocationOptions,
+export function execArgv(
+  argv: string[],
+  env: Readonly<Record<string, string>>,
+  options: ExecOptions,
 ): Promise<{ exitCode: number | null }> {
-  if (invocation.needsNetworkStack && options.holderPid === undefined) {
-    return Promise.reject(new Error("Network stack is not initialized for network limited mode"));
-  }
-  const argv = invocationArgv(
-    invocation,
-    invocation.needsNetworkStack ? options.holderPid : undefined,
-  );
   const child = spawn(argv[0], argv.slice(1), {
     cwd: options.cwd,
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
-    env: invocation.env,
+    env,
   });
 
   return new Promise<{ exitCode: number | null }>((resolve, reject) => {
@@ -217,26 +228,74 @@ export function execInvocation(
 }
 
 /**
+ * 执行一次组装好的 bwrap 调用：需要网络栈时自动前置 `nsenter` 前缀，其余交给
+ * `execArgv`（与本地路径共用的 spawn 实现）。
+ */
+export function execInvocation(
+  invocation: BwrapInvocation,
+  options: ExecInvocationOptions,
+): Promise<{ exitCode: number | null }> {
+  if (invocation.needsNetworkStack && options.holderPid === undefined) {
+    return Promise.reject(new Error("Network stack is not initialized for network limited mode"));
+  }
+  const argv = invocationArgv(
+    invocation,
+    invocation.needsNetworkStack ? options.holderPid : undefined,
+  );
+  return execArgv(argv, invocation.env, options);
+}
+
+/** 两条路径共用的执行前检查：目录必须存在，已中断则不再启动进程。 */
+async function assertExecutable(cwd: string, signal: AbortSignal | undefined): Promise<void> {
+  await fsAccess(cwd, constants.F_OK).catch(() => {
+    throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
+  });
+  // 已中断（signal.reason 是 name=AbortError 的 DOMException）：直接抛，不再执行
+  signal?.throwIfAborted();
+}
+
+/**
  * @param workspace session 工作区：writablePaths 的 "." 与 PROTECTED_DIRS 都基于它解析，
  *   与当次命令的 cwd（仅作为进程执行目录）解耦，避免 workdir 参数漂移可写边界。
+ * @param extraEnv 配置注入的额外环境变量，覆盖沙箱环境里的同名基础值。
  */
 export function createBwrapBashOperations(
   resolved: ResolvedBwrap,
   workspace: string,
   networkStack?: NetworkStack,
+  extraEnv?: Readonly<Record<string, string>>,
 ): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout }) {
-      await fsAccess(cwd, constants.F_OK).catch(() => {
-        throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
-      });
-      // 已中断（signal.reason 是 name=AbortError 的 DOMException）：直接抛，不再执行
-      signal?.throwIfAborted();
+      await assertExecutable(cwd, signal);
 
-      const invocation = await buildBwrapInvocation(resolved, workspace, command);
+      const invocation = await buildBwrapInvocation(resolved, workspace, command, extraEnv);
       return execInvocation(invocation, {
         cwd,
         holderPid: networkStack?.holderPid,
+        onData,
+        signal,
+        timeout,
+      });
+    },
+  };
+}
+
+/**
+ * 不经沙箱的 bash 执行：与 bwrap 路径共用同一份基础环境（`shellBaseEnv`）与同一段
+ * spawn 实现（`execArgv`），argv 换成 `[shell, "-lc", command]`。两条路径的差异只有
+ * 权限，工具版本因此都按 cwd 由登录 shell 的 profile 解析。
+ *
+ * @param extraEnv 配置注入的额外环境变量，覆盖基础环境里的同名值。
+ */
+export function createLocalBashOperations(
+  extraEnv?: Readonly<Record<string, string>>,
+): BashOperations {
+  return {
+    async exec(command, cwd, { onData, signal, timeout }) {
+      await assertExecutable(cwd, signal);
+      return execArgv([getShellConfig().shell, "-lc", command], shellBaseEnv(extraEnv), {
+        cwd,
         onData,
         signal,
         timeout,

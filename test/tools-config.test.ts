@@ -97,6 +97,40 @@ describe("personalExtensions 解析", () => {
       "personalExtensions.disabledTools: expected an array, ignored",
     ]);
   });
+
+  it("shell.env 解析成注入用的环境变量表", () => {
+    const parsed = config({
+      shell: { env: { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" } },
+    });
+
+    expect(parsed.shellEnv).toEqual({ GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" });
+    expect(parsed.warnings).toEqual([]);
+  });
+
+  it("shell 非对象时警告且不注入", () => {
+    const parsed = config({ shell: "GIT_EDITOR=true" });
+
+    expect(parsed.shellEnv).toEqual({});
+    expect(parsed.warnings).toEqual(["personalExtensions.shell: expected an object, ignored"]);
+  });
+
+  it("shell.env 非对象时警告且不注入", () => {
+    const parsed = config({ shell: { env: ["GIT_EDITOR=true"] } });
+
+    expect(parsed.shellEnv).toEqual({});
+    expect(parsed.warnings).toEqual([
+      "personalExtensions.shell.env: expected an object mapping names to string values, ignored",
+    ]);
+  });
+
+  it("shell.env 里的非字符串值逐键警告并跳过，其余键生效", () => {
+    const parsed = config({ shell: { env: { GIT_EDITOR: "true", GIT_PAGER: 42, LANG: "C" } } });
+
+    expect(parsed.shellEnv).toEqual({ GIT_EDITOR: "true", LANG: "C" });
+    expect(parsed.warnings).toEqual([
+      "personalExtensions.shell.env.GIT_PAGER: invalid value 42 ignored (expected a string)",
+    ]);
+  });
 });
 
 describe("工具集与工具可用性判定", () => {

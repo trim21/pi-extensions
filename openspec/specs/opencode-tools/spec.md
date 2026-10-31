@@ -74,7 +74,7 @@ opencode 风格工具集（小写 `read` / `edit` / `write` / `grep` / `glob` / 
 
 ### Requirement: bash 沙箱执行
 
-命令在 bwrap 沙箱内执行，内置默认超时。工具在保持现有文本输出、`details` 与抛错语义的同时 MUST 声明输出结构，并在命令执行结束（含非零退出、超时、中止）时给出与该结构匹配的载荷（`structuredResult`）：
+命令在 bwrap 沙箱内执行，内置默认超时。工具 MUST 声明输出结构，并在命令执行结束（含非零退出、超时、中止）时给出与该结构匹配的载荷（`structuredResult`）：
 
 ```ts
 {
@@ -83,7 +83,7 @@ opencode 风格工具集（小写 `read` / `edit` / `write` / `grep` / `glob` / 
 }
 ```
 
-字段语义与 claude-code 侧 `Bash` 完全一致（脚本换工具集不用改代码）：载荷只有这两个字段，没有 `ok` / `status` 之类的标志；`exitCode` 在被信号终止（超时、中止）或没有退出码时为 `null`；`output` 是命令的**完整**输出（stdout / stderr 已合并，文本被截断时从落盘文件读回全文），MUST NOT 混入工具追加的截断提示、退出码状态行或沙箱状态说明。非零退出 MUST 是成功的结构化结果，现有 `details`（`exitCode` / `truncated` / `fullOutputPath` / `timeout`）与文本 MUST 保持不变。
+字段语义与 claude-code 侧 `Bash` 完全一致（脚本换工具集不用改代码）：载荷只有这两个字段，没有 `ok` / `status` 之类的标志；`exitCode` 在被信号终止（超时、中止）或没有退出码时为 `null`；`output` 是命令的**完整**输出（stdout / stderr 已合并，文本被截断时从落盘文件读回全文），MUST NOT 混入工具追加的截断提示、退出码状态行或沙箱状态说明。非零退出 MUST 是成功的结构化结果，`details`（`exitCode` / `truncated` / `fullOutputPath` / `timeout`）与非超时/中止路径的文本 MUST 保持不变。超时与用户中止的状态行 MUST 包在 `<system-reminder>` 中，并位于命令输出之后；MUST NOT 作为普通文本与命令输出混在一起。
 
 #### Scenario: 沙箱执行命令
 
@@ -103,12 +103,12 @@ opencode 风格工具集（小写 `read` / `edit` / `write` / `grep` / `glob` / 
 #### Scenario: 超时与中止
 
 - **WHEN** 命令超过超时上限或被用户中止
-- **THEN** 载荷的 `exitCode` 为 `null`、`output` 为已捕获的部分输出（超时与中止的区别在文本与 `details` 里）；文本、`details.timeout` 与沙箱状态提示与今天一致
+- **THEN** 载荷的 `exitCode` 为 `null`、`output` 为已捕获的部分输出（超时与中止的区别在文本与 `details` 里）；文本中位于命令输出之后的状态行 MUST 为 `<system-reminder>` 包裹的 `Command exceeded timeout ...` / `Command aborted by user ...`，`details.timeout` 与沙箱状态提示不变
 
 #### Scenario: 声明结构不改变既有输出
 
 - **WHEN** 比较改动前后的同一条命令结果
-- **THEN** 文本、`details` 与失败时的抛错行为都逐字/逐语义不变
+- **THEN** `details`、结构化载荷与失败时的抛错行为都逐字/逐语义不变；除超时与中止的状态行改为 `<system-reminder>` 包裹外，文本保持不变
 
 ### Requirement: todowrite 任务列表
 

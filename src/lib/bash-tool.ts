@@ -14,6 +14,11 @@ import { Type } from "typebox";
 export const BASH_DEFAULT_TIMEOUT_MS = 120_000;
 export const BASH_MAX_TIMEOUT_MS = 7_200_000;
 
+/** 工具追加的状态行（超时、用户取消）统一包成系统提醒，避免被当成命令输出。 */
+export function systemReminder(text: string): string {
+  return `<system-reminder>\n${text}\n</system-reminder>`;
+}
+
 /**
  * `Bash` 的结构化结果：只有退出码与完整输出——命令非零退出不是失败，所以载荷里没有成败
  * 标志，脚本直接读 `exitCode` 分支；超时/中止时 `exitCode` 为 `null`（原因在模型侧文本里）。

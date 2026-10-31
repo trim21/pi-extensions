@@ -431,10 +431,17 @@ export class BwrapRuntime {
    * sandbox.json 加载（主会话入口的现状行为）。
    */
   private readonly config: BwrapConfig | undefined;
+  /** 注入给每条 bash 命令的额外环境变量（`personalExtensions.shell.env`），沙箱内外都生效。 */
+  private readonly env: Readonly<Record<string, string>>;
 
-  constructor(policy: RequestPolicy, config?: BwrapConfig) {
+  constructor(
+    policy: RequestPolicy,
+    config?: BwrapConfig,
+    env: Readonly<Record<string, string>> = {},
+  ) {
     this.policy = policy;
     this.config = config;
+    this.env = env;
   }
 
   setup(pi: ExtensionAPI): void {
@@ -635,6 +642,7 @@ export class BwrapRuntime {
         commandCwd: execCwd,
         command: request.command,
         unsandboxed: local,
+        env: this.env,
         onData: (data) => {
           output.append(data);
           emitUpdate();
@@ -1108,10 +1116,13 @@ export class BwrapRuntime {
  * config 为完整配置（completeBwrapConfig 的产物）：加载配置与创建解耦，传入后不再
  * 读盘，且沙箱固定（不注册 /bwrap-* 命令、非沙盒请求直接拒绝）。缺省从全局/项目
  * sandbox.json 加载。
+ * env 为注入给每条命令的额外环境变量（`personalExtensions.shell.env`）：由入口显式
+ * 传入，缺省不注入——测试里创建 runtime 因此读不到开发机的 settings.json。
  */
 export function createBwrapRuntime(
   policy: RequestPolicy = createRequestPolicy(),
   config?: BwrapConfig,
+  env?: Readonly<Record<string, string>>,
 ): BwrapRuntime {
-  return new BwrapRuntime(policy, config);
+  return new BwrapRuntime(policy, config, env);
 }

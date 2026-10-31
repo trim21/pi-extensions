@@ -72,6 +72,27 @@ describe("opencode bash", () => {
     });
   });
 
+  it("injects personalExtensions shell env into the command", async () => {
+    const runtime = createBwrapRuntime(undefined, undefined, { GIT_EDITOR: "true" });
+    runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
+    const recorder = createToolRecorder<RegisteredTool>();
+    registerBashTool(recorder.bus, recorder.pi, runtime);
+    const tool = requireTool(recorder, "bash");
+
+    const result = await tool.execute(
+      "id",
+      { command: 'printf %s "$GIT_EDITOR"', timeout: 5_000 },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: 0, output: "true" },
+    });
+  });
+
   it("does not throw on non-zero exit: returns output plus exit code text", async () => {
     const { tool } = loadBashTool();
     const result = await tool.execute(
@@ -184,14 +205,10 @@ describe("opencode bash", () => {
       undefined,
       context(process.cwd()),
     );
-    expect(result.content.map((block: { text: string }) => block.text)).toMatchInlineSnapshot(`
-      [
-        "partial
-
-      Command exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
-        "sandbox status",
-      ]
-    `);
+    expect(result.content.map((block: { text: string }) => block.text)).toEqual([
+      "partial\n\n<system-reminder>\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.\n</system-reminder>",
+      "sandbox status",
+    ]);
   });
 
   it("appends the user sandbox reminder after a timeout", async () => {
@@ -215,7 +232,7 @@ describe("opencode bash", () => {
       context(process.cwd()),
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "partial\n\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
+      "partial\n\n<system-reminder>\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.\n</system-reminder>",
       "user sandbox reminder",
     ]);
   });
@@ -230,22 +247,23 @@ describe("opencode bash", () => {
       context(process.cwd()),
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "Command exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
+      "<system-reminder>\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.\n</system-reminder>",
     ]);
     expect(result.details).toEqual({ timeout: true });
   });
 
   it("includes partial output before the timeout message", async () => {
     const { tool } = loadBashTool();
+    // 超时窗口要容得下登录 shell 加载 profile 的开销，否则 printf 还没跑就被杀了
     const result = await tool.execute(
       "id",
-      { command: "printf partial; sleep 1", timeout: 20 },
+      { command: "printf partial; sleep 5", timeout: 500 },
       undefined,
       undefined,
       context(process.cwd()),
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "partial\n\nCommand exceeded timeout of 20 ms. Retry with a larger timeout if the command is expected to take longer.",
+      "partial\n\n<system-reminder>\nCommand exceeded timeout of 500 ms. Retry with a larger timeout if the command is expected to take longer.\n</system-reminder>",
     ]);
     expect(result.details).toEqual({ timeout: true });
   });
@@ -260,11 +278,14 @@ describe("opencode bash", () => {
       undefined,
       context(process.cwd()),
     );
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 等待窗口要容得下登录 shell 加载 profile 的开销，否则 printf 还没跑就被中断了
+    await new Promise((resolve) => setTimeout(resolve, 300));
     controller.abort();
     const result = await promise;
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      expect.stringMatching(/^partial\n\nCommand aborted by user after \d+\.\d seconds$/),
+      expect.stringMatching(
+        /^partial\n\n<system-reminder>\nCommand aborted by user after \d+\.\d seconds\n<\/system-reminder>$/,
+      ),
     ]);
     expect(result.details).toEqual({});
   });

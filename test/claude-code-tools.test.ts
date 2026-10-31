@@ -1314,6 +1314,23 @@ describe("Bash", () => {
     });
   });
 
+  it("injects personalExtensions shell env into the command", async () => {
+    const runtime = createBwrapRuntime(undefined, undefined, { GIT_EDITOR: "true" });
+    runtime.setMode(process.cwd(), { fs: "allow-all", network: "allow-all" });
+    const tool = loadBashTool(runtime);
+
+    const result = await call(
+      tool,
+      { command: 'printf %s "$GIT_EDITOR"', timeout: 5_000 },
+      context(process.cwd()),
+    );
+
+    expect(result.structuredResult).toEqual({
+      ok: true,
+      value: { exitCode: 0, output: "true" },
+    });
+  });
+
   // Git Bash 的 pwd 输出 POSIX 风格路径（/c/...），与 Windows 绝对路径断言
   // 不兼容：此用例只跑 Unix。
   it.skipIf(process.platform === "win32")("runs commands in the given workdir", async () => {
@@ -1352,7 +1369,9 @@ describe("Bash", () => {
       { command: "sleep 1", timeout: 20 },
       context(process.cwd()),
     );
-    expect(result.content[0].text).toBe("Command timed out after 20 milliseconds");
+    expect(result.content[0].text).toBe(
+      "<system-reminder>\nCommand timed out after 20 milliseconds\n</system-reminder>",
+    );
   });
 
   it("force-stops commands that ignore SIGTERM", async () => {
@@ -1365,12 +1384,15 @@ describe("Bash", () => {
   });
 
   it("includes partial output before the timeout message", async () => {
+    // 超时窗口要容得下登录 shell 加载 profile 的开销，否则 printf 还没跑就被杀了
     const result = await call(
       bashTool,
-      { command: "printf partial; sleep 1", timeout: 20 },
+      { command: "printf partial; sleep 5", timeout: 500 },
       context(process.cwd()),
     );
-    expect(result.content[0].text).toBe("partial\n\nCommand timed out after 20 milliseconds");
+    expect(result.content[0].text).toBe(
+      "partial\n\n<system-reminder>\nCommand timed out after 500 milliseconds\n</system-reminder>",
+    );
     expect(result.details).toBeUndefined();
     expect(result.structuredResult).toEqual({
       ok: true,
@@ -1390,7 +1412,7 @@ describe("Bash", () => {
     controller.abort();
     const result = await promise;
     expect(result.content[0].text).toMatch(
-      /^partial\n\nCommand aborted by user after \d+\.\d seconds$/,
+      /^partial\n\n<system-reminder>\nCommand aborted by user after \d+\.\d seconds\n<\/system-reminder>$/,
     );
     expect(result.structuredResult).toEqual({
       ok: true,
@@ -1482,7 +1504,7 @@ describe("Bash", () => {
       context(process.cwd()),
     );
     expect(result.content.map((block: { text: string }) => block.text)).toEqual([
-      "partial\n\nCommand timed out after 20 milliseconds",
+      "partial\n\n<system-reminder>\nCommand timed out after 20 milliseconds\n</system-reminder>",
       "user sandbox reminder",
     ]);
   });
@@ -1512,9 +1534,11 @@ describe("Bash", () => {
   });
 
   it("reports the exit code of the last command in a pipeline", async () => {
+    // 用 grep 而不是 rg：bash 工具的环境由执行层构造（不继承父进程 PATH），
+    // 只有 profile 里的 PATH 能决定命令看到哪些工具，grep 一定在基础 PATH 上
     const result = await call(
       bashTool,
-      { command: "printf x | rg definitely-not-present", timeout: 5_000 },
+      { command: "printf x | grep definitely-not-present", timeout: 5_000 },
       context(process.cwd()),
     );
     expect(result.content[0].text).toBe("Exit code 1");

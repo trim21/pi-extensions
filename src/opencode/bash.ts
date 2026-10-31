@@ -16,11 +16,13 @@ import {
   BASH_MAX_TIMEOUT_MS,
   bashStructuredSchema,
   spilledOutput,
+  systemReminder,
 } from "../lib/bash-tool.js";
 import { resolveWorkdir } from "../lib/path.js";
 import { createRequestPolicy } from "../lib/request-policy.js";
 import { defineStructuredTool, type ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
+import { readToolsConfig } from "../lib/tools-config.js";
 
 /** 对齐上游 opencode 的截断提示文案（tools/BashTool/bash.ts）。 */
 const CAPTURE_TRUNCATED_NOTICE = "[output capture truncated at the in-memory safety limit]";
@@ -51,7 +53,11 @@ function appendTruncationNotice(
  */
 export default function opencodeBash(
   pi: ExtensionAPI,
-  runtime: BwrapRuntime = createBwrapRuntime(createRequestPolicy(pi.events)),
+  runtime: BwrapRuntime = createBwrapRuntime(
+    createRequestPolicy(pi.events),
+    undefined,
+    readToolsConfig().shellEnv,
+  ),
 ): void {
   registerToolsOnSessionStart(pi, (bus) => registerBashTool(bus, pi, runtime));
 }
@@ -127,10 +133,11 @@ export function registerBashTool(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapR
               error.partial.truncation,
               error.partial.fullOutputPath,
             );
-            const status =
+            const status = systemReminder(
               error.kind === "timeout"
                 ? `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`
-                : `Command aborted by user after ${formatElapsedSeconds(error.elapsedMs)}`;
+                : `Command aborted by user after ${formatElapsedSeconds(error.elapsedMs)}`,
+            );
             const full = text ? `${text}\n\n${status}` : status;
             // 对齐上游 opencode：超时与中断都不抛错，输出与状态文本一起返回；
             // 超时可能是沙箱的网络限制导致的，附加沙箱状态（用户中断与沙箱无关）
