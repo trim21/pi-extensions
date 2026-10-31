@@ -859,7 +859,6 @@ describe("subagent session", () => {
     h.settle();
     const result = await running;
     expect(result.usage.cost).toBe(0.0123);
-    expect(result.usage.turns).toBe(1);
     expect(result.usage.contextTokens).toBe(456);
     expect(result.model).toBe("claude-haiku-4-5");
     expect(result.stopReason).toBe("end_turn");
@@ -911,7 +910,7 @@ describe("subagent session", () => {
     });
     h.settle();
     const result = await running;
-    expect(result.usage.turns).toBe(0);
+    expect(result.usage.cost).toBe(0);
     expect(result.messages).toHaveLength(1);
   });
 });
@@ -1140,7 +1139,7 @@ describe("subagent progress log", () => {
       },
     ]);
     const lines = updates.at(-1)!.split("\n");
-    expect(lines.at(-1)).toBe("`scout` 1 turn $0.0123 ctx:456 claude-haiku-4-5");
+    expect(lines.at(-1)).toBe("`scout` $0.012 ctx:456 claude-haiku-4-5");
   });
 });
 
@@ -1180,7 +1179,7 @@ describe("formatSubagentError", () => {
     exitCode: 1,
     messages: [] as AgentMessage[],
     stderr: "",
-    usage: { cost: 0, contextTokens: 0, turns: 0 },
+    usage: { cost: 0, contextTokens: 0 },
   };
 
   it("falls back to (no output) when nothing is available", () => {

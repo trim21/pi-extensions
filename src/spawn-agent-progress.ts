@@ -42,7 +42,6 @@ const PROGRESS_MARKDOWN_MARKERS_RE = /[`*_~[\]<>#|]/g;
 
 /** 进度面板要展示的运行统计（`runAgent` 的 `result.usage`）。 */
 export interface ProgressUsage {
-  turns: number;
   cost: number;
   contextTokens: number;
 }
@@ -105,11 +104,8 @@ export function formatTokens(count: number): string {
 
 function formatUsageStats(usage: ProgressUsage, model?: string): string {
   const parts: string[] = [];
-  if (usage.turns) {
-    parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-  }
   if (usage.cost) {
-    parts.push(`$${usage.cost.toFixed(4)}`);
+    parts.push(`$${usage.cost.toFixed(3)}`);
   }
   if (usage.contextTokens > 0) {
     parts.push(`ctx:${formatTokens(usage.contextTokens)}`);

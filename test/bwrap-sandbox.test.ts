@@ -392,7 +392,7 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
     expect(output).toBe("true");
   }, 60000);
 
-  it("两条路径的命令环境逐项相同", async () => {
+  it("两条路径的探针环境逐项相同", async () => {
     const directory = workspace();
     const strategy = loadSandboxConfig({
       workspace: directory,
@@ -404,27 +404,68 @@ describe.skipIf(!sandbox)("runInSandbox（真实 bwrap）", () => {
     const home = workspace();
     writeFileSync(join(home, ".bash_profile"), "export LOGIN_MARKER=1\n");
     const originalHome = process.env.HOME;
+    const originalParentOnly = process.env.PI_TEST_PARENT_ONLY;
     process.env.HOME = home;
+    process.env.PI_TEST_PARENT_ONLY = "leak";
 
-    const collectEnv = async (unsandboxed: boolean): Promise<string[]> => {
+    // 只比执行层负责的变量：PATH 交给 shell 后会被 profile 按宿主环境重建（CI 上 profile
+    // 会把 pixi 的 env bin 拼进去），不属于执行层保证的范围；它交给 shell 时的取值由
+    // preview.env 的用例覆盖。
+    const probeKeys = [
+      "HOME",
+      "SHELL",
+      "TERM",
+      "LANG",
+      "GIT_EDITOR",
+      "PI_TEST_INJECTED",
+      "LOGIN_MARKER",
+      "PI_TEST_PARENT_ONLY",
+    ];
+
+    const probeEnv = async (unsandboxed: boolean): Promise<string[]> => {
       let output = "";
       const result = await runInSandbox(strategy, {
         workspace: directory,
         command: "env",
         unsandboxed,
-        env: { GIT_EDITOR: "true" },
+        env: { GIT_EDITOR: "true", PI_TEST_INJECTED: "injected" },
         onData: (data) => {
           output += data.toString();
         },
       });
       expect(result.exitCode).toBe(0);
-      return output.trim().split("\n").toSorted();
+      const seen = new Map(
+        output
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+      return probeKeys.map((key) => `${key}=${seen.get(key) ?? "<absent>"}`);
     };
 
     try {
-      expect(await collectEnv(true)).toEqual(await collectEnv(false));
+      const sandboxEnv = await probeEnv(true);
+      expect(sandboxEnv).toEqual(await probeEnv(false));
+      expect(sandboxEnv).toEqual([
+        `HOME=${home}`,
+        "SHELL=/bin/bash",
+        "TERM=dumb",
+        "LANG=C.UTF-8",
+        "GIT_EDITOR=true",
+        "PI_TEST_INJECTED=injected",
+        "LOGIN_MARKER=1",
+        "PI_TEST_PARENT_ONLY=<absent>",
+      ]);
     } finally {
       process.env.HOME = originalHome;
+      if (originalParentOnly === undefined) {
+        delete process.env.PI_TEST_PARENT_ONLY;
+      } else {
+        process.env.PI_TEST_PARENT_ONLY = originalParentOnly;
+      }
     }
   }, 60000);
 

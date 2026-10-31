@@ -13,7 +13,7 @@ import {
   type SubagentProgress,
 } from "../src/spawn-agent-progress.js";
 
-const ZERO_USAGE = { turns: 0, cost: 0, contextTokens: 0 };
+const ZERO_USAGE = { cost: 0, contextTokens: 0 };
 
 function render(progress: SubagentProgress): string[] {
   return progress.render(ZERO_USAGE).split("\n");
@@ -114,9 +114,16 @@ describe("createSubagentProgress", () => {
 
   it("appends usage stats and the model to the footer", () => {
     const progress = createSubagentProgress({ name: "scout" });
-    expect(
-      progress.render({ turns: 1, cost: 0.0123, contextTokens: 456 }, "claude-haiku-4-5"),
-    ).toBe("`scout` 1 turn $0.0123 ctx:456 claude-haiku-4-5");
+    expect(progress.render({ cost: 0.0123, contextTokens: 456 }, "claude-haiku-4-5")).toBe(
+      "`scout` $0.012 ctx:456 claude-haiku-4-5",
+    );
+  });
+
+  it("formats the cost with exactly 3 decimals and rounds", () => {
+    const progress = createSubagentProgress({ name: "scout" });
+    expect(progress.render({ cost: 0.5, contextTokens: 0 })).toBe("`scout` $0.500");
+    expect(progress.render({ cost: 0.1236, contextTokens: 0 })).toBe("`scout` $0.124");
+    expect(progress.render({ cost: 0.0004, contextTokens: 0 })).toBe("`scout` $0.000");
   });
 });
 
