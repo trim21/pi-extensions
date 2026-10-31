@@ -12,8 +12,6 @@
 
 import { existsSync } from "node:fs";
 
-import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
-
 import { expandHome } from "../lib/path.js";
 import {
   type BwrapConfig,
@@ -27,7 +25,12 @@ import {
   resolveBwrapPath,
   type ResolvedBwrap,
 } from "./core.js";
-import { buildBwrapInvocation, createBwrapBashOperations, invocationArgv } from "./exec.js";
+import {
+  buildBwrapInvocation,
+  createBwrapBashOperations,
+  createLocalBashOperations,
+  invocationArgv,
+} from "./exec.js";
 import type { NetworkStack, NetworkStackStopResult } from "./network-stack.js";
 
 export interface SandboxConfigInput {
@@ -54,8 +57,16 @@ export interface SandboxRunOptions {
   signal?: AbortSignal;
   /** 超时秒数：kill 整个进程组并以 TimeoutError 结束。 */
   timeout?: number;
-  /** 调用方已决定不经沙箱（审批通过的全权限、Windows）。fs 与 network 均 allow-all 时无需显式设置。 */
+  /**
+   * 调用方已决定不经沙箱（审批通过的全权限；fs 与 network 均 allow-all 时无需显式设置）。
+   * 两条路径的环境构造与 spawn 实现相同，差异只有权限。
+   */
   unsandboxed?: boolean;
+  /**
+   * 额外环境变量（`personalExtensions.shell.env`）：两条路径共用同一份干净环境，
+   * 注入项覆盖同名基础值。
+   */
+  env?: Readonly<Record<string, string>>;
   /** 网络栈子进程输出转发，仅诊断用（默认丢弃）。 */
   log?: NetworkStackLog;
   /** 网络栈就绪回调：取 holder pid 与 mihomo 配置路径手动排查。 */
@@ -126,8 +137,8 @@ export async function runInSandbox(
       options.onNetworkStack?.(stack);
     }
     const operations = local
-      ? createLocalBashOperations()
-      : createBwrapBashOperations(resolved, workspace, stack);
+      ? createLocalBashOperations(options.env)
+      : createBwrapBashOperations(resolved, workspace, stack, options.env);
     const { exitCode } = await operations.exec(options.command, commandCwd, {
       onData: options.onData,
       signal: options.signal,
@@ -192,12 +203,15 @@ export interface SandboxPreview {
  */
 export async function previewSandboxCommand(
   resolved: ResolvedBwrap,
-  options: Pick<SandboxRunOptions, "workspace" | "command" | "commandCwd" | "unsandboxed"> & {
+  options: Pick<
+    SandboxRunOptions,
+    "workspace" | "command" | "commandCwd" | "unsandboxed" | "env"
+  > & {
     holderPid?: number;
   },
 ): Promise<SandboxPreview> {
   const workspace = expandHome(options.workspace);
-  const invocation = await buildBwrapInvocation(resolved, workspace, options.command);
+  const invocation = await buildBwrapInvocation(resolved, workspace, options.command, options.env);
   if (!invocation.needsNetworkStack || options.unsandboxed === true) {
     return { argv: invocationArgv(invocation), env: invocation.env, needsNetworkStack: false };
   }

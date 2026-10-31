@@ -145,7 +145,6 @@ const spawnAgentSchema = Type.Object({
 interface UsageStats {
   cost: number;
   contextTokens: number;
-  turns: number;
 }
 
 /** 子 agent 的一次运行结果：runAgent 的返回值。 */
@@ -229,7 +228,10 @@ export function subagentToolsExtension(
 ): ExtensionFactory {
   return (pi) => {
     const registration = createToolRegistration(pi);
-    const services = createToolServices(pi, { sandbox: agent.sandbox ?? SUBAGENT_DEFAULT_SANDBOX });
+    const services = createToolServices(pi, {
+      sandbox: agent.sandbox ?? SUBAGENT_DEFAULT_SANDBOX,
+      shellEnv: registration.config.shellEnv,
+    });
     const kind = toolsetsForToolNames(tools);
     if (!kind) {
       return;
@@ -374,7 +376,6 @@ export async function runAgent(
     usage: {
       cost: 0,
       contextTokens: 0,
-      turns: 0,
     },
   };
 
@@ -449,7 +450,6 @@ export async function runAgent(
         const msg = event.message;
         result.messages.push(msg);
         if (msg.role === "assistant") {
-          result.usage.turns++;
           result.usage.cost += msg.usage.cost.total;
           result.usage.contextTokens = msg.usage.totalTokens;
           if (!result.model) {

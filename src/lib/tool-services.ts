@@ -34,11 +34,13 @@ export interface ToolServices {
 export interface ToolServicesOptions extends LspServiceOptions {
   /** 固定沙箱配置（子代理用）；不传则跟随用户配置与 /bwrap-* 命令。 */
   sandbox?: BwrapConfig;
+  /** 注入给 bash 命令的额外环境变量（`personalExtensions.shell.env`）。 */
+  shellEnv?: Readonly<Record<string, string>>;
 }
 
 export function createToolServices(pi: ExtensionAPI, options?: ToolServicesOptions): ToolServices {
   const policy = createRequestPolicy(pi.events);
-  const runtime = createBwrapRuntime(policy, options?.sandbox);
+  const runtime = createBwrapRuntime(policy, options?.sandbox, options?.shellEnv);
   // 注册 /bwrap* 命令、沙箱系统提示与 session 生命周期钩子；固定沙箱
   // （子代理）不注册命令，见 BwrapRuntime.setup。
   runtime.setup(pi);

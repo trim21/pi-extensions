@@ -1,10 +1,12 @@
+import { mkdtempSync, rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { BwrapConfig } from "../src/bwrap/core.js";
 import type { LspServerAdapter } from "../src/lib/lsp/adapter.js";
 import { createToolServices } from "../src/lib/tool-services.js";
 
@@ -122,5 +124,45 @@ describe("createToolServices 的 LSP 启用回调", () => {
     services.setLspEnabledHandler(handler);
 
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe("createToolServices 注入 shell env", () => {
+  const noSandbox: BwrapConfig = {
+    fs: { mode: "allow-all", writablePaths: [], extraWritablePaths: [], denyPaths: [] },
+    network: { mode: "allow-all", allowlist: [] },
+    extraArgs: [],
+  };
+  let agentDir: string;
+
+  beforeAll(() => {
+    // 命令输出落盘到 agent-dir/tmp：指向临时目录，避免写用户真实目录
+    agentDir = mkdtempSync(join(tmpdir(), "pi-tool-services-agent-"));
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+  });
+
+  afterAll(() => {
+    rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  it("shellEnv 经 runtime 到达 bash 命令", async () => {
+    const { pi } = createFakePi();
+    const services = createToolServices(pi, {
+      adapters: [],
+      sandbox: noSandbox,
+      shellEnv: { GIT_EDITOR: "true" },
+    });
+
+    const result = await services.runtime.execute({
+      toolCallId: "test",
+      command: 'printf %s "$GIT_EDITOR"',
+      ctx: {
+        cwd: process.cwd(),
+        hasUI: false,
+        sessionManager: { getSessionId: () => "test-session" },
+      } as never,
+    });
+
+    expect(result).toMatchObject({ exitCode: 0, output: "true" });
   });
 });

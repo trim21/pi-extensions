@@ -36,7 +36,7 @@ export default function personalExtensions(pi: ExtensionAPI): void {
   const registration = createToolRegistration(pi);
   // 共享服务要在 registration 之后创建：LSP manager 的 session_start handler 得
   // 排在「记录本会话模型」的 handler 之后。
-  const services = createToolServices(pi);
+  const services = createToolServices(pi, { shellEnv: registration.config.shellEnv });
 
   // 与文件工具集无关的模块（各自在 create 里注册自己的会话钩子与提示）。
   const modules: { name: string; module: ToolModule }[] = [];
