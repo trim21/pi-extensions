@@ -49,7 +49,7 @@ importers:
         version: 3.18.4
       vscode-languageserver-types:
         specifier: ^3.18.4
-        version: 3.18.4
+        version: 3.18.5
       web-tree-sitter:
         specifier: ^0.27.0
         version: 0.27.1
@@ -2445,6 +2445,9 @@ packages:
   vscode-languageserver-types@3.18.4:
     resolution: {integrity: sha512-nQsacoiijvl0fRf2q28uFDrAVwRhdCa3QveiF7/CX0r18mLR5FU/1WskSsCKOjmEbtteKUnY8x8Yzxop+k0zwg==}
 
+  vscode-languageserver-types@3.18.5:
+    resolution: {integrity: sha512-kPd6+JQNz3HMJvjKlqUxERSlZHAntl/aGpsk7ImwIh0ewDKDcjgAEyVSYciPiOJD3ftbK9IrfiqUeTZLSbCizw==}
+
   web-streams-polyfill@3.3.3:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
     engines: {node: '>= 8'}
@@ -4748,6 +4751,8 @@ snapshots:
       vscode-languageserver-types: 3.18.4
 
   vscode-languageserver-types@3.18.4: {}
+
+  vscode-languageserver-types@3.18.5: {}
 
   web-streams-polyfill@3.3.3: {}
 
