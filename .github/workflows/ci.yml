@@ -54,7 +54,7 @@ jobs:
       # CI 里，再决定是改代码还是收敛版本。
       - uses: prefix-dev/setup-pixi@v0.11.3
         with:
-          pixi-version: v0.83.0
+          pixi-version: v0.84.0
           # 仓库没有 pixi.toml：只装 pixi 本体，依赖走下面的 pixi global install
           run-install: false
 
