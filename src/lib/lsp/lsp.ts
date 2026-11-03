@@ -438,6 +438,39 @@ async function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<
   await Promise.race([promise, abort]);
 }
 
+/**
+ * 打开文档让服务器索引 / 产出诊断。diagnostics 传 "document" 时最多等 5s，
+ * "full" 最多等 10s；不传则只 didOpen 不等待。
+ */
+async function openAndWaitForDiagnostics(
+  clients: LspClient[],
+  file: string,
+  diagnostics?: "document" | "full",
+  options?: LspRequestOptions,
+): Promise<void> {
+  await Promise.all(
+    clients.map(async (client) => {
+      const after = Date.now();
+      const version = await client.notify.open({ path: file });
+      if (!diagnostics) {
+        return;
+      }
+      await abortable(
+        client.waitForDiagnostics({
+          path: file,
+          version,
+          mode: diagnostics,
+          after,
+          signal: options?.signal,
+        }),
+        options?.signal,
+      );
+    }),
+  ).catch(() => {
+    // 诊断等待失败不影响读 / 写操作本身
+  });
+}
+
 export interface LspService {
   touchFile(
     file: string,
@@ -1034,10 +1067,6 @@ export function createLspService(
     return result;
   }
 
-  /**
-   * 打开文档让服务器索引 / 产出诊断。diagnostics 传 "document" 时最多等 5s，
-   * "full" 最多等 10s；不传则只 didOpen 不等待。
-   */
   async function touchFile(
     file: string,
     cwd: string,
@@ -1045,34 +1074,21 @@ export function createLspService(
     options?: LspRequestOptions,
   ): Promise<void> {
     const clients = await getClients(file, cwd, options?.notify);
-    await Promise.all(
-      clients.map(async (client) => {
-        const after = Date.now();
-        const version = await client.notify.open({ path: file });
-        if (!diagnostics) {
-          return;
-        }
-        await abortable(
-          client.waitForDiagnostics({
-            path: file,
-            version,
-            mode: diagnostics,
-            after,
-            signal: options?.signal,
-          }),
-          options?.signal,
-        );
-      }),
-    ).catch(() => {
-      // 诊断等待失败不影响写操作本身
-    });
+    await openAndWaitForDiagnostics(clients, file, diagnostics, options);
   }
 
-  /** 聚合所有 client 的当前诊断（path → diagnostics）。 */
+  /** 聚合活跃工作区内的当前诊断（path → diagnostics）。 */
   function diagnostics(): Promise<Record<string, Diagnostic[]>> {
     const results: Record<string, Diagnostic[]> = {};
     for (const client of state.clients) {
       for (const [filePath, diags] of client.diagnostics) {
+        // 服务器可以为 root 外或 cwd 外的路径推送 / pull 诊断：只保留活跃工作区内的
+        if (state.cwd !== undefined && !containsPath(filePath, state.cwd)) {
+          continue;
+        }
+        if (!containsPath(filePath, client.root)) {
+          continue;
+        }
         (results[filePath] ??= []).push(...diags);
       }
     }
@@ -1081,7 +1097,8 @@ export function createLspService(
 
   /**
    * read / edit / write 用：等待文档诊断并返回该文件的 ERROR / WARN 报告（text 空串表示无此类诊断）
-   * 与数量。内部所有 LSP 失败都会被吞掉，不干扰读取或写操作本身。
+   * 与数量。诊断只取拥有该文件的 client（见 getClients），不属于活跃工作区的文件报告为空。
+   * 内部所有 LSP 失败都会被吞掉，不干扰读取或写操作本身。
    */
   async function lspDiagnosticsForFile(
     file: string,
@@ -1091,10 +1108,14 @@ export function createLspService(
     if (options?.signal?.aborted) {
       return EMPTY_DIAGNOSTIC_REPORT;
     }
-    await touchFile(file, cwd, "document", options);
-    const all = await diagnostics();
+    const clients = await getClients(file, cwd, options?.notify);
+    if (clients.length === 0) {
+      return EMPTY_DIAGNOSTIC_REPORT;
+    }
+    await openAndWaitForDiagnostics(clients, file, "document", options);
     const normalized = normalize(file);
-    return report(normalized, all[normalized] ?? []);
+    const collected = clients.flatMap((client) => client.diagnostics.get(normalized) ?? []);
+    return report(normalized, collected);
   }
 
   /** 符号重命名：只面向 language 类服务器；按配置顺序取第一个成功结果。 */

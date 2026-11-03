@@ -229,9 +229,9 @@ export function registerLspRenameTool(
       }
 
       const renamed =
-        result.placeholder !== undefined && result.placeholder !== params.new_name
-          ? `'${result.placeholder}' -> '${params.new_name}'`
-          : `to '${params.new_name}'`;
+        result.placeholder === undefined || result.placeholder === params.new_name
+          ? `to '${params.new_name}'`
+          : `'${result.placeholder}' -> '${params.new_name}'`;
       const summary = `Renamed ${renamed} across ${applied.length} file(s).`;
       const text =
         diagnosticText === ""

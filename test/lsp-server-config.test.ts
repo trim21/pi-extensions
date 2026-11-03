@@ -13,7 +13,7 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
@@ -809,6 +809,67 @@ describe("config servers integration", () => {
     }
   });
 
+  it("工作区外路径的诊断不外溢到该文件", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const outsideDir = await mkdtemp(join(tmpdir(), "lsp-server-outside-"));
+    const inside = join(dir, "x.py");
+    const outside = join(outsideDir, "y.py");
+    await writeFile(inside, "x = 1\n");
+    await writeFile(outside, "y = 1\n");
+    const service = await withConfig(dir, {
+      mock: {
+        include: ["**/*.py"],
+        bin: process.execPath,
+        args: [fixture],
+        env: { MOCK_PUSH_EXTRA_URI: pathToFileURL(outside).href },
+        languageIdByExtension: { ".py": "python" },
+      },
+    });
+    try {
+      const insideReport = await service.lspDiagnosticsForFile(inside, dir);
+      expect(insideReport.text).toContain("mock error message");
+      const outsideReport = await service.lspDiagnosticsForFile(outside, dir);
+      expect(outsideReport.text).toBe("");
+      expect(outsideReport.errorCount).toBe(0);
+      expect(outsideReport.warningCount).toBe(0);
+      expect(await service.diagnostics()).not.toHaveProperty(outside);
+    } finally {
+      await service.shutdownAll();
+      await rm(dir, { recursive: true, force: true });
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("workingDir 指向 cwd 上级：cwd 内文件正常报告，root 内但 cwd 外的文件不报告", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
+    const dir = join(parent, "ws");
+    await mkdir(dir, { recursive: true });
+    const inside = join(dir, "a.py");
+    const sibling = join(parent, "b.py");
+    await writeFile(inside, "a = 1\n");
+    await writeFile(sibling, "b = 1\n");
+    const service = await withConfig(dir, {
+      mock: {
+        include: ["**/*.py"],
+        workingDir: parent,
+        bin: process.execPath,
+        args: [fixture],
+        env: { MOCK_PUSH_EXTRA_URI: pathToFileURL(sibling).href },
+        languageIdByExtension: { ".py": "python" },
+      },
+    });
+    try {
+      const insideReport = await service.lspDiagnosticsForFile(inside, dir);
+      expect(insideReport.text).toContain("mock error message");
+      const siblingReport = await service.lspDiagnosticsForFile(sibling, dir);
+      expect(siblingReport.text).toBe("");
+      expect(siblingReport.errorCount).toBe(0);
+    } finally {
+      await service.shutdownAll();
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("include 不匹配的文件不启动服务器", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-server-config-"));
     const go = join(dir, "y.go");
@@ -829,6 +890,9 @@ describe("config servers integration", () => {
       const all = await service.diagnostics();
       expect(all).toHaveProperty(go);
       expect(all).not.toHaveProperty(py);
+      const report = await service.lspDiagnosticsForFile(py, dir);
+      expect(report.text).toBe("");
+      expect(report.errorCount).toBe(0);
     } finally {
       await service.shutdownAll();
       await rm(dir, { recursive: true, force: true });
@@ -849,6 +913,7 @@ describe("config servers integration", () => {
         workingDir: "sdk/python",
         bin: process.execPath,
         args: [fixture],
+        env: { MOCK_PUSH_EXTRA_URI: pathToFileURL(outer).href },
         languageIdByExtension: { ".py": "python" },
       },
     });
@@ -858,6 +923,9 @@ describe("config servers integration", () => {
       const all = await service.diagnostics();
       expect(all).toHaveProperty(inner);
       expect(all).not.toHaveProperty(outer);
+      const report = await service.lspDiagnosticsForFile(outer, dir);
+      expect(report.text).toBe("");
+      expect(report.errorCount).toBe(0);
     } finally {
       await service.shutdownAll();
       await rm(dir, { recursive: true, force: true });

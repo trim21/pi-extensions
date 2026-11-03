@@ -19,6 +19,11 @@
       "groupSlug": "cortexkit-aft"
     },
     {
+      "matchPackageNames": ["@types/node"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
       "matchPackageNames": ["pnpm"],
       "groupName": "pnpm",
       "allowedVersions": "<12"
