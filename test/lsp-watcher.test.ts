@@ -85,11 +85,11 @@ describe("workspace watcher", () => {
     const { watcher, batches } = await collect(dir, { debounceMs: 50, flushMs: 200 });
     try {
       await writeFile(file, "x");
-      await sleep(150);
+      await waitFor(() => batches.flat().some((c) => c.path === file && c.type === "created"));
       await writeFile(file, "y");
-      await sleep(150);
+      await waitFor(() => batches.flat().some((c) => c.path === file && c.type === "changed"));
       await unlink(file);
-      await sleep(150);
+      await waitFor(() => batches.flat().some((c) => c.path === file && c.type === "deleted"));
       await watcher.stop();
       const all = batches.flat();
       expect(all).toContainEqual({ path: file, type: "created", isDirectory: false });
@@ -198,9 +198,10 @@ describe("workspace watcher", () => {
     try {
       const sub = join(dir, "subdir");
       await mkdir(sub);
+      // 目录创建事件先被 watcher 处理（记入 seenDirectories、挂上 watch），删除才会报 isDirectory
       await sleep(150);
       await rm(sub, { recursive: true });
-      await sleep(150);
+      await waitFor(() => batches.flat().some((c) => c.path === sub && c.type === "deleted"));
       await watcher.stop();
       expect(batches.flat()).toContainEqual({ path: sub, type: "deleted", isDirectory: true });
     } finally {
@@ -237,7 +238,8 @@ describe("workspace watcher", () => {
       await writeFile(join(dir, "node_modules", "x.js"), "x");
       await writeFile(join(dir, ".git", "HEAD"), "ref");
       await writeFile(join(dir, "normal.txt"), "x");
-      await sleep(300);
+      // 等非忽略路径的事件到齐，忽略目录的事件（若有）此时也已投递过
+      await waitFor(() => batches.flat().some((c) => c.path === join(dir, "normal.txt")));
       await watcher.stop();
       const all = batches.flat();
       expect(all.filter((c) => c.path.includes("node_modules"))).toHaveLength(0);
@@ -262,7 +264,7 @@ describe("workspace watcher", () => {
     try {
       await writeFile(join(dir, "a.log"), "x");
       await writeFile(join(dir, "b.txt"), "x");
-      await sleep(250);
+      await waitFor(() => batches.flat().some((c) => c.path === join(dir, "b.txt")));
       await watcher.stop();
       const all = batches.flat();
       expect(all.filter((c) => c.path.endsWith("a.log"))).toHaveLength(0);
@@ -285,7 +287,7 @@ describe("workspace watcher", () => {
       await sleep(250);
       // 非 ignored 路径事件照常投递，证明监听器仍在工作
       await writeFile(join(dir, "normal.txt"), "x");
-      await sleep(250);
+      await waitFor(() => batches.flat().some((c) => c.path === join(dir, "normal.txt")));
       await watcher.stop();
       const all = batches.flat();
       expect(all.filter((c) => c.path.includes("node_modules"))).toHaveLength(0);
@@ -312,7 +314,7 @@ describe("workspace watcher", () => {
       await sleep(150);
       await writeFile(join(dir, "extra", "inner", "f.txt"), "x");
       await writeFile(join(dir, "keep.txt"), "x");
-      await sleep(250);
+      await waitFor(() => batches.flat().some((c) => c.path === join(dir, "keep.txt")));
       await watcher.stop();
       const all = batches.flat();
       expect(all.filter((c) => c.path.includes("extra"))).toHaveLength(0);
@@ -339,7 +341,7 @@ describe("workspace watcher", () => {
       await sleep(150);
       await writeFile(join(ignored, "inner", "f.txt"), "x");
       await writeFile(join(dir, "keep.txt"), "x");
-      await sleep(250);
+      await waitFor(() => batches.flat().some((c) => c.path === join(dir, "keep.txt")));
       await watcher.stop();
       const all = batches.flat();
       expect(all.filter((c) => c.path.includes("gitignored"))).toHaveLength(0);
@@ -457,7 +459,7 @@ describe("workspace watcher", () => {
     const { watcher, batches } = await collect(dir, { debounceMs: 30, flushMs: 100 });
     try {
       await writeFile(join(dir, "a.txt"), "x");
-      await sleep(150);
+      await waitFor(() => batches.flat().length > 0);
       await watcher.stop();
       const count = batches.flat().length;
       await writeFile(join(dir, "b.txt"), "y");
