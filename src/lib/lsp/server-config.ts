@@ -123,7 +123,7 @@ function interpolateEnvVars(value: string, env: NodeJS.ProcessEnv): string {
   // eslint-disable-next-line unicorn/prefer-default-parameters -- replaceAll 回调参数被上下文的 ...args: any[] 定成 any，默认参数无法保留 string 注解
   return value.replaceAll(envVarPattern, (_match, name: string, fallback?: string) => {
     const resolved = env[name];
-    return resolved !== undefined && resolved !== "" ? resolved : (fallback ?? "");
+    return resolved === undefined || resolved === "" ? (fallback ?? "") : resolved;
   });
 }
 

@@ -126,6 +126,9 @@ export default defineConfig(
       "unicorn/prefer-combined-guards": "off",
       // 把三元挪进子表达式会把 lsp client 的 contentChanges 写成嵌套数组，反而更难读。
       "unicorn/prefer-minimal-ternary": "off",
+      // 只被一个函数用到的模块级 type alias（`type X = Static<typeof xSchema>` 这类）刻意与它
+      // 依赖的 schema / 数组常量放在一起；该规则要求把它们挪进函数体，会切散这种就近关系。
+      "unicorn/prefer-smaller-scope": "off",
       quotes: "off",
       "@typescript-eslint/quotes": "off",
       "n/no-missing-import": "off",
