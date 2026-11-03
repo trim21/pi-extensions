@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@cortexkit/aft-bridge':
-        specifier: 0.59.0
-        version: 0.59.0
+        specifier: 0.63.5
+        version: 0.63.5
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -134,8 +134,8 @@ importers:
         version: 5.1.0(@types/node@24.19.1)(@vitest/coverage-v8@5.1.0)(vite@8.3.4(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
     optionalDependencies:
       '@cortexkit/aft-linux-x64':
-        specifier: 0.59.0
-        version: 0.59.0
+        specifier: 0.63.5
+        version: 0.63.5
 
 packages:
 
@@ -259,17 +259,17 @@ packages:
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
 
-  '@cortexkit/aft-bridge@0.59.0':
-    resolution: {integrity: sha512-RFmIQ6+R5tM0Mxbt3kQsKF5YoERAx90SyyVJ4MK1yXzllShA9mclUg+5NFCnzmM3tiewpTUUqFpDqDCskYPxTQ==}
+  '@cortexkit/aft-bridge@0.63.5':
+    resolution: {integrity: sha512-ek5PLMAZI2Y9fI6WvYBAXeKDypJylfTLK5He5R3EIj5zYPBSivs/1Ck/s8XBvZ6FRb4NPTXHauETaGM7oTVXoA==}
 
-  '@cortexkit/aft-linux-x64@0.59.0':
-    resolution: {integrity: sha512-zbt9EL2rmC5ca+5evghb7AoxaXUPkIDVLQmR7aE6VKA1NKT7gNhO/g1FEnX315CLmpWtGnwZeO1qpZvKSfRrvg==}
+  '@cortexkit/aft-linux-x64@0.63.5':
+    resolution: {integrity: sha512-TWrAqnlwM63NyENjbmbghLQLbBQTeF/ZdoVohknpCeQVOKpvbLawcFL4mQrzvCyZgqA0M6YoXdZeR9VoG48s5Q==}
     cpu: [x64]
     os: [linux]
     hasBin: true
 
-  '@cortexkit/subc-client@0.20.0':
-    resolution: {integrity: sha512-nH0A6QFFYD/ac7cDfUX9fL9jRWK/XjKz84IDFlUu5Rq1cvqYML3l/iY9RduT0lLTMbvcnmawT9v9NqbxlDvE5w==}
+  '@cortexkit/subc-client@0.21.2':
+    resolution: {integrity: sha512-xQLfwFBOigFRF1VMgta7Dr/640H34EHexRtFLDkH42yAAMvtXJFmQ4bsjin6CDmfXiKeItsuQqjYFRMEZs4Aaw==}
     engines: {node: '>=18'}
 
   '@earendil-works/chord@1.1.0':
@@ -2443,9 +2443,6 @@ packages:
   vscode-languageserver-protocol@3.18.5:
     resolution: {integrity: sha512-FW4fBMzZ99N8xeob4py0l050wgCoRgTpEq5Xcsb9lM1bc29UKGR/wSV+4knaqFxssFHajy7OzNiKP/m3U1ZEuA==}
 
-  vscode-languageserver-types@3.18.4:
-    resolution: {integrity: sha512-nQsacoiijvl0fRf2q28uFDrAVwRhdCa3QveiF7/CX0r18mLR5FU/1WskSsCKOjmEbtteKUnY8x8Yzxop+k0zwg==}
-
   vscode-languageserver-types@3.18.5:
     resolution: {integrity: sha512-kPd6+JQNz3HMJvjKlqUxERSlZHAntl/aGpsk7ImwIh0ewDKDcjgAEyVSYciPiOJD3ftbK9IrfiqUeTZLSbCizw==}
 
@@ -2714,15 +2711,15 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
-  '@cortexkit/aft-bridge@0.59.0':
+  '@cortexkit/aft-bridge@0.63.5':
     dependencies:
-      '@cortexkit/subc-client': 0.20.0
+      '@cortexkit/subc-client': 0.21.2
       undici: 7.29.1
 
-  '@cortexkit/aft-linux-x64@0.59.0':
+  '@cortexkit/aft-linux-x64@0.63.5':
     optional: true
 
-  '@cortexkit/subc-client@0.20.0': {}
+  '@cortexkit/subc-client@0.21.2': {}
 
   '@earendil-works/chord@1.1.0':
     dependencies:
@@ -4750,8 +4747,6 @@ snapshots:
     dependencies:
       vscode-jsonrpc: 10.0.0
       vscode-languageserver-types: 3.18.5
-
-  vscode-languageserver-types@3.18.4: {}
 
   vscode-languageserver-types@3.18.5: {}
 
