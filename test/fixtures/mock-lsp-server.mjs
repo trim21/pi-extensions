@@ -47,6 +47,9 @@ const referencesMode = process.env.MOCK_REFERENCES_MODE ?? "";
 // 即 CI 上实测的"残缺答案假稳定、双向一致但漏改跨文件引用"）。
 const coverExtraAfterRefsCalls = Number(process.env.MOCK_RENAME_COVER_AFTER_REFS_CALLS ?? "0");
 const pushDelayMs = Number(process.env.MOCK_PUSH_DELAY_MS ?? "50");
+// 额外的诊断推送目标（逗号分隔的 file URI）：didOpen 推送时一并为其各推一条
+// ERROR，模拟服务器为 root 之外的路径报诊断（project references / extraPaths）。
+const pushExtraUris = (process.env.MOCK_PUSH_EXTRA_URI ?? "").split(",").filter(Boolean);
 let referencesCalls = 0;
 // 项目"加载完成"的标志：首份诊断已推送（cold_until_push 以此为分界）
 let projectLoaded = false;
@@ -175,6 +178,23 @@ function handle(msg) {
     const uri = msg.params.textDocument.uri;
     setTimeout(() => {
       projectLoaded = true;
+      // 额外目标先推：调用方等本文件诊断返回时，这些条目已在客户端诊断表里
+      for (const extraUri of pushExtraUris) {
+        send({
+          jsonrpc: "2.0",
+          method: "textDocument/publishDiagnostics",
+          params: {
+            uri: extraUri,
+            diagnostics: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+                severity: 1,
+                message: "mock extra error message",
+              },
+            ],
+          },
+        });
+      }
       send({
         jsonrpc: "2.0",
         method: "textDocument/publishDiagnostics",
