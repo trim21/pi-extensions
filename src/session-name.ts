@@ -315,7 +315,8 @@ export default function sessionNameExtension(pi: ExtensionAPI) {
   // 会话切换 / reload 后捕获的 pi 会抛 stale 错误，被 catch 忽略，名字
   // 绝不会写到错误的 session。
   pi.on("before_agent_start", (event, ctx) => {
-    if (pi.getSessionName()) {
+    // custom message 触发的 run 没有 user prompt，没有可命名的内容
+    if (event.messageType !== "user" || pi.getSessionName()) {
       return;
     }
     const text = extractFirstUserPrompt(ctx.sessionManager.getBranch(), event.prompt);

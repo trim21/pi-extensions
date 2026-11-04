@@ -5,13 +5,31 @@
   "rebaseWhen": "conflicted",
   "packageRules": [
     {
+      "matchPackageNames": ["typebox"],
+      "enabled": false
+    },
+    {
+      "description": "pi 的 peer 范围（^1.4.0）由人手维护，renovate 只跟 devDependencies 的精确锁定",
       "matchPackageNames": [
         "@earendil-works/pi-agent-core",
         "@earendil-works/pi-ai",
-        "@earendil-works/pi-coding-agent",
-        "typebox"
+        "@earendil-works/pi-coding-agent"
       ],
+      "matchDepTypes": ["peerDependencies"],
       "enabled": false
+    },
+    {
+      "description": "三个 pi 包成组升级、minor 与 patch 分开出 PR，且必须人工合并",
+      "matchPackageNames": [
+        "@earendil-works/pi-agent-core",
+        "@earendil-works/pi-ai",
+        "@earendil-works/pi-coding-agent"
+      ],
+      "matchDepTypes": ["devDependencies"],
+      "groupName": "@earendil-works/pi",
+      "groupSlug": "earendil-works-pi",
+      "separateMinorPatch": true,
+      "addLabels": ["ci:manual-merge"]
     },
     {
       "matchPackageNames": ["@cortexkit/aft-bridge", "@cortexkit/aft-linux-x64"],

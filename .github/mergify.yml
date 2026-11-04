@@ -22,6 +22,8 @@ pull_request_rules:
       - or:
           - "#approved-reviews-by>=1"
           - label=ci:auto-merge
+      # dev 依赖锁精确版本、peer 范围由人手维护，pi 相关升级必须人工合并
+      - label!=ci:manual-merge
       - not:
           and:
             - "head*=renovate/lockfile-maintenance-*"

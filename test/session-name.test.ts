@@ -360,7 +360,7 @@ describe("extension behavior", () => {
       const { pi, handlers, setSessionName } = createPi();
       sessionNameExtension(pi as never);
       handlers.before_agent_start?.(
-        { prompt: "帮我修复登录页面的 bug" } as never,
+        { messageType: "user", prompt: "帮我修复登录页面的 bug" } as never,
         ctx({ hasUI: true, ui: { notify } }) as never,
       );
       await delay();
@@ -384,7 +384,7 @@ describe("extension behavior", () => {
       const { pi, handlers, setSessionName } = createPi();
       sessionNameExtension(pi as never);
       handlers.before_agent_start?.(
-        { prompt: "帮我修复登录页面的 bug" } as never,
+        { messageType: "user", prompt: "帮我修复登录页面的 bug" } as never,
         ctx({
           hasUI: true,
           ui: { notify },
@@ -411,7 +411,7 @@ describe("extension behavior", () => {
       sessionNameExtension(pi as never);
       const registry = { find: () => ({}) as Model<Api>, complete };
       handlers.before_agent_start?.(
-        { prompt: "帮我修复登录页面的 bug" } as never,
+        { messageType: "user", prompt: "帮我修复登录页面的 bug" } as never,
         ctx({ modelRegistry: registry }) as never,
       );
       await vi.waitFor(() => expect(setSessionName).toHaveBeenCalledWith("修复登录bug"));
@@ -427,8 +427,34 @@ describe("extension behavior", () => {
     try {
       const { pi, handlers, setSessionName } = createPi({ getSessionName: () => "Existing" });
       sessionNameExtension(pi as never);
-      handlers.before_agent_start?.({ prompt: "帮我修复 bug" } as never, ctx() as never);
+      handlers.before_agent_start?.(
+        { messageType: "user", prompt: "帮我修复 bug" } as never,
+        ctx() as never,
+      );
       await delay();
+      expect(setSessionName).not.toHaveBeenCalled();
+    } finally {
+      vi.resetModules();
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("does not name the session for runs started by a custom message", async () => {
+    const { sessionNameExtension, tempHome } = await loadExtensionWithHome({
+      "settings.json": JSON.stringify({ sessionName: { model: "m" } }),
+    });
+    try {
+      const complete = vi.fn(async () => ({
+        content: [{ type: "text", text: "不该被调用" }],
+      }));
+      const { pi, handlers, setSessionName } = createPi();
+      sessionNameExtension(pi as never);
+      handlers.before_agent_start?.(
+        { messageType: "custom", message: { customType: "spawn", content: [] } } as never,
+        ctx({ modelRegistry: { find: () => ({}) as Model<Api>, complete } }) as never,
+      );
+      await delay();
+      expect(complete).not.toHaveBeenCalled();
       expect(setSessionName).not.toHaveBeenCalled();
     } finally {
       vi.resetModules();
@@ -453,7 +479,7 @@ describe("extension behavior", () => {
         },
       ];
       handlers.before_agent_start?.(
-        { prompt: "当前 prompt" } as never,
+        { messageType: "user", prompt: "当前 prompt" } as never,
         ctx({
           sessionManager: { getBranch: () => branch },
           modelRegistry: { find: () => ({}) as Model<Api>, complete },
@@ -474,7 +500,10 @@ describe("extension behavior", () => {
     try {
       const { pi, handlers, setSessionName } = createPi();
       sessionNameExtension(pi as never);
-      handlers.before_agent_start?.({ prompt: " ".repeat(3) } as never, ctx() as never);
+      handlers.before_agent_start?.(
+        { messageType: "user", prompt: " ".repeat(3) } as never,
+        ctx() as never,
+      );
       await delay();
       expect(setSessionName).not.toHaveBeenCalled();
     } finally {
@@ -492,7 +521,7 @@ describe("extension behavior", () => {
       const { pi, handlers } = createPi();
       sessionNameExtension(pi as never);
       handlers.before_agent_start?.(
-        { prompt: "修复 bug" } as never,
+        { messageType: "user", prompt: "修复 bug" } as never,
         ctx({
           hasUI: true,
           ui: { notify },
@@ -525,7 +554,7 @@ describe("extension behavior", () => {
         }),
       };
       handlers.before_agent_start?.(
-        { prompt: "帮我修复 bug" } as never,
+        { messageType: "user", prompt: "帮我修复 bug" } as never,
         ctx({ hasUI: true, ui: { notify }, modelRegistry: registry }) as never,
       );
       await delay();
@@ -547,7 +576,7 @@ describe("extension behavior", () => {
       sessionNameExtension(pi as never);
       const registry = { find: (): Model<Api> | undefined => undefined, complete: vi.fn() };
       handlers.before_agent_start?.(
-        { prompt: "帮我修复 bug" } as never,
+        { messageType: "user", prompt: "帮我修复 bug" } as never,
         ctx({ hasUI: true, ui: { notify }, modelRegistry: registry }) as never,
       );
       await delay();
@@ -576,7 +605,7 @@ describe("extension behavior", () => {
       });
       sessionNameExtension(pi as never);
       handlers.before_agent_start?.(
-        { prompt: "帮我修复 bug" } as never,
+        { messageType: "user", prompt: "帮我修复 bug" } as never,
         ctx({
           modelRegistry: {
             find: () => ({}) as Model<Api>,
@@ -602,7 +631,7 @@ describe("extension behavior", () => {
       const { pi, handlers, setSessionName } = createPi();
       sessionNameExtension(pi as never);
       handlers.before_agent_start?.(
-        { prompt: "帮我修复 bug" } as never,
+        { messageType: "user", prompt: "帮我修复 bug" } as never,
         ctx({
           modelRegistry: {
             find: () => ({}) as Model<Api>,
