@@ -77,6 +77,51 @@ describe.concurrent("lsp client", () => {
     }
   });
 
+  it("initialize 请求如实声明已实现的能力，rootUri 与 workspaceFolders 同指项目根", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lsp-client-test-"));
+    const { proc, notifications } = spawnMock({ MOCK_ECHO_REQUESTS: "1" });
+    const client = await create({
+      serverID: "mock",
+      server: { process: proc },
+      root: dir,
+      directory: dir,
+    });
+    try {
+      const rootUri = pathToFileURL(dir).href;
+      // 请求回显经 stderr JSONL 异步到达，等齐再断言
+      await vi.waitFor(() => {
+        const params = notifications.find((entry) => entry.method === "initialize")?.params as
+          | {
+              rootUri?: string;
+              workspaceFolders?: { name: string; uri: string }[];
+              capabilities?: {
+                workspace?: {
+                  workspaceFolders?: boolean;
+                  workspaceEdit?: { documentChanges?: boolean };
+                  diagnostics?: { refreshSupport?: boolean };
+                };
+                textDocument?: {
+                  hover?: { contentFormat?: string[] };
+                  rename?: { prepareSupport?: boolean };
+                };
+              };
+            }
+          | undefined;
+        const capabilities = params?.capabilities;
+        expect(capabilities?.workspace?.workspaceFolders).toBe(true);
+        expect(capabilities?.workspace?.workspaceEdit?.documentChanges).toBe(true);
+        expect(capabilities?.workspace?.diagnostics?.refreshSupport).toBe(false);
+        expect(capabilities?.textDocument?.rename?.prepareSupport).toBe(true);
+        expect(capabilities?.textDocument?.hover?.contentFormat).toEqual(["markdown", "plaintext"]);
+        expect(params?.rootUri).toBe(rootUri);
+        expect(params?.workspaceFolders).toEqual([{ name: "workspace", uri: rootUri }]);
+      });
+    } finally {
+      await client.shutdown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("已打开文档再次 touch 走 didChange 且版本递增", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lsp-client-test-"));
     const file = join(dir, "a.py");

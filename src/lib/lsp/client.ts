@@ -692,10 +692,18 @@ export async function create(input: CreateInput): Promise<LspClient> {
           configuration: true,
           didChangeWatchedFiles: { dynamicRegistration: true },
           diagnostics: { refreshSupport: false },
+          // rename 返回的 documentChanges 里的 text edit 会被应用，文件级操作不支持
+          workspaceEdit: { documentChanges: true },
+          // 请求里已发 workspaceFolders 且会应答 workspace/workspaceFolders 请求，
+          // 能力位必须如实声明，否则按能力判断的服务器会忽略这些工作区信息
+          workspaceFolders: true,
         },
         textDocument: {
           diagnostic: { dynamicRegistration: true, relatedDocumentSupport: true },
+          hover: { contentFormat: ["markdown", "plaintext"] },
           publishDiagnostics: { versionSupport: false },
+          // 会发 textDocument/prepareRename 并使用返回的 placeholder
+          rename: { prepareSupport: true },
         },
       },
     }),
