@@ -679,6 +679,7 @@ export async function create(input: CreateInput): Promise<LspClient> {
 
   const initialized = await withTimeout(
     connection.sendRequest(InitializeRequest.type, {
+      // eslint-disable-next-line @typescript-eslint/no-deprecated -- InitializeParams.rootUri 仍是必填字段，本客户端也未声明 workspace.workspaceFolders 能力，只认它的服务器还需靠它定位 root
       rootUri: pathToFileURL(input.root).href,
       processId: process.pid,
       workspaceFolders: [{ name: "workspace", uri: pathToFileURL(input.root).href }],
