@@ -3,7 +3,7 @@
  *
  * Aligned with opencode commit 999be62662 (v1.2.25-1672-g999be62662, 2026-08-12):
  *   https://github.com/anomalyco/opencode/blob/999be62662/packages/opencode/src/tool/todo.ts
- * 与 opencode 的差异：status/priority 这里用 StringEnum 做运行时校验
+ * 与 opencode 的差异：status/priority 这里用 enum schema 做运行时校验
  * （opencode schema 层不校验）；opencode 输出 title "N todos"，这里未设置；
  * widget/pendant 渲染为本仓库增强（pi 特有）。
  *
@@ -22,11 +22,11 @@
  * 单条增删改动作 —— 模型每次都要传完整的 todo 列表，语义与 opencode 对齐。
  */
 
-import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
 import { type ToolPendant } from "../lib/pendant.js";
+import { stringEnum } from "../lib/string-enum.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 
@@ -79,10 +79,10 @@ const TODOWRITE_DESCRIPTION = [
 
 const todoInfoSchema = Type.Object({
   content: Type.String({ description: "Brief description of the task" }),
-  status: StringEnum(TODO_STATUSES, {
+  status: stringEnum(TODO_STATUSES, {
     description: "Current status of the task: pending, in_progress, completed, cancelled",
   }),
-  priority: StringEnum(TODO_PRIORITIES, {
+  priority: stringEnum(TODO_PRIORITIES, {
     description: "Priority level of the task: high, medium, low",
   }),
 });
