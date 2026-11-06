@@ -9,7 +9,8 @@
  *   system prompt，剥离了 tool 相关说明）；
  * - 动态部分（工具列表、工具 guideline、AGENTS.md 上下文、skills、日期、
  *   cwd、--append-system-prompt 内容）用 event.systemPromptOptions 程序化
- *   拼装，渲染格式与 pi 默认 buildSystemPrompt 保持一致；
+ *   拼装，渲染格式与 pi 默认 buildSystemPrompt 保持一致；工具 guideline 取自
+ *   该事件的 toolGuidelines（按工具分组），全局 guideline 才在 promptGuidelines；
  * - prompt.md 中的 {{tools}} {{guidelines}} {{project_context}} {{skills}}
  *   {{append}} {{date}} {{cwd}} 占位符决定每个动态块的位置；占位符被删掉时
  *   对应块追加到末尾。
@@ -34,6 +35,9 @@ export interface SkillLike {
 export interface PromptInputs {
   selectedTools?: string[];
   toolSnippets?: Record<string, string>;
+  /** 按工具分组的指引。pi 只在这里承载工具定义上的 promptGuidelines。 */
+  toolGuidelines?: Record<string, readonly string[]>;
+  /** 全局指引（不归属任何工具）。 */
   promptGuidelines?: string[];
   appendSystemPrompt?: string;
   cwd: string;
@@ -72,16 +76,33 @@ export function formatTools(
   return lines.length > 0 ? lines.join("\n") : "(none)";
 }
 
-/** 渲染工具特定 guideline 块；为空时整个块（含标题）省略。guide 本身是 md 文档，直接拼接。 */
-export function formatGuidelines(promptGuidelines: string[] | undefined): string {
-  const items = (promptGuidelines ?? [])
-    .map((g) => g.trim())
-    .filter((g) => g.length > 0)
-    .toSorted((a, b) => a.localeCompare(b));
+/**
+ * 渲染工具 guideline 块：先按 `selectedTools` 顺序取各工具的指引，再并入全局指引。
+ * 工具定义上的 `promptGuidelines` 由 pi 收进 `toolGuidelines`，全局那组才在
+ * `promptGuidelines` 里——只读后者会丢掉全部工具级指引。
+ */
+export function formatGuidelines(
+  selectedTools: string[] | undefined,
+  toolGuidelines: Record<string, readonly string[]> | undefined,
+  promptGuidelines: string[] | undefined,
+): string {
+  const collected = (selectedTools ?? []).flatMap((name) => toolGuidelines?.[name] ?? []);
+  collected.push(...(promptGuidelines ?? []));
+
+  const seen = new Set<string>();
+  const items: string[] = [];
+  for (const guideline of collected) {
+    const trimmed = guideline.trim();
+    if (trimmed === "" || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    items.push(trimmed);
+  }
   if (items.length === 0) {
     return "";
   }
-  return `## Guidelines\n\n${items.join("\n\n")}`;
+  return `## Guidelines\n\n${items.toSorted((a, b) => a.localeCompare(b)).join("\n\n")}`;
 }
 
 /** 渲染 AGENTS.md 等上下文文件；为空时省略 */
@@ -180,7 +201,11 @@ export function buildSystemPromptText(promptMd: string, options: PromptInputs): 
   ].join("-");
   return buildPrompt(promptMd, {
     tools: formatTools(options.selectedTools, options.toolSnippets),
-    guidelines: formatGuidelines(options.promptGuidelines),
+    guidelines: formatGuidelines(
+      options.selectedTools,
+      options.toolGuidelines,
+      options.promptGuidelines,
+    ),
     projectContext: formatContextFiles(options.contextFiles),
     skills: formatSkills(options.skills),
     append: options.appendSystemPrompt,

@@ -24,6 +24,11 @@ const PROMPT_MD = readFileSync(
   "utf8",
 );
 
+const AFT_GUIDELINES = readFileSync(
+  fileURLToPath(new URL("../src/aft/guidelines.md", import.meta.url)),
+  "utf8",
+).trim();
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -49,32 +54,52 @@ describe("formatTools", () => {
 
 describe("formatGuidelines", () => {
   it("renders guidelines verbatim under a Guidelines heading, trimmed", () => {
-    expect(formatGuidelines(["Use custom_tool when scanning", "  padded  "])).toBe(
-      "## Guidelines\n\npadded\n\nUse custom_tool when scanning",
-    );
+    expect(
+      formatGuidelines(undefined, undefined, ["Use custom_tool when scanning", "  padded  "]),
+    ).toBe("## Guidelines\n\npadded\n\nUse custom_tool when scanning");
   });
 
   it("sorts guidelines regardless of discovery order", () => {
-    expect(formatGuidelines(["Use write", "Use read"])).toBe(
+    expect(formatGuidelines(undefined, undefined, ["Use write", "Use read"])).toBe(
       "## Guidelines\n\nUse read\n\nUse write",
     );
   });
 
   it("omits the block when empty", () => {
-    expect(formatGuidelines(undefined)).toBe("");
-    expect(formatGuidelines([])).toBe("");
-    expect(formatGuidelines([" ".repeat(3)])).toBe("");
+    expect(formatGuidelines(undefined, undefined, undefined)).toBe("");
+    expect(formatGuidelines(undefined, undefined, [])).toBe("");
+    expect(formatGuidelines(undefined, undefined, [" ".repeat(3)])).toBe("");
+    expect(formatGuidelines(["read"], {}, [])).toBe("");
   });
 
   it("keeps multi-line markdown guidelines verbatim, without bullet prefixes", () => {
     const section = formatAgentListSection([
       { name: "scout", description: "Fast recon", systemPrompt: "", filePath: "" },
     ]);
-    const rendered = formatGuidelines([section]);
+    const rendered = formatGuidelines(undefined, undefined, [section]);
     expect(rendered).toBe(`## Guidelines\n\n${section.trim()}`);
     expect(rendered).toContain("\n### Delegating to subagents\n");
     expect(rendered).toContain("\n### Available subagents\n");
     expect(rendered).not.toContain("- ### ");
+  });
+
+  it("renders guidelines grouped by tool, filtered by selected tools", () => {
+    const rendered = formatGuidelines(
+      ["read", "grep"],
+      { read: ["Read before edit"], grep: ["Prefer the Grep tool"], bash: ["Prefer workdir"] },
+      [],
+    );
+    expect(rendered).toBe("## Guidelines\n\nPrefer the Grep tool\n\nRead before edit");
+  });
+
+  it("ignores guidelines of tools that are not selected", () => {
+    expect(formatGuidelines(["read"], { bash: ["Prefer workdir"] }, [])).toBe("");
+  });
+
+  it("deduplicates entries shared by a tool and the global list", () => {
+    expect(formatGuidelines(["read"], { read: ["Be concise"] }, ["  Be concise  "])).toBe(
+      "## Guidelines\n\nBe concise",
+    );
   });
 });
 
@@ -184,6 +209,21 @@ describe("buildSystemPromptText", () => {
     expect(out).toContain("extra");
     expect(out).toContain("Current working directory: /home/user/proj");
     expect(out).not.toContain("{{");
+  });
+
+  it("includes tool-level guidelines supplied by pi", () => {
+    const agentList = formatAgentListSection([
+      { name: "scout", description: "Fast recon", systemPrompt: "", filePath: "" },
+    ]);
+    const out = buildSystemPromptText(PROMPT_MD, {
+      cwd: "/tmp",
+      selectedTools: ["spawn-agent", "aft_outline"],
+      toolGuidelines: { "spawn-agent": [agentList], aft_outline: [AFT_GUIDELINES] },
+    });
+
+    expect(out).toContain("## Guidelines");
+    expect(out).toContain("### Available subagents");
+    expect(out).toContain(AFT_GUIDELINES);
   });
 
   it("handles missing dynamic data gracefully", () => {
