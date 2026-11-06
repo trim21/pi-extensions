@@ -636,7 +636,7 @@ pi -e ./src/session-name.ts
 
 ## request-headers
 
-给每个发往 provider 的请求附加 `Thread-Id` 请求头，值为当前会话 id，便于网关按会话追踪与归属请求。已存在的 `Thread-Id` 会被覆盖；会话 id 在每次请求时读取，resume、fork 或 `/new` 后自动跟随。
+给每个发往 provider 的请求附加 `Thread-Id` 请求头，值为当前会话 id，便于网关按会话追踪与归属请求。已存在的 `Thread-Id` 会被覆盖；会话 id 在每次请求时读取，resume、fork 或 `/new` 后自动跟随。spawn-agent 创建的子代理 session 复用同一份注入逻辑，取子代理自己 session 的 id，因此子代理请求同样可追踪。
 
 该扩展不注册工具，作为独立入口随包加载，不经过 `src/index.ts` 的工具总线。
 

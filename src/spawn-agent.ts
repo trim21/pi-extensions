@@ -80,6 +80,7 @@ import {
 import { createToolServices } from "./lib/tool-services.js";
 import { toolsetsForToolNames, unitsForToolNames } from "./lib/tool-units.js";
 import { createOpencodeFileTools } from "./opencode/files.js";
+import requestHeaders from "./request-headers.js";
 import {
   type AgentConfig,
   applyAgentDefaults,
@@ -322,9 +323,11 @@ export type SessionFactory = (
 /**
  * Create the subagent session via the pi SDK: an in-memory session (no disk
  * session recovery or persistence, same as the old --no-session child), a
- * resource loader with no extensions except our own inline tool factory
- * (equivalent to --no-extensions), and the parent UI bound directly so
- * subagent extensions show their dialogs in the parent without RPC.
+ * resource loader with no extensions except two inline factories — the
+ * request-headers one (so provider requests carry this subagent session's
+ * Thread-Id) and our own tool factory (equivalent to --no-extensions) — and
+ * the parent UI bound directly so subagent extensions show their dialogs in
+ * the parent without RPC.
  */
 export async function createSubagentSession(
   agent: AgentConfig,
@@ -338,7 +341,7 @@ export async function createSubagentSession(
     agentDir: getAgentDir(),
     settingsManager,
     noExtensions: true,
-    extensionFactories: [subagentToolsExtension(agent, tools)],
+    extensionFactories: [requestHeaders, subagentToolsExtension(agent, tools)],
     appendSystemPrompt: agent.systemPrompt ? [agent.systemPrompt] : undefined,
   });
   await loader.reload();
