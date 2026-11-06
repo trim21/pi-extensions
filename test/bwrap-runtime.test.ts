@@ -274,8 +274,9 @@ describe("BwrapRuntime", () => {
     await expect(
       runtime.execute({
         toolCallId: "test",
-        command: "printf partial; sleep 1",
-        timeout: 0.02,
+        // 超时窗口要容得下登录 shell 加载 profile 的开销，否则 printf 还没跑就被杀了
+        command: "printf partial; sleep 5",
+        timeout: 1,
         ctx: {
           cwd: process.cwd(),
           hasUI: true,
@@ -285,7 +286,7 @@ describe("BwrapRuntime", () => {
     ).rejects.toMatchObject({
       kind: "timeout",
       name: "TimeoutError",
-      message: "Command timed out after 0.02 seconds",
+      message: "Command timed out after 1 seconds",
       partial: { output: "partial" },
     });
   });
@@ -304,7 +305,8 @@ describe("BwrapRuntime", () => {
         sessionManager: { getSessionId: () => "test-session" },
       } as never,
     });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 等待窗口要容得下登录 shell 加载 profile 的开销，否则 printf 还没跑就被中断了
+    await new Promise((resolve) => setTimeout(resolve, 300));
     controller.abort();
     const abortError = (await promise.catch((error: unknown) => error)) as BashInterruptedError;
     expect(abortError).toBeInstanceOf(BashInterruptedError);
@@ -314,7 +316,7 @@ describe("BwrapRuntime", () => {
       message: "Command aborted by user",
     });
     expect(abortError.partial.output).toBe("partial");
-    expect(abortError.elapsedMs).toBeGreaterThanOrEqual(100);
+    expect(abortError.elapsedMs).toBeGreaterThanOrEqual(300);
   });
 
   it("excludes the approval dialog wait from the aborted duration", async () => {
