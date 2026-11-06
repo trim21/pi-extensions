@@ -3,13 +3,13 @@ import { readdir, realpath, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import process from "node:process";
 
-import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
 import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { expandHome } from "../lib/path.js";
+import { stringEnum } from "../lib/string-enum.js";
 import { type ApprovalRule } from "./approval-rules.js";
 import { type NetworkStack, resolveDnsServers, startNetworkStack } from "./network-stack.js";
 
@@ -38,7 +38,7 @@ export function isNetworkMode(value: unknown): value is NetworkMode {
 }
 
 const fsConfigProperties = {
-  mode: StringEnum(FS_MODES),
+  mode: stringEnum(FS_MODES),
   writablePaths: Type.Array(Type.String()),
   extraWritablePaths: Type.Array(Type.String()),
   denyPaths: Type.Array(
@@ -50,7 +50,7 @@ const fsConfigProperties = {
 };
 
 const networkConfigProperties = {
-  mode: StringEnum(NETWORK_MODES),
+  mode: stringEnum(NETWORK_MODES),
   allowlist: Type.Array(
     Type.String({
       description:
@@ -63,7 +63,7 @@ const networkConfigProperties = {
 
 const approvalRuleSchema = Type.Object(
   {
-    action: StringEnum(["allow", "deny"] as const),
+    action: stringEnum(["allow", "deny"] as const),
     pattern: Type.String({ description: '命令模式，如 "git push *"、"npm install *"' }),
   },
   { additionalProperties: true },

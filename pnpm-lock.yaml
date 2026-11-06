@@ -41,6 +41,9 @@ importers:
       turndown:
         specifier: ^7.2.0
         version: 7.2.5
+      typebox:
+        specifier: ^1.3.27
+        version: 1.3.27
       undici:
         specifier: ^8.0.0
         version: 8.12.3

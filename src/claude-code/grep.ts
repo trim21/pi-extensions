@@ -13,10 +13,10 @@ import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 
+import { stringEnum } from "../lib/string-enum.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { searchRoot, suggestPathUnderCwd, toRelativePath } from "./common.js";
@@ -54,7 +54,7 @@ const grepParametersSchema = Type.Object(
     ),
     glob: Type.Optional(Type.String({ description: 'Glob filter such as "*.js" or "*.{ts,tsx}"' })),
     output_mode: Type.Optional(
-      StringEnum(GREP_OUTPUT_MODES, {
+      stringEnum(GREP_OUTPUT_MODES, {
         description: "Output mode. Defaults to files_with_matches.",
       }),
     ),

@@ -1,8 +1,8 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { stringEnum } from "../lib/string-enum.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
 
@@ -23,7 +23,7 @@ type TodoStatus = (typeof TODO_STATUSES)[number];
 const todoItemSchema = Type.Object(
   {
     content: Type.String({ minLength: 1 }),
-    status: StringEnum(TODO_STATUSES),
+    status: stringEnum(TODO_STATUSES),
     activeForm: Type.String({ minLength: 1 }),
   },
   { additionalProperties: false },

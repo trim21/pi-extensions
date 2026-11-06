@@ -218,7 +218,7 @@ describe("tool bus 执行", () => {
     const execute = vi.fn(noopExecute);
     bus.register(echoTool(execute));
 
-    const result = await bus.executeTool("echo", { text: 42 }, { ctx });
+    const result = await bus.executeTool("echo", {}, { ctx });
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('Invalid arguments for tool "echo"');
@@ -284,7 +284,7 @@ describe("tool bus 执行", () => {
     const bus = createToolBus(pi);
     bus.registerCodemodeOnly(codemodeEcho());
 
-    const invalid = await bus.executeCodemodeTool("echo", { text: 42 }, { ctx });
+    const invalid = await bus.executeCodemodeTool("echo", {}, { ctx });
     expect(invalid).toEqual({
       ok: false,
       error: expect.stringContaining('Invalid arguments for tool "echo"'),

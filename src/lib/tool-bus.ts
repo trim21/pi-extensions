@@ -29,6 +29,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
+import { Value } from "typebox/value";
 
 import { parseWithSchema } from "./parse-with-schema.js";
 
@@ -196,6 +197,15 @@ function errorResult(text: string): ToolExecutionResult {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 校验工具参数：先按 TypeBox 的转换规则 coerce 再解析。pi 1.5 校验模型调用参数时带 coercion
+ * （`"3"` → 3、单值包成数组），codemode 这条路径要给出相同结论。结构化结果的复核不走这里
+ * ——输出不该被静默转换。
+ */
+function parseToolArguments<T extends TSchema>(schema: T, value: unknown): Static<T> {
+  return parseWithSchema(schema, Value.Convert(schema, value));
 }
 
 type StructuredCheck =
@@ -389,7 +399,7 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
       let params: Static<TSchema>;
       try {
         const prepared = definition.prepareArguments ? definition.prepareArguments(args) : args;
-        params = parseWithSchema(definition.parameters, prepared);
+        params = parseToolArguments(definition.parameters, prepared);
       } catch (error) {
         return errorResult(`Invalid arguments for tool "${name}": ${errorMessage(error)}`);
       }
@@ -426,7 +436,7 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
       let params: Static<TSchema>;
       try {
         const prepared = definition.prepareArguments ? definition.prepareArguments(args) : args;
-        params = parseWithSchema(definition.parameters, prepared);
+        params = parseToolArguments(definition.parameters, prepared);
       } catch (error) {
         return { ok: false, error: `Invalid arguments for tool "${name}": ${errorMessage(error)}` };
       }
