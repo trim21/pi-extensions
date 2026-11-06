@@ -20,6 +20,7 @@ import {
   resolveMihomoPath,
   resolveSandboxBinary,
   resolveSlirp4netnsPath,
+  routableDnsServers,
   runSandboxExecutor,
   type SandboxPolicy,
   TimeoutError,
@@ -254,5 +255,23 @@ describe("runSandboxExecutor abort", () => {
     });
     setTimeout(() => controller.abort(), 50);
     await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+describe("routableDnsServers", () => {
+  it("keeps routable IPv4 nameservers in order", () => {
+    expect(routableDnsServers(["223.5.5.5", "192.168.2.1"])).toEqual(["223.5.5.5", "192.168.2.1"]);
+  });
+
+  it("drops loopback addresses: inside the sandbox they point at the stack itself", () => {
+    expect(routableDnsServers(["127.0.0.53", "223.5.5.5"])).toEqual(["223.5.5.5"]);
+    expect(routableDnsServers(["localhost", "1.1.1.1"])).toEqual(["1.1.1.1"]);
+    // 宿主只有 stub 时整份都会被排除，调用方再回退到真实上游或 egress 解析器
+    expect(routableDnsServers(["127.0.0.53"])).toEqual([]);
+  });
+
+  it("drops IPv6 nameservers: the egress channel is IPv4 only", () => {
+    expect(routableDnsServers(["240e:58::1", "8.8.8.8"])).toEqual(["8.8.8.8"]);
+    expect(routableDnsServers(["::1"])).toEqual([]);
   });
 });
