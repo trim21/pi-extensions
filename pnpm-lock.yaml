@@ -37,7 +37,7 @@ importers:
         version: 5.0.5
       quickjs-wasi:
         specifier: ^3.6.2
-        version: 3.6.3
+        version: 3.6.4
       turndown:
         specifier: ^7.2.0
         version: 7.2.5
@@ -2222,8 +2222,8 @@ packages:
   quickjs-wasi@3.6.2:
     resolution: {integrity: sha512-FCqGtGOrMgzUiIrMNMA2YnsOxCNwo31dzqXvclXUC6xeT35NJLKXQJsvbeCTjvoFAwZgEAPg8U6+KAPDGXn8Mg==}
 
-  quickjs-wasi@3.6.3:
-    resolution: {integrity: sha512-gDXhV2yi6oyVcGPYnACIzVbMNsmMlwjryhh3vAk8K589Xk/J06fb2SGbx8GJQnxyJv43pdrNbfP815dTkSYb9g==}
+  quickjs-wasi@3.6.4:
+    resolution: {integrity: sha512-2ze6NpDlJKWIMapoZenSwGmDEy6BEJFW9BmnAY7c+uNX/7ojq1/++5uhTX5l1C13vKy56daUSqWs1eRwr0CJ4g==}
 
   quote-js-string@0.1.0:
     resolution: {integrity: sha512-Y3NoRtprEEZQD8RfxMCfS0ZTqc4e+i18OrXEXAvpM6TfC/3y+0L5rNbZiSnbBBEkDfFzbpd8o+cE8q3/anjMGA==}
@@ -4586,7 +4586,7 @@ snapshots:
 
   quickjs-wasi@3.6.2: {}
 
-  quickjs-wasi@3.6.3: {}
+  quickjs-wasi@3.6.4: {}
 
   quote-js-string@0.1.0: {}
 
