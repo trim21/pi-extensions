@@ -27,14 +27,15 @@
     "test:coverage": "vitest run --coverage",
     "sandbox": "jiti bin/sandbox.ts",
     "aft-search": "jiti bin/aft-search.ts",
-    "build:holder": "esbuild src/bwrap/holder.ts --format=esm --target=node24 --outfile=src/bwrap/holder.js",
+    "build:native": "cd native && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags \"-s -w\" -o ../bin/native/linux-x64/sandbox . && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags \"-s -w\" -o ../bin/native/linux-arm64/sandbox .",
     "prepare": "husky",
     "build:codemode-worker": "esbuild src/codemode/worker.ts --bundle --platform=node --external:quickjs-wasi --format=esm --target=node24 --outfile=src/codemode/worker.js"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "^1.4.0",
     "@earendil-works/pi-ai": "^1.4.0",
-    "@earendil-works/pi-coding-agent": "^1.4.0"
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "1.5.0",
@@ -60,6 +61,7 @@
     "jiti": "^2.7.0",
     "lint-staged": "^17.3.0",
     "prettier": "^3.9.6",
+    "typebox": "^1.3.27",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.67.0",
     "vitest": "^5.0.0"
@@ -101,7 +103,6 @@
     "octokit": "^5.0.5",
     "quickjs-wasi": "^3.6.2",
     "turndown": "^7.2.0",
-    "typebox": "^1.3.27",
     "undici": "^8.0.0",
     "vscode-languageserver-protocol": "^3.18.4",
     "vscode-languageserver-types": "^3.18.4",
