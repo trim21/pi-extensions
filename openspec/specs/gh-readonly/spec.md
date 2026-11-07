@@ -235,7 +235,7 @@ GitHub 请求失败（HTTP 非 2xx、网络错误、token 无效 / 过期）MUST
 
 ### Requirement: 状态快照与 run 级等待
 
-`read-github-pr-status` 的 checks 状态快照（commit statuses + check runs + 无 check run 的 check suites）继续走 octokit 并立即返回；`wait-github-pr-checks` / `wait-github-commit-checks` 的轮询与判定见独立 spec（`openspec/specs/wait-github-pr-checks/`）。`watch-github-run` 改为按固定间隔轮询 `actions.getWorkflowRun`（间隔与上限沿用等待工具的 30s / 600s），轮询期间 MUST NOT 输出进度（这条路径上没有会消费进度的调用方）；超过上限时 MUST 以超时结束而不是挂住。
+`read-github-pr-status` 的 checks 状态快照（commit statuses + check runs + 无 check run 的 check suites）继续走 octokit 并立即返回；`wait-github-pr-checks` / `wait-github-commit-checks` 的轮询与判定见独立 spec（`openspec/specs/wait-github-checks/`）。`watch-github-run` 改为按固定间隔轮询 `actions.getWorkflowRun`（间隔与上限沿用等待工具的 30s / 600s），轮询期间 MUST NOT 输出进度（这条路径上没有会消费进度的调用方）；超过上限时 MUST 以超时结束而不是挂住。
 
 #### Scenario: 状态快照
 
@@ -288,7 +288,7 @@ gh 工具 MUST 只用结构化结果交付数据：成功是 `{ ok: true; value 
 - **CI 日志**：`read-github-ci-logs` 只取 `job_id` / `repo?`；job 元数据走 octokit（`actions.getJobForWorkflowRun`），日志走 `actions.downloadJobLogsForWorkflowRun`（GitHub 只有按 job id 取日志的端点，没有按 job 名称的），响应原样写入 `~/.cache/pi/github/ci-logs/<owner>/<repo>/<runId>/<jobId>.log`（`jobLogPath` 统一计算；owner/repo 由 `repoFromRunUrl` 解析 job 的 `run_url` 得出，用 GitHub 规范化后的仓库大小写，不受调用方传入的 `repo` 字符串影响），同一 job 的请求经 `createSeqState` 串行化。step 行号由 `stepLineSpans` 得出：先收集深度 1 的 `##[group]Run …` / `##[group]Post Run …` header（每个真正执行过的 step 一个），再与 API steps 做**保序最优匹配**——名字相等记 4 分，header 时间戳落在 step `started_at` 之后 5s 内按距离记分（runner 约在 0.01–1.6s 后写 header，而 API 时间戳只到秒），只有得分大于 0 才配对，匹配不到就不给行号（不猜）。因此：自定义 `name:` 的 step 没有名字证据仍能靠时间戳命中；skipped 的 step 不参与匹配（它不会产生 header，否则会抢走同名的、真正跑过的 step 的块）；复合 action 的内部 step header 对任何 API step 都没有证据，不被认领，自然归入外层 step 的区间；「Set up job」拥有第一个 header 之前的 runner 前言。工具不清洗、不截断、不回显日志内容。
 - **release 资产**：`download-github-release-assets` 先 `gh.reads.release`（`repos.getLatestRelease` / `repos.getReleaseByTag`）解析出真实 tag 与该 release 的资产清单（tag 不存在就在这里报错），再按资产 id 逐个下载（`getReleaseAsset` → `rawFetch` + `Accept: application/octet-stream` 流式落盘；源码归档走 `zipball` / `tarball` 端点）；pattern 由 `releasePatterns` 按逗号切分、`matchAsset` 用 `matchesGlob` 匹配；结果由目录实读得出（`listReleaseFiles`：普通文件 + `stat` 大小，按名排序），同名同大小视为已下载。pattern 未命中时由工具自己报出该 release 的实际资产名。
 - **代理**：`gh` 子进程与 octokit 请求共用 `src/lib/proxy.ts` 解析的代理配置（配置 `~/.pi/agent/proxy.json`，回退 `HTTPS_PROXY` 等环境变量），经共享出网层 `src/lib/egress.ts` 的 `env` / `fetch` 取用，在扩展加载时读一次；配置写错直接抛，不带着被忽略的配置静默直连。`web_fetch` / `web_search` 经同一层出网（见 `openspec/specs/web/spec.md`）。
-- **等待工具**：`wait-github-pr-checks` 的轮询、判定与载荷见 `openspec/specs/wait-github-pr-checks/spec.md`（octokit 客户端在 `src/lib/github.ts`）；`watch-github-run` 轮询 `actions.getWorkflowRun`（30 秒间隔、600 秒上限）直到运行结束，不输出进度。
+- **等待工具**：`wait-github-pr-checks` / `wait-github-commit-checks` 的轮询、判定与载荷见 `openspec/specs/wait-github-checks/spec.md`（octokit 客户端在 `src/lib/github.ts`）；`watch-github-run` 轮询 `actions.getWorkflowRun`（30 秒间隔、600 秒上限）直到运行结束，不输出进度。
 - 重试只限「401 时换新 token 重试一次」（octokit 调用与 `rawFetch` 共用这套逻辑，见 `createGithubApi`）；`read-github-pr-comments` 的 `reviews=true` 依次取 reviews 与 review comments（都走 octokit，不并行）。
 
 涉及文件：`src/gh/`（`base.ts` 共享层与 checks 等待、`diff-stats.ts` 变更统计解析、`index.ts` 注册、`schemas.ts` 结构化 schema、`tools/<name>.ts` 每工具一个文件）、`src/lib/github.ts`、`src/lib/github-reads.ts`、`src/lib/gh-process.ts`、`src/lib/egress.ts`、`src/lib/proxy.ts`。工具使用路径（PR / commit → 失败 check → job → 日志）见 skill `src/skills/github-ci-logs/SKILL.md`。

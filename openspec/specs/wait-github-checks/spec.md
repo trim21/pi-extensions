@@ -1,12 +1,21 @@
-# wait-github-pr-checks Specification
+# wait-github-checks Specification
 
 ## Purpose
 
-阻塞等待 PR 全部 CI 检查完成并给出终判。判定数据来自 PR head commit 的 combined-status 与 check-runs API（octokit 直连，不经由 `gh pr checks` 与其退出码），同时覆盖经典 commit status（Azure DevOps、Jenkins 等外部 CI）与 check runs（GitHub Actions、GitHub App）。
+阻塞等待某个 commit（PR head 或任意 commit）的 CI 检查完成并给出终判。判定数据来自该 commit 的 combined-status 与 check-runs API（octokit 直连，不经由 `gh pr checks` 与其退出码），同时覆盖经典 commit status（Azure DevOps、Jenkins 等外部 CI）与 check runs（GitHub Actions、GitHub App）。两个入口共享同一套轮询、合并、判定与汇总核心，只用参数区分：**PR 入口**从 PR 解析 head commit，**commit 入口**直接给出 commit（full/partial SHA、分支名或 tag 名）并可只判定某个 workflow event 触发的检查。
 
 等待语义：**any(failed) 即返回失败；all(pass | skipped) 才返回成功；超时如实返回在途状态，绝不把未完成的等待判成 PASSED**。
 
 ## Requirements
+
+### Requirement: commit 解析
+
+`commit` 参数 MUST 支持非 PR 入口；解析失败 MUST 以带上下文的错误终止。
+
+#### Scenario: SHA / 分支 / tag 解析
+
+- **WHEN** `commit` 为 full SHA、partial SHA、分支名或 tag 名
+- **THEN** 经 commit API 解析为该 commit 的 full SHA，后续轮询与载荷都基于该 SHA
 
 ### Requirement: 检查合并与判定映射
 
@@ -48,6 +57,25 @@
 - **WHEN** 某 suite 有它自己的 check runs
 - **THEN** 该 suite 本身不产生额外条目，快照里只有它的 check runs（各自带该 suite 的 `suiteId`），检查总数与引入 suite 数据源之前一致
 
+### Requirement: 事件过滤
+
+`event` 参数（commit 入口）可选；设置时 MUST 只判定该 workflow event 触发的检查条目。
+
+#### Scenario: 严格匹配
+
+- **WHEN** 指定 `event`（如 `push`）
+- **THEN** 只保留 `event` 匹配的 check runs 与 suite 条目参与 any(fail) / any(action_required) / all(pass|skipped) 判定；commit status 与事件未知的 suite（匹配不到 workflow run）被排除
+
+#### Scenario: 不过滤
+
+- **WHEN** 未指定 `event`
+- **THEN** 判定范围是该 commit 上的全部检查（status + check runs + 无 check run 的 suite，含 push 与 pull_request 等各事件来源的条目）
+
+#### Scenario: 等待审批的 workflow 参与判定
+
+- **WHEN** 某 workflow 因等待维护者审批而没有 check run，且它的 workflow run 事件与指定的 `event` 相同
+- **THEN** 该 suite 条目参与判定，并按等待语义立即返回 `awaiting_approval`
+
 ### Requirement: 等待与返回语义
 
 轮询间隔 30s、截止 600s。返回时机 MUST 只由检查快照决定：`any(fail)`、`any(action_required)` 或 `all(pass | skipped)`。
@@ -87,6 +115,11 @@
 - **WHEN** 每轮轮询完成且仍有检查在途
 - **THEN** 不输出进度：工具只经 codemode 调用，没有会消费 `onUpdate` 的调用方；判定与快照不受影响
 
+#### Scenario: 轮询到终止状态
+
+- **WHEN** 任一入口轮询到 any(fail) / all(pass|skipped) / 超时
+- **THEN** 两个入口的载荷形状与判定结果一致，载荷不包含额外的调用上下文字段
+
 ### Requirement: 失败详情仅为展示补充
 
 Actions jobs 详情只服务于 FAILED 载荷里的失败 job 明细（`failedJobs`）；判定 MUST 只来自检查快照，补充数据的有无不改变结论。
@@ -103,7 +136,8 @@ Actions jobs 详情只服务于 FAILED 载荷里的失败 job 明细（`failedJo
 
 ## Implementation
 
-- 分层（均在 `src/gh/base.ts`，后两层为纯函数、可独立单测）：`mergeChecks` 合并与 bucket 映射（commit statuses + check runs + 已结束且没有 check run 的 suites，后者的元数据由 `checkSuiteId` 匹配 workflow run 补齐）→ `pollPrChecks` 等待循环（返回 `completed / fail_fast / awaiting_approval / timeout` 与最终快照、`elapsedMs`）→ `checksVerdict` 判定汇总（`status` + `failedJobs`）；工具入口在 `src/gh/tools/wait-pr-checks.ts`，与 `wait-commit-checks.ts` 共享 `waitChecksReport` 编排核心。
+- 分层（均在 `src/gh/base.ts`，后两层为纯函数、可独立单测）：`mergeChecks` 合并与 bucket 映射（commit statuses + check runs + 已结束且没有 check run 的 suites，后者的元数据由 `checkSuiteId` 匹配 workflow run 补齐）→ `pollPrChecks` 等待循环（返回 `completed / fail_fast / awaiting_approval / timeout` 与最终快照、`elapsedMs`）→ `checksVerdict` 判定汇总（`status` + `failedJobs`）；两个工具入口 `src/gh/tools/wait-pr-checks.ts` 与 `src/gh/tools/wait-commit-checks.ts` 共享 `waitChecksReport` 编排核心，`event` 过滤在每轮合并判定后应用（严格匹配），因此无 check run 的 suite 条目按其 workflow run 的 event 一起参与或一起被排除。
+- commit 解析：`src/lib/github.ts` 的 `createGithubChecks(api).headSha()`（octokit `repos.getCommit`，接受 SHA / 分支 / tag）；PR 入口用 `pullHead()` 取 head commit。
 - API 客户端：`src/lib/github.ts` 的 `createGithubChecks(api)`（octokit；`api` 是与 search / reads 共用的 `createGithubApi` accessor，token 只取一次并闭包缓存，401 时丢弃缓存重试一次），提供 `statuses` / `checkRuns`（带 `checkSuiteId`）/ `suites` / `workflowRuns` / `actionJobs`。`statuses` 用单次 `repos.getCombinedStatusForRef({ per_page: 100 })`，其余四个用 `octokit.paginate`（per_page=100）。check run 的 event 与 suite 的名字/event/链接都来自同一次 `workflowRuns`（`run.check_suite_id` 是 suite 的 join key）。
 - signal 由调用方构造并持有，轮询层只观察不取消；工具侧 `signal ?? new AbortController().signal`。
 - 单轮失败不终止轮询；截止时若从未成功取得任何一轮则抛出最后的错误。
