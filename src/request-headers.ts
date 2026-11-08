@@ -10,6 +10,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function requestHeaders(pi: ExtensionAPI) {
   pi.on("before_provider_headers", (event, ctx) => {
-    event.headers["Thread-Id"] = ctx.sessionManager.getSessionId();
+    const sessionID = ctx.sessionManager.getSessionId();
+    event.headers["Thread-Id"] = sessionID;
+    // OpenRouter
+    event.headers["x-session-id"] = sessionID;
   });
 }
