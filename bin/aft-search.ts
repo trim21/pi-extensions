@@ -38,23 +38,8 @@ import {
 } from "../src/aft/tools.js";
 import { expandHome } from "../src/lib/path.js";
 
-type AftState = Awaited<ReturnType<typeof createAftState>>;
-
-/** 当前 bridge 状态：信号退出时释放子进程，避免遗留常驻 aft 进程。 */
-const activeState: { current: AftState | null } = { current: null };
-
 function diagnose(text: string): void {
   console.error(`# ${text}`);
-}
-
-function releaseActiveState(): void {
-  const current = activeState.current;
-  activeState.current = null;
-  if (current) {
-    void shutdownAftPool(current.pool).catch((error: unknown) => {
-      diagnose(`释放 bridge 失败：${error instanceof Error ? error.message : String(error)}`);
-    });
-  }
 }
 
 async function search(flags: {
@@ -86,7 +71,44 @@ async function search(flags: {
   }
 
   const state = await createAftState(root, undefined, binaryPath, cfg.semanticRemote);
-  activeState.current = state;
+
+  // 信号退出与正常退出共用同一段清理：真正关掉 bridge（含 aft 子进程）后才 exit。
+  // 监听器成对注册/注销，`closed` 保证清理只跑一次。
+  let closed = false;
+  async function closeBridge(): Promise<void> {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+    try {
+      await shutdownAftPool(state.pool);
+    } catch (error) {
+      diagnose(`释放 bridge 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    await state.logger.drain();
+  }
+
+  function exitAfterCleanup(code: number): void {
+    void closeBridge()
+      .catch((error: unknown) => {
+        diagnose(`退出前清理失败：${error instanceof Error ? error.message : String(error)}`);
+      })
+      .then(() => process.exit(code));
+  }
+
+  function onSigint(): void {
+    exitAfterCleanup(130);
+  }
+
+  function onSigterm(): void {
+    exitAfterCleanup(143);
+  }
+
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+
   try {
     const bridge = state.pool.pool.getBridge(root);
     const rawArgs = compactArgs({
@@ -120,8 +142,7 @@ async function search(flags: {
       stopProgress?.();
     }
   } finally {
-    releaseActiveState();
-    await state.logger.drain();
+    await closeBridge();
   }
 }
 
@@ -180,15 +201,6 @@ const command = defineCommand({
       process.exitCode = 1;
     }
   },
-});
-
-process.on("SIGINT", () => {
-  releaseActiveState();
-  process.exit(130);
-});
-process.on("SIGTERM", () => {
-  releaseActiveState();
-  process.exit(143);
 });
 
 await runMain(command);
