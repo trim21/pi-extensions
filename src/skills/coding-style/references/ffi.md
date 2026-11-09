@@ -1,11 +1,6 @@
----
-name: coding-style-ffi
-description: Use when 处理任何跨语言 FFI 或跨语言数据传递——pybind11、nanobind 绑定（binding）、Python↔C++ 镜像结构、`SYNC` 契约注释、nlohmann JSON 跨边界序列化、`.pyi` stub 维护、跨语言类型映射。任何要在两种语言之间传递数据或写绑定的任务都要先加载本 skill，即使用户没有提到风格、规范或最佳实践。只读调查不加载：单纯 debug、定位或理解跨语言代码、而不写或改绑定/镜像结构代码的任务不需要加载。
----
-
 # Python ↔ C++ FFI：镜像结构与跨边界数据传递
 
-**REQUIRED BACKGROUND：先加载 `coding-style`（shared）**——语言无关的原则与"为什么"在那里；本文件只放跨语言侧的具体写法。
+`coding-style` 的跨语言 reference：语言无关的原则与"为什么"见 `../SKILL.md`；本文件只放跨语言侧的具体写法。
 
 当同一份配置/事件结构要同时存在于 Python 和 C++，并通过 JSON 跨边界传递时，两侧必须是字段 1:1 的镜像，不能各自演化。用 `SYNC:` 注释把另一侧的定义位置写死；改字段必须一次提交改两侧。
 

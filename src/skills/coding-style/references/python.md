@@ -1,11 +1,6 @@
----
-name: coding-style-python
-description: Use when 编写、生成、修改、编辑、重构或评审任何 Python 代码——涵盖实现功能、修 bug、写脚本、写测试、性能优化、代码迁移、重命名、加减参数或函数、修改函数签名、定义类型、dataclass、处理函数间数据流、JSON 反序列化、pydantic、code review / PR review。任何会产出或改动 Python 代码的任务（write / edit / refactor / review Python code）都要先加载本 skill，即使用户没有提到风格、规范或最佳实践。只读调查不加载：单纯 debug、定位代码、定位问题、读代码理解逻辑等不改代码的任务不需要加载。
----
-
 # Python 编码风格
 
-**REQUIRED BACKGROUND：先加载 `coding-style`（shared）**——语言无关的原则与"为什么"在那里，章节序号与本文件对应；本文件只放 Python 侧的具体写法。
+`coding-style` 的 Python reference：语言无关的原则与"为什么"见 `../SKILL.md`，章节序号与本文件对应；本文件只放 Python 侧的具体写法。
 
 ---
 
@@ -437,7 +432,7 @@ class RawOrderRow:
 - **我们控制的配置需要读进来、改几个键再原样写回**（配置文件的读写往返工具）：这时才需要显式持有未知键（`extra="allow"` + pydantic 的 `model_extra`），不要为了"能存住"就逐个猜字段。更常见的解法是让每个组件只读写自己那一段，不做整文件往返。
 - **上游数据要全字段落盘 / 审计**（数据本身就是产品）：直接保留原始 dict 或原始 bytes，别把上游全部字段抄成 dataclass——那还是一份会腐烂的文档，只是多了一层转换。
 - **就是要主动探测上游新增字段**：显式 `extra="forbid"`，并在注释里写明这是"上游一动我就报错"的有意选择。
-- **Python ↔ C++ 跨语言镜像结构不属于这两种归属**：那是我们自己两侧维护、两侧都读的契约，必须严格 1:1，写法见 `coding-style-ffi`。
+- **Python ↔ C++ 跨语言镜像结构不属于这两种归属**：那是我们自己两侧维护、两侧都读的契约，必须严格 1:1，写法见 `references/ffi.md`。
 
 ---
 

@@ -1,19 +1,19 @@
 ---
 name: coding-style
-description: Use when 编写、生成、修改、编辑、重构或评审任何代码——涵盖实现功能、修 bug、写脚本、写测试、性能优化、代码迁移、重命名、加减参数或函数、修改函数签名、定义类型、处理函数间数据流、JSON/YAML 反序列化、code review / PR review。任何语言中任何会产出或改动代码的任务（write / edit / refactor / review code）都要加载本 skill，即使用户没有提到风格、规范或最佳实践。只读调查不加载：单纯 debug、定位代码、定位问题、读代码理解逻辑等不改代码的任务不需要加载。
+description: Use when 修改或评审任何代码——写实现、修 bug、写脚本、写测试、重构、代码迁移、改函数签名 / 参数 / 类型定义、处理函数间数据流、JSON/YAML 反序列化，以及 code review / PR review。任何语言的改动或评审都要加载本 skill，即使用户没有提到风格、规范或最佳实践：语言无关的原则在本文，语言细则在 `references/` 下按语言分文件（Python、TypeScript/JavaScript、Go、C++、pybind11/nanobind 跨语言 FFI），改或评审哪种语言就同时读对应的 reference。只读调查不加载：单纯 debug、定位代码、定位问题、读代码理解逻辑等不改代码的任务不需要加载。
 ---
 
 # 编码风格（shared）
 
-语言无关的原则写在本文件；语言特定的实现细则在对应语言的 skill 里，**写或改哪种语言，就同时加载哪个 skill**：
+语言无关的原则写在本文件；语言特定的实现细则在 `references/` 下按语言分文件，**改或评审哪种语言，就同时读对应的 reference**（路径相对本文件所在目录）：
 
-| 语言 / 场景                                   | Skill                                |
-| --------------------------------------------- | ------------------------------------ |
-| Python                                        | `coding-style-python`                |
-| TypeScript / JavaScript                       | `coding-style-typescript-javascript` |
-| Go                                            | `coding-style-golang`                |
-| C++                                           | `coding-style-cpp`                   |
-| 跨语言 FFI / 镜像结构（pybind11、Python↔C++） | `coding-style-ffi`                   |
+| 语言 / 场景                                   | Reference                             |
+| --------------------------------------------- | ------------------------------------- |
+| Python                                        | `references/python.md`                |
+| TypeScript / JavaScript                       | `references/typescript-javascript.md` |
+| Go                                            | `references/golang.md`                |
+| C++                                           | `references/cpp.md`                   |
+| 跨语言 FFI / 镜像结构（pybind11、Python↔C++） | `references/ffi.md`                   |
 
 每条规则都说明**为什么**这么要求——理解动机后，遇到规则没覆盖的灰色地带才能自己判断。
 
@@ -66,7 +66,7 @@ description: Use when 编写、生成、修改、编辑、重构或评审任何�
 
 如果函数层级很深、字典穿透了很多层，优先改最外层的公共函数签名——内部函数可以暂时继续收字典，因为它们不暴露给外部，影响面小，可以后续慢慢收敛。
 
-容器选型（可变性、命名元组、不可变默认值等）和类型检查器的具体配置见对应语言的 skill。
+容器选型（可变性、命名元组、不可变默认值等）和类型检查器的具体配置见对应语言的 reference。
 
 ---
 
@@ -151,13 +151,13 @@ description: Use when 编写、生成、修改、编辑、重构或评审任何�
 - **我们控制的配置需要读进来、改几个键再原样写回**（配置文件的读写往返工具）：这时才需要显式持有未知键，不要为了"能存住"就逐个猜字段。更常见的解法是让每个组件只读写自己那一段，不做整文件往返。
 - **上游数据要全字段落盘 / 审计**（数据本身就是产品）：直接保留原始 dict 或原始 bytes，别把上游全部字段抄成类型——那还是一份会腐烂的文档，只是多了一层转换。
 - **就是要主动探测上游新增字段**：显式配置"未知键报错"，并在注释里写明这是"上游一动我就报错"的有意选择。
-- **跨语言镜像结构不属于这两种归属**：那是我们自己两侧维护、两侧都读的契约，必须严格 1:1，写法见 `coding-style-ffi`。
+- **跨语言镜像结构不属于这两种归属**：那是我们自己两侧维护、两侧都读的契约，必须严格 1:1，写法见 `references/ffi.md`。
 
 ### 校验库当引擎，模型是长期契约
 
 校验的价值集中在"从原始数据到 typed 对象"这一步；对象一旦构造出来，后续传递靠的是语言原生的类型系统和普通容器。选校验库和用法时，优先"校验完产出/对应普通类型"的形态，不要让校验库的模型基类侵入整个数据模型——那是把外部 schema 的包袱带进内部。
 
-各语言的具体取舍见对应语言的 skill：Python 优先 stdlib dataclass + pydantic `TypeAdapter`（不用 `BaseModel`，字段级配置用 `Annotated` 注入），见 `coding-style-python`；TS 里 zod / typebox 的 schema 本身就是类型来源，见 `coding-style-typescript-javascript`。
+各语言的具体取舍见对应语言的 reference：Python 优先 stdlib dataclass + pydantic `TypeAdapter`（不用 `BaseModel`，字段级配置用 `Annotated` 注入），见 `references/python.md`；TS 里 zod / typebox 的 schema 本身就是类型来源，见 `references/typescript-javascript.md`。
 
 ---
 
@@ -181,4 +181,4 @@ description: Use when 编写、生成、修改、编辑、重构或评审任何�
 - **Python：** 参数收 `Iterable[T]` / `Sequence[T]` / `Protocol`，返回具体 dataclass、具体容器；返回 `list[T]` 而不是 `Iterable[T]`（除非真是惰性序列）。
 - **TypeScript：** 参数收最小 interface / 宽联合类型，返回具体类型，不返回 `object` / 宽泛 Record。
 
-语言侧细则在对应语言的 skill 里补充。
+语言侧细则在对应的 reference 里补充。

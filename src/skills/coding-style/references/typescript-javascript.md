@@ -1,11 +1,6 @@
----
-name: coding-style-typescript-javascript
-description: Use when 编写、生成、修改、编辑、重构或评审任何 TypeScript / JavaScript 代码——涵盖实现功能、修 bug、写脚本、写测试、性能优化、代码迁移、重命名、加减参数或函数、修改函数签名、定义类型、interface、处理函数间数据流、JSON 反序列化、zod、typebox、tsconfig、code review / PR review。任何会产出或改动 TS/JS 代码的任务（write / edit / refactor / review TypeScript or JavaScript code）都要先加载本 skill，即使用户没有提到风格、规范或最佳实践。只读调查不加载：单纯 debug、定位代码、定位问题、读代码理解逻辑等不改代码的任务不需要加载。
----
-
 # TypeScript / JavaScript 编码风格
 
-**REQUIRED BACKGROUND：先加载 `coding-style`（shared）**——语言无关的原则与"为什么"在那里，章节序号与本文件对应。本文以 TypeScript 为准；纯 JavaScript 没有类型标注，只有"边界校验 + JSDoc 标注"一条弱化路径可选。
+`coding-style` 的 TypeScript / JavaScript reference：语言无关的原则与"为什么"见 `../SKILL.md`，章节序号与本文件对应。本文以 TypeScript 为准；纯 JavaScript 没有类型标注，只有"边界校验 + JSDoc 标注"一条弱化路径可选。
 
 ---
 
