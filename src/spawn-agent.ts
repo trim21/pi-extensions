@@ -244,11 +244,13 @@ export function subagentToolsExtension(
             policy: services.policy,
             bus: registration.bus,
             manager: services.manager,
+            readTracking: registration.config.fileIoReadTracking,
           })
         : createOpencodeFileTools(pi, {
             policy: services.policy,
             bus: registration.bus,
             manager: services.manager,
+            readTracking: registration.config.fileIoReadTracking,
           });
     services.setLspEnabledHandler((service) => fileToolset.onLspEnabled(registration.bus, service));
 

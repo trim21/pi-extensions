@@ -20,7 +20,10 @@ import {
 } from "../src/bwrap/runtime.js";
 import { didYouMean, findSimilarFile, suggestPathUnderCwd } from "../src/claude-code/common.js";
 import { applyExactEdit } from "../src/claude-code/edit-match.js";
-import claudeCodeFileTools, { formatReadOutput } from "../src/claude-code/files.js";
+import claudeCodeFileTools, {
+  createClaudeCodeFileTools,
+  formatReadOutput,
+} from "../src/claude-code/files.js";
 import claudeCodeGlobTool, { globFiles } from "../src/claude-code/glob.js";
 import claudeCodeGrepTool, {
   sortFilesByMtime,
@@ -117,6 +120,25 @@ function loadFileToolsWithConfig(globalConfigPath: string): {
     { globalConfigPath },
   );
   return { tools, handlers };
+}
+
+/** 直接建工具集并注册：默认导出会从 settings.json 读开关，不适合逐个用例覆盖。 */
+function loadFileToolsWithoutReadTracking(): Map<string, RegisteredTool> {
+  const tools = new Map<string, RegisteredTool>();
+  const pi = {
+    registerTool(tool: RegisteredTool) {
+      tools.set(tool.name, tool);
+    },
+    registerFlag: vi.fn(),
+    registerCommand: vi.fn(),
+    on: vi.fn(),
+    exec: vi.fn(),
+  } as never;
+  createClaudeCodeFileTools(pi, {
+    readTracking: false,
+    globalConfigPath: join(process.env.PI_CODING_AGENT_DIR ?? tmpdir(), "lsp.json"),
+  }).register(createToolBus(pi));
+  return tools;
 }
 
 function sessionStartCtx(ctx: Record<string, unknown>): Record<string, unknown> {
@@ -442,6 +464,33 @@ describe("Read, Edit, and Write", () => {
     );
     expect(editResult.details).toMatchObject({ pendant: { subtitle: "./note.txt" } });
     expect(await readFile(filePath, "utf8")).toBe("hello there\n");
+  });
+
+  it("skips read-before-write tracking when fileIoReadTracking is off", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cc-no-reads-"));
+    const filePath = join(directory, "note.txt");
+    await writeFile(filePath, "hello world\n", "utf8");
+    const tools = loadFileToolsWithoutReadTracking();
+    const ctx = context(directory);
+
+    const editResult = await call(
+      tools.get("Edit")!,
+      { file_path: filePath, old_string: "world", new_string: "there" },
+      ctx,
+    );
+    expect(editResult.details.reads).toBeUndefined();
+    expect(await readFile(filePath, "utf8")).toBe("hello there\n");
+
+    const writeResult = await call(
+      tools.get("Write")!,
+      { file_path: filePath, content: "no reads\n" },
+      ctx,
+    );
+    expect(writeResult.details.reads).toBeUndefined();
+    expect(await readFile(filePath, "utf8")).toBe("no reads\n");
+
+    const readResult = await call(tools.get("Read")!, { file_path: filePath }, ctx);
+    expect(readResult.details.reads).toBeUndefined();
   });
 
   it("accepts paths relative to the working directory", async () => {

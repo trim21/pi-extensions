@@ -27,7 +27,7 @@ opencode 风格工具集（小写 `read` / `edit` / `write` / `grep` / `glob` / 
 
 ### Requirement: edit 编辑文件
 
-按 opencode 的 schema 与匹配引擎编辑文件。目标文件 MUST 已在本会话读过且读后未变。
+按 opencode 的 schema 与匹配引擎编辑文件。`fileIoReadTracking` 生效时（缺省），目标文件 MUST 已在本会话读过且读后未变。
 
 #### Scenario: 多策略匹配
 
@@ -41,12 +41,17 @@ opencode 风格工具集（小写 `read` / `edit` / `write` / `grep` / `glob` / 
 
 #### Scenario: 未读或读后被改动时拒绝
 
-- **WHEN** 目标文件未在本会话读过，或读取后磁盘内容发生变化
+- **WHEN** `fileIoReadTracking` 生效，且目标文件未在本会话读过，或读取后磁盘内容发生变化
 - **THEN** 拒绝编辑，提示先读或重读，文件不变
+
+#### Scenario: 关闭已读记账后不拒绝
+
+- **WHEN** `personalExtensions.fileIoReadTracking` 为 `false`，目标文件未在本会话读过或读后已被改动
+- **THEN** 编辑照常进行，结果不带 `details.reads`；写保护审批照常
 
 ### Requirement: write 写入文件
 
-创建或覆盖文件；覆盖已存在文件时 MUST 要求该文件已在本会话读过且读后未变。
+创建或覆盖文件；`fileIoReadTracking` 生效时（缺省），覆盖已存在文件 MUST 要求该文件已在本会话读过且读后未变。
 
 #### Scenario: 创建与覆盖
 
@@ -55,8 +60,13 @@ opencode 风格工具集（小写 `read` / `edit` / `write` / `grep` / `glob` / 
 
 #### Scenario: 读后被改动时拒绝
 
-- **WHEN** 文件已被读过，但磁盘内容在读取后发生变化或被删除
+- **WHEN** `fileIoReadTracking` 生效，且文件已被读过，但磁盘内容在读取后发生变化或被删除
 - **THEN** 拒绝写入，提示重读，文件不变
+
+#### Scenario: 关闭已读记账后不拒绝
+
+- **WHEN** `personalExtensions.fileIoReadTracking` 为 `false`，覆盖一个未读过或读后已被改动的文件
+- **THEN** 写入照常进行，结果不带 `details.reads`；写保护审批照常
 
 ### Requirement: grep / glob 搜索
 

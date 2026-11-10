@@ -31,6 +31,17 @@ import {
   type SpawnAgentDefaults,
 } from "../src/spawn-agent-agents.js";
 
+interface SubagentTool {
+  name: string;
+  execute: (
+    toolCallId: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    onUpdate: unknown,
+    ctx: Record<string, unknown>,
+  ) => Promise<{ details: Record<string, unknown> }>;
+}
+
 function withTempDir(files: Record<string, string>, fn: (dir: string) => void) {
   const dir = mkdtempSync(join(tmpdir(), "spawn-agent-test-"));
   try {
@@ -399,6 +410,59 @@ describe("子代理工具单元选择", () => {
       }
       expect(tools).toContain("read");
       expect(tools).not.toContain("edit");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previous;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("fileIoReadTracking 同样作用于子代理的文件工具", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-subagent-reads-"));
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = dir;
+    writeFileSync(
+      join(dir, "settings.json"),
+      JSON.stringify({ personalExtensions: { fileIoReadTracking: false } }),
+    );
+    const filePath = join(dir, "note.txt");
+    writeFileSync(filePath, "hello\n", "utf8");
+    try {
+      const registered = new Map<string, SubagentTool>();
+      const handlers: ((event: unknown, ctx: unknown) => unknown)[] = [];
+      const pi = {
+        registerTool: (tool: SubagentTool) => {
+          registered.set(tool.name, tool);
+        },
+        registerFlag: vi.fn(),
+        registerCommand: vi.fn(),
+        getActiveTools: () => [],
+        setActiveTools: vi.fn(),
+        exec: vi.fn(),
+        on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) => {
+          if (event === "session_start") {
+            handlers.push(handler);
+          }
+        },
+      };
+      const extension = subagentToolsExtension({ ...BASE_AGENT, tools: ["Read"] }, ["Read"]);
+      await extension(pi as never);
+      const ctx = {
+        model: undefined,
+        cwd: dir,
+        ui: { notify: () => false, setStatus: vi.fn(), theme: { fg: () => "" } },
+        sessionManager: { getBranch: () => [] },
+      };
+      for (const handler of handlers) {
+        await handler({ type: "session_start", reason: "startup" }, ctx);
+      }
+
+      const result = await registered
+        .get("Read")!
+        .execute("id", { file_path: filePath }, undefined, undefined, ctx);
+      expect(result.details.reads).toBeUndefined();
     } finally {
       if (previous === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;

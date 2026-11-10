@@ -52,9 +52,9 @@ interface Harness {
   emitSessionStart: (branch: unknown[]) => Promise<void>;
 }
 
-function loadTool(): Harness {
+function loadTool(options: { readTracking?: boolean } = {}): Harness {
   const recorder = createToolRecorder<Tool>();
-  const toolset = createOpencodeFileTools(recorder.pi);
+  const toolset = createOpencodeFileTools(recorder.pi, options);
   toolset.register(recorder.bus);
   recorder.handlers.set("session_start", [
     (_event: unknown, ctx: unknown) => toolset.restoreReads(ctx as never),
@@ -158,6 +158,31 @@ describe("opencode edit execute", () => {
     expect(result.details.patch?.startsWith("--- ")).toBe(true);
     expect(result.details.firstChangedLine).toBe(2);
     expect(Object.keys(result.details.reads ?? {})).toHaveLength(1);
+  });
+
+  it("skips read-before-write tracking when fileIoReadTracking is off", async () => {
+    await writeFile(target, "hello\n", "utf8");
+    const { tool, write } = loadTool({ readTracking: false });
+
+    const editResult = await tool.execute(
+      "id",
+      { filePath: target, oldString: "hello", newString: "world" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(editResult.details.reads).toBeUndefined();
+    expect(await readFile(target, "utf8")).toBe("world\n");
+
+    const writeResult = await write.execute(
+      "id",
+      { filePath: target, content: "again\n" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(writeResult.details.reads).toBeUndefined();
+    expect(await readFile(target, "utf8")).toBe("again\n");
   });
 
   it("replaceAll replaces every occurrence", async () => {

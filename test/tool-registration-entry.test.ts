@@ -74,9 +74,21 @@ vi.mock("../src/web/fetch.js", () => ({
   createWebFetch: () => fakeModule("web_fetch", ["web_fetch"]),
 }));
 
+interface RegisteredTool {
+  name: string;
+  execute: (
+    toolCallId: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    onUpdate: unknown,
+    ctx: Record<string, unknown>,
+  ) => Promise<{ content: unknown; details: Record<string, unknown> }>;
+}
+
 interface Loaded {
   toolNames: string[];
   notifications: string[];
+  tools: Map<string, RegisteredTool>;
 }
 
 let agentDir: string;
@@ -94,11 +106,11 @@ async function loadEntry(
     JSON.stringify(config === undefined ? {} : { personalExtensions: config }),
   );
 
-  const tools = new Map<string, { name: string }>();
+  const tools = new Map<string, RegisteredTool>();
   const notifications: string[] = [];
   const handlers: ((event: unknown, ctx: unknown) => unknown)[] = [];
   const pi = {
-    registerTool: (tool: { name: string }) => {
+    registerTool: (tool: RegisteredTool) => {
       if (tools.has(tool.name)) {
         throw new Error(`duplicate tool registration: ${tool.name}`);
       }
@@ -136,7 +148,7 @@ async function loadEntry(
   for (const handler of handlers) {
     await handler({ type: "session_start", reason: "startup" }, ctx);
   }
-  return { toolNames: [...tools.keys()], notifications };
+  return { toolNames: [...tools.keys()], notifications, tools };
 }
 
 describe("统一入口的注册行为", () => {
@@ -176,6 +188,32 @@ describe("统一入口的注册行为", () => {
     expect(toolNames).toContain("bash");
     expect(toolNames).not.toContain("Read");
     expect(toolNames).not.toContain("Bash");
+  });
+
+  it("fileIoReadTracking 关闭后文件工具不再记账", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pi-ext-entry-files-"));
+    const filePath = join(directory, "note.txt");
+    writeFileSync(filePath, "hello world\n");
+    const ctx = {
+      cwd: directory,
+      ui: { notify: vi.fn() },
+      sessionManager: { getBranch: () => [] },
+    };
+    try {
+      const tracked = await loadEntry(undefined);
+      const trackedRead = await tracked.tools
+        .get("Read")!
+        .execute("id", { file_path: filePath }, undefined, undefined, ctx);
+      expect(trackedRead.details.reads).toBeDefined();
+
+      const untracked = await loadEntry({ fileIoReadTracking: false });
+      const untrackedRead = await untracked.tools
+        .get("Read")!
+        .execute("id", { file_path: filePath }, undefined, undefined, ctx);
+      expect(untrackedRead.details.reads).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("fileIoByModel 按模型切换工具集", async () => {

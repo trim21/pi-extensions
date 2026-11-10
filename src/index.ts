@@ -3,8 +3,8 @@
  *
  * 为什么是单一入口：pi 给每个扩展入口单独的模块图，模块级状态不跨入口共享
  * （两套文件 IO 工具集、LSP 服务、bwrap runtime 都各自持有状态），而且只有集中
- * 在一处，`personalExtensions` 配置（`fileIo` / `fileIoByModel` / `disabledTools`
- * / `enabledTools`）才有一个唯一的求值点。
+ * 在一处，`personalExtensions` 配置（`fileIo` / `fileIoByModel` / `fileIoReadTracking`
+ * / `disabledTools` / `enabledTools`）才有一个唯一的求值点。
  *
  * 注册时机：pi 在每次会话启动（启动、/new、resume、fork、/reload）时重建扩展，
  * 所以在 `session_start` 里注册即「每个会话按自己的模型判定一次」。模型在扩展
@@ -89,11 +89,13 @@ export default function personalExtensions(pi: ExtensionAPI): void {
             policy: services.policy,
             bus,
             manager: services.manager,
+            readTracking: registration.config.fileIoReadTracking,
           })
         : createClaudeCodeFileTools(pi, {
             policy: services.policy,
             bus,
             manager: services.manager,
+            readTracking: registration.config.fileIoReadTracking,
           });
     services.setLspEnabledHandler((service) => fileToolset.onLspEnabled(bus, service));
     runModule(kind, () => fileToolset.restoreReads(ctx));

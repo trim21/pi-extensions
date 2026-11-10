@@ -64,6 +64,20 @@ describe("personalExtensions 解析", () => {
     expect(parsed.warnings[1]).toContain("personalExtensions.fileIoByModel[2]");
   });
 
+  it("fileIoReadTracking 缺省为 true，可显式关闭", () => {
+    expect(config(undefined).fileIoReadTracking).toBe(true);
+    expect(config({ fileIoReadTracking: false }).fileIoReadTracking).toBe(false);
+  });
+
+  it("fileIoReadTracking 非布尔时按 true 处理并警告", () => {
+    const parsed = config({ fileIoReadTracking: "no" });
+
+    expect(parsed.fileIoReadTracking).toBe(true);
+    expect(parsed.warnings).toHaveLength(1);
+    expect(parsed.warnings[0]).toContain("personalExtensions.fileIoReadTracking");
+    expect(parsed.warnings[0]).toContain("no");
+  });
+
   it("工具规则支持字符串与对象两种写法", () => {
     const parsed = config({
       disabledTools: ["talk-*", { tools: ["web_*"], models: ["gpt-*"] }],
@@ -128,7 +142,7 @@ describe("personalExtensions 解析", () => {
 
     expect(parsed.shellEnv).toEqual({ GIT_EDITOR: "true", LANG: "C" });
     expect(parsed.warnings).toEqual([
-      "personalExtensions.shell.env.GIT_PAGER: invalid value 42 ignored (expected a string)",
+      "personalExtensions.shell.env.GIT_PAGER: invalid value 42 ignored (must be string)",
     ]);
   });
 });

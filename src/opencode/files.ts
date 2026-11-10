@@ -57,6 +57,7 @@ import {
   type LspService,
   type LspServiceOptions,
 } from "../lib/lsp/lsp.js";
+import type { AppliedFileEdit } from "../lib/lsp/rename.js";
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
@@ -416,7 +417,12 @@ async function formatDirectoryEntries(dirPath: string): Promise<string[]> {
  */
 const READS_TOOL_NAMES = new Set(["read", "edit", "write", "lsp-rename", "codemode"]);
 
-function registerReadTool(bus: ToolBus, getService: () => LspService, state: ReadsState): void {
+function registerReadTool(
+  bus: ToolBus,
+  getService: () => LspService,
+  state: ReadsState,
+  readTracking: boolean,
+): void {
   bus.register({
     name: "read",
     label: "read",
@@ -514,11 +520,16 @@ function registerReadTool(bus: ToolBus, getService: () => LspService, state: Rea
           { type: "text", text: "Image read successfully" },
           { type: "image", data: base64, mimeType },
         ];
-        const reads = await recordRead(state, absolutePath, snapshotOf(buffer, false));
+        const reads = await trackedRead(
+          state,
+          readTracking,
+          absolutePath,
+          snapshotOf(buffer, false),
+        );
         return {
           content,
           details: {
-            reads,
+            ...reads,
             pendant: { subtitle: formatSubtitlePath(ctx.cwd, absolutePath) },
           },
         };
@@ -566,7 +577,7 @@ function registerReadTool(bus: ToolBus, getService: () => LspService, state: Rea
         outputText = `${header}${numbered}\n\n(End of file - total ${page.count} lines)${footer}`;
       }
 
-      const reads = await recordRead(state, absolutePath, snapshot);
+      const reads = await trackedRead(state, readTracking, absolutePath, snapshot);
 
       // opencode: 与 edit / write 同一条驻留路径：didOpen 后等待该文件的诊断并报告
       const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
@@ -583,7 +594,7 @@ function registerReadTool(bus: ToolBus, getService: () => LspService, state: Rea
         content,
         details: {
           ...details,
-          reads,
+          ...reads,
           pendant: {
             subtitle: formatSubtitlePath(
               ctx.cwd,
@@ -616,6 +627,7 @@ function registerEditTool(
   getService: () => LspService,
   policy: RequestPolicy,
   state: ReadsState,
+  readTracking: boolean,
 ): void {
   bus.register({
     name: "edit",
@@ -679,13 +691,18 @@ function registerEditTool(
             signal?.throwIfAborted();
             await writeFile(absolutePath, newString, "utf8");
             // 新建文件无需先 read（无处可读），写后记账
-            const reads = await recordRead(state, absolutePath, snapshotOf(newString));
+            const reads = await trackedRead(
+              state,
+              readTracking,
+              absolutePath,
+              snapshotOf(newString),
+            );
             const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
               signal,
             });
             return [
               "Edit applied successfully.",
-              { diff: "", patch: "", firstChangedLine: 0, reads },
+              { ...reads, diff: "", patch: "", firstChangedLine: 0 },
               diagnostics,
             ] as const;
           }
@@ -711,7 +728,9 @@ function registerEditTool(
 
           // 指纹校验必须发生在写入之前：未 read 或外部已改动都拒绝编辑
           const rawContent = await readFile(absolutePath, "utf8");
-          await requireCurrentRead(state, absolutePath, rawContent);
+          if (readTracking) {
+            await requireCurrentRead(state, absolutePath, rawContent);
+          }
 
           const applied = applyEdit(rawContent, oldString, newString, replaceAll);
           signal?.throwIfAborted();
@@ -723,7 +742,12 @@ function registerEditTool(
             signal,
           });
           await writeFile(absolutePath, applied.finalContent, "utf8");
-          const reads = await recordRead(state, absolutePath, snapshotOf(applied.finalContent));
+          const reads = await trackedRead(
+            state,
+            readTracking,
+            absolutePath,
+            snapshotOf(applied.finalContent),
+          );
 
           const diffOld = normalizeToLF(applied.contentOld);
           const diffNew = normalizeToLF(applied.contentNew);
@@ -735,10 +759,10 @@ function registerEditTool(
           return [
             "Edit applied successfully.",
             {
+              ...reads,
               diff: diffResult.diff,
               patch,
               firstChangedLine: diffResult.firstChangedLine,
-              reads,
             },
             diagnostics,
           ] as const;
@@ -793,6 +817,7 @@ function registerWriteTool(
   getService: () => LspService,
   policy: RequestPolicy,
   state: ReadsState,
+  readTracking: boolean,
 ): void {
   bus.register({
     name: "write",
@@ -820,7 +845,7 @@ function registerWriteTool(
 
           // write 不要求先读过；但若已有读取记录，磁盘内容必须仍是读取时的样子，
           // 否则先重新 read（外部改动过的文件不让盲写覆盖）
-          await requireUnchangedRead(state, absolutePath);
+          await requireTrackedRead(state, readTracking, absolutePath);
 
           // opencode: desiredBom = source.bom || next.bom —— 保留原文件 BOM，
           // 否则用新内容自带的 BOM。旧内容整读一次，既是 BOM 的来源，也是审批预览
@@ -847,12 +872,17 @@ function registerWriteTool(
           signal?.throwIfAborted();
           await writeFile(absolutePath, finalContent, "utf8");
           // 写后记账：紧接着的 edit 不该再要求重新 read
-          const reads = await recordRead(state, absolutePath, snapshotOf(finalContent));
+          const reads = await trackedRead(
+            state,
+            readTracking,
+            absolutePath,
+            snapshotOf(finalContent),
+          );
           const diagnostics = await getService().lspDiagnosticsForFile(absolutePath, ctx.cwd, {
             signal,
           });
 
-          return ["Wrote file successfully.", { reads }, diagnostics] as const;
+          return ["Wrote file successfully.", { ...reads }, diagnostics] as const;
         },
       );
 
@@ -877,15 +907,40 @@ function registerWriteTool(
 
 // ── 入口 ─────────────────────────────────────────────────────────────────────
 
+/**
+ * 已读记账片段：开启时记录已读并返回可直接展开进工具 `details` 的 `reads`，
+ * `fileIoReadTracking` 关闭时返回空对象，结果里就没有 `details.reads`。
+ */
+async function trackedRead(
+  state: ReadsState,
+  readTracking: boolean,
+  filePath: string,
+  snapshot: FileSnapshot,
+): Promise<{ reads?: Record<string, FileSnapshot> }> {
+  return readTracking ? { reads: await recordRead(state, filePath, snapshot) } : {};
+}
+
+/** 读后未变的写前校验：只在已读记账开启时生效。 */
+async function requireTrackedRead(
+  state: ReadsState,
+  readTracking: boolean,
+  filePath: string,
+): Promise<void> {
+  if (readTracking) {
+    await requireUnchangedRead(state, filePath);
+  }
+}
+
 function registerFileTools(
   bus: ToolBus,
   getService: () => LspService,
   policy: RequestPolicy,
   state: ReadsState,
+  readTracking = true,
 ): void {
-  registerReadTool(bus, getService, state);
-  registerEditTool(bus, getService, policy, state);
-  registerWriteTool(bus, getService, policy, state);
+  registerReadTool(bus, getService, state, readTracking);
+  registerEditTool(bus, getService, policy, state, readTracking);
+  registerWriteTool(bus, getService, policy, state, readTracking);
   // lsp-rename / inspect 工具由 manager 的 onEnabled 回调注册，不在这里注册。
 }
 
@@ -896,6 +951,11 @@ export interface OpencodeFileToolOptions extends LspServiceOptions {
   bus?: ToolBus;
   /** 聚合入口注入的共享 LSP manager（与另一套文件工具集共享同一份）。 */
   manager?: LspManager;
+  /**
+   * 是否维护 read-before-write 记账（已读快照、读后未变校验、details.reads 回放），
+   * 来自 `personalExtensions.fileIoReadTracking`；缺省 true。
+   */
+  readTracking?: boolean;
 }
 
 /** 一套文件工具集：reads state 归实例所有，LSP 与请求策略可以由入口注入共享。 */
@@ -918,25 +978,34 @@ export function createOpencodeFileTools(
   // 同一开关。
   const policy = options?.policy ?? createRequestPolicy(pi.events);
   const state = createReadsState();
+  const readTracking = options?.readTracking ?? true;
   // 聚合入口注入自己的总线（与同入口其他模块共享）；独立入口自建一份。
   const bus = options?.bus ?? createToolRegistration(pi).bus;
 
   const toolset: OpencodeFileToolset = {
     register(currentBus) {
-      registerFileTools(currentBus, () => manager.mustLazyGetService(), policy, state);
+      registerFileTools(
+        currentBus,
+        () => manager.mustLazyGetService(),
+        policy,
+        state,
+        readTracking,
+      );
     },
 
     onLspEnabled(currentBus, service) {
       registerLspRenameTool(currentBus, service, {
         policy,
-        recordReads: (applied) =>
-          recordReads(
-            state,
-            applied.map((fileEdit) => ({
-              path: fileEdit.path,
-              snapshot: snapshotOf(fileEdit.newText),
-            })),
-          ),
+        ...(readTracking && {
+          recordReads: (applied: readonly AppliedFileEdit[]) =>
+            recordReads(
+              state,
+              applied.map((fileEdit) => ({
+                path: fileEdit.path,
+                snapshot: snapshotOf(fileEdit.newText),
+              })),
+            ),
+        }),
       });
       registerLspInspectTools(currentBus, service);
     },
@@ -945,7 +1014,9 @@ export function createOpencodeFileTools(
     // 记账随之丢失，这里从当前分支的历史工具结果恢复；digest 仍是当时的值，文件
     // 若在此期间被外部修改，edit 时的指纹对比照样要求重新 read。
     restoreReads(ctx) {
-      restoreReads(state, ctx.sessionManager, READS_TOOL_NAMES);
+      if (readTracking) {
+        restoreReads(state, ctx.sessionManager, READS_TOOL_NAMES);
+      }
     },
 
     reads: state,
@@ -968,7 +1039,11 @@ export default function opencodeFileTools(
   options?: OpencodeFileToolOptions,
 ): void {
   const registration = createToolRegistration(pi);
-  const toolset = createOpencodeFileTools(pi, { ...options, bus: registration.bus });
+  const toolset = createOpencodeFileTools(pi, {
+    ...options,
+    bus: registration.bus,
+    readTracking: registration.config.fileIoReadTracking,
+  });
 
   pi.on("session_start", (_event, ctx) => {
     toolset.restoreReads(ctx);

@@ -31,6 +31,7 @@ import {
   type LspService,
   type LspServiceOptions,
 } from "../lib/lsp/lsp.js";
+import type { AppliedFileEdit } from "../lib/lsp/rename.js";
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import type { ToolPendant } from "../lib/pendant.ts";
@@ -179,11 +180,37 @@ export function formatReadOutput(
   return { text, totalLines };
 }
 
+/**
+ * 已读记账片段：开启时记录已读并返回可直接展开进工具 `details` 的 `reads`，
+ * `fileIoReadTracking` 关闭时返回空对象，结果里就没有 `details.reads`。
+ */
+async function trackedRead(
+  state: ReadsState,
+  readTracking: boolean,
+  filePath: string,
+  snapshot: FileSnapshot,
+): Promise<{ reads?: Record<string, FileSnapshot> }> {
+  return readTracking ? { reads: await recordRead(state, filePath, snapshot) } : {};
+}
+
+/** 读后未变的写前校验：只在已读记账开启时生效。 */
+async function requireTrackedRead(
+  state: ReadsState,
+  readTracking: boolean,
+  filePath: string,
+  currentContent: Uint8Array | string,
+): Promise<void> {
+  if (readTracking) {
+    await requireCurrentRead(state, filePath, currentContent);
+  }
+}
+
 export function registerFileTools(
   bus: ToolBus,
   state: ReadsState,
   getService: () => LspService,
   policy: RequestPolicy,
+  readTracking = true,
 ): void {
   bus.register({
     name: "Read",
@@ -255,11 +282,11 @@ export function registerFileTools(
           { type: "text", text: `Read image file [${imageMime}]` },
           { type: "image", data, mimeType: imageMime },
         ];
-        const reads = await recordRead(state, filePath, snapshotOf(image, false));
+        const reads = await trackedRead(state, readTracking, filePath, snapshotOf(image, false));
         return {
           content,
           details: {
-            reads,
+            ...reads,
             pendant: {
               subtitle: formatSubtitlePath(ctx.cwd, filePath),
               title: "Read",
@@ -290,7 +317,7 @@ export function registerFileTools(
           `File content (${estimatedTokens} tokens) exceeds maximum allowed tokens (${MAX_READ_TOKENS}). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file.`,
         );
       }
-      const reads = await recordRead(state, filePath, snapshotOf(buffer));
+      const reads = await trackedRead(state, readTracking, filePath, snapshotOf(buffer));
       // 与 Edit / Write 同一条驻留路径：didOpen 后等待该文件的诊断并报告
       const diagnostics = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
         notify: (message, level) => ctx.ui.notify(message, level),
@@ -304,7 +331,7 @@ export function registerFileTools(
           },
         ],
         details: {
-          reads,
+          ...reads,
           pendant: {
             subtitle: formatSubtitlePath(
               ctx.cwd,
@@ -388,7 +415,7 @@ export function registerFileTools(
             await mkdir(dirname(filePath), { recursive: true });
           }
           await writeFile(filePath, newString, "utf8");
-          const reads = await recordRead(state, filePath, snapshotOf(newString));
+          const reads = await trackedRead(state, readTracking, filePath, snapshotOf(newString));
           const diff = generateDiffString("", convertLeadingTabsToSpaces(newString));
           signal?.throwIfAborted();
           const diagnostics = await getService().lspDiagnosticsForFile(filePath, ctx.cwd, {
@@ -398,10 +425,10 @@ export function registerFileTools(
           return [
             `The file ${filePath} has been updated successfully.`,
             {
+              ...reads,
               diff: diff.diff,
               patch: generateUnifiedPatch(filePath, "", convertLeadingTabsToSpaces(newString)),
               firstChangedLine: diff.firstChangedLine,
-              reads,
             },
             diagnostics,
           ];
@@ -438,7 +465,7 @@ export function registerFileTools(
             "File is a Jupyter Notebook. Use the NotebookEditTool to edit this file.",
           );
         }
-        await requireCurrentRead(state, filePath, content);
+        await requireTrackedRead(state, readTracking, filePath, content);
         await access(filePath, constants.R_OK | constants.W_OK);
         signal?.throwIfAborted();
         const original = content.toString("utf8");
@@ -451,7 +478,7 @@ export function registerFileTools(
           signal,
         });
         await writeFile(filePath, restored, "utf8");
-        const reads = await recordRead(state, filePath, snapshotOf(restored));
+        const reads = await trackedRead(state, readTracking, filePath, snapshotOf(restored));
         // patch/diff 仅供显示：前导 tab 转空格，避免 UI 渲染错位（对齐 Claude Code）
         const diff = generateDiffString(
           convertLeadingTabsToSpaces(original),
@@ -468,6 +495,7 @@ export function registerFileTools(
         return [
           text,
           {
+            ...reads,
             diff: diff.diff,
             patch: generateUnifiedPatch(
               filePath,
@@ -475,7 +503,6 @@ export function registerFileTools(
               convertLeadingTabsToSpaces(restored),
             ),
             firstChangedLine: diff.firstChangedLine,
-            reads,
           },
           diagnostics,
         ];
@@ -531,7 +558,7 @@ export function registerFileTools(
           const value = await stat(filePath);
           if (value.isFile()) {
             const content = await readFile(filePath);
-            await requireCurrentRead(state, filePath, content);
+            await requireTrackedRead(state, readTracking, filePath, content);
             original = content.toString("utf8");
           }
         } catch (error) {
@@ -550,7 +577,7 @@ export function registerFileTools(
         });
         await mkdir(dirname(filePath), { recursive: true });
         await writeFile(filePath, params.content, "utf8");
-        const reads = await recordRead(state, filePath, snapshotOf(params.content));
+        const reads = await trackedRead(state, readTracking, filePath, snapshotOf(params.content));
         const diff = generateDiffString(original ?? "", params.content);
         const text =
           original === undefined
@@ -564,10 +591,10 @@ export function registerFileTools(
         return [
           text,
           {
+            ...reads,
             diff: diff.diff,
             patch: generateUnifiedPatch(filePath, original ?? "", params.content),
             firstChangedLine: diff.firstChangedLine,
-            reads,
           },
           diagnostics,
         ];
@@ -614,6 +641,11 @@ export interface ClaudeCodeFileToolOptions extends LspServiceOptions {
    * 否则 /lsp-* 命令与 LSP 服务会重复注册）；独立入口不传，自建一份。
    */
   manager?: LspManager;
+  /**
+   * 是否维护 read-before-write 记账（已读快照、读后未变校验、details.reads 回放），
+   * 来自 `personalExtensions.fileIoReadTracking`；缺省 true。
+   */
+  readTracking?: boolean;
 }
 
 /**
@@ -641,6 +673,7 @@ export function createClaudeCodeFileTools(
   options?: ClaudeCodeFileToolOptions,
 ): FileToolset {
   const state = createReadsState();
+  const readTracking = options?.readTracking ?? true;
   // 聚合入口注入与 bash runtime 共享的那一份；独立入口自建并订阅 pi.events。
   const policy = options?.policy ?? createRequestPolicy(pi.events);
   // 聚合入口注入自己的总线（与同入口其他模块共享）；独立入口自建一份。
@@ -648,7 +681,13 @@ export function createClaudeCodeFileTools(
 
   const toolset: FileToolset = {
     register(currentBus) {
-      registerFileTools(currentBus, state, () => manager.mustLazyGetService(), policy);
+      registerFileTools(
+        currentBus,
+        state,
+        () => manager.mustLazyGetService(),
+        policy,
+        readTracking,
+      );
     },
 
     // LSP 专属工具（lsp-rename / inspect 族）仅在 lsp.json 有 enabled 服务器时
@@ -657,14 +696,16 @@ export function createClaudeCodeFileTools(
     onLspEnabled(currentBus, service) {
       registerLspRenameTool(currentBus, service, {
         policy,
-        recordReads: (applied) =>
-          recordReads(
-            state,
-            applied.map((fileEdit) => ({
-              path: fileEdit.path,
-              snapshot: snapshotOf(fileEdit.newText),
-            })),
-          ),
+        ...(readTracking && {
+          recordReads: (applied: readonly AppliedFileEdit[]) =>
+            recordReads(
+              state,
+              applied.map((fileEdit) => ({
+                path: fileEdit.path,
+                snapshot: snapshotOf(fileEdit.newText),
+              })),
+            ),
+        }),
       });
       registerLspInspectTools(currentBus, service);
     },
@@ -674,7 +715,9 @@ export function createClaudeCodeFileTools(
     // 若文件在此期间被外部修改，Edit/Write 时的指纹对比仍会要求重新 Read，
     // 防呆语义不因重建而弱化。
     restoreReads(ctx) {
-      restoreReads(state, ctx.sessionManager, FILE_TOOL_NAMES);
+      if (readTracking) {
+        restoreReads(state, ctx.sessionManager, FILE_TOOL_NAMES);
+      }
     },
 
     reads: state,
@@ -701,7 +744,11 @@ export default function claudeCodeFileTools(
   options?: ClaudeCodeFileToolOptions,
 ): void {
   const registration = createToolRegistration(pi);
-  const toolset = createClaudeCodeFileTools(pi, { ...options, bus: registration.bus });
+  const toolset = createClaudeCodeFileTools(pi, {
+    ...options,
+    bus: registration.bus,
+    readTracking: registration.config.fileIoReadTracking,
+  });
 
   pi.on("session_start", (_event, ctx) => {
     toolset.restoreReads(ctx);
