@@ -33,5 +33,5 @@ checksum = "sha256:dcc60d59a0746999f99064a01c020445d54d84228c691cdbf25b49ac3b591
 url = "https://nodejs.org/dist/v26.13.0/node-v26.13.0-win-x64.zip"
 
 [[tools."npm:pnpm"]]
-version = "11.28.10"
+version = "11.28.11"
 backend = "npm:pnpm"
