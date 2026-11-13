@@ -13,8 +13,8 @@
  *   - 语义索引首次构建会阻塞到完成（最长约 10 分钟），与 aft_search 工具行为一致；
  *     等待期间订阅 bridge status，把「语义索引构建中」进度逐条打到 stderr（无前缀），
  *     --raw-status 改为打印收到的完整 status 快照 JSON（调试字段形状用）。
- *   - 语义搜索未配置（未开 semantic_search 或未配外部 embedding 后端）时警告后
- *     继续跑词法搜索，不像扩展那样直接不注册工具。
+ *   - 语义搜索未配置（未开索引开关 `indexes.semantic` 或未配外部 embedding 后端）
+ *     时警告后继续跑词法搜索，不像扩展那样直接不注册工具。
  *   - 退出码：成功 0，用法错误 2，执行失败 1（SIGINT/SIGTERM 为 130/143）。
  */
 
@@ -56,9 +56,9 @@ async function search(flags: {
     diagnose(`AFT 已在用户级 aft.jsonc 中禁用（enabled: false），项目根：${root}`);
     return 1;
   }
-  if (!cfg.semanticRemote || !cfg.semanticSearch) {
+  if (!cfg.semanticRemote || !cfg.semanticIndex) {
     diagnose(
-      "语义搜索未启用（aft.jsonc 未开 semantic_search 或未配外部 embedding 后端），本次走词法搜索",
+      "语义搜索未启用（aft.jsonc 未开 indexes.semantic 或未配外部 embedding 后端），本次走词法搜索",
     );
   }
 

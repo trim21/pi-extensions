@@ -1,13 +1,17 @@
 /**
- * aft.jsonc 最小读取：只关心 JS 侧注册决策需要的字段（enabled / semantic_search /
+ * aft.jsonc 最小读取：只关心 JS 侧注册决策需要的字段（enabled / indexes.semantic /
  * semantic.backend / semantic.base_url），其余字段由 Rust 侧从配置 tier 自行读取。
  *
  * 只读用户级配置：语义搜索涉及外部 embedding 端点与密钥，按 AFT 的信任边界只允许
  * 用户级控制（项目级配置不应替用户开启语义搜索或注入 base_url）。
  *
+ * 语义索引开关的规范键是 `indexes.semantic`（AFT 侧默认 true）；顶层
+ * `semantic_search` 是 AFT 已退役的旧键（新版本加载时会拒绝并要求迁移），这里只为
+ * 老配置保留读取，`indexes.semantic` 优先。
+ *
  * 本仓库只接受外部 embedding 后端（openai_compatible / ollama）：aft 默认后端
- * fastembed 走本地 ONNX Runtime，内网镜像不提供该运行时，所以即便用户开了
- * semantic_search，外部后端未就绪时也不注册 aft_search。
+ * fastembed 走本地 ONNX Runtime，内网镜像不提供该运行时，所以外部后端未就绪时
+ * 不注册 aft_search（用户显式开过语义搜索时给出告警）。
  *
  * JSONC 解析用微软 jsonc-parser（vscode 同源，处理注释与尾逗号），不手写解析器；
  * 分两层：rawConfigSchema 只描述依赖的外部形状并做基础类型校验，toReadConfig 负责
@@ -45,21 +49,31 @@ export interface SemanticRemote {
 
 export interface AftReadConfig {
   enabled: boolean;
-  semanticSearch: boolean;
+  /** 语义索引是否启用（`indexes.semantic`，缺省 true，与 AFT 侧默认一致）。 */
+  semanticIndex: boolean;
+  /** 配置里显式写过语义索引开关：只用于「开了但后端没配好」的告警判定。 */
+  semanticIndexExplicit: boolean;
   /** undefined = 外部后端未就绪（未配 backend、非远程后端、或缺 base_url）。 */
   semanticRemote: SemanticRemote | undefined;
 }
 
 const DEFAULTS: AftReadConfig = {
   enabled: true,
-  semanticSearch: false,
+  semanticIndex: true,
+  semanticIndexExplicit: false,
   semanticRemote: undefined,
 };
 
 /** 上游（aft）控制的形状：只声明本仓库真正读取的字段，未声明的键由解析层忽略。 */
 const rawConfigSchema = Type.Object({
   enabled: Type.Optional(Type.Boolean()),
+  // AFT 已退役的旧键，新版本会在加载时要求迁移；仅为老配置保留读取。
   semantic_search: Type.Optional(Type.Boolean()),
+  indexes: Type.Optional(
+    Type.Object({
+      semantic: Type.Optional(Type.Boolean()),
+    }),
+  ),
   semantic: Type.Optional(
     Type.Object({
       backend: Type.Optional(Type.String()),
@@ -101,9 +115,12 @@ function remoteOf(semantic: RawConfig["semantic"]): SemanticRemote | undefined {
 }
 
 function toReadConfig(raw: RawConfig): AftReadConfig {
+  // `indexes.semantic` 是规范键，旧键 `semantic_search` 只作回退。
+  const semanticIndex = raw.indexes?.semantic ?? raw.semantic_search ?? DEFAULTS.semanticIndex;
   return {
     enabled: raw.enabled ?? DEFAULTS.enabled,
-    semanticSearch: raw.semantic_search ?? DEFAULTS.semanticSearch,
+    semanticIndex,
+    semanticIndexExplicit: raw.indexes?.semantic !== undefined || raw.semantic_search !== undefined,
     semanticRemote: remoteOf(raw.semantic),
   };
 }

@@ -21,24 +21,47 @@ describe("loadAftConfig", () => {
   it("defaults when file is missing", () => {
     expect(loadAftConfig(join(dir, "missing.jsonc"))).toEqual({
       enabled: true,
-      semanticSearch: false,
+      semanticIndex: true,
+      semanticIndexExplicit: false,
       semanticRemote: undefined,
     });
   });
 
-  it("reads enabled and semantic_search", () => {
-    const file = written("ok.jsonc", '{ "enabled": false, "semantic_search": true }');
+  it("reads enabled and indexes.semantic", () => {
+    const file = written("ok.jsonc", '{ "enabled": false, "indexes": { "semantic": false } }');
     expect(loadAftConfig(file)).toEqual({
       enabled: false,
-      semanticSearch: true,
+      semanticIndex: false,
+      semanticIndexExplicit: true,
       semanticRemote: undefined,
+    });
+  });
+
+  it("still reads the retired semantic_search key", () => {
+    const file = written("legacy.jsonc", '{ "semantic_search": false }');
+    expect(loadAftConfig(file)).toEqual({
+      enabled: true,
+      semanticIndex: false,
+      semanticIndexExplicit: true,
+      semanticRemote: undefined,
+    });
+  });
+
+  it("prefers indexes.semantic over the retired key", () => {
+    const file = written(
+      "both.jsonc",
+      '{ "semantic_search": false, "indexes": { "semantic": true } }',
+    );
+    expect(loadAftConfig(file)).toMatchObject({
+      semanticIndex: true,
+      semanticIndexExplicit: true,
     });
   });
 
   it("accepts an openai-compatible backend with base_url", () => {
     const file = written(
       "openai.jsonc",
-      '{ "semantic_search": true, "semantic": { "backend": "openai_compatible", "base_url": "https://gateway.internal/v1/" } }',
+      '{ "indexes": { "semantic": true }, "semantic": { "backend": "openai_compatible", "base_url": "https://gateway.internal/v1/" } }',
     );
     expect(loadAftConfig(file).semanticRemote).toEqual({
       backend: "openai_compatible",
@@ -79,7 +102,7 @@ describe("loadAftConfig", () => {
   it("rejects the local onnx fastembed backend", () => {
     const file = written(
       "fastembed.jsonc",
-      '{ "semantic_search": true, "semantic": { "backend": "fastembed" } }',
+      '{ "indexes": { "semantic": true }, "semantic": { "backend": "fastembed" } }',
     );
     expect(loadAftConfig(file).semanticRemote).toBeUndefined();
   });
@@ -87,7 +110,7 @@ describe("loadAftConfig", () => {
   it("requires base_url before treating a backend as ready", () => {
     const file = written(
       "no-url.jsonc",
-      '{ "semantic_search": true, "semantic": { "backend": "openai_compatible" } }',
+      '{ "indexes": { "semantic": true }, "semantic": { "backend": "openai_compatible" } }',
     );
     expect(loadAftConfig(file).semanticRemote).toBeUndefined();
   });
@@ -106,12 +129,13 @@ describe("loadAftConfig", () => {
       `{
         // line comment
         "enabled": false, /* block comment */
-        "semantic_search": true,
+        "indexes": { "semantic": false },
       }`,
     );
     expect(loadAftConfig(file)).toEqual({
       enabled: false,
-      semanticSearch: true,
+      semanticIndex: false,
+      semanticIndexExplicit: true,
       semanticRemote: undefined,
     });
   });
@@ -119,29 +143,35 @@ describe("loadAftConfig", () => {
   it("does not misparse // inside string values (URLs)", () => {
     const file = written(
       "url.jsonc",
-      '{ "semantic": { "base_url": "https://example.com/api" }, "semantic_search": true }',
+      '{ "semantic": { "base_url": "https://example.com/api" }, "indexes": { "semantic": true } }',
     );
     expect(loadAftConfig(file)).toEqual({
       enabled: true,
-      semanticSearch: true,
+      semanticIndex: true,
+      semanticIndexExplicit: true,
       semanticRemote: undefined,
     });
   });
 
   it("fills defaults for missing fields", () => {
-    const file = written("missing-fields.jsonc", '{ "semantic_search": true }');
+    const file = written("missing-fields.jsonc", '{ "indexes": { "semantic": true } }');
     expect(loadAftConfig(file)).toEqual({
       enabled: true,
-      semanticSearch: true,
+      semanticIndex: true,
+      semanticIndexExplicit: true,
       semanticRemote: undefined,
     });
   });
 
   it("falls back to defaults when a scalar has the wrong type", () => {
-    const file = written("partial.jsonc", '{ "enabled": "yes", "semantic_search": "true" }');
+    const file = written(
+      "partial.jsonc",
+      '{ "enabled": "yes", "indexes": { "semantic": "true" } }',
+    );
     expect(loadAftConfig(file)).toEqual({
       enabled: true,
-      semanticSearch: false,
+      semanticIndex: true,
+      semanticIndexExplicit: false,
       semanticRemote: undefined,
     });
   });
@@ -149,14 +179,15 @@ describe("loadAftConfig", () => {
   it("falls back to defaults on invalid content", () => {
     const file = written("broken.jsonc", "{ not json");
     expect(loadAftConfig(file).enabled).toBe(true);
-    expect(loadAftConfig(file).semanticSearch).toBe(false);
+    expect(loadAftConfig(file).semanticIndex).toBe(true);
   });
 
   it("falls back to defaults when content is not an object", () => {
     const file = written("array.jsonc", "[1, 2, 3]");
     expect(loadAftConfig(file)).toEqual({
       enabled: true,
-      semanticSearch: false,
+      semanticIndex: true,
+      semanticIndexExplicit: false,
       semanticRemote: undefined,
     });
   });

@@ -3,10 +3,10 @@
  * 全部只读。
  *
  * 感知工具不触碰本仓库自己的 read/write/edit/bash 工具及其安全机制
- * （bwrap 沙箱、write-guard、reads 记账）。aft_search 仅当用户级 aft.jsonc 开启
- * semantic_search 且配好外部 embedding 后端（semantic.backend 为
- * openai_compatible / ollama 且有 base_url）时注册；aft 默认的本地 ONNX
- * fastembed 后端不使用。
+ * （bwrap 沙箱、write-guard、reads 记账）。aft_search 仅当用户级 aft.jsonc 的语义
+ * 索引开关（`indexes.semantic`，旧键 `semantic_search` 兼容）开着且配好外部
+ * embedding 后端（semantic.backend 为 openai_compatible / ollama 且有 base_url）
+ * 时注册；aft 默认的本地 ONNX fastembed 后端不使用。
  *
  * 项目根是**会话工作目录**（`session_start` 的 `ctx.cwd`），不是 pi 进程的启动
  * 目录：引擎按项目根建索引与调用图存储，用错会把用户家目录当项目根并自动关闭这
@@ -41,7 +41,7 @@ import {
 
 /**
  * aft 工具集：入口用它。`registerForSession` 必须在会话启动时调用——二进制
- * 探测、semantic_search 的提示、bridge 状态（项目根 = 本会话的 `ctx.cwd`）的
+ * 探测、语义搜索后端缺失的提示、bridge 状态（项目根 = 本会话的 `ctx.cwd`）的
  * 创建都在里面；找不到二进制就不注册任何工具（避免模型看到只会抛
  * "not initialized" 的死工具）。
  */
@@ -80,11 +80,10 @@ export function createAftTools(pi: ExtensionAPI): {
       return;
     }
 
-    // 只开了 semantic_search 开关、没配外部 embedding 后端：与其静默不注册，
-    // 不如说明缺什么。
-    if (cfg.semanticSearch && !cfg.semanticRemote) {
+    // 用户显式开了语义索引、但外部 embedding 后端没配好：与其静默不注册，不如说明缺什么。
+    if (cfg.semanticIndexExplicit && cfg.semanticIndex && !cfg.semanticRemote) {
       ctx.ui.notify(
-        "aft_search is not registered: semantic_search needs an external embedding backend (aft.jsonc semantic.backend = openai_compatible | ollama, plus base_url). The local ONNX fastembed default is not used here.",
+        "aft_search is not registered: indexes.semantic needs an external embedding backend (aft.jsonc semantic.backend = openai_compatible | ollama, plus base_url). The local ONNX fastembed default is not used here.",
         "warning",
       );
     }
@@ -94,7 +93,7 @@ export function createAftTools(pi: ExtensionAPI): {
     registerOutlineTool(bus, toolCtx);
     registerZoomTool(bus, toolCtx);
     registerCallgraphTool(bus, toolCtx);
-    if (cfg.semanticSearch && cfg.semanticRemote) {
+    if (cfg.semanticIndex && cfg.semanticRemote) {
       registerSearchTool(bus, toolCtx);
     }
 

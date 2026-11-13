@@ -60,7 +60,8 @@ async function registerWith(
   vi.mocked(findBinary).mockResolvedValue(binary as unknown as string);
   vi.mocked(loadAftConfig).mockReturnValue({
     enabled: true,
-    semanticSearch: false,
+    semanticIndex: true,
+    semanticIndexExplicit: false,
     semanticRemote: undefined,
     ...config,
   });
@@ -129,20 +130,23 @@ describe("aft tool surface", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers the five core tools when semantic_search is off", async () => {
-    const { names, notices } = await registerWith({});
+  it("registers the five core tools when the semantic index is off", async () => {
+    const { names, notices } = await registerWith({ semanticIndex: false });
     expect(names.toSorted()).toEqual(ALWAYS_REGISTERED.toSorted());
     expect(notices).toEqual([]);
   });
 
   it("registers aft_search when an external embedding backend is configured", async () => {
-    const { names, notices } = await registerWith({ semanticSearch: true, semanticRemote: REMOTE });
+    const { names, notices } = await registerWith({ semanticRemote: REMOTE });
     expect(names).toContain("aft_search");
     expect(notices).toEqual([]);
   });
 
-  it("skips aft_search with a reason when only the flag is on", async () => {
-    const { names, notices } = await registerWith({ semanticSearch: true });
+  it("skips aft_search with a reason when semantic search is explicitly on", async () => {
+    const { names, notices } = await registerWith({
+      semanticIndex: true,
+      semanticIndexExplicit: true,
+    });
     expect(names).not.toContain("aft_search");
     expect(notices.join("\n")).toContain("external embedding backend");
   });
@@ -185,7 +189,7 @@ describe("aft tool surface", () => {
 
   it.each(NEVER_REGISTERED)("never registers %s", async (name) => {
     const off = await registerWith({});
-    const on = await registerWith({ semanticSearch: true, semanticRemote: REMOTE });
+    const on = await registerWith({ semanticRemote: REMOTE });
     expect(off.names).not.toContain(name);
     expect(on.names).not.toContain(name);
   });

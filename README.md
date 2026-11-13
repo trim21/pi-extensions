@@ -475,7 +475,7 @@ pi -e ./src/claude-code/index.ts
 [AFT](https://github.com/cortexkit/aft) 只读代码感知工具：`aft_outline`（文件/目录结构大纲）、`aft_zoom`（命名符号完整源码）、`aft_callgraph`（调用关系导航）、`aft_search`（语义 + 精确搜索）。全部只读，不触碰本包 read/write/edit/bash 工具及其安全机制。
 
 - **二进制解析**：session 启动时解析 `aft` 二进制（npm 平台包 `@cortexkit/aft-<platform>`、`cargo install agent-file-tools` 或 PATH，含 GitHub release 自动下载兜底）；找不到则告警且不注册任何工具
-- **`aft_search` 条件注册**：仅当用户级 `aft.jsonc` 开启 `semantic_search` 且配好外部 embedding 后端（`semantic.backend` 为 `openai_compatible` / `ollama` 且有 `base_url`）时注册；aft 默认的本地 ONNX fastembed 后端不使用，只开开关不配后端会告警说明缺什么
+- **`aft_search` 条件注册**：仅当用户级 `aft.jsonc` 的语义索引开关（`indexes.semantic`，旧键 `semantic_search` 兼容读取）开着且配好外部 embedding 后端（`semantic.backend` 为 `openai_compatible` / `ollama` 且有 `base_url`）时注册；aft 默认的本地 ONNX fastembed 后端不使用，显式开开关却不配后端会告警说明缺什么
 - **生命周期**：常驻 aft 子进程与日志（`tmp/{sessionId}/aft-plugin.log`）随 session 创建与释放
 
 ### 使用

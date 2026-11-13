@@ -75,12 +75,12 @@ outline / zoom / callgraph / search 为纯只读查询，MUST NOT 经过写保�
 
 #### Scenario: 搜索注册门控
 
-- **WHEN** 语义搜索未启用（`semantic_search: false`）
+- **WHEN** 语义索引关闭（`indexes.semantic: false`，或旧键 `semantic_search: false`）
 - **THEN** 不注册 `aft_search`
 
 #### Scenario: 开关开启但后端未就绪
 
-- **WHEN** `semantic_search: true` 而没有就绪的外部 embedding 后端
+- **WHEN** 配置里显式开着语义索引（`indexes.semantic: true`，或旧键 `semantic_search: true`）而没有就绪的外部 embedding 后端
 - **THEN** 不注册 `aft_search`，并在 session 开始时 notify 说明缺什么，而不是静默少一个工具
 
 #### Scenario: 首次调用等待索引
@@ -113,7 +113,7 @@ outline / zoom / callgraph / search 为纯只读查询，MUST NOT 经过写保�
 
 #### Scenario: 后端类型决定注册
 
-- **WHEN** `semantic_search: true` 且 `semantic.backend` 缺省或为 `fastembed`
+- **WHEN** `indexes.semantic` 开启（默认开启）且 `semantic.backend` 缺省或为 `fastembed`
 - **THEN** 不注册 `aft_search`
 
 #### Scenario: 外部后端就绪即注册
@@ -238,10 +238,10 @@ AFT 工具基于 Rust bridge 进程池（`src/aft/bridge.ts`）：每个扩展�
 
 - **项目根**（`src/aft/index.ts`）：取当前会话的工作目录（`session_start` 的 `ctx.cwd`），不取进程启动目录；配置读取、bridge 创建与工具取 bridge 共用同一份项目根。
 
-- **配置**（`src/aft/config.ts`）：用户级 `aft.jsonc`——`enabled`（默认 true）、`semantic_search`（默认 false，涉及外部 embedding 后端，仅用户级可开）。
+- **配置**（`src/aft/config.ts`）：用户级 `aft.jsonc`——`enabled`（默认 true）、`indexes.semantic`（默认 true，与 AFT 侧默认一致；旧键 `semantic_search` 兼容读取，`indexes.semantic` 优先，涉及外部 embedding 后端，仅用户级可开）。
 - **感知工具只读**：outline / zoom / callgraph / search 均为纯只读查询，不经过写保护审批；写类能力（符号重命名、跨文件引用更新）由 LSP 侧的 `lsp-rename` 承接。
 - **callgraph 冷构建**：Rust 侧内联等待窗口之外，扩展侧每 3 秒重试、总预算 90 秒；预算耗尽才把 `callgraph_building` 软结果交给模型。
-- **语义搜索**：`semantic_search: true` 时注册 `aft_search`，首次调用阻塞至多 3600 秒（1 小时，`SEMANTIC_INDEX_WAIT_TIMEOUT_MS`，与 Rust 侧 `AFT_WAIT_FOR_SEMANTIC_READY_MS` 一致）等索引构建完成。
+- **语义搜索**：语义索引开启且外部后端就绪时注册 `aft_search`，首次调用阻塞至多 3600 秒（1 小时，`SEMANTIC_INDEX_WAIT_TIMEOUT_MS`，与 Rust 侧 `AFT_WAIT_FOR_SEMANTIC_READY_MS` 一致）等索引构建完成。
 - sessionId 传给 Rust 侧做 undo / checkpoint 作用域。
 
 涉及文件：`src/aft/`（tools.ts / bridge.ts / config.ts / index.ts）。
