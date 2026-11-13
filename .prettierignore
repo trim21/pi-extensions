@@ -8,3 +8,4 @@ test/fixtures/
 .kilo/
 src/bwrap/holder.js
 src/codemode/worker.js
+.agents/skills/openspec-*/
