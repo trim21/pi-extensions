@@ -20,6 +20,7 @@ import {
 } from "../lib/bash-tool.js";
 import { resolveWorkdir } from "../lib/path.js";
 import { createRequestPolicy } from "../lib/request-policy.js";
+import { Default } from "../lib/schema-defaults.js";
 import { defineStructuredTool, type ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { readToolsConfig } from "../lib/tools-config.js";
@@ -70,7 +71,7 @@ export function registerBashTool(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapR
       description: [
         "Executes a given bash command synchronously and returns its output.",
         "The default working directory is the current directory; use workdir to run elsewhere.",
-        "timeout is in milliseconds, defaults to 120000, and may not exceed 7200000.",
+        "timeout is in milliseconds.",
         "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
       ].join("\n"),
       promptSnippet: "execute bash command",
@@ -87,10 +88,13 @@ export function registerBashTool(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapR
                 "Working directory to execute the command in. Defaults to the current directory; relative paths resolve from there. prefer use this argument over `cd ...`",
             }),
           ),
-          timeout: Type.Optional(
-            Type.Number({
-              description: "Optional timeout in milliseconds (max 7200000)",
+          timeout: Default(
+            Type.Integer({
+              minimum: 1,
+              maximum: BASH_MAX_TIMEOUT_MS,
+              description: "Timeout in milliseconds",
             }),
+            BASH_DEFAULT_TIMEOUT_MS,
           ),
           dangerouslyDisableSandbox: Type.Optional(
             Type.Boolean({
@@ -102,10 +106,7 @@ export function registerBashTool(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapR
         { additionalProperties: false },
       ),
       async execute(id, params, signal, onUpdate, ctx, callOptions) {
-        const timeout = params.timeout ?? BASH_DEFAULT_TIMEOUT_MS;
-        if (!Number.isFinite(timeout) || timeout <= 0 || timeout > BASH_MAX_TIMEOUT_MS) {
-          throw new Error(`timeout must be between 1 and ${BASH_MAX_TIMEOUT_MS} milliseconds`);
-        }
+        const timeout = params.timeout;
 
         const cwd = params.workdir ? await resolveWorkdir(params.workdir, ctx.cwd) : ctx.cwd;
 

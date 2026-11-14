@@ -14,8 +14,10 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import type { Octokit } from "octokit";
+import type { Static } from "typebox";
 
 import { type GithubApi } from "./github.js";
+import { type listFilterParameters, type RunListFilters } from "./github-params.js";
 
 /** `actions.listWorkflowRuns*` 的 `status` 取值（octokit 是字面量联合，工具参数是 string）。 */
 type WorkflowRunParams = NonNullable<
@@ -23,15 +25,13 @@ type WorkflowRunParams = NonNullable<
 >;
 type WorkflowRunStatus = NonNullable<WorkflowRunParams["status"]>;
 
-/** 列表类查询的公共过滤条件；与工具的 `ListFilters` 一一对应。 */
-export interface ListQuery {
-  state?: string;
-  label?: string;
-  author?: string;
-  assignee?: string;
-  milestone?: string;
-  limit?: number;
-}
+/**
+ * 列表类查询的公共过滤条件：从工具参数 schema 派生。`state` 在读取层可以省略（等于不加
+ * state 过滤），`limit` 必填——缺省值只由工具参数 schema 提供。
+ */
+export type ListQuery = Omit<Static<ReturnType<typeof listFilterParameters>>, "limit"> & {
+  limit: number;
+};
 
 export interface GithubReads {
   issue(owner: string, repo: string, number: number, signal?: AbortSignal): Promise<unknown>;
@@ -70,7 +70,7 @@ export interface GithubReads {
   listReleases(
     owner: string,
     repo: string,
-    limit: number | undefined,
+    limit: number,
     signal?: AbortSignal,
   ): Promise<unknown[]>;
   /** `tag` 缺省时取 latest release（与 `gh release view` 的缺省一致）。 */
@@ -83,7 +83,7 @@ export interface GithubReads {
   listRuns(
     owner: string,
     repo: string,
-    query: { workflow?: string; status?: string; limit?: number },
+    query: Pick<RunListFilters, "workflow" | "status" | "limit">,
     signal?: AbortSignal,
   ): Promise<unknown[]>;
   run(owner: string, repo: string, runId: number, signal?: AbortSignal): Promise<unknown>;
@@ -141,14 +141,6 @@ function listParams(query: ListQuery): {
     ...(query.milestone !== undefined && { milestone: query.milestone }),
   };
 }
-
-function limitOf(limit: number | undefined, fallback: number): number {
-  return Math.min(Math.max(limit ?? fallback, 1), 100);
-}
-
-/** 两个 list 工具的缺省 limit：schema 的 `default` 与读取层共用同一份常量。 */
-export const GH_RELEASES_DEFAULT_LIMIT = 10;
-export const GH_RUNS_DEFAULT_LIMIT = 20;
 
 /**
  * 逐页取列表直到凑满 `limit` 条命中项：每页 `per_page` 就是 limit，所以通常一次请求即够；
@@ -246,7 +238,7 @@ export function createGithubReads(api: GithubApi): GithubReads {
     },
 
     async listIssues(owner, repo, query, signal) {
-      const limit = limitOf(query.limit, 30);
+      const limit = query.limit;
       const params = {
         owner,
         repo,
@@ -270,7 +262,7 @@ export function createGithubReads(api: GithubApi): GithubReads {
     },
 
     async listPulls(owner, repo, query, signal) {
-      const limit = limitOf(query.limit, 30);
+      const limit = query.limit;
       const params = {
         owner,
         repo,
@@ -303,7 +295,7 @@ export function createGithubReads(api: GithubApi): GithubReads {
     },
 
     async listReleases(owner, repo, limit, signal) {
-      const max = limitOf(limit, GH_RELEASES_DEFAULT_LIMIT);
+      const max = limit;
       const params = { owner, repo, per_page: max, ...octokitRequest(signal) };
       const releases = await api.call((octokit) =>
         takePages(async (page) => {
@@ -324,7 +316,7 @@ export function createGithubReads(api: GithubApi): GithubReads {
     },
 
     async listRuns(owner, repo, query, signal) {
-      const limit = limitOf(query.limit, GH_RUNS_DEFAULT_LIMIT);
+      const limit = query.limit;
       let workflowId: number | undefined;
       if (query.workflow !== undefined) {
         const workflows = await api.call((octokit) =>

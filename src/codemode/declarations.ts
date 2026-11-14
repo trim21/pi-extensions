@@ -27,10 +27,25 @@ function propertyName(name: string): string {
 }
 
 /**
- * 字段注释：schema 的 `description` 与 `default` 都进 JSDoc。
+ * 渲染进 JSDoc 的约束关键字：数值边界与长度 / 元素个数。这些值决定一次调用是否合法，
+ * 但 TypeScript 类型表达不了，只能靠注释告诉写脚本的模型。
+ */
+const CONSTRAINT_TAGS = [
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+] as const;
+
+/**
+ * 字段注释：schema 的 `description`、`default` 与取值约束都进 JSDoc。
  *
- * 全部用 JSDoc（单行也用 `/** ... *\/`）而不是 `//`：`@default` 是 tag，写在 `//`
- * 里只是普通文本，读声明的模型和工具链都不会把它当默认值。
+ * 全部用 JSDoc（单行也用 `/** ... *\/`）而不是 `//`：`@default` / `@maximum` 是 tag，
+ * 写在 `//` 里只是普通文本，读声明的模型和工具链都不会把它当约束。
  */
 function fieldComment(schema: unknown, indent: string): string {
   const lines: string[] = [];
@@ -43,6 +58,14 @@ function fieldComment(schema: unknown, indent: string): string {
   }
   if (isRecord(schema) && schema.default !== undefined) {
     lines.push(`@default ${JSON.stringify(schema.default)}`);
+  }
+  if (isRecord(schema)) {
+    for (const keyword of CONSTRAINT_TAGS) {
+      const value = schema[keyword];
+      if (typeof value === "number" || typeof value === "boolean") {
+        lines.push(`@${keyword} ${String(value)}`);
+      }
+    }
   }
   if (lines.length === 0) {
     return "";

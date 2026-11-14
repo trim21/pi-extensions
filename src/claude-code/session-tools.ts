@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { Default } from "../lib/schema-defaults.js";
 import { stringEnum } from "../lib/string-enum.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
@@ -53,10 +54,10 @@ const questionSchema = Type.Object(
       maxItems: 4,
       description: "The available choices; do not include an Other option",
     }),
-    multiSelect: Type.Boolean({
-      default: false,
-      description: "Allow the user to select multiple options",
-    }),
+    multiSelect: Default(
+      Type.Boolean({ description: "Allow the user to select multiple options" }),
+      false,
+    ),
   },
   { additionalProperties: false },
 );

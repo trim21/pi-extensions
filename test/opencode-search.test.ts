@@ -230,13 +230,13 @@ describe("opencode grep / glob execute", () => {
   it("globs files, skipping .git and gitignored entries", async () => {
     const result = await loadTools()
       .get("glob")!
-      .execute("id", { pattern: "**/*.ts" }, undefined, undefined, ctx);
+      .execute("id", { pattern: "**/*.ts", path: "." }, undefined, undefined, ctx);
     expect(result.content[0].text).toBe(join(dir, "src", "a.ts"));
     expect(result.details.pendant).toEqual({ subtitle: "1 file" });
 
     const none = await loadTools()
       .get("glob")!
-      .execute("id", { pattern: "**/*.rs" }, undefined, undefined, ctx);
+      .execute("id", { pattern: "**/*.rs", path: "." }, undefined, undefined, ctx);
     expect(none.content[0].text).toBe("No files found");
   });
 

@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 
-import { GH_RUNS_DEFAULT_LIMIT } from "../../lib/github-reads.js";
+import { runListParameters } from "../../lib/github-params.js";
 import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, structuredResult } from "../base.js";
@@ -11,16 +11,7 @@ export function addListWorkflowRunsTool(gh: GhClient, bus: ToolBus) {
     name: "list-github-workflow-runs",
     label: "GitHub Workflow Runs",
     description: "List GitHub Actions workflow runs.",
-    parameters: Type.Object({
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-      limit: Type.Optional(
-        Type.Number({ default: GH_RUNS_DEFAULT_LIMIT, description: "Max results" }),
-      ),
-      status: Type.Optional(
-        Type.String({ description: "Filter by status: success, failure, cancelled, etc." }),
-      ),
-      workflow: Type.Optional(Type.String({ description: "Filter by workflow name or file" })),
-    }),
+    parameters: runListParameters,
     structuredSchema: ghRunListPayloadSchema,
     async execute(_id, params, signal, ctx) {
       const { limit, status, workflow } = params;

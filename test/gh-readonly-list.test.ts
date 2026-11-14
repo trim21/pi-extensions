@@ -60,7 +60,7 @@ describe("浏览路径的 REST 查询映射", () => {
   it("缺省 state 不传参数（交给 GitHub 的缺省）", async () => {
     const { reads, urls } = capture();
 
-    await reads.listIssues("a", "b", {});
+    await reads.listIssues("a", "b", { limit: 30 });
 
     expect(queryOf(urls[0]).has("state")).toBe(false);
     expect(queryOf(urls[0]).get("per_page")).toBe("30");
@@ -114,7 +114,7 @@ describe("浏览路径的 REST 查询映射", () => {
       createGithubApi({ token: async () => "test-token", fetch: cassette.fetch }),
     );
 
-    const items = await reads.listIssues("a", "b", {});
+    const items = await reads.listIssues("a", "b", { limit: 30 });
 
     expect(items.map((item) => (item as { number: number }).number)).toEqual([1]);
   });

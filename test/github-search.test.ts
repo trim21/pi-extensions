@@ -8,51 +8,60 @@
 import { describe, expect, it } from "vitest";
 
 import { buildSearchQuery, createGithubApi, createGithubSearch } from "../src/lib/github.js";
+import { listFilterParameters } from "../src/lib/github-params.js";
+
+type QueryParams = Partial<Parameters<typeof buildSearchQuery>[1]>;
+
+/** 工具层总会按 schema 补上 `state`，这里替测试补上同一个值。 */
+function build(kind: "issue" | "pr", params: QueryParams = {}) {
+  return buildSearchQuery(kind, { state: "open", ...params });
+}
 
 describe("buildSearchQuery state semantics", () => {
-  it("defaults to open (browse parity)", () => {
-    expect(buildSearchQuery("issue", {})).toBe("is:issue state:open");
-    expect(buildSearchQuery("pr", {})).toBe("is:pr state:open");
+  it("state / limit 的缺省值来自工具参数 schema", () => {
+    const schema = listFilterParameters("issue");
+    expect(schema.properties.state).toMatchObject({ default: "open" });
+    expect(schema.properties.limit).toMatchObject({ default: 30 });
   });
 
   it("state=all applies no state filter", () => {
-    expect(buildSearchQuery("issue", { repo: "a/b", state: "all" })).toBe("repo:a/b is:issue");
-    expect(buildSearchQuery("pr", { repo: "a/b", state: "all" })).toBe("repo:a/b is:pr");
+    expect(build("issue", { repo: "a/b", state: "all" })).toBe("repo:a/b is:issue");
+    expect(build("pr", { repo: "a/b", state: "all" })).toBe("repo:a/b is:pr");
   });
 
   it("issue closed maps to state:closed", () => {
-    expect(buildSearchQuery("issue", { state: "closed" })).toBe("is:issue state:closed");
+    expect(build("issue", { state: "closed" })).toBe("is:issue state:closed");
   });
 
   it("pr closed excludes merged PRs", () => {
-    expect(buildSearchQuery("pr", { state: "closed" })).toBe("is:pr state:closed -is:merged");
+    expect(build("pr", { state: "closed" })).toBe("is:pr state:closed -is:merged");
   });
 
   it("pr merged maps to is:merged", () => {
-    expect(buildSearchQuery("pr", { state: "merged" })).toBe("is:pr is:merged");
+    expect(build("pr", { state: "merged" })).toBe("is:pr is:merged");
   });
 
   it("rejects merged for issue searches", () => {
-    expect(() => buildSearchQuery("issue", { state: "merged" })).toThrow(
+    expect(() => build("issue", { state: "merged" })).toThrow(
       "state=merged is only valid for PR searches",
     );
   });
 
   it("rejects unknown states", () => {
-    expect(() => buildSearchQuery("issue", { state: "openn" })).toThrow("invalid state");
+    expect(() => build("issue", { state: "openn" })).toThrow("invalid state");
   });
 });
 
 describe("buildSearchQuery filters", () => {
   it("keeps keywords as free text after the qualifiers", () => {
-    expect(buildSearchQuery("issue", { repo: "a/b", keywords: "autoclosed goproxy" })).toBe(
+    expect(build("issue", { repo: "a/b", keywords: "autoclosed goproxy" })).toBe(
       "repo:a/b is:issue state:open autoclosed goproxy",
     );
   });
 
   it("passes structured filters through", () => {
     expect(
-      buildSearchQuery("issue", {
+      build("issue", {
         repo: "a/b",
         author: "trim21",
         assignee: "octocat",
@@ -62,16 +71,16 @@ describe("buildSearchQuery filters", () => {
   });
 
   it("quotes qualifier values containing whitespace", () => {
-    expect(buildSearchQuery("issue", { label: "help wanted" })).toBe(
+    expect(build("issue", { label: "help wanted" })).toBe(
       'is:issue state:open label:"help wanted"',
     );
-    expect(buildSearchQuery("pr", { milestone: "The big one" })).toBe(
+    expect(build("pr", { milestone: "The big one" })).toBe(
       'is:pr state:open milestone:"The big one"',
     );
   });
 
   it("does not quote simple qualifier values", () => {
-    expect(buildSearchQuery("issue", { label: "bug", assignee: "@me" })).toBe(
+    expect(build("issue", { label: "bug", assignee: "@me" })).toBe(
       "is:issue state:open label:bug assignee:@me",
     );
   });
@@ -138,7 +147,7 @@ describe("search 的请求路径", () => {
       createGithubApi({ fetch: api.fetch, token: async () => "test-token" }),
     );
 
-    const hits = await search.search("issue", { repo: "a/b" });
+    const hits = await search.search("issue", { repo: "a/b", state: "open", limit: 30 });
 
     expect(hits.map((entry) => entry.number)).toEqual([12]);
     expect(api.calls).toHaveLength(2);
@@ -151,7 +160,7 @@ describe("search 的请求路径", () => {
       createGithubApi({ fetch: api.fetch, token: async () => "test-token" }),
     );
 
-    await search.search("issue", { repo: "a/b", assignee: "@me" });
+    await search.search("issue", { repo: "a/b", assignee: "@me", state: "open", limit: 30 });
 
     expect(api.calls).toHaveLength(1);
     expect(decodeURIComponent(api.calls[0] ?? "")).toContain("assignee:@me");

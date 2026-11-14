@@ -32,6 +32,7 @@ import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 
 import { parseWithSchema } from "./parse-with-schema.js";
+import type { StaticDefaulted } from "./schema-defaults.js";
 
 /**
  * 结构化结果：成功带 `value`，失败带可直接展示的错误说明。它只嵌在工具结果的
@@ -52,7 +53,7 @@ export interface StructuredToolDefinition<
   structuredSchema: TOutput;
   execute(
     toolCallId: string,
-    params: Static<TParams>,
+    params: StaticDefaulted<TParams>,
     signal: AbortSignal | undefined,
     onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
     ctx: ExtensionContext,
@@ -107,7 +108,7 @@ export interface CodemodeToolDefinition<
   prepareArguments?: (args: unknown) => unknown;
   execute(
     toolCallId: string,
-    params: Static<TParams>,
+    params: StaticDefaulted<TParams>,
     signal: AbortSignal | undefined,
     ctx: ExtensionContext,
   ): Promise<StructuredResult<Static<TOutput>>>;
@@ -146,10 +147,31 @@ export type RegisteredToolDefinition = Omit<
   ): Promise<AgentToolResult<unknown>>;
 };
 
+/**
+ * 交给 pi 的工具定义：与 pi 的 `ToolDefinition` 同形，只把 `execute` 的参数换成补过默认值的
+ * 类型。`StaticDefaulted<TParams>` 是 `Static<TParams>` 的子类型，因此仍按 pi 的形状注册。
+ */
+export interface ToolDefinitionWithDefaults<
+  TParams extends TSchema = TSchema,
+  TDetails = unknown,
+> extends Omit<ToolDefinition<TParams, TDetails, unknown>, "execute"> {
+  execute(
+    toolCallId: string,
+    params: StaticDefaulted<TParams>,
+    signal: AbortSignal | undefined,
+    onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
+    ctx: ExtensionToolContext,
+    callOptions?: ToolCallOptions,
+  ): Promise<AgentToolResult<TDetails>>;
+}
+
 export interface ToolBus {
-  /** 注册一个工具；被配置禁用时跳过并返回 false。 */
+  /**
+   * 注册一个工具；被配置禁用时跳过并返回 false。`execute` 的参数是
+   * `StaticDefaulted<TParams>`：总线在调用前已经用 `Value.Default` 补过默认值。
+   */
   register<TParams extends TSchema, TDetails>(
-    definition: ToolDefinition<TParams, TDetails, unknown>,
+    definition: ToolDefinitionWithDefaults<TParams, TDetails>,
   ): boolean;
   /**
    * 注册一个只进 codemode 的脚本工具：曝光方式由模块自己决定、不问配置，MUST NOT 交给 pi。
@@ -363,7 +385,7 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
         ) =>
           definition.execute(
             toolCallId,
-            params as Static<typeof definition.parameters>,
+            params as StaticDefaulted<typeof definition.parameters>,
             signal,
             ctx,
           ),

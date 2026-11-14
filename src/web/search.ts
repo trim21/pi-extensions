@@ -13,6 +13,7 @@ import { Value } from "typebox/value";
 
 import { withTimeoutSignal } from "../lib/abort.js";
 import { egress } from "../lib/egress.js";
+import { Default, type StaticDefaulted } from "../lib/schema-defaults.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart, type ToolModule } from "../lib/tool-registration.js";
 import { loadSearch1ApiKey } from "./config.js";
@@ -44,26 +45,42 @@ export interface SearchResult {
   hits: SearchHit[];
 }
 
-export interface SearchOptions {
-  numResults?: number;
-  recencyFilter?: string;
-  domainFilter?: string[];
-  searchService?: string;
-  /** 内联抓取前几个结果的正文（crawl_results），可省去后续 web_fetch */
-  includeContent?: boolean;
-  signal?: AbortSignal;
-}
+/** `web_search` 的参数：schema 是唯一来源，`numResults` 已按 schema 的 `default` 补齐。 */
+const searchParameters = Type.Object({
+  query: Type.Optional(
+    Type.String({ description: "Search query (mutually exclusive with queries)" }),
+  ),
+  queries: Type.Optional(
+    Type.Array(Type.String(), { description: "Multiple queries searched in sequence" }),
+  ),
+  numResults: Default(
+    Type.Integer({ minimum: 1, maximum: 50, description: "Results per query" }),
+    5,
+  ),
+  recencyFilter: Type.Optional(
+    Type.String({ description: "Filter by recency: day, week, month, year" }),
+  ),
+  domainFilter: Type.Optional(
+    Type.Array(Type.String(), { description: "Limit to domains; prefix with - to exclude" }),
+  ),
+  searchService: Type.Optional(
+    Type.String({
+      description: "Search engine: google, bing, duckduckgo, github, arxiv, reddit, youtube, etc.",
+    }),
+  ),
+  includeContent: Type.Optional(
+    Type.Boolean({ description: "Inline-fetch content for the top results (up to 5)" }),
+  ),
+});
 
-/** `numResults` 的缺省值与上限；参数描述从这里插值。 */
-const DEFAULT_NUM_RESULTS = 5;
-const MAX_NUM_RESULTS = 50;
+type WebSearchParams = StaticDefaulted<typeof searchParameters>;
 
-function clampNumResults(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_NUM_RESULTS;
-  }
-  return Math.max(1, Math.min(Math.floor(value), MAX_NUM_RESULTS));
-}
+export type SearchOptions = Pick<WebSearchParams, "numResults"> &
+  Partial<
+    Pick<WebSearchParams, "recencyFilter" | "domainFilter" | "searchService" | "includeContent">
+  > & {
+    signal?: AbortSignal;
+  };
 
 function normalizeDomain(raw: string): string | undefined {
   const input = raw.trim().toLowerCase().replace(/^-/, "").trim();
@@ -97,7 +114,7 @@ function splitDomainFilter(domainFilter: string[] | undefined): {
 }
 
 export function buildSearchBody(query: string, options: SearchOptions): Record<string, unknown> {
-  const numResults = clampNumResults(options.numResults);
+  const numResults = options.numResults;
   const { includeSites, excludeSites } = splitDomainFilter(options.domainFilter);
   const body: Record<string, unknown> = {
     query,
@@ -151,7 +168,7 @@ function mapHits(
 export async function searchWeb(
   query: string,
   apiKey: string,
-  options: SearchOptions = {},
+  options: SearchOptions,
 ): Promise<SearchResult> {
   const response = await egress.fetch(SEARCH_URL, {
     method: "POST",
@@ -179,35 +196,7 @@ export function registerWebSearchTool(bus: ToolBus): void {
       "Search the web via Search1API and return structured results " +
       "(title/url/snippet, optionally inline content).",
     promptSnippet: "Search the web",
-    parameters: Type.Object({
-      query: Type.Optional(
-        Type.String({ description: "Search query (mutually exclusive with queries)" }),
-      ),
-      queries: Type.Optional(
-        Type.Array(Type.String(), { description: "Multiple queries searched in sequence" }),
-      ),
-      numResults: Type.Optional(
-        Type.Number({
-          default: DEFAULT_NUM_RESULTS,
-          description: `Results per query (max ${MAX_NUM_RESULTS})`,
-        }),
-      ),
-      recencyFilter: Type.Optional(
-        Type.String({ description: "Filter by recency: day, week, month, year" }),
-      ),
-      domainFilter: Type.Optional(
-        Type.Array(Type.String(), { description: "Limit to domains; prefix with - to exclude" }),
-      ),
-      searchService: Type.Optional(
-        Type.String({
-          description:
-            "Search engine: google, bing, duckduckgo, github, arxiv, reddit, youtube, etc.",
-        }),
-      ),
-      includeContent: Type.Optional(
-        Type.Boolean({ description: "Inline-fetch content for the top results (up to 5)" }),
-      ),
-    }),
+    parameters: searchParameters,
     async execute(_id, params, signal, onUpdate) {
       try {
         const queries = [...(params.query ? [params.query] : []), ...(params.queries ?? [])]

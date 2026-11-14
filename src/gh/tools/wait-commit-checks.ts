@@ -1,15 +1,10 @@
-import { type Static } from "typebox";
-
+import { type StaticDefaulted } from "../../lib/schema-defaults.js";
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, type ToolCall, waitChecksReport } from "../base.js";
-import {
-  CHECKS_WAIT_FAIL_FAST_DEFAULT,
-  checksVerdictSchema,
-  waitCommitChecksParameters,
-} from "../schemas.js";
+import { checksVerdictSchema, waitCommitChecksParameters } from "../schemas.js";
 
-/** 入参类型由参数 schema 推断，schema 是唯一来源。 */
-type CommitChecksWaitParams = Static<typeof waitCommitChecksParameters>;
+/** 入参类型由参数 schema 推断：`fail_fast` 有默认值，解析后必填。 */
+type CommitChecksWaitParams = StaticDefaulted<typeof waitCommitChecksParameters>;
 
 /** The toolcall handler behind `wait-github-commit-checks`. */
 async function waitCommitChecks(gh: GhClient, call: ToolCall<CommitChecksWaitParams>) {
@@ -26,7 +21,7 @@ async function waitCommitChecks(gh: GhClient, call: ToolCall<CommitChecksWaitPar
     owner,
     repo: repoName,
     headSha: sha,
-    failFast: fail_fast ?? CHECKS_WAIT_FAIL_FAST_DEFAULT,
+    failFast: fail_fast,
     event,
     signal,
   });

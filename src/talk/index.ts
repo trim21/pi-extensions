@@ -24,6 +24,7 @@ import { type TObject, Type } from "typebox";
 
 import { type CommandResult, type CommandSpec, parseCommand } from "../lib/cli.js";
 import { resolveHomePath } from "../lib/path.js";
+import { Default } from "../lib/schema-defaults.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart, type ToolModule } from "../lib/tool-registration.js";
 import { restoreTalkAgentId, TALK_JOIN_ENTRY_TYPE, TalkCore } from "./core.js";
@@ -131,8 +132,9 @@ function registerTalkTools(
     parameters: Type.Object({
       to: Type.String({ description: "Target agent id (from talk-list-agents)" }),
       message: Type.String({ description: "The question" }),
-      timeoutMs: Type.Optional(
-        Type.Number({ description: `Wait cap in ms; default ${ASK_TIMEOUT_MS}` }),
+      timeoutMs: Default(
+        Type.Integer({ minimum: 1, description: "Wait cap in ms" }),
+        ASK_TIMEOUT_MS,
       ),
     }),
     async execute(_toolCallId, params, signal) {
@@ -141,12 +143,7 @@ function registerTalkTools(
         return toolResult(initError);
       }
       return toolResult(
-        await core.ask(
-          params.to,
-          params.message,
-          params.timeoutMs ?? ASK_TIMEOUT_MS,
-          signal ?? undefined,
-        ),
+        await core.ask(params.to, params.message, params.timeoutMs, signal ?? undefined),
       );
     },
   });

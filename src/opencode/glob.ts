@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { Default } from "../lib/schema-defaults.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { didYouMean } from "./files.js";
@@ -45,12 +46,12 @@ export function renderGlobOutput(files: readonly string[], truncated: boolean): 
 }
 
 async function glob(
-  params: { pattern: string; path?: string },
+  params: { pattern: string; path: string },
   ctx: ExtensionContext,
   signal: AbortSignal | undefined,
 ): Promise<{ text: string; search: string; count: number; truncated: boolean }> {
   // resolve 对绝对路径原样返回，相对路径按调用 cwd 解析
-  const search = resolve(ctx.cwd, params.path ?? ".");
+  const search = resolve(ctx.cwd, params.path);
   let info;
   try {
     info = await stat(search);
@@ -58,7 +59,7 @@ async function glob(
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       const suggestion = await didYouMean(search);
       throw new Error(
-        `Directory does not exist: ${params.path ?? search}. Note: your current working directory is ${ctx.cwd}.${suggestion}`,
+        `Directory does not exist: ${params.path}. Note: your current working directory is ${ctx.cwd}.${suggestion}`,
         { cause: error },
       );
     }
@@ -95,11 +96,12 @@ export function registerGlobTool(bus: ToolBus): void {
     parameters: Type.Object(
       {
         pattern: Type.String({ description: "The glob pattern to match files against" }),
-        path: Type.Optional(
+        path: Default(
           Type.String({
             description:
-              'The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.',
+              'The directory to search in. IMPORTANT: Omit this field to use the current working directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.',
           }),
+          ".",
         ),
       },
       { additionalProperties: false },

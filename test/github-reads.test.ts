@@ -72,6 +72,7 @@ describe("列表端点", () => {
       assignee: "@me",
       author: "someone",
       milestone: "v1",
+      limit: 30,
     });
 
     const url = calls[0] ?? "";
@@ -85,7 +86,7 @@ describe("列表端点", () => {
   it("merged 状态在列表端点按 all 处理（REST 没有 merged 过滤）", async () => {
     const { reads, calls } = setup({ "repos/o/r/pulls": { body: [] } });
 
-    await reads.listPulls("o", "r", { state: "merged" });
+    await reads.listPulls("o", "r", { state: "merged", limit: 30 });
 
     expect(calls[0]).toContain("state=all");
     expect(calls[0]).not.toContain("merged");
@@ -93,7 +94,7 @@ describe("列表端点", () => {
 
   it("拒绝非法的 state 取值", async () => {
     const { reads } = setup({});
-    await expect(reads.listPulls("o", "r", { state: "weird" })).rejects.toThrow(
+    await expect(reads.listPulls("o", "r", { state: "weird", limit: 30 })).rejects.toThrow(
       "invalid state: weird",
     );
   });
@@ -186,7 +187,9 @@ describe("workflow runs", () => {
       },
     });
 
-    expect(await reads.listRuns("o", "r", { workflow: "Release" })).toEqual([{ id: 99 }]);
+    expect(await reads.listRuns("o", "r", { workflow: "Release", limit: 20 })).toEqual([
+      { id: 99 },
+    ]);
     expect(calls.some((url) => url.includes("/actions/workflows/11/runs"))).toBe(true);
   });
 
@@ -198,10 +201,10 @@ describe("workflow runs", () => {
       },
     });
 
-    await reads.listRuns("o", "r", { workflow: "ci.yml" });
+    await reads.listRuns("o", "r", { workflow: "ci.yml", limit: 20 });
     expect(calls.some((url) => url.includes("/actions/workflows/10/runs"))).toBe(true);
 
-    await expect(reads.listRuns("o", "r", { workflow: "nope" })).rejects.toThrow(
+    await expect(reads.listRuns("o", "r", { workflow: "nope", limit: 20 })).rejects.toThrow(
       'workflow "nope" not found (available: CI)',
     );
   });

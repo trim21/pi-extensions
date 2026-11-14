@@ -62,6 +62,26 @@ describe("renderType", () => {
     `);
   });
 
+  it("把数值与长度边界渲染成 JSDoc tag", () => {
+    const schema = Type.Object({
+      limit: Type.Integer({ minimum: 1, maximum: 100, description: "Max results" }),
+      tags: Type.Array(Type.String(), { maxItems: 4 }),
+    });
+
+    expect(renderType(schema, "")).toMatchInlineSnapshot(`
+      "{
+        /**
+         * Max results
+         * @minimum 1
+         * @maximum 100
+         */
+        limit: number;
+        /** @maxItems 4 */
+        tags: Array<string>;
+      }"
+    `);
+  });
+
   it("渲染联合、字面量与无法识别的回退", () => {
     const schema = Type.Object({
       kind: Type.Union([Type.Literal("a"), Type.Literal("b")]),

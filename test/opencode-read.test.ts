@@ -335,7 +335,14 @@ describe("opencode read execute", () => {
     await writeFile(join(listing, "alpha.txt"), "a", "utf8");
     await mkdir(join(listing, "subdir"));
     const tool = loadTool();
-    const result = await tool.execute("id", { filePath: listing }, undefined, undefined, ctx);
+    // 直接调 execute 时参数要写成总线补过默认值之后的形状（`limit` 必填）
+    const result = await tool.execute(
+      "id",
+      { filePath: listing, limit: 2000 },
+      undefined,
+      undefined,
+      ctx,
+    );
     const text = result.content[0].text;
     expect(text).toContain("<type>directory</type>");
     const entries = text.split("\n").filter((l) => l.endsWith(".txt") || l.endsWith("subdir/"));
@@ -364,7 +371,7 @@ describe("opencode read execute", () => {
     const tool = loadTool();
     const result = await tool.execute(
       "id",
-      { filePath: listing, offset: -1 },
+      { filePath: listing, offset: -1, limit: 2000 },
       undefined,
       undefined,
       ctx,

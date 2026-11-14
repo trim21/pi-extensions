@@ -291,16 +291,19 @@ describe("opencode bash", () => {
   });
 
   it("rejects an invalid timeout", async () => {
-    const { tool } = loadBashTool();
-    await expect(
-      tool.execute(
-        "id",
-        { command: "printf x", timeout: -1 },
-        undefined,
-        undefined,
-        context(process.cwd()),
-      ),
-    ).rejects.toThrow(/timeout must be between/);
+    const runtime = createBwrapRuntime();
+    const recorder = createToolRecorder<RegisteredTool>();
+    registerBashTool(recorder.bus, recorder.pi, runtime);
+    // 边界由参数 schema 的 minimum 约束，经总线校验
+    const result = await recorder.bus.executeTool(
+      "bash",
+      { command: "printf x", timeout: -1 },
+      { ctx: context(process.cwd()) },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content.map((block) => ("text" in block ? block.text : "")).join("\n")).toMatch(
+      /timeout/,
+    );
   });
 
   it("does not expose background parameters", async () => {

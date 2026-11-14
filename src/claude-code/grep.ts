@@ -14,8 +14,9 @@ import { stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 
+import { Default, type StaticDefaulted } from "../lib/schema-defaults.js";
 import { stringEnum } from "../lib/string-enum.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
@@ -53,10 +54,9 @@ const grepParametersSchema = Type.Object(
       }),
     ),
     glob: Type.Optional(Type.String({ description: 'Glob filter such as "*.js" or "*.{ts,tsx}"' })),
-    output_mode: Type.Optional(
-      stringEnum(GREP_OUTPUT_MODES, {
-        description: "Output mode. Defaults to files_with_matches.",
-      }),
+    output_mode: Default(
+      stringEnum(GREP_OUTPUT_MODES, { description: "Output mode" }),
+      "files_with_matches",
     ),
     "-B": Type.Optional(
       Type.Number({ description: "Lines to show before each match in content mode" }),
@@ -68,17 +68,22 @@ const grepParametersSchema = Type.Object(
     context: Type.Optional(
       Type.Number({ description: "Lines to show before and after each match" }),
     ),
-    "-n": Type.Optional(
-      Type.Boolean({ description: "Show line numbers in content mode; defaults true" }),
-    ),
+    "-n": Default(Type.Boolean({ description: "Show line numbers in content mode" }), true),
     "-i": Type.Optional(Type.Boolean({ description: "Case-insensitive search" })),
     type: Type.Optional(
       Type.String({ description: "ripgrep file type such as js, py, rust, or go" }),
     ),
-    head_limit: Type.Optional(
-      Type.Number({ description: "Limit output to the first N entries after offset" }),
+    head_limit: Default(
+      Type.Integer({
+        minimum: 0,
+        description: "Limit output to the first N entries after offset (0 means no limit)",
+      }),
+      DEFAULT_HEAD_LIMIT,
     ),
-    offset: Type.Optional(Type.Number({ description: "Skip the first N output entries" })),
+    offset: Default(
+      Type.Integer({ minimum: 0, description: "Skip the first N output entries" }),
+      0,
+    ),
     multiline: Type.Optional(
       Type.Boolean({ description: "Allow patterns to span multiple lines" }),
     ),
@@ -86,10 +91,10 @@ const grepParametersSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type GrepParameters = Static<typeof grepParametersSchema>;
+type GrepParameters = StaticDefaulted<typeof grepParametersSchema>;
 
 export function buildGrepArguments(params: GrepParameters, cwd: string): string[] {
-  const mode = params.output_mode ?? "files_with_matches";
+  const mode = params.output_mode;
   const args = ["--color=never", "--hidden", "--max-columns", "500"];
   for (const dir of VCS_DIRECTORIES_TO_EXCLUDE) {
     args.push("--glob", `!${dir}`);
@@ -106,7 +111,7 @@ export function buildGrepArguments(params: GrepParameters, cwd: string): string[
     }
     case "content": {
       args.push("--no-heading", "--with-filename");
-      const showLineNumbers = params["-n"] === true || params["-n"] === undefined;
+      const showLineNumbers = params["-n"];
       if (showLineNumbers) {
         args.push("--line-number");
       }
@@ -268,24 +273,12 @@ export function registerGrepTool(bus: ToolBus, pi: ExtensionAPI): void {
     description: [
       "A powerful search tool built on ripgrep.",
       "Supports regular expressions, file globs, file types, multiline matching, context lines, and paginated output.",
-      'output_mode defaults to "files_with_matches"; use "content" for matching lines or "count" for match counts.',
+      'use "content" for matching lines or "count" for match counts.',
     ].join("\n"),
     promptSnippet: "Search file contents with regular expressions",
     promptGuidelines: [GREP_PROMPT],
     parameters: grepParametersSchema,
     async execute(_id, params, signal, _onUpdate, ctx) {
-      if (
-        params.offset !== undefined &&
-        (!Number.isSafeInteger(params.offset) || params.offset < 0)
-      ) {
-        throw new Error("offset must be a non-negative integer");
-      }
-      if (
-        params.head_limit !== undefined &&
-        (!Number.isSafeInteger(params.head_limit) || params.head_limit < 0)
-      ) {
-        throw new Error("head_limit must be a non-negative integer");
-      }
       if (params.path) {
         const absolutePath = searchRoot(params.path, ctx.cwd);
         try {
@@ -306,9 +299,9 @@ export function registerGrepTool(bus: ToolBus, pi: ExtensionAPI): void {
       if (result.code !== 0 && result.code !== 1) {
         throw new Error(result.stderr.trim() || `ripgrep exited with code ${result.code}`);
       }
-      const mode = params.output_mode ?? "files_with_matches";
-      const offset = params.offset ?? 0;
-      const headLimit = params.head_limit ?? DEFAULT_HEAD_LIMIT;
+      const mode = params.output_mode;
+      const offset = params.offset;
+      const headLimit = params.head_limit;
       // rg 退出码 1 = 无匹配，stdout 为空
       const stdout = result.code === 1 ? "" : result.stdout;
 

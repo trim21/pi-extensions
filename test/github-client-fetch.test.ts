@@ -63,6 +63,8 @@ describe("createGithubSearch fetch injection", () => {
     ).search("pr", {
       repo: "a/b",
       keywords: "proxy",
+      state: "open",
+      limit: 30,
     });
 
     expect(calls).toHaveLength(1);
@@ -79,6 +81,8 @@ describe("createGithubSearch fetch injection", () => {
 
     await createGithubSearch(createGithubApi({ token: async () => "test-token" })).search("issue", {
       repo: "a/b",
+      state: "open",
+      limit: 30,
     });
 
     expect(spy).toHaveBeenCalledTimes(1);

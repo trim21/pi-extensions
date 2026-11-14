@@ -11,6 +11,8 @@
 
 import { Type } from "typebox";
 
+import { Default } from "../lib/schema-defaults.js";
+
 // ── 共享片段 ─────────────────────────────────────────────────────────────────
 
 /** GitHub 的 actor（author / assignee / mergedBy / review 作者）。 */
@@ -420,26 +422,25 @@ export const ghDiffPayloadSchema = Type.Object(
 
 // ── 工具参数 ────────────────────────────────────────────────────────────────
 //
-// 参数 schema 是工具参数的唯一来源：handler 的入参类型由 `Static` 推断，
-// 不再另写一份 TS interface（否则改一个默认值要同时改两处）。
+// 参数 schema 是工具参数的唯一来源：handler 的入参类型由总线按 `StaticDefaulted`
+// 推断（带默认值的字段必填），不再另写一份 TS interface。
 
 /** 两个 wait 工具共用的 `repo` 参数。 */
 const checksWaitRepoSchema = Type.Optional(Type.String({ description: "OWNER/REPO" }));
 
-/** 两个 wait 工具 `fail_fast` 的缺省值：schema 的 `default` 与代码共用这一份。 */
-export const CHECKS_WAIT_FAIL_FAST_DEFAULT = true;
-
 /**
  * 两个 wait 工具共用的 `fail_fast`：任一检查失败时是否立即返回。
  *
- * `default` 是缺省值的唯一来源：codemode 声明渲染成 `@default true`，pi 侧随
- * JSON Schema 进上下文，代码用 `?? CHECKS_WAIT_FAIL_FAST_DEFAULT` 解析。
+ * 默认值经 `Default()` 声明，因此同时进入 JSON Schema（codemode 声明渲染成
+ * `@default true`）与类型（`StaticDefaulted` 里该字段必填），handler 不再写兜底。
  */
 const checksWaitFailFastSchema = Type.Optional(
-  Type.Boolean({
-    default: CHECKS_WAIT_FAIL_FAST_DEFAULT,
-    description: "Exit immediately when any check fails; false waits for the remaining checks",
-  }),
+  Default(
+    Type.Boolean({
+      description: "Exit immediately when any check fails; false waits for the remaining checks",
+    }),
+    true,
+  ),
 );
 
 /** `wait-github-pr-checks` 的参数。 */

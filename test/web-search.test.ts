@@ -70,17 +70,14 @@ describe("loadSearch1ApiKey", () => {
 });
 
 describe("buildSearchBody", () => {
-  it("clamps numResults and defaults crawl_results to 0", () => {
-    const body = buildSearchBody("q", {});
+  it("keeps numResults and defaults crawl_results to 0", () => {
+    const body = buildSearchBody("q", { numResults: 5 });
     expect(body).toMatchObject({ query: "q", max_results: 5, crawl_results: 0 });
-  });
-
-  it("caps numResults at 50", () => {
-    expect(buildSearchBody("q", { numResults: 100 }).max_results).toBe(50);
   });
 
   it("maps recencyFilter and searchService", () => {
     const body = buildSearchBody("q", {
+      numResults: 5,
       recencyFilter: "week",
       searchService: "github",
     });
@@ -88,7 +85,10 @@ describe("buildSearchBody", () => {
   });
 
   it("splits domainFilter into include/exclude sites", () => {
-    const body = buildSearchBody("q", { domainFilter: ["github.com", "-example.com"] });
+    const body = buildSearchBody("q", {
+      numResults: 5,
+      domainFilter: ["github.com", "-example.com"],
+    });
     expect(body).toMatchObject({ include_sites: ["github.com"], exclude_sites: ["example.com"] });
   });
 
@@ -127,7 +127,7 @@ describe("searchWeb", () => {
 
   it("throws on non-OK response", async () => {
     egressFetch.mockImplementation(async () => new Response("nope", { status: 500 }));
-    await expect(searchWeb("q", "key")).rejects.toThrow("Search1API error 500");
+    await expect(searchWeb("q", "key", { numResults: 5 })).rejects.toThrow("Search1API error 500");
   });
 
   it("never falls back to the global fetch", async () => {
@@ -139,7 +139,7 @@ describe("searchWeb", () => {
     });
     vi.stubGlobal("fetch", globalFetch);
 
-    const result = await searchWeb("q", "key");
+    const result = await searchWeb("q", "key", { numResults: 5 });
 
     expect(result.hits).toEqual([{ title: "T", url: "https://a.example/1", snippet: "S" }]);
     expect(egressFetch).toHaveBeenCalledTimes(1);

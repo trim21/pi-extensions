@@ -61,6 +61,7 @@ import type { AppliedFileEdit } from "../lib/lsp/rename.js";
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
+import { Default } from "../lib/schema-defaults.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { createToolRegistration } from "../lib/tool-registration.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
@@ -442,12 +443,12 @@ function registerReadTool(
             "The line number to start reading from (1-indexed; 0 is treated as 1). A negative value counts from the end of the file (offset=-2 reads the last 2 lines).",
         }),
       ),
-      limit: Type.Optional(
+      limit: Default(
         Type.Integer({
           minimum: 0,
-          default: DEFAULT_MAX_LINES,
           description: "The maximum number of lines to read",
         }),
+        DEFAULT_MAX_LINES,
       ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -472,7 +473,7 @@ function registerReadTool(
       // --- Directory listing ---
       if (fileStat.isDirectory()) {
         const entries = await formatDirectoryEntries(absolutePath);
-        const limitVal = limit ?? DEFAULT_MAX_LINES;
+        const limitVal = limit;
         // opencode: params.offset || 1（0 视为 1）；负数从末尾倒数
         const offsetVal = offset || 1;
         const start = offsetVal < 0 ? Math.max(entries.length + offsetVal, 0) : offsetVal - 1;
@@ -550,7 +551,7 @@ function registerReadTool(
       const effectiveOffset = offset || 1;
       const page = await readLines(absolutePath, {
         offset: effectiveOffset,
-        limit: limit ?? DEFAULT_MAX_LINES,
+        limit,
         signal,
       });
 
@@ -618,9 +619,7 @@ const editSchema = Type.Object({
   newString: Type.String({
     description: "The text to replace it with (must be different from oldString)",
   }),
-  replaceAll: Type.Optional(
-    Type.Boolean({ description: "Replace all occurrences of oldString (default false)" }),
-  ),
+  replaceAll: Default(Type.Boolean({ description: "Replace all occurrences of oldString" }), false),
 });
 
 function registerEditTool(
@@ -652,7 +651,7 @@ function registerEditTool(
       const filePath = params.filePath;
       const oldString = params.oldString;
       const newString = params.newString;
-      const replaceAll = params.replaceAll ?? false;
+      const replaceAll = params.replaceAll;
 
       const absolutePath = isAbsolute(filePath) ? filePath : resolvePath(ctx.cwd, filePath);
 

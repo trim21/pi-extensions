@@ -22,9 +22,6 @@ import {
   createGithubApi,
   createGithubChecks,
   createGithubSearch,
-  GH_LIST_DEFAULT_LIMIT,
-  GH_LIST_DEFAULT_STATE,
-  GH_LIST_MAX_LIMIT,
   type GithubChecksClient,
   type GithubClientOptions,
   type GithubSearch,
@@ -199,46 +196,13 @@ export function structuredFailure(error: string): StructuredFailure {
 }
 
 /**
- * `list-github-issues` / `list-github-prs` 共用的一套过滤参数，只有 `state` 的说明文案按
- * kind 不同。
+ * `list-github-issues` / `list-github-prs` 的过滤参数：定义在读取层旁边
+ * （`src/lib/github-params.ts`），工具与读取层共用同一份 schema。
  */
-export function listFilterParameters(kind: "issue" | "pr") {
-  const isPr = kind === "pr";
-  return Type.Object({
-    repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
-    keywords: Type.Optional(Type.String({ description: "Search keywords (free text)" })),
-    state: Type.Optional(
-      Type.String({
-        default: GH_LIST_DEFAULT_STATE,
-        description: isPr
-          ? "open, closed, merged, all (all applies to keyword search and covers open + closed + merged)"
-          : "open, closed, all (all applies to keyword search and covers closed too)",
-      }),
-    ),
-    label: Type.Optional(Type.String({ description: "Filter by label" })),
-    // `@me` 只在关键词搜索分支可用：搜索 API 自己把它解析成当前登录用户。浏览分支走
-    // REST 列表端点，`@me` 按字面量转发，不会匹配到当前用户（本仓库不做展开）。
-    author: Type.Optional(
-      Type.String({
-        description: "Filter by author ('@me' works with keywords; browse takes it literally)",
-      }),
-    ),
-    assignee: Type.Optional(
-      Type.String({
-        description: "Filter by assignee ('@me' works with keywords; browse takes it literally)",
-      }),
-    ),
-    milestone: Type.Optional(Type.String({ description: "Filter by milestone" })),
-    limit: Type.Optional(
-      Type.Number({
-        default: GH_LIST_DEFAULT_LIMIT,
-        description: `Max results (upper bound ${GH_LIST_MAX_LIMIT})`,
-      }),
-    ),
-  });
-}
+import type { ListFilters } from "../lib/github-params.js";
 
-export type ListFilters = Static<ReturnType<typeof listFilterParameters>>;
+export type { ListFilters } from "../lib/github-params.js";
+export { listFilterParameters } from "../lib/github-params.js";
 
 /**
  * 浏览分支（不带 keywords）：走 octokit 的 REST 列表端点，再归一到与搜索分支同一套

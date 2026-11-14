@@ -691,4 +691,25 @@ describe("wait-github-pr-checks 工具入口", () => {
     // 只轮询了一轮：第二轮会被 30s 的间隔挡住，走到那里说明没有短路
     expect(cassette.calls.filter((url) => url.includes("/check-runs"))).toHaveLength(1);
   });
+
+  it("显式 fail_fast: false 时不短路，等到超时返回在途快照", async () => {
+    vi.useFakeTimers();
+    try {
+      const { bus, cassette } = waitBus();
+
+      const pending = bus.executeCodemodeTool(
+        "wait-github-pr-checks",
+        { number: 299, repo: "o/r", fail_fast: false },
+        { ctx: { cwd: "/tmp" } as never },
+      );
+      await vi.advanceTimersByTimeAsync(610_000);
+      const result = await pending;
+
+      // 超时快照里仍有 fail，因此结论还是 failure；区别在于轮询没有在第一轮停下
+      expect(result).toMatchObject({ ok: true, value: { status: "failure", totalChecks: 2 } });
+      expect(cassette.calls.filter((url) => url.includes("/check-runs")).length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

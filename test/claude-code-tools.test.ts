@@ -1122,19 +1122,25 @@ describe("reads state restore on session_start", () => {
 });
 
 describe("Glob and Grep", () => {
+  // buildGrepArguments 收的是总线补过默认值之后的形状
+  type GrepArgsInput = Parameters<typeof buildGrepArguments>[0];
+  function grepArgs(params: Partial<GrepArgsInput> & Pick<GrepArgsInput, "pattern">): string[] {
+    return buildGrepArguments(
+      { output_mode: "files_with_matches", "-n": true, head_limit: 250, offset: 0, ...params },
+      "/repo",
+    );
+  }
+
   it("builds ripgrep arguments for Claude Code output modes", () => {
     expect(
-      buildGrepArguments(
-        {
-          pattern: "hello",
-          output_mode: "content",
-          glob: "*.ts",
-          "-i": true,
-          context: 2,
-          multiline: true,
-        },
-        "/repo",
-      ),
+      grepArgs({
+        pattern: "hello",
+        output_mode: "content",
+        glob: "*.ts",
+        "-i": true,
+        context: 2,
+        multiline: true,
+      }),
     ).toEqual([
       "--color=never",
       "--hidden",
@@ -1168,7 +1174,7 @@ describe("Glob and Grep", () => {
   });
 
   it("uses -c for count mode and splits comma/space globs like Claude Code", () => {
-    expect(buildGrepArguments({ pattern: "hello", output_mode: "count" }, "/repo")).toEqual([
+    expect(grepArgs({ pattern: "hello", output_mode: "count" })).toEqual([
       "--color=never",
       "--hidden",
       "--max-columns",
@@ -1189,16 +1195,14 @@ describe("Glob and Grep", () => {
       "hello",
       "/repo",
     ]);
-    expect(buildGrepArguments({ pattern: "hello", glob: "*.js,*.ts src/**" }, "/repo")).toContain(
-      "--glob",
-    );
-    const globArgs = buildGrepArguments({ pattern: "hello", glob: "*.js,*.ts src/**" }, "/repo");
+    expect(grepArgs({ pattern: "hello", glob: "*.js,*.ts src/**" })).toContain("--glob");
+    const globArgs = grepArgs({ pattern: "hello", glob: "*.js,*.ts src/**" });
     expect(globArgs.filter((arg) => arg === "--glob").length).toBe(6 + 3);
     expect(globArgs).toContain("*.js");
     expect(globArgs).toContain("*.ts");
     expect(globArgs).toContain("src/**");
     // pattern 以 - 开头时用 -e 显式声明
-    expect(buildGrepArguments({ pattern: "-foo" }, "/repo")).toEqual([
+    expect(grepArgs({ pattern: "-foo" })).toEqual([
       "--color=never",
       "--hidden",
       "--max-columns",
@@ -1387,7 +1391,7 @@ describe("Bash", () => {
     const nested = join(directory, "nested");
     await import("node:fs/promises").then(({ mkdir }) => mkdir(nested));
     const ctx = context(directory);
-    const result = await call(bashTool, { command: "pwd", workdir: nested }, ctx);
+    const result = await call(bashTool, { command: "pwd", workdir: nested, timeout: 5_000 }, ctx);
     expect(result.content[0].text).toBe(`${nested}\n`);
   });
 
@@ -1395,7 +1399,7 @@ describe("Bash", () => {
     await expect(
       call(
         bashTool,
-        { command: "pwd", workdir: join(tmpdir(), "cc-bash-missing-workdir") },
+        { command: "pwd", workdir: join(tmpdir(), "cc-bash-missing-workdir"), timeout: 5_000 },
         context(process.cwd()),
       ),
     ).rejects.toThrow(/Working directory does not exist/);

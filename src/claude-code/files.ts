@@ -36,6 +36,7 @@ import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import type { ToolPendant } from "../lib/pendant.ts";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
+import { Default } from "../lib/schema-defaults.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { createToolRegistration } from "../lib/tool-registration.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
@@ -231,13 +232,16 @@ export function registerFileTools(
           description:
             "The path to the file to read (absolute or relative to the working directory)",
         }),
-        offset: Type.Optional(
+        offset: Default(
           Type.Integer({
             description:
               "The line number to start reading from. A negative value counts from the end of the file (offset=-5 starts 5 lines before EOF).",
           }),
+          1,
         ),
-        limit: Type.Optional(Type.Integer({ description: "The number of lines to read" })),
+        limit: Type.Optional(
+          Type.Integer({ minimum: 1, description: "The number of lines to read" }),
+        ),
         pages: Type.Optional(
           Type.String({ description: 'Page range for PDF files (for example "1-5" or "3")' }),
         ),
@@ -247,12 +251,6 @@ export function registerFileTools(
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const filePath = resolveToolFilePath(params.file_path, ctx.cwd);
-      if (params.offset !== undefined && !Number.isSafeInteger(params.offset)) {
-        throw new Error("offset must be an integer");
-      }
-      if (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit < 1)) {
-        throw new Error("limit must be a positive integer");
-      }
       // 文件不存在 → 友好错误 + Did you mean（对齐 Claude Code）
       try {
         await assertReadableFile(filePath);
@@ -295,7 +293,7 @@ export function registerFileTools(
         };
       }
 
-      const offset = params.offset ?? 1;
+      const offset = params.offset;
       const limit = params.limit;
       const buffer = await readFile(filePath);
 
@@ -367,8 +365,9 @@ export function registerFileTools(
         new_string: Type.String({
           description: "The text to replace it with (must be different from old_string)",
         }),
-        replace_all: Type.Optional(
-          Type.Boolean({ description: "Replace all occurrences of old_string", default: false }),
+        replace_all: Default(
+          Type.Boolean({ description: "Replace all occurrences of old_string" }),
+          false,
         ),
       },
       { additionalProperties: false },
@@ -433,7 +432,7 @@ export function registerFileTools(
             diagnostics,
           ];
         }
-        const replaceAll = params.replace_all ?? false;
+        const replaceAll = params.replace_all;
         // 防止 OOM 的大文件检查（对齐 Claude Code）
         try {
           const { size } = await stat(filePath);

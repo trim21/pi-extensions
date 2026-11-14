@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 
+import { Default } from "../../lib/schema-defaults.js";
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, structuredResult } from "../base.js";
 import { prCommentsSchema } from "../schemas.js";
@@ -13,12 +14,12 @@ export function addReadPrCommentsTool(gh: GhClient, bus: ToolBus) {
     parameters: Type.Object({
       number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-      reviews: Type.Optional(
+      reviews: Default(
         Type.Boolean({
-          default: false,
           description:
             "If true, returns inline code review comments (with diff_hunk, path, line) via API instead of issue comments",
         }),
+        false,
       ),
     }),
     structuredSchema: prCommentsSchema,

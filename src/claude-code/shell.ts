@@ -24,6 +24,7 @@ import {
   systemReminder,
 } from "../lib/bash-tool.js";
 import { resolveWorkdir } from "../lib/path.js";
+import { Default } from "../lib/schema-defaults.js";
 import { defineStructuredTool, type ToolBus } from "../lib/tool-bus.js";
 
 /** 对齐 Claude Code formatError：错误文本超过该长度时头尾各保留一半。 */
@@ -100,14 +101,19 @@ export function registerShellTools(bus: ToolBus, pi: ExtensionAPI, runtime: Bwra
       label: "Bash",
       description: [
         "Executes a given bash command synchronously and returns its output.",
-        "timeout is in milliseconds, defaults to 120000, and may not exceed 7200000.",
+        "timeout is in milliseconds.",
         "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
       ].join("\n"),
       parameters: Type.Object(
         {
           command: Type.String({ description: "The command to execute" }),
-          timeout: Type.Optional(
-            Type.Number({ description: "Optional timeout in milliseconds (max 7200000)" }),
+          timeout: Default(
+            Type.Integer({
+              minimum: 1,
+              maximum: BASH_MAX_TIMEOUT_MS,
+              description: "Timeout in milliseconds",
+            }),
+            BASH_DEFAULT_TIMEOUT_MS,
           ),
           description: Type.Optional(
             Type.String({ description: "Clear, concise description of the command" }),
@@ -128,10 +134,7 @@ export function registerShellTools(bus: ToolBus, pi: ExtensionAPI, runtime: Bwra
         { additionalProperties: false },
       ),
       async execute(id, params, signal, onUpdate, ctx, callOptions) {
-        const timeout = params.timeout ?? BASH_DEFAULT_TIMEOUT_MS;
-        if (!Number.isFinite(timeout) || timeout <= 0 || timeout > BASH_MAX_TIMEOUT_MS) {
-          throw new Error(`timeout must be between 1 and ${BASH_MAX_TIMEOUT_MS} milliseconds`);
-        }
+        const timeout = params.timeout;
 
         const cwd = params.workdir ? await resolveWorkdir(params.workdir, ctx.cwd) : ctx.cwd;
 

@@ -12,20 +12,16 @@ import { Octokit } from "octokit";
 import { type Static, Type } from "typebox";
 
 import { ghAuthToken } from "./gh-process.js";
+import { type ListFilters } from "./github-params.js";
 import { parseWithSchema } from "./parse-with-schema.js";
 
 export type SearchKind = "issue" | "pr";
 
-export interface SearchParams {
-  repo?: string;
-  keywords?: string;
-  state?: string;
-  label?: string;
-  author?: string;
-  assignee?: string;
-  milestone?: string;
-  limit?: number;
-}
+/**
+ * 搜索端点消费的过滤条件：与工具参数 schema 同源（`github-params.ts`），`state` / `limit`
+ * 已由工具层按 schema 的 `default` 补齐，读取层不再兜底。
+ */
+export type SearchParams = ListFilters;
 
 /**
  * REST /search/issues 里本客户端消费的 item 形状（issue / PR 联合）。只声明真正
@@ -76,25 +72,16 @@ export interface SearchHit {
 }
 
 /**
- * `list-github-issues` / `list-github-prs` 的缺省 state 与 limit 范围：schema 的
- * `default` 与这里共用同一份常量，不要在别处另写字面量。
- */
-export const GH_LIST_DEFAULT_STATE = "open";
-export const GH_LIST_DEFAULT_LIMIT = 30;
-export const GH_LIST_MAX_LIMIT = 100;
-
-/**
  * Build the `q` parameter for the issues-and-pull-requests search endpoint.
  *
  * State semantics (the whole reason this client exists):
- * - default is `open`, matching the browse tools
+ * - `open` filters to open items, matching the browse tools
  * - `all` applies no state filter (open + closed)
  * - for PRs, `merged` maps to `is:merged` and `closed` excludes merged PRs,
  *   because the search API reports a merged PR's state as `closed`
  */
-export function buildSearchQuery(kind: SearchKind, params: SearchParams): string {
-  const { repo, keywords, label, author, assignee, milestone } = params;
-  const state = params.state ?? GH_LIST_DEFAULT_STATE;
+export function buildSearchQuery(kind: SearchKind, params: Omit<SearchParams, "limit">): string {
+  const { repo, keywords, label, author, assignee, milestone, state } = params;
 
   const parts: string[] = [];
   if (repo) {
@@ -420,9 +407,10 @@ export interface GithubSearch {
 export function createGithubSearch(api: GithubApi): GithubSearch {
   return {
     async search(kind, params) {
-      const limit = Math.min(Math.max(params.limit ?? GH_LIST_DEFAULT_LIMIT, 1), GH_LIST_MAX_LIMIT);
+      // limit 的取值与上限由工具参数 schema 约束，读取层不再 clamp
+      const limit = params.limit;
       // `@me` 是 gh CLI 的简写，REST 搜索不认识：这里不展开，它按字面量进入查询串。
-      const q = buildSearchQuery(kind, { ...params, limit });
+      const q = buildSearchQuery(kind, params);
       return await api.call(async (client) => {
         const { data } = await client.rest.search.issuesAndPullRequests({
           q,

@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 
-import { GH_RELEASES_DEFAULT_LIMIT } from "../../lib/github-reads.js";
+import { releaseListParameters } from "../../lib/github-params.js";
 import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, structuredResult } from "../base.js";
@@ -11,12 +11,7 @@ export function addListReleasesTool(gh: GhClient, bus: ToolBus) {
     name: "list-github-releases",
     label: "GitHub Releases List",
     description: "List GitHub releases.",
-    parameters: Type.Object({
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-      limit: Type.Optional(
-        Type.Number({ default: GH_RELEASES_DEFAULT_LIMIT, description: "Max results" }),
-      ),
-    }),
+    parameters: releaseListParameters,
     structuredSchema: ghReleaseListPayloadSchema,
     async execute(_id, params, signal, ctx) {
       const { limit } = params;
