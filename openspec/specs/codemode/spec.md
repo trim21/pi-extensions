@@ -12,6 +12,8 @@
 
 每个工具的说明 MUST 是它 `description` 的**全文**，包含多行描述的每一行（按 JSDoc 注释渲染）；MUST NOT 只取首行，也 MUST NOT 做任何截断——工具作者写在描述里的约束必须在 codemode 里同样可见。
 
+字段的 schema 注解 MUST 渲染进该字段的 JSDoc 注释：`description` 作为描述正文，`default` 作为 `@default <JSON>`，数值与长度边界（`minimum` / `maximum` / `exclusiveMinimum` / `exclusiveMaximum` / `minLength` / `maxLength` / `minItems` / `maxItems`）作为同名 tag。单行注释也用 `/** ... */` 形式，因为这些 tag 写在 `//` 里只是普通文本。`pattern` / `format` 等其余注解 MAY 不渲染，这类约束仍由 `description` 文本承载。
+
 可调用集合 MUST 只包含本仓库工具总线上**声明了 `structuredSchema`** 的工具；在此之上，MUST 包含所有 codemode-only 工具，且对非 codemode-only 的工具 MUST 再与当前 active 工具列表求交（取不到 active 列表时不过滤）。codemode-only 工具不在 active 列表里是常态，MUST NOT 因此把它排除。这条准入条件 MUST 是唯一的集合规则：MUST NOT 再维护手工的工具名单（黑名单会随工具增减而漂移）。理由是脚本拿到的返回值必须有确定的形状：只给文本的工具在脚本里既不能当数据用（得解析文本），也没有返回类型能写进声明。
 
 由此天然不在集合里、且各自理由独立成立的例子：`codemode` 自身与 `spawn-agent`（没有结构化输出）、两套文件工具集的读写工具（脚本用 `fs.read` / `fs.write`，不重复一套为 LLM 上下文设计的行号/锚点语义）、两套工具集的搜索工具（脚本用 `call("Bash", { command })` 跑 `rg` / `grep`，走同一个沙箱、拿得到退出码，还能拼管道）、`lsp-rename`（写工具）、talk 工具与会话工具（会把执行时间交给用户或另一个 agent 的回答）。这些工具 MUST NOT 需要写进特殊名单：它们没有声明结构化输出，因此自然不在集合里。
@@ -30,8 +32,8 @@
 
 #### Scenario: 返回类型字段的说明渲染成注释
 
-- **WHEN** `structuredSchema` 的某个字段带 `description`
-- **THEN** 描述里该字段的类型声明上方渲染这段 `description`：单行用 `//`，多行按 JSDoc 渲染；嵌套对象与数组元素的字段同样递归渲染，没有 `description` 的字段不产生注释
+- **WHEN** 参数或 `structuredSchema` 的某个字段带 `description`、`default` 或数值/长度边界
+- **THEN** 描述里该字段的类型声明上方渲染 JSDoc 注释：`description` 作正文，`default` 渲染成 `@default <JSON>`，边界渲染成同名 tag；单行注释也用 `/** ... */`；嵌套对象与数组元素的字段同样递归渲染，没有任何注解的字段不产生注释
 
 #### Scenario: 多行说明完整渲染
 
