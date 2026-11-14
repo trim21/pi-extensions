@@ -417,3 +417,50 @@ export const ghDiffPayloadSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// ── 工具参数 ────────────────────────────────────────────────────────────────
+//
+// 参数 schema 是工具参数的唯一来源：handler 的入参类型由 `Static` 推断，
+// 不再另写一份 TS interface（否则改一个默认值要同时改两处）。
+
+/** 两个 wait 工具共用的 `repo` 参数。 */
+const checksWaitRepoSchema = Type.Optional(Type.String({ description: "OWNER/REPO" }));
+
+/** 两个 wait 工具 `fail_fast` 的缺省值：schema 的 `default` 与代码共用这一份。 */
+export const CHECKS_WAIT_FAIL_FAST_DEFAULT = true;
+
+/**
+ * 两个 wait 工具共用的 `fail_fast`：任一检查失败时是否立即返回。
+ *
+ * `default` 是缺省值的唯一来源：codemode 声明渲染成 `@default true`，pi 侧随
+ * JSON Schema 进上下文，代码用 `?? CHECKS_WAIT_FAIL_FAST_DEFAULT` 解析。
+ */
+const checksWaitFailFastSchema = Type.Optional(
+  Type.Boolean({
+    default: CHECKS_WAIT_FAIL_FAST_DEFAULT,
+    description: "Exit immediately when any check fails; false waits for the remaining checks",
+  }),
+);
+
+/** `wait-github-pr-checks` 的参数。 */
+export const waitPrChecksParameters = Type.Object({
+  number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
+  repo: checksWaitRepoSchema,
+  fail_fast: checksWaitFailFastSchema,
+});
+
+/** `wait-github-commit-checks` 的参数。 */
+export const waitCommitChecksParameters = Type.Object({
+  commit: Type.Union([Type.Number(), Type.String()], {
+    description:
+      "Commit to wait for: full or partial SHA, branch name, or tag name (resolved to the commit's SHA)",
+  }),
+  repo: checksWaitRepoSchema,
+  event: Type.Optional(
+    Type.String({
+      description:
+        "Only judge check runs triggered by this workflow event (e.g. push, pull_request)",
+    }),
+  ),
+  fail_fast: checksWaitFailFastSchema,
+});

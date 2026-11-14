@@ -146,6 +146,10 @@ function limitOf(limit: number | undefined, fallback: number): number {
   return Math.min(Math.max(limit ?? fallback, 1), 100);
 }
 
+/** 两个 list 工具的缺省 limit：schema 的 `default` 与读取层共用同一份常量。 */
+export const GH_RELEASES_DEFAULT_LIMIT = 10;
+export const GH_RUNS_DEFAULT_LIMIT = 20;
+
 /**
  * 逐页取列表直到凑满 `limit` 条命中项：每页 `per_page` 就是 limit，所以通常一次请求即够；
  * 需要客户端过滤（issues 端点混着 PR）或列表本身更长时才继续翻页，凑满立刻停止，不像
@@ -299,7 +303,7 @@ export function createGithubReads(api: GithubApi): GithubReads {
     },
 
     async listReleases(owner, repo, limit, signal) {
-      const max = limitOf(limit, 10);
+      const max = limitOf(limit, GH_RELEASES_DEFAULT_LIMIT);
       const params = { owner, repo, per_page: max, ...octokitRequest(signal) };
       const releases = await api.call((octokit) =>
         takePages(async (page) => {
@@ -320,7 +324,7 @@ export function createGithubReads(api: GithubApi): GithubReads {
     },
 
     async listRuns(owner, repo, query, signal) {
-      const limit = limitOf(query.limit, 20);
+      const limit = limitOf(query.limit, GH_RUNS_DEFAULT_LIMIT);
       let workflowId: number | undefined;
       if (query.workflow !== undefined) {
         const workflows = await api.call((octokit) =>

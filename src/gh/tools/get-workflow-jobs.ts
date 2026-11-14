@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 
 import { type ToolBus } from "../../lib/tool-bus.js";
 import {
@@ -10,10 +10,13 @@ import {
 } from "../base.js";
 import { workflowJobsSchema } from "../schemas.js";
 
-interface RunIdParams {
-  run_id: number | string;
-  repo?: string;
-}
+const workflowJobsParameters = Type.Object({
+  run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),
+  repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+});
+
+/** 入参类型由参数 schema 推断，schema 是唯一来源。 */
+type RunIdParams = Static<typeof workflowJobsParameters>;
 
 /** The toolcall handler behind `get-github-workflow-jobs`: every job of a run, all pages. */
 async function workflowJobs(gh: GhClient, call: ToolCall<RunIdParams>) {
@@ -30,10 +33,7 @@ export function addGetWorkflowJobsTool(gh: GhClient, bus: ToolBus) {
     label: "GitHub Workflow Jobs",
     description:
       "Get every job of a workflow run. Paginated server-side, so runs with more than 30 jobs return all of them. Use the `id` with read-github-ci-logs after read-github-pr-status / wait-github-commit-checks did not already give you a job id.",
-    parameters: Type.Object({
-      run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-    }),
+    parameters: workflowJobsParameters,
     structuredSchema: workflowJobsSchema,
     async execute(_id, params, signal, ctx) {
       return workflowJobs(gh, { params, ctx, signal });

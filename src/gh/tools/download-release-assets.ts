@@ -16,12 +16,24 @@ import {
 } from "../base.js";
 import { releaseDownloadSchema } from "../schemas.js";
 
-interface ReleaseDownloadParams {
-  repo?: string;
-  tag?: string;
-  pattern?: string;
-  archive?: "zip" | "tar.gz";
-}
+const releaseDownloadParameters = Type.Object({
+  repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
+  tag: Type.Optional(Type.String({ description: "Release tag (defaults to the latest release)" })),
+  pattern: Type.Optional(
+    Type.String({
+      description:
+        'Comma-separated glob patterns for asset names, e.g. "*.tar.gz,*.deb" (default: every asset)',
+    }),
+  ),
+  archive: Type.Optional(
+    Type.Union([Type.Literal("zip"), Type.Literal("tar.gz")], {
+      description: "Download the release's source archive instead of its assets",
+    }),
+  ),
+});
+
+/** 入参类型由参数 schema 推断，schema 是唯一来源。 */
+type ReleaseDownloadParams = Static<typeof releaseDownloadParameters>;
 
 /** `repos.getReleaseByTag` / `getLatestRelease` 里本工具真正读取的字段。 */
 const releaseViewSchema = Type.Object({
@@ -180,23 +192,7 @@ export function addDownloadReleaseAssetsTool(gh: GhClient, bus: ToolBus) {
       "so private repositories and large binaries work where a plain HTTP fetch cannot. " +
       "Files already in that directory are kept, never re-fetched. The result lists everything " +
       "now in the directory; file contents are not echoed. Read the entries you need from `path`.",
-    parameters: Type.Object({
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
-      tag: Type.Optional(
-        Type.String({ description: "Release tag (defaults to the latest release)" }),
-      ),
-      pattern: Type.Optional(
-        Type.String({
-          description:
-            'Comma-separated glob patterns for asset names, e.g. "*.tar.gz,*.deb" (default: every asset)',
-        }),
-      ),
-      archive: Type.Optional(
-        Type.Union([Type.Literal("zip"), Type.Literal("tar.gz")], {
-          description: "Download the release's source archive instead of its assets",
-        }),
-      ),
-    }),
+    parameters: releaseDownloadParameters,
     structuredSchema: releaseDownloadSchema,
     async execute(_id, params, signal, ctx) {
       return downloadReleaseAssets(gh, { params, ctx, signal });

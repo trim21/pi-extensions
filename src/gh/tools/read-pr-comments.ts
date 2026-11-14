@@ -15,8 +15,9 @@ export function addReadPrCommentsTool(gh: GhClient, bus: ToolBus) {
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
       reviews: Type.Optional(
         Type.Boolean({
+          default: false,
           description:
-            "If true, returns inline code review comments (with diff_hunk, path, line) via API. Default: false (returns issue comments).",
+            "If true, returns inline code review comments (with diff_hunk, path, line) via API instead of issue comments",
         }),
       ),
     }),

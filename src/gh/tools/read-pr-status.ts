@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 
 import { type ToolBus } from "../../lib/tool-bus.js";
 import {
@@ -11,10 +11,13 @@ import {
 } from "../base.js";
 import { prStatusSchema } from "../schemas.js";
 
-interface PrStatusParams {
-  number: number | string;
-  repo?: string;
-}
+const prStatusParameters = Type.Object({
+  number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
+  repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
+});
+
+/** 入参类型由参数 schema 推断，schema 是唯一来源。 */
+type PrStatusParams = Static<typeof prStatusParameters>;
 
 /**
  * `read-github-pr-status`: the PR head commit's checks as a snapshot. Same read
@@ -68,10 +71,7 @@ export function addReadPrStatusTool(gh: GhClient, bus: ToolBus) {
     label: "GitHub PR Status",
     description:
       "Get the current checks of a pull request's head commit. Each check's `bucket` is pass / fail / pending / skipped / action_required; `action_required` means the workflow is waiting for a maintainer's approval (a fork PR's first run) and has created no check run yet, so it is listed from its check suite and named after its workflow run. Actions checks carry the `run_id` and `job_id` behind them (null for other CI), which is what read-github-ci-logs and get-github-workflow-jobs take; `suite_id` groups the checks of one suite. Returns the snapshot immediately without waiting — use wait-github-pr-checks to block until the checks finish.",
-    parameters: Type.Object({
-      number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
-    }),
+    parameters: prStatusParameters,
     structuredSchema: prStatusSchema,
     async execute(_id, params, signal, ctx) {
       return prStatus(gh, { params, ctx, signal });

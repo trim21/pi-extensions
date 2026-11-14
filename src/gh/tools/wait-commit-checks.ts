@@ -1,15 +1,15 @@
-import { Type } from "typebox";
+import { type Static } from "typebox";
 
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, type ToolCall, waitChecksReport } from "../base.js";
-import { checksVerdictSchema } from "../schemas.js";
+import {
+  CHECKS_WAIT_FAIL_FAST_DEFAULT,
+  checksVerdictSchema,
+  waitCommitChecksParameters,
+} from "../schemas.js";
 
-interface CommitChecksWaitParams {
-  commit: number | string;
-  repo?: string;
-  event?: string;
-  fail_fast?: boolean;
-}
+/** 入参类型由参数 schema 推断，schema 是唯一来源。 */
+type CommitChecksWaitParams = Static<typeof waitCommitChecksParameters>;
 
 /** The toolcall handler behind `wait-github-commit-checks`. */
 async function waitCommitChecks(gh: GhClient, call: ToolCall<CommitChecksWaitParams>) {
@@ -26,7 +26,7 @@ async function waitCommitChecks(gh: GhClient, call: ToolCall<CommitChecksWaitPar
     owner,
     repo: repoName,
     headSha: sha,
-    failFast: fail_fast === true,
+    failFast: fail_fast ?? CHECKS_WAIT_FAIL_FAST_DEFAULT,
     event,
     signal,
   });
@@ -38,28 +38,14 @@ export function addWaitCommitChecksTool(gh: GhClient, bus: ToolBus) {
     label: "Watch GitHub Commit Checks",
     description:
       "Watch CI status checks for a commit until they complete — no pull request required. " +
-      "Same semantics as wait-github-pr-checks: returns when any check fails (immediately under fail_fast), " +
+      "Same semantics as wait-github-pr-checks: returns as soon as any check fails " +
+      "(pass `fail_fast: false` to wait for the remaining checks), " +
       'when a workflow is waiting for maintainer approval (`status: "awaiting_approval"`, returned right away), ' +
       "or all checks pass/skip; on timeout the still-in-flight snapshot is returned. " +
       "With `event`, only checks triggered by that workflow event (e.g. push) are judged; " +
       "commit statuses and suites whose workflow run is unknown are excluded under a filter. " +
       "Use this to wait for the runs a commit's push triggered, or for checks on an arbitrary ref.",
-    parameters: Type.Object({
-      commit: Type.Union([Type.Number(), Type.String()], {
-        description:
-          "Commit to wait for: full or partial SHA, branch name, or tag name (resolved to the commit's SHA)",
-      }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-      event: Type.Optional(
-        Type.String({
-          description:
-            "Only judge check runs triggered by this workflow event (e.g. push, pull_request)",
-        }),
-      ),
-      fail_fast: Type.Optional(
-        Type.Boolean({ description: "Exit immediately when any check fails (default: false)" }),
-      ),
-    }),
+    parameters: waitCommitChecksParameters,
     structuredSchema: checksVerdictSchema,
     async execute(_id, params, signal, ctx) {
       return waitCommitChecks(gh, { params, ctx, signal });

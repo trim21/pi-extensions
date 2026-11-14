@@ -346,10 +346,15 @@ export function jobLogIndex(job: RunJob, rawLog: string): CiLogsJobIndex {
   };
 }
 
-interface JobIdParams {
-  job_id: number | string;
-  repo?: string;
-}
+const ciLogsParameters = Type.Object({
+  job_id: Type.Union([Type.Number(), Type.String()], {
+    description: "Job ID, from get-github-workflow-jobs.",
+  }),
+  repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+});
+
+/** 入参类型由参数 schema 推断，schema 是唯一来源。 */
+type JobIdParams = Static<typeof ciLogsParameters>;
 
 /** 「没找到 / 还没日志」是结构化失败，不是异常：脚本能按 ok === false 分辨。 */
 type CiLogsResult = StructuredResult<Static<typeof ciLogsSchema>>;
@@ -396,12 +401,7 @@ export function addReadCiLogsTool(gh: GhClient, bus: ToolBus) {
       "Download one GitHub Actions job's CI log by job ID and index its steps. `log_file` is the job's complete raw log on disk (runner timestamps and ANSI kept, exactly as GitHub delivers it) and each step carries the 1-based inclusive line range of its block inside that file." +
       " The log text is not echoed back: `log_file` is the only copy, so read the parts you need out of it with the `fs.read` primitive (or `Bash` when you need to slice lines) — e.g. read the block between a step's start_line and end_line. Do not treat the returned object as the log: it carries only the step index. Fetch each job once; re-reading that file is how you get every further part of the log." +
       " Get the job IDs from get-github-workflow-jobs, then call this once per job you need. Note: queued jobs have no logs yet; use watch-github-run to wait for completion.",
-    parameters: Type.Object({
-      job_id: Type.Union([Type.Number(), Type.String()], {
-        description: "Job ID, from get-github-workflow-jobs.",
-      }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-    }),
+    parameters: ciLogsParameters,
     structuredSchema: ciLogsSchema,
     async execute(_id, params, signal, ctx) {
       return ciLogs(gh, { params, ctx, signal });

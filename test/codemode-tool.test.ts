@@ -473,7 +473,7 @@ describe("codemode 工具", () => {
     expect(h.codemode.description).toContain(
       [
         'declare function call(name: "annotated", args: Record<string, unknown>): Promise<{',
-        "  // one line",
+        "  /** one line */",
         "  single: string;",
         "  /**",
         "   * first line",

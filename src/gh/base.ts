@@ -22,6 +22,9 @@ import {
   createGithubApi,
   createGithubChecks,
   createGithubSearch,
+  GH_LIST_DEFAULT_LIMIT,
+  GH_LIST_DEFAULT_STATE,
+  GH_LIST_MAX_LIMIT,
   type GithubChecksClient,
   type GithubClientOptions,
   type GithubSearch,
@@ -206,9 +209,10 @@ export function listFilterParameters(kind: "issue" | "pr") {
     keywords: Type.Optional(Type.String({ description: "Search keywords (free text)" })),
     state: Type.Optional(
       Type.String({
+        default: GH_LIST_DEFAULT_STATE,
         description: isPr
-          ? "open, closed, merged, all (default: open; all applies to keyword search and covers open + closed + merged)"
-          : "open, closed, all (default: open; all applies to keyword search and covers closed too)",
+          ? "open, closed, merged, all (all applies to keyword search and covers open + closed + merged)"
+          : "open, closed, all (all applies to keyword search and covers closed too)",
       }),
     ),
     label: Type.Optional(Type.String({ description: "Filter by label" })),
@@ -225,20 +229,16 @@ export function listFilterParameters(kind: "issue" | "pr") {
       }),
     ),
     milestone: Type.Optional(Type.String({ description: "Filter by milestone" })),
-    limit: Type.Optional(Type.Number({ description: "Max results (default 30, max 100)" })),
+    limit: Type.Optional(
+      Type.Number({
+        default: GH_LIST_DEFAULT_LIMIT,
+        description: `Max results (upper bound ${GH_LIST_MAX_LIMIT})`,
+      }),
+    ),
   });
 }
 
-export interface ListFilters {
-  repo?: string;
-  keywords?: string;
-  state?: string;
-  label?: string;
-  author?: string;
-  assignee?: string;
-  milestone?: string;
-  limit?: number;
-}
+export type ListFilters = Static<ReturnType<typeof listFilterParameters>>;
 
 /**
  * 浏览分支（不带 keywords）：走 octokit 的 REST 列表端点，再归一到与搜索分支同一套
@@ -491,6 +491,10 @@ export interface PollPrChecksOptions {
   owner: string;
   repo: string;
   headSha: string;
+  /**
+   * Return as soon as a check fails instead of waiting for the remaining
+   * checks to finish. The tools default to true.
+   */
   failFast: boolean;
   checks: GithubChecksClient;
   /**

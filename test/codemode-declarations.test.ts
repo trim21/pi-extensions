@@ -18,13 +18,13 @@ describe("renderType", () => {
 
     expect(renderType(schema, "")).toMatchInlineSnapshot(`
       "{
-        // single line
+        /** single line */
         name: string;
         count: number;
         tags: Array<string>;
         nested: {
           inner: boolean;
-          // 数组自身的说明
+          /** 数组自身的说明 */
           deep: Array<number>;
         };
         /**
@@ -32,6 +32,32 @@ describe("renderType", () => {
          * second line
          */
         note?: string;
+      }"
+    `);
+  });
+
+  it("把 default 渲染成 @default tag", () => {
+    const schema = Type.Object({
+      fail_fast: Type.Optional(
+        Type.Boolean({ description: "Exit immediately when any check fails", default: true }),
+      ),
+      state: Type.Optional(Type.String({ default: "open" })),
+      count: Type.Number({ default: 5 }),
+      nothing: Type.Optional(Type.Boolean()),
+    });
+
+    expect(renderType(schema, "")).toMatchInlineSnapshot(`
+      "{
+        /**
+         * Exit immediately when any check fails
+         * @default true
+         */
+        fail_fast?: boolean;
+        /** @default "open" */
+        state?: string;
+        /** @default 5 */
+        count: number;
+        nothing?: boolean;
       }"
     `);
   });

@@ -88,7 +88,7 @@
 #### Scenario: 任一失败
 
 - **WHEN** 某一轮出现 fail 检查
-- **THEN** `fail_fast: true` 时立即返回 FAILED；默认（false）继续等待其余检查完成或超时后返回 FAILED，载荷里列出失败检查与链接
+- **THEN** 默认（`fail_fast` 缺省为 true）立即返回 FAILED，不等其余仍在途的检查；显式 `fail_fast: false` 时继续等待其余检查完成或超时后返回 FAILED，载荷里列出失败检查与链接
 
 #### Scenario: 等待人工审批
 
@@ -136,7 +136,7 @@ Actions jobs 详情只服务于 FAILED 载荷里的失败 job 明细（`failedJo
 
 ## Implementation
 
-- 分层（均在 `src/gh/base.ts`，后两层为纯函数、可独立单测）：`mergeChecks` 合并与 bucket 映射（commit statuses + check runs + 已结束且没有 check run 的 suites，后者的元数据由 `checkSuiteId` 匹配 workflow run 补齐）→ `pollPrChecks` 等待循环（返回 `completed / fail_fast / awaiting_approval / timeout` 与最终快照、`elapsedMs`）→ `checksVerdict` 判定汇总（`status` + `failedJobs`）；两个工具入口 `src/gh/tools/wait-pr-checks.ts` 与 `src/gh/tools/wait-commit-checks.ts` 共享 `waitChecksReport` 编排核心，`event` 过滤在每轮合并判定后应用（严格匹配），因此无 check run 的 suite 条目按其 workflow run 的 event 一起参与或一起被排除。
+- 分层（均在 `src/gh/base.ts`，后两层为纯函数、可独立单测）：`mergeChecks` 合并与 bucket 映射（commit statuses + check runs + 已结束且没有 check run 的 suites，后者的元数据由 `checkSuiteId` 匹配 workflow run 补齐）→ `pollPrChecks` 等待循环（返回 `completed / fail_fast / awaiting_approval / timeout` 与最终快照、`elapsedMs`）→ `checksVerdict` 判定汇总（`status` + `failedJobs`）；两个工具入口 `src/gh/tools/wait-pr-checks.ts` 与 `src/gh/tools/wait-commit-checks.ts` 共享 `waitChecksReport` 编排核心（`fail_fast` 缺省为 true，即 `fail_fast !== false`），`event` 过滤在每轮合并判定后应用（严格匹配），因此无 check run 的 suite 条目按其 workflow run 的 event 一起参与或一起被排除。
 - commit 解析：`src/lib/github.ts` 的 `createGithubChecks(api).headSha()`（octokit `repos.getCommit`，接受 SHA / 分支 / tag）；PR 入口用 `pullHead()` 取 head commit。
 - API 客户端：`src/lib/github.ts` 的 `createGithubChecks(api)`（octokit；`api` 是与 search / reads 共用的 `createGithubApi` accessor，token 只取一次并闭包缓存，401 时丢弃缓存重试一次），提供 `statuses` / `checkRuns`（带 `checkSuiteId`）/ `suites` / `workflowRuns` / `actionJobs`。`statuses` 用单次 `repos.getCombinedStatusForRef({ per_page: 100 })`，其余四个用 `octokit.paginate`（per_page=100）。check run 的 event 与 suite 的名字/event/链接都来自同一次 `workflowRuns`（`run.check_suite_id` 是 suite 的 join key）。
 - signal 由调用方构造并持有，轮询层只观察不取消；工具侧 `signal ?? new AbortController().signal`。

@@ -54,11 +54,15 @@ export interface SearchOptions {
   signal?: AbortSignal;
 }
 
+/** `numResults` 的缺省值与上限；参数描述从这里插值。 */
+const DEFAULT_NUM_RESULTS = 5;
+const MAX_NUM_RESULTS = 50;
+
 function clampNumResults(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return 5;
+    return DEFAULT_NUM_RESULTS;
   }
-  return Math.max(1, Math.min(Math.floor(value), 50));
+  return Math.max(1, Math.min(Math.floor(value), MAX_NUM_RESULTS));
 }
 
 function normalizeDomain(raw: string): string | undefined {
@@ -183,7 +187,10 @@ export function registerWebSearchTool(bus: ToolBus): void {
         Type.Array(Type.String(), { description: "Multiple queries searched in sequence" }),
       ),
       numResults: Type.Optional(
-        Type.Number({ description: "Results per query (default: 5, max: 50)" }),
+        Type.Number({
+          default: DEFAULT_NUM_RESULTS,
+          description: `Results per query (max ${MAX_NUM_RESULTS})`,
+        }),
       ),
       recencyFilter: Type.Optional(
         Type.String({ description: "Filter by recency: day, week, month, year" }),

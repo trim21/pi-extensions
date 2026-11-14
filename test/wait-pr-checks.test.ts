@@ -10,8 +10,10 @@
  *
  * Run: pnpm exec vitest run test/wait-pr-checks.test.ts
  */
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
+import { GhClient } from "../src/gh/base.js";
 import {
   type ChecksPollResult,
   checksVerdict,
@@ -19,6 +21,7 @@ import {
   type MergedCheck,
   pollPrChecks,
 } from "../src/gh/index.js";
+import { addWaitPrChecksTool } from "../src/gh/tools/wait-pr-checks.js";
 import type {
   ActionJob,
   CheckRun,
@@ -26,6 +29,8 @@ import type {
   CommitStatus,
   WorkflowRunRef,
 } from "../src/lib/github.js";
+import { createToolBus } from "../src/lib/tool-bus.js";
+import { githubCassette } from "./github-fixtures.js";
 
 function status(overrides: Partial<CommitStatus> & { context?: string }): CommitStatus {
   return {
@@ -628,5 +633,62 @@ describe("checksVerdict", () => {
     const verdict = checksVerdict({ poll: poll({ outcome: "timeout", elapsedMs: 600_000 }) });
 
     expect(verdict).toEqual({ status: "pending", failedJobs: [] });
+  });
+});
+
+describe("wait-github-pr-checks 工具入口", () => {
+  const sha = "1111111111111111111111111111111111111111";
+
+  /** 一个 PR：head commit 上一条失败的 check run + 一条仍在跑的 check run。 */
+  function waitBus() {
+    const cassette = githubCassette({
+      "repos/o/r/pulls/299": { body: { number: 299, head: { sha } } },
+      [`repos/o/r/commits/${sha}/status`]: { body: { state: "pending", statuses: [] } },
+      [`repos/o/r/commits/${sha}/check-runs`]: {
+        body: {
+          total_count: 2,
+          check_runs: [
+            {
+              name: "rust (windows-latest)",
+              status: "completed",
+              conclusion: "failure",
+              started_at: "2026-11-15T02:00:00Z",
+              html_url: "https://github.com/o/r/actions/runs/1/job/2",
+              details_url: "https://github.com/o/r/actions/runs/1/job/2",
+              check_suite: { id: 10 },
+            },
+            {
+              name: "rust (macos-15)",
+              status: "in_progress",
+              conclusion: null,
+              started_at: "2026-11-15T02:00:00Z",
+              html_url: null,
+              details_url: null,
+              check_suite: { id: 10 },
+            },
+          ],
+        },
+      },
+      [`repos/o/r/commits/${sha}/check-suites`]: { body: { total_count: 0, check_suites: [] } },
+      "repos/o/r/actions/runs": { body: { total_count: 0, workflow_runs: [] } },
+    });
+    const gh = new GhClient(cassette.fetch, { token: async () => "test-token" });
+    const bus = createToolBus({ registerTool: () => {} } as unknown as ExtensionAPI);
+    addWaitPrChecksTool(gh, bus);
+    return { bus, cassette };
+  }
+
+  it("默认在出现失败检查时立即返回，不等仍在跑的检查", async () => {
+    const { bus, cassette } = waitBus();
+
+    const result = await bus.executeCodemodeTool(
+      "wait-github-pr-checks",
+      { number: 299, repo: "o/r" },
+      { ctx: { cwd: "/tmp" } as never },
+    );
+
+    expect(result).toMatchObject({ ok: true, value: { status: "failure", totalChecks: 2 } });
+    // 只轮询了一轮：第二轮会被 30s 的间隔挡住，走到那里说明没有短路
+    expect(cassette.calls.filter((url) => url.includes("/check-runs"))).toHaveLength(1);
   });
 });

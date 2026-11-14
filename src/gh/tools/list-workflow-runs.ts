@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 
+import { GH_RUNS_DEFAULT_LIMIT } from "../../lib/github-reads.js";
 import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, structuredResult } from "../base.js";
@@ -12,7 +13,9 @@ export function addListWorkflowRunsTool(gh: GhClient, bus: ToolBus) {
     description: "List GitHub Actions workflow runs.",
     parameters: Type.Object({
       repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-      limit: Type.Optional(Type.Number({ description: "Max results (default 20)" })),
+      limit: Type.Optional(
+        Type.Number({ default: GH_RUNS_DEFAULT_LIMIT, description: "Max results" }),
+      ),
       status: Type.Optional(
         Type.String({ description: "Filter by status: success, failure, cancelled, etc." }),
       ),

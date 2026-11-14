@@ -76,6 +76,14 @@ export interface SearchHit {
 }
 
 /**
+ * `list-github-issues` / `list-github-prs` 的缺省 state 与 limit 范围：schema 的
+ * `default` 与这里共用同一份常量，不要在别处另写字面量。
+ */
+export const GH_LIST_DEFAULT_STATE = "open";
+export const GH_LIST_DEFAULT_LIMIT = 30;
+export const GH_LIST_MAX_LIMIT = 100;
+
+/**
  * Build the `q` parameter for the issues-and-pull-requests search endpoint.
  *
  * State semantics (the whole reason this client exists):
@@ -86,7 +94,7 @@ export interface SearchHit {
  */
 export function buildSearchQuery(kind: SearchKind, params: SearchParams): string {
   const { repo, keywords, label, author, assignee, milestone } = params;
-  const state = params.state ?? "open";
+  const state = params.state ?? GH_LIST_DEFAULT_STATE;
 
   const parts: string[] = [];
   if (repo) {
@@ -412,7 +420,7 @@ export interface GithubSearch {
 export function createGithubSearch(api: GithubApi): GithubSearch {
   return {
     async search(kind, params) {
-      const limit = Math.min(Math.max(params.limit ?? 30, 1), 100);
+      const limit = Math.min(Math.max(params.limit ?? GH_LIST_DEFAULT_LIMIT, 1), GH_LIST_MAX_LIMIT);
       // `@me` 是 gh CLI 的简写，REST 搜索不认识：这里不展开，它按字面量进入查询串。
       const q = buildSearchQuery(kind, { ...params, limit });
       return await api.call(async (client) => {

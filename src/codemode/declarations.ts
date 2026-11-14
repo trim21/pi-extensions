@@ -26,19 +26,29 @@ function propertyName(name: string): string {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : JSON.stringify(name);
 }
 
-/** schema 自带的字段说明：没有或为空时不渲染注释。 */
-function descriptionOf(schema: unknown): string {
-  if (!isRecord(schema) || typeof schema.description !== "string") {
+/**
+ * 字段注释：schema 的 `description` 与 `default` 都进 JSDoc。
+ *
+ * 全部用 JSDoc（单行也用 `/** ... *\/`）而不是 `//`：`@default` 是 tag，写在 `//`
+ * 里只是普通文本，读声明的模型和工具链都不会把它当默认值。
+ */
+function fieldComment(schema: unknown, indent: string): string {
+  const lines: string[] = [];
+  if (
+    isRecord(schema) &&
+    typeof schema.description === "string" &&
+    schema.description.trim() !== ""
+  ) {
+    lines.push(...schema.description.split("\n").map((line) => line.trim()));
+  }
+  if (isRecord(schema) && schema.default !== undefined) {
+    lines.push(`@default ${JSON.stringify(schema.default)}`);
+  }
+  if (lines.length === 0) {
     return "";
   }
-  return schema.description.trim();
-}
-
-/** 字段注释：单行用 `//`，多行才用 JSDoc；缩进与它下面的属性对齐。 */
-function fieldComment(description: string, indent: string): string {
-  const lines = description.split("\n").map((line) => line.trim());
   if (lines.length === 1) {
-    return `${indent}// ${lines[0]}`;
+    return `${indent}/** ${lines[0]} */`;
   }
   return [
     `${indent}/**`,
@@ -89,10 +99,8 @@ export function renderType(schema: unknown, indent: string): string {
       const lines = entries.map(([key, value]) => {
         const optional = required.has(key) ? "" : "?";
         const property = `${indent}  ${propertyName(key)}${optional}: ${renderType(value, `${indent}  `)};`;
-        const description = descriptionOf(value);
-        return description === ""
-          ? property
-          : `${fieldComment(description, `${indent}  `)}\n${property}`;
+        const comment = fieldComment(value, `${indent}  `);
+        return comment === "" ? property : `${comment}\n${property}`;
       });
       return `{\n${lines.join("\n")}\n${indent}}`;
     }

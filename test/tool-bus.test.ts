@@ -225,6 +225,31 @@ describe("tool bus 执行", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("解析前用 schema 的 default 补齐缺省参数", async () => {
+    const { pi } = createFakePi();
+    const bus = createToolBus(pi);
+    const execute = vi.fn(async (_id: string, params: Record<string, unknown>) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(params) }],
+      details: {},
+    }));
+    bus.register({
+      name: "echo",
+      label: "Echo",
+      description: "echo text back",
+      parameters: Type.Object({
+        text: Type.String(),
+        loud: Type.Optional(Type.Boolean({ default: true })),
+      }),
+      execute,
+    });
+
+    await bus.executeTool("echo", { text: "hi" }, { ctx });
+    await bus.executeCodemodeTool("echo", { text: "hi" }, { ctx });
+
+    expect(execute.mock.calls[0]?.[1]).toEqual({ text: "hi", loud: true });
+    expect(execute.mock.calls[1]?.[1]).toEqual({ text: "hi", loud: true });
+  });
+
   it("工具抛错时返回错误结果", async () => {
     const { pi } = createFakePi();
     const bus = createToolBus(pi);

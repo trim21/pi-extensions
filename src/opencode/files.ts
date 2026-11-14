@@ -445,7 +445,8 @@ function registerReadTool(
       limit: Type.Optional(
         Type.Integer({
           minimum: 0,
-          description: "The maximum number of lines to read (defaults to 2000)",
+          default: DEFAULT_MAX_LINES,
+          description: "The maximum number of lines to read",
         }),
       ),
     }),

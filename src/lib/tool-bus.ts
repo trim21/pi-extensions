@@ -200,12 +200,15 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * 校验工具参数：先按 TypeBox 的转换规则 coerce 再解析。pi 1.5 校验模型调用参数时带 coercion
- * （`"3"` → 3、单值包成数组），codemode 这条路径要给出相同结论。结构化结果的复核不走这里
- * ——输出不该被静默转换。
+ * 校验工具参数：先按 TypeBox 的转换规则 coerce（与 pi 校验模型参数时的 coercion 一致：
+ * `"3"` → 3、单值包成数组），再用 schema 的 `default` 补齐缺省字段，最后解析。默认值必须
+ * 在 Parse 之前补——否则补进去的值不过校验（`default` 写错类型不会被发现）。结构化结果
+ * 的复核不走这里——输出不该被静默转换或补值。
  */
 function parseToolArguments<T extends TSchema>(schema: T, value: unknown): Static<T> {
-  return parseWithSchema(schema, Value.Convert(schema, value));
+  // Default 原地修改传入的对象：pi 路径传的是它自己 clone 过的参数，codemode 路径是
+  // JSON 解析出的新对象，改它们都不会影响调用方。
+  return parseWithSchema(schema, Value.Default(schema, Value.Convert(schema, value)));
 }
 
 type StructuredCheck =
