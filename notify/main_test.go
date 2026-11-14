@@ -158,6 +158,31 @@ func TestScanSessionReportsUnparsableFile(t *testing.T) {
 	}
 }
 
+func TestNewClientUsesEnvProxiesByDefault(t *testing.T) {
+	transport, ok := newClient(false).Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("newClient(false) did not return an *http.Transport")
+	}
+	if transport.Proxy == nil {
+		t.Fatal("newClient(false) must keep honouring HTTP_PROXY and friends")
+	}
+}
+
+func TestNewClientNoProxyBypassesEnvProxies(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	t.Setenv("NO_PROXY", "")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	if err := postGotify(newClient(true), server.URL+"/message", "secret", "title", "message"); err != nil {
+		t.Fatalf("postGotify with the no-proxy client: %v", err)
+	}
+}
+
 func TestPostGotify(t *testing.T) {
 	var (
 		gotPath  string

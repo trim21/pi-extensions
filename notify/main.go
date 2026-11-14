@@ -49,6 +49,7 @@ func main() {
 func run() error {
 	baseURL := flag.String("url", "", "gotify base URL, for example https://gotify.example.com")
 	token := flag.String("token", "", "gotify application token")
+	noProxy := flag.Bool("no-proxy", false, "ignore HTTP_PROXY, HTTPS_PROXY and NO_PROXY")
 	flag.Parse()
 
 	endpoint, err := messageEndpoint(*baseURL)
@@ -74,12 +75,23 @@ func run() error {
 	title := firstNonEmpty(sessionName, payload.Title, defaultTitle)
 	body := notificationBody(payload.Event, cwd)
 
-	client := &http.Client{Timeout: requestTimeout}
+	client := newClient(*noProxy)
 	if err := postGotify(client, endpoint, *token, title, body); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// newClient builds the gotify client. Proxy settings come from the environment
+// by default, exactly like http.DefaultClient; noProxy drops them so that a
+// stale HTTP_PROXY inherited from the editor cannot swallow the notification.
+func newClient(noProxy bool) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if noProxy {
+		transport.Proxy = nil
+	}
+	return &http.Client{Timeout: requestTimeout, Transport: transport}
 }
 
 func readPayload() hookPayload {
