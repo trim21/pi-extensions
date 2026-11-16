@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@cortexkit/aft-bridge':
-        specifier: 0.64.0
-        version: 0.64.0
+        specifier: 0.65.0
+        version: 0.65.0
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -31,7 +31,7 @@ importers:
         version: 4.18.1
       minimatch:
         specifier: ^11.0.0
-        version: 11.0.8
+        version: 11.0.9
       octokit:
         specifier: ^5.0.5
         version: 5.0.5
@@ -122,7 +122,7 @@ importers:
         version: 2.7.0
       lint-staged:
         specifier: ^17.3.0
-        version: 17.6.0
+        version: 17.6.1
       prettier:
         specifier: ^3.9.6
         version: 3.10.1
@@ -140,8 +140,8 @@ importers:
         version: 5.1.0(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
     optionalDependencies:
       '@cortexkit/aft-linux-x64':
-        specifier: 0.64.0
-        version: 0.64.0
+        specifier: 0.65.0
+        version: 0.65.0
 
 packages:
 
@@ -265,17 +265,17 @@ packages:
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
 
-  '@cortexkit/aft-bridge@0.64.0':
-    resolution: {integrity: sha512-4EQO/hJmjWh8LUvul5YL+CAuu2jzIZdfX6AuE436PzqcF8jLEMJPVgN9aWhHPcaTD4JxpFpsoJVyNawvZRjN7g==}
+  '@cortexkit/aft-bridge@0.65.0':
+    resolution: {integrity: sha512-rhgcyQnW2gAMceqXs0RcScIPE2A6+yaAg2EV1/0R98GT+dyYCSf2zQJAJVU0j67GBko8Mt4rSZkF5dq6fA59QQ==}
 
-  '@cortexkit/aft-linux-x64@0.64.0':
-    resolution: {integrity: sha512-PwHrqOd40gvMP/DI8Bf/QNoZqkLvwken9Bwkwi17MfA6izFEY4bzdt28IbgvHYT+E2QAwpmgZvSJNIJuxOFEDA==}
+  '@cortexkit/aft-linux-x64@0.65.0':
+    resolution: {integrity: sha512-TzjOERu3FkFVdk7GMI5WJtvQqczUwd/FPS6iUXYsW7YvvN3yEERxEU4207DdI0mJsXS2VpAc9mKl9tmdu8+zrA==}
     cpu: [x64]
     os: [linux]
     hasBin: true
 
-  '@cortexkit/subc-client@0.21.2':
-    resolution: {integrity: sha512-xQLfwFBOigFRF1VMgta7Dr/640H34EHexRtFLDkH42yAAMvtXJFmQ4bsjin6CDmfXiKeItsuQqjYFRMEZs4Aaw==}
+  '@cortexkit/subc-client@0.24.5':
+    resolution: {integrity: sha512-quPMUUXjj6RG8Ns3EJcNV7rbFyCLP5MVoaOSSBAwD6deY8Rxg77Y/4GA5bKdr5WAO/JTQT9aLz53fTvuzNF9Sg==}
     engines: {node: '>=18'}
 
   '@earendil-works/pi-agent-core@1.5.0':
@@ -1993,8 +1993,8 @@ packages:
       canvas:
         optional: true
 
-  lint-staged@17.6.0:
-    resolution: {integrity: sha512-nOhBfYkZEwkFtNzD5pK9s9LkcWoxJ+whLzEnhqi9nl7zTB5n7tg8+9iYgMGx2Wm3VlLu8cbNj0RACzY+nWi5iQ==}
+  lint-staged@17.6.1:
+    resolution: {integrity: sha512-3MXgVN7BERDR/6CXZs2fDHGc+r0+hlvGAa9wqMlVbIS6RVRuaPOnb5SnN6wMXulwfEy9DXVkMVUN/8cUlpPDnw==}
     engines: {node: '>=22.22.1'}
     hasBin: true
 
@@ -2103,8 +2103,8 @@ packages:
     resolution: {integrity: sha512-iny/40PEGkNJQ5/Pv6z3nm6FbRAby32GeZRjCUJk2WnNDbgPSTcdI+DDvLqsgBdD4cD5sMtMheqPPnehCCa8Nw==}
     engines: {node: 18 || 20 || >=22}
 
-  minimatch@11.0.8:
-    resolution: {integrity: sha512-nFQuYSTVrGvysVBps5Ih+0BdnYFN/Cj3C816r6+p7yK+FHrVLGE4O4N9AFwykrlNlvM2HYt+Rad1Uiro6h88Ig==}
+  minimatch@11.0.9:
+    resolution: {integrity: sha512-KCFkfyjqerNlSstjlhIGNXIKZGA/6O4V4RlhZ+Dsr621SPPw0mzlypE9D9ZOoPiVefHID+j7/XuMMlqfD/F60Q==}
     engines: {node: 20 || >=22}
 
   ms@2.1.3:
@@ -2325,9 +2325,9 @@ packages:
   std-env@4.3.0:
     resolution: {integrity: sha512-OtU/EgQ1kIm5KwqQpBC6ZEMXrZRui11w8zgfTWp8cdO9B8OaPsbA8bTHO2P+HNo1VlUTGMVBwPhydu6poeXiag==}
 
-  string-argv@0.3.2:
-    resolution: {integrity: sha512-aqD2Q0144Z+/RqG52NeHEkZauTAUWJO8c6yTftGJKO3Tja5tUgIfmIl6kExvhtxSDP7fXB6DvzkfMpCd/F3G+Q==}
-    engines: {node: '>=0.6.19'}
+  string-argv@0.4.0:
+    resolution: {integrity: sha512-UOtaksJ3SK3KLHba2i9I27fvuZNfBlImDP5wKsCOxCDMRDNxlipCe8rmnUAaDpqlQ93upnA0SzF2pjWhttozSA==}
+    engines: {node: '>=16.20.0'}
 
   strip-indent@4.1.1:
     resolution: {integrity: sha512-SlyRoSkdh1dYP0PzclLE7r0M9sgbFKKMFXpFRUMNuKhQSbC6VQIGzq3E0qsfvGJaUFJPGv6Ws1NZ/haTAjfbMA==}
@@ -2796,15 +2796,15 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
-  '@cortexkit/aft-bridge@0.64.0':
+  '@cortexkit/aft-bridge@0.65.0':
     dependencies:
-      '@cortexkit/subc-client': 0.21.2
+      '@cortexkit/subc-client': 0.24.5
       undici: 7.30.2
 
-  '@cortexkit/aft-linux-x64@0.64.0':
+  '@cortexkit/aft-linux-x64@0.65.0':
     optional: true
 
-  '@cortexkit/subc-client@0.21.2': {}
+  '@cortexkit/subc-client@0.24.5': {}
 
   '@earendil-works/pi-agent-core@1.5.0(@aws-sdk/credential-provider-node@3.972.97)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.23.0)(zod@4.6.7)':
     dependencies:
@@ -4018,7 +4018,7 @@ snapshots:
       eslint: 10.15.0(jiti@2.7.0)
       eslint-import-context: 0.1.9(unrs-resolver@1.13.0)
       is-glob: 4.0.3
-      minimatch: 11.0.8
+      minimatch: 11.0.9
       semver: 7.8.6
       stable-hash-x: 0.2.0
       unrs-resolver: 1.13.0
@@ -4410,10 +4410,10 @@ snapshots:
       htmlparser2: 10.1.0
       uhyphen: 0.2.0
 
-  lint-staged@17.6.0:
+  lint-staged@17.6.1:
     dependencies:
       picomatch: 4.0.7
-      string-argv: 0.3.2
+      string-argv: 0.4.0
       tinyexec: 1.3.1
     optionalDependencies:
       yaml: 2.9.1
@@ -4587,7 +4587,7 @@ snapshots:
       '@isaacs/nonrecursive-glob-match': 1.1.0
       brace-expansion: 5.0.12
 
-  minimatch@11.0.8:
+  minimatch@11.0.9:
     dependencies:
       '@isaacs/nonrecursive-glob-match': 1.1.0
       brace-expansion: 5.0.13
@@ -4789,7 +4789,7 @@ snapshots:
 
   std-env@4.3.0: {}
 
-  string-argv@0.3.2: {}
+  string-argv@0.4.0: {}
 
   strip-indent@4.1.1: {}
 
