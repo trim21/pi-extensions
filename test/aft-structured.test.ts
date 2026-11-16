@@ -75,13 +75,18 @@ async function run(
 describe("aft_outline 结构化结果", () => {
   beforeEach(() => mockCallAftTool.mockReset());
 
-  it("单文件模式：载荷只有 text 与 complete", async () => {
+  it("单文件模式：载荷只有 text、complete 与 content_files", async () => {
     const response = await fixture("outline-file.json");
     mockCallAftTool.mockResolvedValue({ text: response.text as string, response });
 
     const { value } = await run(registerOutlineTool, "aft_outline", { target: "/tmp/a.ts" });
 
-    expect(value).toEqual({ success: true, complete: true, text: response.text });
+    expect(value).toEqual({
+      success: true,
+      complete: true,
+      text: response.text,
+      content_files: ["/tmp/a.ts"],
+    });
   });
 
   it("files 模式：文件条目原样进载荷", async () => {
@@ -103,7 +108,7 @@ describe("aft_outline 结构化结果", () => {
 describe("aft_zoom 结构化结果", () => {
   beforeEach(() => mockCallAftTool.mockReset());
 
-  it("符号源码与调用注解原样进载荷", async () => {
+  it("batch 包装与符号源码原样进载荷", async () => {
     const response = await fixture("zoom-greet.json");
     mockCallAftTool.mockResolvedValue({ text: response.text as string, response });
 
@@ -112,11 +117,19 @@ describe("aft_zoom 结构化结果", () => {
       symbols: "greet",
     });
 
-    expect(value.name).toBe("greet");
-    expect(value.kind).toBe("function");
-    expect(value.range).toEqual({ start_line: 1, start_col: 1, end_line: 3, end_col: 2 });
-    expect(value.content).toContain("export function greet");
-    expect(value.annotations).toEqual({ calls_out: [], called_by: [] });
+    const targets = value.targets as {
+      targetLabel: string;
+      name: string;
+      response: Record<string, unknown>;
+    }[];
+    expect(targets[0]?.targetLabel).toBe("/tmp/a.ts");
+    const entry = targets[0]?.response ?? {};
+    expect(entry.name).toBe("greet");
+    expect(entry.kind).toBe("function");
+    expect(entry.range).toEqual({ start_line: 1, start_col: 1, end_line: 3, end_col: 2 });
+    expect(entry.content).toContain("export function greet");
+    expect(entry.annotations).toEqual({ calls_out: [], called_by: [] });
+    expect(value.content_files).toEqual(["/tmp/a.ts"]);
   });
 });
 
@@ -206,7 +219,7 @@ describe("schema 的宽松度", () => {
       symbols: "greet",
     });
 
-    expect(value.name).toBe(response.name);
+    expect(value.targets).toHaveLength(1);
     expect(value).not.toHaveProperty("brand_new_field");
     expect(value).not.toHaveProperty("another");
   });
@@ -224,7 +237,17 @@ describe("schema 的宽松度", () => {
   });
 
   it("引擎省略 range 的行号时仍通过复核", async () => {
-    const response = { success: true, text: "greet", name: "greet", range: { start_col: 1 } };
+    const response = {
+      success: true,
+      text: "greet",
+      targets: [
+        {
+          targetLabel: "/tmp/a.ts",
+          name: "greet",
+          response: { name: "greet", range: { start_col: 1 } },
+        },
+      ],
+    };
     mockCallAftTool.mockResolvedValue({ text: "greet", response });
 
     const { value } = await run(registerZoomTool, "aft_zoom", {
@@ -232,7 +255,8 @@ describe("schema 的宽松度", () => {
       symbols: "greet",
     });
 
-    expect(value.range).toEqual({ start_col: 1 });
+    const targets = value.targets as { response: { range: unknown } }[];
+    expect(targets[0]?.response.range).toEqual({ start_col: 1 });
   });
 
   it("把引擎的否定答案作为 softCodes 传给 callAftTool", async () => {

@@ -1,7 +1,9 @@
 {
   "id": "s1",
   "success": true,
+  "status": "ready",
   "query": "greet",
+  "include_tests": false,
   "interpreted_as": "hybrid",
   "query_kind": "Identifier",
   "complete": true,
@@ -22,6 +24,7 @@
       "source": "semantic",
       "semantic_score": 0.97,
       "lexical_score": null,
+      "hybrid_boosted": false,
       "exact": false,
       "snippet": "export function greet(name)"
     },

@@ -4,10 +4,7 @@
   "symbol": "buildZoomSubtitle",
   "file": "src/aft/tools.ts",
   "signature": "buildZoomSubtitle(cwd: string, params): string | undefined",
-  "parameters": [
-    "cwd",
-    "params"
-  ],
+  "parameters": ["cwd", "params"],
   "total_affected": 2,
   "affected_files": 1,
   "callers": [
@@ -15,14 +12,22 @@
       "caller_symbol": "registerZoomTool",
       "caller_file": "src/aft/tools.ts",
       "line": 237,
-      "is_entry_point": false,
-      "parameters": [
-        "extCtx.cwd",
-        "params"
-      ]
+      "root": "main",
+      "parameters": ["extCtx.cwd", "params"],
+      "call_expression": "buildZoomSubtitle(extCtx.cwd, params)"
     }
   ],
+  "root_counts": {
+    "main": 1
+  },
   "depth_limited": false,
   "truncated": 0,
+  "sites_list_envelope": {
+    "shown": 1,
+    "total": { "kind": "exact", "value": 1 },
+    "unit": "sites",
+    "causes": [],
+    "narrow": ["depth", "includeTests"]
+  },
   "text": "2 affected call sites in 1 file"
 }

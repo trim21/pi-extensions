@@ -2,6 +2,7 @@
   "id": "o2",
   "success": true,
   "text": "a.ts  typescript     2 syms       6 lines\n",
+  "content_files": ["/tmp/a.ts"],
   "files": [
     {
       "path": "a.ts",
