@@ -1,11 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Static, Type } from "typebox";
-import { Value } from "typebox/value";
+import { z } from "zod";
 
-import { Default } from "../lib/schema-defaults.js";
-import { stringEnum } from "../lib/string-enum.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
+import { booleanParam } from "../lib/zod-tool.js";
 
 const TODO_STATUSES = ["pending", "in_progress", "completed"] as const;
 const OTHER_OPTION = "Other";
@@ -21,48 +19,35 @@ const ASK_PROMPT = [
 
 type TodoStatus = (typeof TODO_STATUSES)[number];
 
-const todoItemSchema = Type.Object(
-  {
-    content: Type.String({ minLength: 1 }),
-    status: stringEnum(TODO_STATUSES),
-    activeForm: Type.String({ minLength: 1 }),
-  },
-  { additionalProperties: false },
-);
-const todoSchema = Type.Object(
-  {
-    todos: Type.Array(todoItemSchema, { description: "The updated todo list" }),
-  },
-  { additionalProperties: false },
-);
+const todoItemSchema = z.object({
+  content: z.string().min(1),
+  status: z.enum(TODO_STATUSES),
+  activeForm: z.string().min(1),
+});
+const todoSchema = z.object({
+  todos: z.array(todoItemSchema).describe("The updated todo list"),
+});
 
-type ClaudeCodeTodo = Static<typeof todoItemSchema>;
+type ClaudeCodeTodo = z.infer<typeof todoItemSchema>;
 
-const optionSchema = Type.Object(
-  {
-    label: Type.String({ description: "Concise display text for the option" }),
-    description: Type.String({ description: "Explanation of the option" }),
-  },
-  { additionalProperties: false },
-);
-const questionSchema = Type.Object(
-  {
-    question: Type.String({ description: "The complete question to ask" }),
-    header: Type.String({ description: "Very short label displayed with the question" }),
-    options: Type.Array(optionSchema, {
-      minItems: 2,
-      maxItems: 4,
-      description: "The available choices; do not include an Other option",
-    }),
-    multiSelect: Default(
-      Type.Boolean({ description: "Allow the user to select multiple options" }),
-      false,
-    ),
-  },
-  { additionalProperties: false },
-);
+const optionSchema = z.object({
+  label: z.string().describe("Concise display text for the option"),
+  description: z.string().describe("Explanation of the option"),
+});
+const questionSchema = z.object({
+  question: z.string().describe("The complete question to ask"),
+  header: z.string().describe("Very short label displayed with the question"),
+  options: z
+    .array(optionSchema)
+    .min(2)
+    .max(4)
+    .describe("The available choices; do not include an Other option"),
+  multiSelect: booleanParam({ default: false }).describe(
+    "Allow the user to select multiple options",
+  ),
+});
 
-type QuestionInput = Static<typeof questionSchema>;
+type QuestionInput = z.infer<typeof questionSchema>;
 
 function formatTodos(todos: readonly ClaudeCodeTodo[]): string[] | undefined {
   if (todos.length === 0) {
@@ -135,8 +120,9 @@ export function registerSessionTools(bus: ToolBus, pi: ExtensionAPI): void {
       if (entry.message.toolName !== "TodoWrite") {
         continue;
       }
-      if (Value.Check(todoSchema, entry.message.details)) {
-        ctx.ui.setWidget("claude-code-todos", formatTodos(entry.message.details.todos));
+      const parsed = todoSchema.safeParse(entry.message.details);
+      if (parsed.success) {
+        ctx.ui.setWidget("claude-code-todos", formatTodos(parsed.data.todos));
       }
     }
   });
@@ -190,16 +176,9 @@ export function registerSessionTools(bus: ToolBus, pi: ExtensionAPI): void {
     ].join("\n"),
     promptSnippet: "Ask the user questions during execution",
     promptGuidelines: [ASK_PROMPT],
-    parameters: Type.Object(
-      {
-        questions: Type.Array(questionSchema, {
-          minItems: 1,
-          maxItems: 4,
-          description: "Questions to ask the user",
-        }),
-      },
-      { additionalProperties: false },
-    ),
+    parameters: z.object({
+      questions: z.array(questionSchema).min(1).max(4).describe("Questions to ask the user"),
+    }),
     executionMode: "sequential",
     async execute(_id, params, signal, _onUpdate, ctx) {
       if (!ctx.hasUI) {

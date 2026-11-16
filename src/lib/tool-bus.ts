@@ -9,10 +9,9 @@
  * - `executeTool`：先用工具自身的参数 schema 校验参数，再调用定义的 `execute`；
  *   参数校验失败与工具抛出的异常都归一化成错误结果返回，不向调用方抛异常。
  *
- * 结构化结果：工具可以在定义上声明 `structuredSchema`（TypeBox），并在结果里带
- * `structuredResult: StructuredResult<Static<typeof structuredSchema>>`。成功支的载荷类型
- * 由 schema 在编译期约束，执行时再由总线 `Value.Parse` 复核；`ok: false` 让工具不必抛异常
- * 也能结构化地报告失败（它不改变结果的 `isError`）。
+ * 结构化结果：工具可以在定义上声明 `structuredSchema`（TypeBox 或 Zod），并在结果里带
+ * `structuredResult: StructuredResult<…>`。成功支的载荷类型由 schema 在编译期约束，执行时
+ * 再由总线复核；`ok: false` 让工具不必抛异常也能结构化地报告失败（它不改变结果的 `isError`）。
  *
  * 这两个名字是本仓库自己的约定，刻意不占用宿主字段：pi-agent-core >= 0.99 自带
  * `outputSchema` / `structuredContent`，语义是「裸载荷 + 用 `isError` 表失败」，与本仓库的
@@ -30,9 +29,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
+import { z } from "zod";
 
 import { parseWithSchema } from "./parse-with-schema.js";
 import type { StaticDefaulted } from "./schema-defaults.js";
+import { toOutputJsonSchema, toParametersJsonSchema, type ZodToolSchema } from "./zod-tool.js";
 
 /**
  * 结构化结果：成功带 `value`，失败带可直接展示的错误说明。它只嵌在工具结果的
@@ -46,19 +47,22 @@ export type StructuredResult<T> = { ok: true; value: T } | { ok: false; error: s
  * 期绑定，因此工具无法返回与声明不符的结果。
  */
 export interface StructuredToolDefinition<
-  TParams extends TSchema = TSchema,
-  TOutput extends TSchema = TSchema,
+  TParams extends ToolSchema = ToolSchema,
+  TOutput extends ToolSchema = ToolSchema,
   TDetails = unknown,
-> extends Omit<ToolDefinition<TParams, TDetails, unknown>, "execute"> {
+> extends Omit<ToolDefinition<PiParams<TParams>, TDetails, unknown>, "parameters" | "execute"> {
+  parameters: TParams;
   structuredSchema: TOutput;
   execute(
     toolCallId: string,
-    params: StaticDefaulted<TParams>,
+    params: ParamsValue<TParams>,
     signal: AbortSignal | undefined,
     onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
     ctx: ExtensionContext,
     callOptions?: ToolCallOptions,
-  ): Promise<AgentToolResult<TDetails> & { structuredResult: StructuredResult<Static<TOutput>> }>;
+  ): Promise<
+    AgentToolResult<TDetails> & { structuredResult: StructuredResult<StructuredValue<TOutput>> }
+  >;
 }
 
 /**
@@ -66,8 +70,8 @@ export interface StructuredToolDefinition<
  * generic 函数的参数位置才建立得起来（与 pi 的 `defineTool` 同理）。
  */
 export function defineStructuredTool<
-  TParams extends TSchema,
-  TOutput extends TSchema,
+  TParams extends ToolSchema,
+  TOutput extends ToolSchema,
   TDetails = unknown,
 >(
   definition: StructuredToolDefinition<TParams, TOutput, TDetails>,
@@ -92,13 +96,32 @@ export interface ExecuteToolOptions {
 }
 
 /**
+ * 工具参数与结构化输出可以用 TypeBox（本身就是 JSON Schema + 类型标记）或 Zod 声明。Zod 的
+ * schema 在注册时派生成 JSON Schema 交给 pi 与 codemode 声明，运行期仍由 Zod 解析——因此
+ * `.default()` 是普通的解析语义，不需要仓库再补一套默认值机制。
+ */
+export type ToolSchema = TSchema | ZodToolSchema;
+
+/** 参数解析后的类型：Zod 用 `z.output`（带默认值的字段必有值），TypeBox 用 `StaticDefaulted`。 */
+export type ParamsValue<T extends ToolSchema> = T extends z.ZodType
+  ? z.output<T>
+  : StaticDefaulted<T>;
+
+/** 结构化输出的类型：Zod 用 `z.output`，TypeBox 用 `Static`。 */
+export type StructuredValue<T extends ToolSchema> = T extends z.ZodType ? z.output<T> : Static<T>;
+
+function isZodSchema(schema: ToolSchema): schema is ZodToolSchema {
+  return schema instanceof z.ZodType;
+}
+
+/**
  * codemode-only 工具的定义：`execute` 直接返回结构化结果，没有 pi 的 `AgentToolResult`
  * （`content` / `details`）——这条路径上不存在「模型读到的文本」这个位置，唯一的消费者
  * 是 codemode 脚本。
  */
 export interface CodemodeToolDefinition<
-  TParams extends TSchema = TSchema,
-  TOutput extends TSchema = TSchema,
+  TParams extends ToolSchema = ToolSchema,
+  TOutput extends ToolSchema = ToolSchema,
 > {
   name: string;
   label: string;
@@ -108,10 +131,10 @@ export interface CodemodeToolDefinition<
   prepareArguments?: (args: unknown) => unknown;
   execute(
     toolCallId: string,
-    params: StaticDefaulted<TParams>,
+    params: ParamsValue<TParams>,
     signal: AbortSignal | undefined,
     ctx: ExtensionContext,
-  ): Promise<StructuredResult<Static<TOutput>>>;
+  ): Promise<StructuredResult<StructuredValue<TOutput>>>;
 }
 
 /**
@@ -151,13 +174,20 @@ export type RegisteredToolDefinition = Omit<
  * 交给 pi 的工具定义：与 pi 的 `ToolDefinition` 同形，只把 `execute` 的参数换成补过默认值的
  * 类型。`StaticDefaulted<TParams>` 是 `Static<TParams>` 的子类型，因此仍按 pi 的形状注册。
  */
+/**
+ * 交给 pi 的参数 schema：TypeBox 原样保留（`renderCall` / `renderResult` 等泛型字段仍拿到
+ * 具体形状），Zod 没有对应的 TypeBox 类型，退化成 `TSchema`（渲染器参数变成 `unknown`）。
+ */
+type PiParams<T extends ToolSchema> = T extends TSchema ? T : TSchema;
+
 export interface ToolDefinitionWithDefaults<
-  TParams extends TSchema = TSchema,
+  TParams extends ToolSchema = ToolSchema,
   TDetails = unknown,
-> extends Omit<ToolDefinition<TParams, TDetails, unknown>, "execute"> {
+> extends Omit<ToolDefinition<PiParams<TParams>, TDetails, unknown>, "parameters" | "execute"> {
+  parameters: TParams;
   execute(
     toolCallId: string,
-    params: StaticDefaulted<TParams>,
+    params: ParamsValue<TParams>,
     signal: AbortSignal | undefined,
     onUpdate: AgentToolUpdateCallback<TDetails> | undefined,
     ctx: ExtensionToolContext,
@@ -170,7 +200,7 @@ export interface ToolBus {
    * 注册一个工具；被配置禁用时跳过并返回 false。`execute` 的参数是
    * `StaticDefaulted<TParams>`：总线在调用前已经用 `Value.Default` 补过默认值。
    */
-  register<TParams extends TSchema, TDetails>(
+  register<TParams extends ToolSchema, TDetails>(
     definition: ToolDefinitionWithDefaults<TParams, TDetails>,
   ): boolean;
   /**
@@ -330,6 +360,44 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
   const diagnostics = new Set<string>();
   let callCounter = 0;
 
+  /**
+   * 把定义换成总线内部形状。Zod 声明的 schema 派生成 JSON Schema（pi 与 codemode 声明读的是
+   * 它），解析交给宿主提供的 `prepareArguments`：它在 pi 的 schema 校验之前运行，Zod 在这里
+   * 补默认值、做校验，随后总线的 `Value.Convert → Value.Default → Parse` 对派生 schema 只剩
+   * 结构校验（`Convert` / `Default` 对普通 JSON Schema 是空操作）。
+   *
+   * 「模型把 `"42"` 写成字符串」这类容错落在参数 schema 自己身上（`z.coerce.number()`、
+   * `booleanParam()`），派生出的 JSON Schema 因此仍是 `type: "integer"` / `"boolean"`。
+   */
+  function normalize(definition: {
+    name: string;
+    parameters: ToolSchema;
+    structuredSchema?: ToolSchema;
+    prepareArguments?: (args: unknown) => unknown;
+  }): RegisteredToolDefinition {
+    const { parameters, structuredSchema, prepareArguments } = definition;
+    const zodParameters = isZodSchema(parameters) ? parameters : undefined;
+    const zodStructured =
+      structuredSchema !== undefined && isZodSchema(structuredSchema)
+        ? structuredSchema
+        : undefined;
+    if (zodParameters === undefined && zodStructured === undefined) {
+      // 纯 TypeBox 定义原样保存：`get()` 拿到的就是注册时那个对象
+      return definition as unknown as RegisteredToolDefinition;
+    }
+    return {
+      ...definition,
+      parameters: zodParameters === undefined ? parameters : toParametersJsonSchema(zodParameters),
+      ...(zodParameters !== undefined && {
+        prepareArguments: (args: unknown) =>
+          zodParameters.parse(prepareArguments === undefined ? args : prepareArguments(args)),
+      }),
+      ...(zodStructured !== undefined && {
+        structuredSchema: toOutputJsonSchema(zodStructured),
+      }),
+    } as unknown as RegisteredToolDefinition;
+  }
+
   return {
     register(definition) {
       declared.add(definition.name);
@@ -344,15 +412,12 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
             `personalExtensions.codemodeOnlyTools: tool "${definition.name}" declares no structuredSchema; it stays directly available.`,
           );
         } else {
-          const codemodeStored = {
-            ...(definition as unknown as RegisteredToolDefinition),
-            codemodeOnly: true,
-          };
+          const codemodeStored = { ...normalize(definition), codemodeOnly: true };
           registered.set(codemodeStored.name, codemodeStored);
           return true;
         }
       }
-      const stored = definition as unknown as RegisteredToolDefinition;
+      const stored = normalize(definition);
       pi.registerTool(stored);
       registered.set(stored.name, stored);
       return true;
@@ -366,26 +431,19 @@ export function createToolBus(pi: ExtensionAPI, options: ToolBusOptions = {}): T
       // 总线内部统一按 pi 的调用约定（第 4 个参数是 onUpdate）；脚本定义没有 onUpdate，
       // 因此在这里把它的 ctx 摆到第 5 位。
       const stored = {
-        name: definition.name,
-        label: definition.label,
-        description: definition.description,
-        parameters: definition.parameters,
-        structuredSchema: definition.structuredSchema,
+        ...normalize(definition),
         codemodeOnly: true,
         scripted: true,
-        ...(definition.prepareArguments !== undefined && {
-          prepareArguments: definition.prepareArguments,
-        }),
         execute: (
           toolCallId: string,
-          params: Static<TSchema>,
+          params: unknown,
           signal: AbortSignal | undefined,
           _onUpdate: unknown,
           ctx: ExtensionContext,
         ) =>
           definition.execute(
             toolCallId,
-            params as StaticDefaulted<typeof definition.parameters>,
+            params as ParamsValue<typeof definition.parameters>,
             signal,
             ctx,
           ),

@@ -1,7 +1,6 @@
-import { Type } from "typebox";
+import { z } from "zod";
 
 import { runListParameters } from "../../lib/github-params.js";
-import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, structuredResult } from "../base.js";
 import { ghRunListPayloadSchema, ghRunSummarySchema } from "../schemas.js";
@@ -17,7 +16,7 @@ export function addListWorkflowRunsTool(gh: GhClient, bus: ToolBus) {
       const { limit, status, workflow } = params;
       const { owner, name } = await resolveRepoTarget(params.repo, signal, ctx.cwd, params);
       const items = await gh.reads.listRuns(owner, name, { workflow, status, limit }, signal);
-      const runs = parseWithSchema(Type.Array(ghRunSummarySchema), items);
+      const runs = z.array(ghRunSummarySchema).parse(items);
       return structuredResult(ghRunListPayloadSchema, { runs });
     },
   });

@@ -9,7 +9,7 @@
 import { readFile } from "node:fs/promises";
 
 import type { TruncationResult } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { z } from "zod";
 
 export const BASH_DEFAULT_TIMEOUT_MS = 120_000;
 export const BASH_MAX_TIMEOUT_MS = 7_200_000;
@@ -23,14 +23,16 @@ export function systemReminder(text: string): string {
  * `Bash` 的结构化结果：只有退出码与完整输出——命令非零退出不是失败，所以载荷里没有成败
  * 标志，脚本直接读 `exitCode` 分支；超时/中止时 `exitCode` 为 `null`（原因在模型侧文本里）。
  */
-export const bashStructuredSchema = Type.Object({
-  exitCode: Type.Union([Type.Number(), Type.Null()], {
-    description: "Exit code of the command; null when it was killed (timeout or abort)",
-  }),
-  output: Type.String({
-    description:
+export const bashStructuredSchema = z.strictObject({
+  exitCode: z
+    .number()
+    .nullable()
+    .describe("Exit code of the command; null when it was killed (timeout or abort)"),
+  output: z
+    .string()
+    .describe(
       "Complete output of the command (stdout and stderr merged). Never truncated, never mixed with tool-added notices.",
-  }),
+    ),
 });
 
 /**

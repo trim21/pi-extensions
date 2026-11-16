@@ -22,11 +22,12 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Static, Type } from "typebox";
+import { z } from "zod";
 
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { selectMultiple, selectWithOptionalInput } from "../lib/ui.js";
+import { booleanParam } from "../lib/zod-tool.js";
 
 // ── constants ────────────────────────────────────────────────────────────────
 
@@ -52,26 +53,26 @@ const QUESTION_DESCRIPTION = [
 
 // ── schema（与 opencode 的 Question.Prompt 一致）──────────────────────────────
 
-const optionSchema = Type.Object({
-  label: Type.String({ description: "Display text (concise, 1-5 words)" }),
-  description: Type.String({ description: "Explanation of what this choice means" }),
+const optionSchema = z.object({
+  label: z.string().describe("Display text (concise, 1-5 words)"),
+  description: z.string().describe("Explanation of what this choice means"),
 });
 
-const questionSchema = Type.Object({
-  question: Type.String({ description: "The complete question to ask" }),
-  header: Type.String({ description: "Very short label (max 30 chars)" }),
-  options: Type.Array(optionSchema, { description: "Available choices" }),
-  multiple: Type.Optional(Type.Boolean({ description: "Allow selecting multiple choices" })),
+const questionSchema = z.object({
+  question: z.string().describe("The complete question to ask"),
+  header: z.string().describe("Very short label (max 30 chars)"),
+  options: z.array(optionSchema).describe("Available choices"),
+  multiple: booleanParam().describe("Allow selecting multiple choices").optional(),
 });
 
-export const questionParamsSchema = Type.Object({
-  questions: Type.Array(questionSchema, { description: "Questions to ask" }),
+export const questionParamsSchema = z.object({
+  questions: z.array(questionSchema).describe("Questions to ask"),
 });
 
 // ── types ────────────────────────────────────────────────────────────────────
 
 /** 与 schema 对齐的输入形状（multiple 可选） */
-export type QuestionInput = Static<typeof questionSchema>;
+export type QuestionInput = z.infer<typeof questionSchema>;
 
 /** 规整后的问题（multiple 已默认化为 boolean） */
 export interface Question extends Omit<QuestionInput, "multiple"> {

@@ -20,12 +20,14 @@ import {
   type StatusSnapshot,
 } from "@cortexkit/aft-bridge";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Static, type TSchema, Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import { z } from "zod";
 
 import { formatDisplayPath, formatSubtitlePath, resolvePathArg } from "../lib/path.js";
 import { type ToolPendant } from "../lib/pendant.js";
-import { defineStructuredTool, type StructuredResult, type ToolBus } from "../lib/tool-bus.js";
+import { defineStructuredTool, type ToolBus } from "../lib/tool-bus.js";
+import { booleanParam, zodStructuredResult } from "../lib/zod-tool.js";
 import {
   type AftState,
   callAftTool,
@@ -86,21 +88,17 @@ export function compactArgs(args: Record<string, unknown>): Record<string, unkno
 }
 
 /**
- * 结构化载荷：引擎自己的响应字段（去掉 envelope 的 request id）原样给脚本，外加我们
+ * 结构化载荷的原始值：引擎自己的响应字段（去掉 envelope 的 request id）给脚本，外加我们
  * 渲染的文本。引擎的 `success` / `code` 保留在载荷里——软失败（symbol_not_found、
  * callgraph_building、search_lanes_unavailable）是「工具跑成了、引擎给出否定答案」，
- * 脚本据 `code` 分支，而不是被当成调用异常。
+ * 脚本据 `code` 分支，而不是被当成调用异常。schema 只声明我们确证过的字段，引擎多发的
+ * 未声明字段在复核时被剥掉，因此这里只拼值，类型正确性由 schema 的解析负责。
  */
-function aftPayload<TOutput extends TSchema>(
-  response: Record<string, unknown>,
-  text: string,
-): StructuredResult<Static<TOutput>> {
+function aftPayloadValue(response: Record<string, unknown>, text: string): Record<string, unknown> {
   const value: Record<string, unknown> = { ...response, text };
   // envelope 的 request id 是传输层的事，不进载荷
   delete value.id;
-  // 载荷是引擎响应的原样透传（schema 只声明我们确证过的字段，其余允许通过），所以
-  // 编译期只能断言；类型正确性由脚本侧的声明与总线运行期的 Value.Parse 复核共同保证。
-  return { ok: true, value: value as Static<TOutput> };
+  return value;
 }
 
 /** 人类视角的调用记录：input params + 与 LLM 相同的输出结果。 */
@@ -129,26 +127,21 @@ function buildPendantMarkdown(params: {
   return lines.join("\n").trim();
 }
 
-const OutlineParams = Type.Object(
-  {
-    target: Type.String({
-      description:
-        "要 outline 的对象：文件路径或目录路径。只接受单个 target；目录遍历上限由引擎决定（当前 10000 个文件）。",
-    }),
-    files: Type.Optional(
-      Type.Boolean({
-        description:
-          "为 true 时 target 必须是目录，返回带语言/符号数/字节大小的扁平文件树，而非符号大纲。默认：target 为目录时 true，为文件时 false。",
-      }),
+const OutlineParams = z.object({
+  target: z
+    .string()
+    .describe(
+      "要 outline 的对象：文件路径或目录路径。只接受单个 target；目录遍历上限由引擎决定（当前 10000 个文件）。",
     ),
-    includeTests: Type.Optional(
-      Type.Boolean({
-        description: "目录符号大纲（files: false）模式：包含测试文件。默认 false。",
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
+  files: booleanParam()
+    .describe(
+      "为 true 时 target 必须是目录，返回带语言/符号数/字节大小的扁平文件树，而非符号大纲。默认：target 为目录时 true，为文件时 false。",
+    )
+    .optional(),
+  includeTests: booleanParam()
+    .describe("目录符号大纲（files: false）模式：包含测试文件。默认 false。")
+    .optional(),
+});
 
 export function registerOutlineTool(bus: ToolBus, ctx: AftToolContext): void {
   bus.register(
@@ -166,7 +159,7 @@ export function registerOutlineTool(bus: ToolBus, ctx: AftToolContext): void {
       promptGuidelines: [OUTLINE_PROMPT, AFT_GUIDELINES],
       parameters: OutlineParams,
       structuredSchema: aftOutlineStructuredSchema,
-      async execute(_id, params, signal, _onUpdate, extCtx) {
+      async execute(_id, params: z.infer<typeof OutlineParams>, signal, _onUpdate, extCtx) {
         const target = coerceTargetParam(params.target);
         if (typeof target !== "string" || target.length === 0) {
           throw new Error("'target' must be a single path (array targets are not supported)");
@@ -204,7 +197,10 @@ export function registerOutlineTool(bus: ToolBus, ctx: AftToolContext): void {
               subtitle,
             } satisfies ToolPendant,
           },
-          structuredResult: aftPayload<typeof aftOutlineStructuredSchema>(response, text),
+          structuredResult: zodStructuredResult(
+            aftOutlineStructuredSchema,
+            aftPayloadValue(response, text),
+          ),
         };
       },
     }),
@@ -216,27 +212,20 @@ export function buildOutlineSubtitle(cwd: string, target: string): string {
   return `target="${formatSubtitlePath(cwd, resolvePathArg(cwd, target))}"`;
 }
 
-const ZoomParams = Type.Object(
-  {
-    path: Type.String({ description: "文件路径（绝对或相对项目根）" }),
-    symbols: Type.Optional(
-      Type.Union([Type.String(), Type.Array(Type.String())], {
-        description: "符号名（代码）或标题文本；字符串或数组（同文件批量查询）。",
-      }),
-    ),
-    contextLines: Type.Optional(
-      Type.Union([Type.Number({ minimum: 1 }), Type.String()], {
-        description: "符号前后上下文行数（默认 3）",
-      }),
-    ),
-    callgraph: Type.Optional(
-      Type.Boolean({
-        description: "附带调用图标注（同文件内 calls-out / called-by）。默认 false 保持输出精简。",
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
+const ZoomParams = z.object({
+  path: z.string().describe("文件路径（绝对或相对项目根）"),
+  symbols: z
+    .union([z.string(), z.array(z.string())])
+    .describe("符号名（代码）或标题文本；字符串或数组（同文件批量查询）。")
+    .optional(),
+  contextLines: z
+    .union([z.number().min(1), z.string()])
+    .describe("符号前后上下文行数（默认 3）")
+    .optional(),
+  callgraph: booleanParam()
+    .describe("附带调用图标注（同文件内 calls-out / called-by）。默认 false 保持输出精简。")
+    .optional(),
+});
 
 export function registerZoomTool(bus: ToolBus, ctx: AftToolContext): void {
   bus.register(
@@ -253,7 +242,7 @@ export function registerZoomTool(bus: ToolBus, ctx: AftToolContext): void {
       promptGuidelines: [ZOOM_PROMPT],
       parameters: ZoomParams,
       structuredSchema: aftZoomStructuredSchema,
-      async execute(_id, params, signal, _onUpdate, extCtx) {
+      async execute(_id, params: z.infer<typeof ZoomParams>, signal, _onUpdate, extCtx) {
         const rawArgs = compactArgs({
           filePath: resolvePathArg(extCtx.cwd, params.path),
           symbols: params.symbols,
@@ -293,7 +282,10 @@ export function registerZoomTool(bus: ToolBus, ctx: AftToolContext): void {
               }),
             } satisfies ToolPendant,
           },
-          structuredResult: aftPayload<typeof aftZoomStructuredSchema>(response, text),
+          structuredResult: zodStructuredResult(
+            aftZoomStructuredSchema,
+            aftPayloadValue(response, text),
+          ),
         };
       },
     }),
@@ -303,7 +295,7 @@ export function registerZoomTool(bus: ToolBus, ctx: AftToolContext): void {
 /** 构建 aft_zoom pendant 的 subtitle：`path="…" symbol="…"`。 */
 export function buildZoomSubtitle(
   cwd: string,
-  params: Type.Static<typeof ZoomParams>,
+  params: z.infer<typeof ZoomParams>,
 ): string | undefined {
   const symbols = params.symbols;
   const symbolStr = Array.isArray(symbols) ? symbols.join(", ") : symbols;
@@ -320,35 +312,22 @@ const CALLGRAPH_OPS = [
   "trace_data",
 ] as const;
 
-const CallgraphParams = Type.Object(
-  {
-    op: Type.Union(
-      CALLGRAPH_OPS.map((op) => Type.Literal(op)),
-      { description: "导航操作" },
-    ),
-    path: Type.String({
-      description: "包含目标符号的源文件（绝对或相对项目根）",
-    }),
-    symbol: Type.String({ description: "要分析的符号名" }),
-    depth: Type.Optional(
-      Type.Union([Type.Number({ minimum: 1 }), Type.String()], {
-        description: "调用图最大遍历深度",
-      }),
-    ),
-    expression: Type.Optional(Type.String({ description: "要追踪的表达式（op=trace_data 必填）" })),
-    toSymbol: Type.Optional(Type.String({ description: "目标符号（op=trace_to_symbol 必填）" })),
-    toPath: Type.Optional(Type.String({ description: "目标文件（toSymbol 存在歧义时指定）" })),
-    includeTests: Type.Optional(
-      Type.Boolean({ description: "callers/路径中包含测试文件。默认 false。" }),
-    ),
-    includeUnresolved: Type.Optional(
-      Type.Boolean({
-        description: "逐个显示未解析的外部/stdlib 调用。默认折叠为每父节点一条摘要。",
-      }),
-    ),
-  },
-  { additionalProperties: false },
-);
+const CallgraphParams = z.object({
+  op: z.enum(CALLGRAPH_OPS).describe("导航操作"),
+  path: z.string().describe("包含目标符号的源文件（绝对或相对项目根）"),
+  symbol: z.string().describe("要分析的符号名"),
+  depth: z
+    .union([z.number().min(1), z.string()])
+    .describe("调用图最大遍历深度")
+    .optional(),
+  expression: z.string().describe("要追踪的表达式（op=trace_data 必填）").optional(),
+  toSymbol: z.string().describe("目标符号（op=trace_to_symbol 必填）").optional(),
+  toPath: z.string().describe("目标文件（toSymbol 存在歧义时指定）").optional(),
+  includeTests: booleanParam().describe("callers/路径中包含测试文件。默认 false。").optional(),
+  includeUnresolved: booleanParam()
+    .describe("逐个显示未解析的外部/stdlib 调用。默认折叠为每父节点一条摘要。")
+    .optional(),
+});
 
 /** 引擎的否定答案：这些码是一等结果，不应变成调用失败。 */
 const AFT_SOFT_CODES = new Set([
@@ -417,7 +396,7 @@ export function registerCallgraphTool(bus: ToolBus, ctx: AftToolContext): void {
       promptGuidelines: [CALLGRAPH_PROMPT],
       parameters: CallgraphParams,
       structuredSchema: aftCallgraphStructuredSchema,
-      async execute(_id, params, signal, _onUpdate, extCtx) {
+      async execute(_id, params: z.infer<typeof CallgraphParams>, signal, _onUpdate, extCtx) {
         const rawArgs = compactArgs({
           op: params.op,
           filePath: resolvePathArg(extCtx.cwd, params.path),
@@ -455,7 +434,10 @@ export function registerCallgraphTool(bus: ToolBus, ctx: AftToolContext): void {
               }),
             } satisfies ToolPendant,
           },
-          structuredResult: aftPayload<typeof aftCallgraphStructuredSchema>(response, out),
+          structuredResult: zodStructuredResult(
+            aftCallgraphStructuredSchema,
+            aftPayloadValue(response, out),
+          ),
         };
       },
     }),
@@ -636,23 +618,21 @@ export function createSemanticIndexProgressFormatter(options?: {
   };
 }
 
-const SearchParams = Type.Object(
-  {
-    query: Type.String({
-      description:
-        "搜索意图：概念、标识符、错误串、正则、字面量或文件名。概念类查询用完整自然语言句子，精确的名字/字符串/正则保持简短。",
-    }),
-    topK: Type.Optional(
-      Type.Integer({
-        description: "最大结果数（默认 10，最大 100）",
-        minimum: 1,
-        maximum: 100,
-      }),
+const SearchParams = z.object({
+  query: z
+    .string()
+    .describe(
+      "搜索意图：概念、标识符、错误串、正则、字面量或文件名。概念类查询用完整自然语言句子，精确的名字/字符串/正则保持简短。",
     ),
-    includeTests: Type.Optional(Type.Boolean({ description: "包含测试文件。默认 false。" })),
-  },
-  { additionalProperties: false },
-);
+  topK: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .describe("最大结果数（默认 10，最大 100）")
+    .optional(),
+  includeTests: booleanParam().describe("包含测试文件。默认 false。").optional(),
+});
 
 export function registerSearchTool(bus: ToolBus, ctx: AftToolContext): void {
   bus.register(
@@ -669,7 +649,7 @@ export function registerSearchTool(bus: ToolBus, ctx: AftToolContext): void {
       promptGuidelines: [SEARCH_PROMPT],
       parameters: SearchParams,
       structuredSchema: aftSearchStructuredSchema,
-      async execute(_id, params, signal, onUpdate, extCtx) {
+      async execute(_id, params: z.infer<typeof SearchParams>, signal, onUpdate, extCtx) {
         if (typeof params.query !== "string" || params.query.trim().length === 0) {
           throw new Error("'query' must be a non-empty string");
         }
@@ -725,7 +705,10 @@ export function registerSearchTool(bus: ToolBus, ctx: AftToolContext): void {
               }),
             } satisfies ToolPendant,
           },
-          structuredResult: aftPayload<typeof aftSearchStructuredSchema>(response, text),
+          structuredResult: zodStructuredResult(
+            aftSearchStructuredSchema,
+            aftPayloadValue(response, text),
+          ),
         };
       },
     }),

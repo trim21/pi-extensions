@@ -114,6 +114,14 @@ function loadRawConfig(path: string): RawStrategyConfig {
 - **上游控制的 schema（API 响应、消息）：** 只声明代码真正读取的字段。zod 默认剥离未知键（strip）；TypeBox 不声明 `additionalProperties` 即不校验未知键——都不要配成"未知键报错"，理由见 `coding-style` 第 3 节。
 - **可选语义 = 有默认值。** 新增字段必须 optional/default，否则旧数据缺键直接 parse 抛错，破坏向后兼容。
 
+未知键怎么处理，看的是**值由谁产生**，与上面"schema 归谁控制"是两个问题：
+
+- **值完全由我们的代码构造**（工具的结构化返回值、内部 DTO）：`z.strictObject`（TypeBox 用 `Type.Object(..., { additionalProperties: false })`）。多一个键只可能是我们的代码写错，报错正是想要的。
+- **值来自外部，或来自序列化后读回来的存量数据**（API 响应、配置文件、命令行/模型传入的参数、自己写出去再读回来的持久化数据）：`z.object`（strip）。未知键不报错、解析时剥掉——上游加字段不该让我们失败，多余参数不该让整次工具调用失败，旧版本写下的数据也不该让新代码读不出来。
+- 两条派生的 JSON Schema 都是 `additionalProperties: false`，差别只在 `parse` 是剥掉还是报错，所以别指望用 schema 表达"允许多余键"。
+- **存量数据语义变了就双读**：字段改名或类型收窄时，在读路径先按当前 schema 解析，失败再按旧 schema 解析并转换成新形状（典型例子：旧版本把字段写成 `sessionId`，新版本叫 `agentId`）。不要靠 passthrough 把旧字段糊过去。
+- `z.looseObject`（passthrough）只在确实要把未知键原样转交时才用，例如代理、全量落盘。
+
 ## 3. 类型检查配置
 
 tsconfig 最低要求：

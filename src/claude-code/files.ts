@@ -11,7 +11,7 @@ import {
   generateUnifiedPatch,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { z } from "zod";
 
 import {
   createReadsState,
@@ -36,10 +36,10 @@ import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import type { ToolPendant } from "../lib/pendant.ts";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
-import { Default } from "../lib/schema-defaults.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { createToolRegistration } from "../lib/tool-registration.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
+import { booleanParam } from "../lib/zod-tool.js";
 import { didYouMean, resolveToolFilePath } from "./common.js";
 import { applyExactEdit } from "./edit-match.js";
 import { convertLeadingTabsToSpaces } from "./edit-utils.js";
@@ -226,28 +226,20 @@ export function registerFileTools(
     ].join("\n"),
     promptSnippet: "Read files from the local filesystem with line numbers",
     promptGuidelines: [READ_PROMPT],
-    parameters: Type.Object(
-      {
-        file_path: Type.String({
-          description:
-            "The path to the file to read (absolute or relative to the working directory)",
-        }),
-        offset: Default(
-          Type.Integer({
-            description:
-              "The line number to start reading from. A negative value counts from the end of the file (offset=-5 starts 5 lines before EOF).",
-          }),
-          1,
-        ),
-        limit: Type.Optional(
-          Type.Integer({ minimum: 1, description: "The number of lines to read" }),
-        ),
-        pages: Type.Optional(
-          Type.String({ description: 'Page range for PDF files (for example "1-5" or "3")' }),
-        ),
-      },
-      { additionalProperties: false },
-    ),
+    parameters: z.object({
+      file_path: z
+        .string()
+        .describe("The path to the file to read (absolute or relative to the working directory)"),
+      offset: z.coerce
+        .number()
+        .int()
+        .describe(
+          "The line number to start reading from. A negative value counts from the end of the file (offset=-5 starts 5 lines before EOF).",
+        )
+        .default(1),
+      limit: z.coerce.number().int().min(1).describe("The number of lines to read").optional(),
+      pages: z.string().describe('Page range for PDF files (for example "1-5" or "3")').optional(),
+    }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const filePath = resolveToolFilePath(params.file_path, ctx.cwd);
@@ -355,23 +347,18 @@ export function registerFileTools(
     ].join("\n"),
     promptSnippet: "Make exact string replacements in files",
     promptGuidelines: [EDIT_PROMPT],
-    parameters: Type.Object(
-      {
-        file_path: Type.String({
-          description:
-            "The path to the file to modify (absolute or relative to the working directory)",
-        }),
-        old_string: Type.String({ description: "The text to replace" }),
-        new_string: Type.String({
-          description: "The text to replace it with (must be different from old_string)",
-        }),
-        replace_all: Default(
-          Type.Boolean({ description: "Replace all occurrences of old_string" }),
-          false,
-        ),
-      },
-      { additionalProperties: false },
-    ),
+    parameters: z.object({
+      file_path: z
+        .string()
+        .describe("The path to the file to modify (absolute or relative to the working directory)"),
+      old_string: z.string().describe("The text to replace"),
+      new_string: z
+        .string()
+        .describe("The text to replace it with (must be different from old_string)"),
+      replace_all: booleanParam({ default: false }).describe(
+        "Replace all occurrences of old_string",
+      ),
+    }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const filePath = resolveToolFilePath(params.file_path, ctx.cwd);
@@ -536,16 +523,12 @@ export function registerFileTools(
     ].join("\n"),
     promptSnippet: "Create or overwrite files",
     promptGuidelines: [WRITE_PROMPT],
-    parameters: Type.Object(
-      {
-        file_path: Type.String({
-          description:
-            "The path to the file to write (absolute or relative to the working directory)",
-        }),
-        content: Type.String({ description: "The content to write to the file" }),
-      },
-      { additionalProperties: false },
-    ),
+    parameters: z.object({
+      file_path: z
+        .string()
+        .describe("The path to the file to write (absolute or relative to the working directory)"),
+      content: z.string().describe("The content to write to the file"),
+    }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const filePath = resolveToolFilePath(params.file_path, ctx.cwd);

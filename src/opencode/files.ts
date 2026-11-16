@@ -35,7 +35,7 @@ import {
   generateUnifiedPatch,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { z } from "zod";
 
 import {
   createReadsState,
@@ -61,10 +61,10 @@ import type { AppliedFileEdit } from "../lib/lsp/rename.js";
 import { registerLspRenameTool } from "../lib/lsp/rename-tool.js";
 import { formatSubtitlePath } from "../lib/path.js";
 import { createRequestPolicy, type RequestPolicy } from "../lib/request-policy.js";
-import { Default } from "../lib/schema-defaults.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { createToolRegistration } from "../lib/tool-registration.js";
 import { guardWriteAccess } from "../lib/write-guard.js";
+import { booleanParam } from "../lib/zod-tool.js";
 import { applyEdit, normalizeToLF, stripBom } from "./edit-engine.js";
 
 // ── read 工具 ────────────────────────────────────────────────────────────────
@@ -432,24 +432,25 @@ function registerReadTool(
     promptGuidelines: [
       "Use read to examine files instead of cat, sed, or tail. A negative offset reads from the end of the file (offset=-2 reads the last 2 lines).",
     ],
-    parameters: Type.Object({
-      filePath: Type.String({
-        description:
+    parameters: z.object({
+      filePath: z
+        .string()
+        .describe(
           "The path to the file or directory to read (absolute or relative to the working directory)",
-      }),
-      offset: Type.Optional(
-        Type.Integer({
-          description:
-            "The line number to start reading from (1-indexed; 0 is treated as 1). A negative value counts from the end of the file (offset=-2 reads the last 2 lines).",
-        }),
-      ),
-      limit: Default(
-        Type.Integer({
-          minimum: 0,
-          description: "The maximum number of lines to read",
-        }),
-        DEFAULT_MAX_LINES,
-      ),
+        ),
+      offset: z.coerce
+        .number()
+        .int()
+        .describe(
+          "The line number to start reading from (1-indexed; 0 is treated as 1). A negative value counts from the end of the file (offset=-2 reads the last 2 lines).",
+        )
+        .optional(),
+      limit: z.coerce
+        .number()
+        .int()
+        .min(0)
+        .describe("The maximum number of lines to read")
+        .default(DEFAULT_MAX_LINES),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
@@ -613,13 +614,11 @@ function registerReadTool(
 
 // ── edit 工具 ────────────────────────────────────────────────────────────────
 
-const editSchema = Type.Object({
-  filePath: Type.String({ description: "The path to the file to modify (relative or absolute)" }),
-  oldString: Type.String({ description: "The text to replace" }),
-  newString: Type.String({
-    description: "The text to replace it with (must be different from oldString)",
-  }),
-  replaceAll: Default(Type.Boolean({ description: "Replace all occurrences of oldString" }), false),
+const editSchema = z.object({
+  filePath: z.string().describe("The path to the file to modify (relative or absolute)"),
+  oldString: z.string().describe("The text to replace"),
+  newString: z.string().describe("The text to replace it with (must be different from oldString)"),
+  replaceAll: booleanParam({ default: false }).describe("Replace all occurrences of oldString"),
 });
 
 function registerEditTool(
@@ -826,12 +825,11 @@ function registerWriteTool(
       "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
     promptSnippet: "Create or overwrite files",
     promptGuidelines: ["Use write only for new files or complete rewrites."],
-    parameters: Type.Object({
-      filePath: Type.String({
-        description:
-          "The path to the file to write (absolute or relative to the working directory)",
-      }),
-      content: Type.String({ description: "The content to write to the file" }),
+    parameters: z.object({
+      filePath: z
+        .string()
+        .describe("The path to the file to write (absolute or relative to the working directory)"),
+      content: z.string().describe("The content to write to the file"),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const { filePath: rawPath, content } = params;

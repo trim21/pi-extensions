@@ -14,10 +14,9 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import type { Octokit } from "octokit";
-import type { Static } from "typebox";
 
 import { type GithubApi } from "./github.js";
-import { type listFilterParameters, type RunListFilters } from "./github-params.js";
+import { type ListFilterInput, type RunListFilters } from "./github-params.js";
 
 /** `actions.listWorkflowRuns*` 的 `status` 取值（octokit 是字面量联合，工具参数是 string）。 */
 type WorkflowRunParams = NonNullable<
@@ -26,12 +25,10 @@ type WorkflowRunParams = NonNullable<
 type WorkflowRunStatus = NonNullable<WorkflowRunParams["status"]>;
 
 /**
- * 列表类查询的公共过滤条件：从工具参数 schema 派生。`state` 在读取层可以省略（等于不加
- * state 过滤），`limit` 必填——缺省值只由工具参数 schema 提供。
+ * 列表类查询的公共过滤条件：从工具参数 schema 的输入类型派生。`limit` 必填——缺省值只由
+ * 工具参数 schema 提供。
  */
-export type ListQuery = Omit<Static<ReturnType<typeof listFilterParameters>>, "limit"> & {
-  limit: number;
-};
+export type ListQuery = Omit<ListFilterInput, "limit"> & { limit: number };
 
 export interface GithubReads {
   issue(owner: string, repo: string, number: number, signal?: AbortSignal): Promise<unknown>;

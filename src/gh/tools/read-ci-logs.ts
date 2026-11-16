@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { type Static, Type } from "typebox";
+import { z } from "zod";
 
 import { isNotFound, type RunJob } from "../../lib/github.js";
 import { createSeqState } from "../../lib/seq-state.js";
@@ -346,18 +346,16 @@ export function jobLogIndex(job: RunJob, rawLog: string): CiLogsJobIndex {
   };
 }
 
-const ciLogsParameters = Type.Object({
-  job_id: Type.Union([Type.Number(), Type.String()], {
-    description: "Job ID, from get-github-workflow-jobs.",
-  }),
-  repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+const ciLogsParameters = z.object({
+  job_id: z.union([z.number(), z.string()]).describe("Job ID, from get-github-workflow-jobs."),
+  repo: z.string().describe("OWNER/REPO").optional(),
 });
 
 /** 入参类型由参数 schema 推断，schema 是唯一来源。 */
-type JobIdParams = Static<typeof ciLogsParameters>;
+type JobIdParams = z.infer<typeof ciLogsParameters>;
 
 /** 「没找到 / 还没日志」是结构化失败，不是异常：脚本能按 ok === false 分辨。 */
-type CiLogsResult = StructuredResult<Static<typeof ciLogsSchema>>;
+type CiLogsResult = StructuredResult<z.output<typeof ciLogsSchema>>;
 
 /** The toolcall handler behind `read-github-ci-logs`. */
 async function ciLogs(gh: GhClient, call: ToolCall<JobIdParams>): Promise<CiLogsResult> {

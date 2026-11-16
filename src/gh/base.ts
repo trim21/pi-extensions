@@ -9,8 +9,9 @@
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
-import { type Static, type TSchema, Type } from "typebox";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
+import type { z } from "zod";
 
 import { egress } from "../lib/egress.js";
 import { type GhResult, runGh } from "../lib/gh-process.js";
@@ -30,7 +31,6 @@ import {
   type WorkflowRunRef,
 } from "../lib/github.js";
 import { createGithubReads, type GithubReads } from "../lib/github-reads.js";
-import { parseWithSchema } from "../lib/parse-with-schema.js";
 import { type StructuredResult } from "../lib/tool-bus.js";
 import { checksVerdictSchema, ghRunSummarySchema } from "./schemas.js";
 
@@ -183,11 +183,11 @@ export async function resolveRepoTarget(
 }
 
 /** 成功结果：把外部数据按该工具的 `structuredSchema` 校验后交给脚本。 */
-export function structuredResult<T extends TSchema>(
+export function structuredResult<T extends z.ZodType>(
   schema: T,
   data: unknown,
-): StructuredResult<Static<T>> {
-  return { ok: true, value: parseWithSchema(schema, data) };
+): StructuredResult<z.output<T>> {
+  return { ok: true, value: schema.parse(data) };
 }
 
 /** 结构化失败（Result 的失败支）：不必抛异常就能把「没找到」这类结果告诉脚本。 */
@@ -591,7 +591,7 @@ export async function watchRun(options: WatchRunOptions): Promise<RunWatchResult
   const watchStart = Date.now();
   for (;;) {
     signal.throwIfAborted();
-    const run = parseWithSchema(ghRunSummarySchema, await reads.run(owner, repo, runId, signal));
+    const run = ghRunSummarySchema.parse(await reads.run(owner, repo, runId, signal));
     const elapsedMs = Date.now() - watchStart;
     if (run.status === "completed") {
       return { outcome: "completed", run, elapsedMs };
@@ -680,7 +680,7 @@ export async function waitChecksReport(options: {
   failFast: boolean;
   event?: string;
   signal: AbortSignal | undefined;
-}): Promise<StructuredResult<Static<typeof checksVerdictSchema>>> {
+}): Promise<StructuredResult<z.output<typeof checksVerdictSchema>>> {
   const { owner, repo, headSha, failFast, event, signal } = options;
 
   // 轮询层要求非空 signal；框架可能不给时构造一个占位的（从不取消）。

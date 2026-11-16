@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { z } from "zod";
 
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, structuredResult } from "../base.js";
@@ -10,9 +10,9 @@ export function addReadReleaseTool(gh: GhClient, bus: ToolBus) {
     label: "GitHub Release",
     description:
       "Get details of a specific GitHub release by tag: metadata, asset list and release notes.",
-    parameters: Type.Object({
-      tag: Type.String({ description: "Release tag name" }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+    parameters: z.object({
+      tag: z.string().describe("Release tag name"),
+      repo: z.string().describe("OWNER/REPO").optional(),
     }),
     structuredSchema: ghReleaseViewPayloadSchema,
     async execute(_id, params, signal, ctx) {

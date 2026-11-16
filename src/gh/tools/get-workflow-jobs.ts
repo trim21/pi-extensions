@@ -1,4 +1,4 @@
-import { type Static, Type } from "typebox";
+import { z } from "zod";
 
 import { type ToolBus } from "../../lib/tool-bus.js";
 import {
@@ -10,13 +10,13 @@ import {
 } from "../base.js";
 import { workflowJobsSchema } from "../schemas.js";
 
-const workflowJobsParameters = Type.Object({
-  run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),
-  repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+const workflowJobsParameters = z.object({
+  run_id: z.union([z.number(), z.string()]).describe("Workflow run ID"),
+  repo: z.string().describe("OWNER/REPO").optional(),
 });
 
 /** 入参类型由参数 schema 推断，schema 是唯一来源。 */
-type RunIdParams = Static<typeof workflowJobsParameters>;
+type RunIdParams = z.infer<typeof workflowJobsParameters>;
 
 /** The toolcall handler behind `get-github-workflow-jobs`: every job of a run, all pages. */
 async function workflowJobs(gh: GhClient, call: ToolCall<RunIdParams>) {

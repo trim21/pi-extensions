@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI, TruncationResult } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { z } from "zod";
 
 import {
   BashInterruptedError,
@@ -20,10 +20,10 @@ import {
 } from "../lib/bash-tool.js";
 import { resolveWorkdir } from "../lib/path.js";
 import { createRequestPolicy } from "../lib/request-policy.js";
-import { Default } from "../lib/schema-defaults.js";
 import { defineStructuredTool, type ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { readToolsConfig } from "../lib/tools-config.js";
+import { booleanParam } from "../lib/zod-tool.js";
 
 /** 对齐上游 opencode 的截断提示文案（tools/BashTool/bash.ts）。 */
 const CAPTURE_TRUNCATED_NOTICE = "[output capture truncated at the in-memory safety limit]";
@@ -63,6 +63,31 @@ export default function opencodeBash(
   registerToolsOnSessionStart(pi, (bus) => registerBashTool(bus, pi, runtime));
 }
 
+/**
+ * Bash 的参数 schema。`defineStructuredTool` 仍按 TypeBox 推导 `execute` 的入参类型（Zod schema
+ * 落到 `StaticDefaulted` 上是 unknown），因此这里显式标注参数类型。
+ */
+const bashParameters = z.object({
+  command: z.string().describe("The command to execute"),
+  description: z.string().describe("Clear, concise description of the command").optional(),
+  workdir: z
+    .string()
+    .describe(
+      "Working directory to execute the command in. Defaults to the current directory; relative paths resolve from there. prefer use this argument over `cd ...`",
+    )
+    .optional(),
+  timeout: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(BASH_MAX_TIMEOUT_MS)
+    .describe("Timeout in milliseconds")
+    .default(BASH_DEFAULT_TIMEOUT_MS),
+  dangerouslyDisableSandbox: booleanParam()
+    .describe("Request one-time unsandboxed execution. The user must approve this request.")
+    .optional(),
+});
+
 export function registerBashTool(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapRuntime): void {
   bus.register(
     defineStructuredTool({
@@ -76,36 +101,15 @@ export function registerBashTool(bus: ToolBus, pi: ExtensionAPI, runtime: BwrapR
       ].join("\n"),
       promptSnippet: "execute bash command",
       promptGuidelines: [BASH_PROMPT],
-      parameters: Type.Object(
-        {
-          command: Type.String({ description: "The command to execute" }),
-          description: Type.Optional(
-            Type.String({ description: "Clear, concise description of the command" }),
-          ),
-          workdir: Type.Optional(
-            Type.String({
-              description:
-                "Working directory to execute the command in. Defaults to the current directory; relative paths resolve from there. prefer use this argument over `cd ...`",
-            }),
-          ),
-          timeout: Default(
-            Type.Integer({
-              minimum: 1,
-              maximum: BASH_MAX_TIMEOUT_MS,
-              description: "Timeout in milliseconds",
-            }),
-            BASH_DEFAULT_TIMEOUT_MS,
-          ),
-          dangerouslyDisableSandbox: Type.Optional(
-            Type.Boolean({
-              description:
-                "Request one-time unsandboxed execution. The user must approve this request.",
-            }),
-          ),
-        },
-        { additionalProperties: false },
-      ),
-      async execute(id, params, signal, onUpdate, ctx, callOptions) {
+      parameters: bashParameters,
+      async execute(
+        id,
+        params: z.infer<typeof bashParameters>,
+        signal,
+        onUpdate,
+        ctx,
+        callOptions,
+      ) {
         const timeout = params.timeout;
 
         const cwd = params.workdir ? await resolveWorkdir(params.workdir, ctx.cwd) : ctx.cwd;

@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { z } from "zod";
 
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, structuredResult } from "../base.js";
@@ -9,9 +9,9 @@ export function addReadIssueCommentsTool(gh: GhClient, bus: ToolBus) {
     name: "read-github-issue-comments",
     label: "GitHub Issue Comments",
     description: "Get comments on a GitHub issue.",
-    parameters: Type.Object({
-      number: Type.Union([Type.Number(), Type.String()], { description: "Issue number" }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+    parameters: z.object({
+      number: z.union([z.number(), z.string()]).describe("Issue number"),
+      repo: z.string().describe("OWNER/REPO").optional(),
     }),
     structuredSchema: issueCommentsSchema,
     async execute(_id, params, signal, ctx) {

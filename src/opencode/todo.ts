@@ -23,10 +23,9 @@
  */
 
 import { type ExtensionAPI, truncateToVisualLines } from "@earendil-works/pi-coding-agent";
-import { type Static, Type } from "typebox";
+import { z } from "zod";
 
 import { type ToolPendant } from "../lib/pendant.js";
-import { stringEnum } from "../lib/string-enum.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 
@@ -77,23 +76,21 @@ const TODOWRITE_DESCRIPTION = [
 
 // ── schema（与 opencode 的 Parameters 一致）──────────────────────────────────
 
-const todoInfoSchema = Type.Object({
-  content: Type.String({ description: "Brief description of the task" }),
-  status: stringEnum(TODO_STATUSES, {
-    description: "Current status of the task: pending, in_progress, completed, cancelled",
-  }),
-  priority: stringEnum(TODO_PRIORITIES, {
-    description: "Priority level of the task: high, medium, low",
-  }),
+const todoInfoSchema = z.object({
+  content: z.string().describe("Brief description of the task"),
+  status: z
+    .enum(TODO_STATUSES)
+    .describe("Current status of the task: pending, in_progress, completed, cancelled"),
+  priority: z.enum(TODO_PRIORITIES).describe("Priority level of the task: high, medium, low"),
 });
 
-export const todowriteSchema = Type.Object({
-  todos: Type.Array(todoInfoSchema, { description: "The updated todo list" }),
+export const todowriteSchema = z.object({
+  todos: z.array(todoInfoSchema).describe("The updated todo list"),
 });
 
 // ── types ────────────────────────────────────────────────────────────────────
 
-export type TodoInfo = Static<typeof todoInfoSchema>;
+export type TodoInfo = z.infer<typeof todoInfoSchema>;
 
 export interface TodoDetails {
   todos: TodoInfo[];
@@ -102,7 +99,7 @@ export interface TodoDetails {
 
 // ── 纯函数（可测试）──────────────────────────────────────────────────────────
 
-/** trim content 并返回干净副本；字段类型已由 typebox schema 推断，无需运行时校验 */
+/** trim content 并返回干净副本；字段类型已由 schema 推断，无需运行时校验 */
 export function normalizeTodos(todos: readonly TodoInfo[]): TodoInfo[] {
   return todos.map((t) => ({ ...t, content: t.content.trim() }));
 }

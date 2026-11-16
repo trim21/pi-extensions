@@ -14,12 +14,11 @@ import { stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { z } from "zod";
 
-import { Default, type StaticDefaulted } from "../lib/schema-defaults.js";
-import { stringEnum } from "../lib/string-enum.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
+import { booleanParam } from "../lib/zod-tool.js";
 import { searchRoot, suggestPathUnderCwd, toRelativePath } from "./common.js";
 
 const GREP_OUTPUT_MODES = ["content", "files_with_matches", "count"] as const;
@@ -45,53 +44,32 @@ function truncateOutput(output: string): string {
   return `${output.slice(0, maxCharacters)}\n\n[Output truncated at ${maxCharacters} characters]`;
 }
 
-const grepParametersSchema = Type.Object(
-  {
-    pattern: Type.String({ description: "The regular expression pattern to search for" }),
-    path: Type.Optional(
-      Type.String({
-        description: "File or directory to search. Defaults to the current directory.",
-      }),
-    ),
-    glob: Type.Optional(Type.String({ description: 'Glob filter such as "*.js" or "*.{ts,tsx}"' })),
-    output_mode: Default(
-      stringEnum(GREP_OUTPUT_MODES, { description: "Output mode" }),
-      "files_with_matches",
-    ),
-    "-B": Type.Optional(
-      Type.Number({ description: "Lines to show before each match in content mode" }),
-    ),
-    "-A": Type.Optional(
-      Type.Number({ description: "Lines to show after each match in content mode" }),
-    ),
-    "-C": Type.Optional(Type.Number({ description: "Lines to show before and after each match" })),
-    context: Type.Optional(
-      Type.Number({ description: "Lines to show before and after each match" }),
-    ),
-    "-n": Default(Type.Boolean({ description: "Show line numbers in content mode" }), true),
-    "-i": Type.Optional(Type.Boolean({ description: "Case-insensitive search" })),
-    type: Type.Optional(
-      Type.String({ description: "ripgrep file type such as js, py, rust, or go" }),
-    ),
-    head_limit: Default(
-      Type.Integer({
-        minimum: 0,
-        description: "Limit output to the first N entries after offset (0 means no limit)",
-      }),
-      DEFAULT_HEAD_LIMIT,
-    ),
-    offset: Default(
-      Type.Integer({ minimum: 0, description: "Skip the first N output entries" }),
-      0,
-    ),
-    multiline: Type.Optional(
-      Type.Boolean({ description: "Allow patterns to span multiple lines" }),
-    ),
-  },
-  { additionalProperties: false },
-);
+const grepParametersSchema = z.object({
+  pattern: z.string().describe("The regular expression pattern to search for"),
+  path: z
+    .string()
+    .describe("File or directory to search. Defaults to the current directory.")
+    .optional(),
+  glob: z.string().describe('Glob filter such as "*.js" or "*.{ts,tsx}"').optional(),
+  output_mode: z.enum(GREP_OUTPUT_MODES).describe("Output mode").default("files_with_matches"),
+  "-B": z.coerce.number().describe("Lines to show before each match in content mode").optional(),
+  "-A": z.coerce.number().describe("Lines to show after each match in content mode").optional(),
+  "-C": z.coerce.number().describe("Lines to show before and after each match").optional(),
+  context: z.coerce.number().describe("Lines to show before and after each match").optional(),
+  "-n": booleanParam({ default: true }).describe("Show line numbers in content mode"),
+  "-i": booleanParam().describe("Case-insensitive search").optional(),
+  type: z.string().describe("ripgrep file type such as js, py, rust, or go").optional(),
+  head_limit: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .describe("Limit output to the first N entries after offset (0 means no limit)")
+    .default(DEFAULT_HEAD_LIMIT),
+  offset: z.coerce.number().int().min(0).describe("Skip the first N output entries").default(0),
+  multiline: booleanParam().describe("Allow patterns to span multiple lines").optional(),
+});
 
-type GrepParameters = StaticDefaulted<typeof grepParametersSchema>;
+type GrepParameters = z.infer<typeof grepParametersSchema>;
 
 export function buildGrepArguments(params: GrepParameters, cwd: string): string[] {
   const mode = params.output_mode;

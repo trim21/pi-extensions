@@ -16,9 +16,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { z } from "zod";
 
-import { Default } from "../lib/schema-defaults.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
 import { didYouMean } from "./files.js";
@@ -93,19 +92,15 @@ export function registerGlobTool(bus: ToolBus): void {
     ].join("\n"),
     promptSnippet: "Find files by name patterns",
     promptGuidelines: [GLOB_PROMPT],
-    parameters: Type.Object(
-      {
-        pattern: Type.String({ description: "The glob pattern to match files against" }),
-        path: Default(
-          Type.String({
-            description:
-              'The directory to search in. IMPORTANT: Omit this field to use the current working directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.',
-          }),
-          ".",
-        ),
-      },
-      { additionalProperties: false },
-    ),
+    parameters: z.object({
+      pattern: z.string().describe("The glob pattern to match files against"),
+      path: z
+        .string()
+        .describe(
+          'The directory to search in. IMPORTANT: Omit this field to use the current working directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.',
+        )
+        .default("."),
+    }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const { text, search, count, truncated } = await glob(params, ctx, signal);

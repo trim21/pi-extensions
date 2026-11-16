@@ -8,7 +8,7 @@ import {
   formatSize,
   type TruncationResult,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { z } from "zod";
 
 import {
   BashInterruptedError,
@@ -24,8 +24,8 @@ import {
   systemReminder,
 } from "../lib/bash-tool.js";
 import { resolveWorkdir } from "../lib/path.js";
-import { Default } from "../lib/schema-defaults.js";
 import { defineStructuredTool, type ToolBus } from "../lib/tool-bus.js";
+import { booleanParam } from "../lib/zod-tool.js";
 
 /** 对齐 Claude Code formatError：错误文本超过该长度时头尾各保留一半。 */
 const MAX_ERROR_CHARS = 10_000;
@@ -104,35 +104,26 @@ export function registerShellTools(bus: ToolBus, pi: ExtensionAPI, runtime: Bwra
         "timeout is in milliseconds.",
         "Every command runs in the foreground. Background command execution is not supported; shell jobs are waited for before the tool returns.",
       ].join("\n"),
-      parameters: Type.Object(
-        {
-          command: Type.String({ description: "The command to execute" }),
-          timeout: Default(
-            Type.Integer({
-              minimum: 1,
-              maximum: BASH_MAX_TIMEOUT_MS,
-              description: "Timeout in milliseconds",
-            }),
-            BASH_DEFAULT_TIMEOUT_MS,
-          ),
-          description: Type.Optional(
-            Type.String({ description: "Clear, concise description of the command" }),
-          ),
-          workdir: Type.Optional(
-            Type.String({
-              description:
-                "Working directory to execute the command in. Defaults to the current directory; relative paths resolve from there.",
-            }),
-          ),
-          dangerouslyDisableSandbox: Type.Optional(
-            Type.Boolean({
-              description:
-                "Request one-time unsandboxed execution. The user must approve this request.",
-            }),
-          ),
-        },
-        { additionalProperties: false },
-      ),
+      parameters: z.object({
+        command: z.string().describe("The command to execute"),
+        timeout: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(BASH_MAX_TIMEOUT_MS)
+          .describe("Timeout in milliseconds")
+          .default(BASH_DEFAULT_TIMEOUT_MS),
+        description: z.string().describe("Clear, concise description of the command").optional(),
+        workdir: z
+          .string()
+          .describe(
+            "Working directory to execute the command in. Defaults to the current directory; relative paths resolve from there.",
+          )
+          .optional(),
+        dangerouslyDisableSandbox: booleanParam()
+          .describe("Request one-time unsandboxed execution. The user must approve this request.")
+          .optional(),
+      }),
       async execute(id, params, signal, onUpdate, ctx, callOptions) {
         const timeout = params.timeout;
 

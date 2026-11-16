@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { z } from "zod";
 
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, structuredResult } from "../base.js";
@@ -9,9 +9,9 @@ export function addReadPrTool(gh: GhClient, bus: ToolBus) {
     name: "read-github-pr",
     label: "GitHub PR",
     description: "Get details of a GitHub pull request by number.",
-    parameters: Type.Object({
-      number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+    parameters: z.object({
+      number: z.union([z.number(), z.string()]).describe("PR number"),
+      repo: z.string().describe("OWNER/REPO").optional(),
     }),
     structuredSchema: prViewSchema,
     async execute(_id, params, signal, ctx) {

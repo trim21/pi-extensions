@@ -94,6 +94,11 @@ export function renderType(schema: unknown, indent: string): string {
   if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
     return schema.anyOf.map((option) => renderType(option, indent)).join(" | ");
   }
+  // Zod 把 `z.union([...])` / `.nullable()` 派生成数组形式的 type，TypeBox 用的是 anyOf
+  if (Array.isArray(schema.type) && schema.type.length > 0) {
+    const types: unknown[] = schema.type;
+    return types.map((type) => renderType({ ...schema, type }, indent)).join(" | ");
+  }
 
   switch (schema.type) {
     case "string": {

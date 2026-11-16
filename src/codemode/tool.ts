@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { z } from "zod";
 
 import type { FileSnapshot, ReadsState } from "../lib/file-reads.js";
 import type { ToolPendant } from "../lib/pendant.js";
@@ -295,11 +295,12 @@ export function createCodemodeTools(pi: ExtensionAPI): CodemodeTools {
           "Use codemode to batch or chain several tool calls, or to filter large tool output down to what matters, instead of issuing many individual tool calls.",
           "Keep codemode output minimal: pass only the content the next step needs to `text(value)`, not whole tool results or data you will not use.",
         ],
-        parameters: Type.Object({
-          code: Type.String({
-            description:
+        parameters: z.object({
+          code: z
+            .string()
+            .describe(
               'Raw JavaScript source. Top-level await and return work. May start with a `// @options: {"max_output_tokens": 10000, "timeout_ms": 600000}` line.',
-          }),
+            ),
         }),
         // 采样约束与 pi 内置 codemode 同形：grammar 只能约束一个自由文本参数，所以
         // options 只能待在脚本里（多参数会让这个工具在支持 grammar 的模型上退化成

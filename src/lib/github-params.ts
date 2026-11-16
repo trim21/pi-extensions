@@ -5,9 +5,7 @@
  * 这里派生，字段集只有一处声明，工具层与读取层不会各自漂移。
  */
 
-import { Type } from "typebox";
-
-import { Default, type StaticDefaulted } from "./schema-defaults.js";
+import { z } from "zod";
 
 /**
  * `list-github-issues` / `list-github-prs` 共用的一套过滤参数，只有 `state` 的说明文案按
@@ -15,53 +13,53 @@ import { Default, type StaticDefaulted } from "./schema-defaults.js";
  */
 export function listFilterParameters(kind: "issue" | "pr") {
   const isPr = kind === "pr";
-  return Type.Object({
-    repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
-    keywords: Type.Optional(Type.String({ description: "Search keywords (free text)" })),
-    state: Default(
-      Type.String({
-        description: isPr
+  return z.object({
+    repo: z.string().describe("OWNER/REPO (defaults to current repo)").optional(),
+    keywords: z.string().describe("Search keywords (free text)").optional(),
+    state: z
+      .string()
+      .describe(
+        isPr
           ? "open, closed, merged, all (all applies to keyword search and covers open + closed + merged)"
           : "open, closed, all (all applies to keyword search and covers closed too)",
-      }),
-      "open",
-    ),
-    label: Type.Optional(Type.String({ description: "Filter by label" })),
+      )
+      .default("open"),
+    label: z.string().describe("Filter by label").optional(),
     // `@me` 只在关键词搜索分支可用：搜索 API 自己把它解析成当前登录用户。浏览分支走
     // REST 列表端点，`@me` 按字面量转发，不会匹配到当前用户（本仓库不做展开）。
-    author: Type.Optional(
-      Type.String({
-        description: "Filter by author ('@me' works with keywords; browse takes it literally)",
-      }),
-    ),
-    assignee: Type.Optional(
-      Type.String({
-        description: "Filter by assignee ('@me' works with keywords; browse takes it literally)",
-      }),
-    ),
-    milestone: Type.Optional(Type.String({ description: "Filter by milestone" })),
-    limit: Default(Type.Integer({ minimum: 1, maximum: 100, description: "Max results" }), 30),
+    author: z
+      .string()
+      .describe("Filter by author ('@me' works with keywords; browse takes it literally)")
+      .optional(),
+    assignee: z
+      .string()
+      .describe("Filter by assignee ('@me' works with keywords; browse takes it literally)")
+      .optional(),
+    milestone: z.string().describe("Filter by milestone").optional(),
+    limit: z.coerce.number().int().min(1).max(100).describe("Max results").default(30),
   });
 }
 
-export type ListFilters = StaticDefaulted<ReturnType<typeof listFilterParameters>>;
+/** 解析后的参数：默认值已补齐，`state` / `limit` 一定有值（工具 handler 里用）。 */
+export type ListFilters = z.infer<ReturnType<typeof listFilterParameters>>;
+
+/** 调用方传入的参数：带默认值的字段可以省略（读取层与测试里用）。 */
+export type ListFilterInput = z.input<ReturnType<typeof listFilterParameters>>;
 
 /** `list-github-workflow-runs` 的参数。 */
-export const runListParameters = Type.Object({
-  repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-  limit: Default(Type.Integer({ minimum: 1, description: "Max results" }), 20),
-  status: Type.Optional(
-    Type.String({ description: "Filter by status: success, failure, cancelled, etc." }),
-  ),
-  workflow: Type.Optional(Type.String({ description: "Filter by workflow name or file" })),
+export const runListParameters = z.object({
+  repo: z.string().describe("OWNER/REPO").optional(),
+  limit: z.coerce.number().int().min(1).describe("Max results").default(20),
+  status: z.string().describe("Filter by status: success, failure, cancelled, etc.").optional(),
+  workflow: z.string().describe("Filter by workflow name or file").optional(),
 });
 
-export type RunListFilters = StaticDefaulted<typeof runListParameters>;
+export type RunListFilters = z.infer<typeof runListParameters>;
 
 /** `list-github-releases` 的参数。 */
-export const releaseListParameters = Type.Object({
-  repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-  limit: Default(Type.Integer({ minimum: 1, description: "Max results" }), 10),
+export const releaseListParameters = z.object({
+  repo: z.string().describe("OWNER/REPO").optional(),
+  limit: z.coerce.number().int().min(1).describe("Max results").default(10),
 });
 
-export type ReleaseListFilters = StaticDefaulted<typeof releaseListParameters>;
+export type ReleaseListFilters = z.infer<typeof releaseListParameters>;

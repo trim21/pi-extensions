@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { z } from "zod";
 
 import { isRecord } from "../lib/narrow.js";
 import { parseWithSchema } from "../lib/parse-with-schema.js";
@@ -188,22 +189,17 @@ export function registerGrepTool(bus: ToolBus): void {
     ].join("\n"),
     promptSnippet: "Search file contents with ripgrep",
     promptGuidelines: [GREP_PROMPT],
-    parameters: Type.Object(
-      {
-        pattern: Type.String({ description: "The regex pattern to search for in file contents" }),
-        path: Type.Optional(
-          Type.String({
-            description: "The file or directory to search in. Defaults to the working directory.",
-          }),
-        ),
-        include: Type.Optional(
-          Type.String({
-            description: 'File pattern to include in the search (e.g. "*.js", "*.{ts,tsx}")',
-          }),
-        ),
-      },
-      { additionalProperties: false },
-    ),
+    parameters: z.object({
+      pattern: z.string().describe("The regex pattern to search for in file contents"),
+      path: z
+        .string()
+        .describe("The file or directory to search in. Defaults to the working directory.")
+        .optional(),
+      include: z
+        .string()
+        .describe('File pattern to include in the search (e.g. "*.js", "*.{ts,tsx}")')
+        .optional(),
+    }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const { text, subtitle } = await grep(params, ctx, signal);

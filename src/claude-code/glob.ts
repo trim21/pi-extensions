@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { z } from "zod";
 
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart } from "../lib/tool-registration.js";
@@ -123,18 +123,15 @@ export function registerGlobTool(bus: ToolBus): void {
     ].join("\n"),
     promptSnippet: "Find files by name patterns",
     promptGuidelines: [GLOB_PROMPT],
-    parameters: Type.Object(
-      {
-        pattern: Type.String({ description: "The glob pattern to match files against" }),
-        path: Type.Optional(
-          Type.String({
-            description:
-              'The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.',
-          }),
-        ),
-      },
-      { additionalProperties: false },
-    ),
+    parameters: z.object({
+      pattern: z.string().describe("The glob pattern to match files against"),
+      path: z
+        .string()
+        .describe(
+          'The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.',
+        )
+        .optional(),
+    }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       const root = searchRoot(params.path, ctx.cwd);
       if (params.path) {

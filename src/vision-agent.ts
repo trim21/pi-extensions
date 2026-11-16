@@ -25,6 +25,7 @@ import { type Api, type ImageContent, type Model, type TextContent } from "@eare
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import { z } from "zod";
 
 import { completeText, type CompleteTextResult, type ModelRegistryLike } from "./lib/model-call.js";
 import { type ToolPendant } from "./lib/pendant.js";
@@ -340,25 +341,19 @@ function registerVisionTool(bus: ToolBus): void {
       "② prompt=可选的具体描述要求（如「图中验证码是什么」「逐字翻译图中的文字」），缺省时自动生成通用描述指令。" +
       "聊天里粘贴的截图若当前模型不支持视觉，先用 write 工具存成文件再传 path。",
     promptSnippet: "调用视觉模型识别图片文件（可一次多张）",
-    parameters: Type.Object({
-      path: Type.Optional(
-        Type.Union([
-          Type.String({
-            description: "本地图片路径，如 /path/to/screenshot.png。",
-          }),
-          Type.Array(
-            Type.String({
-              description: "多个本地图片路径，一次识别多张。",
-            }),
-          ),
-        ]),
-      ),
-      prompt: Type.Optional(
-        Type.String({
-          description:
-            "可选：具体的描述要求，如「图中验证码是什么」「逐字翻译图中的文字」。缺省时自动生成通用描述指令。",
-        }),
-      ),
+    parameters: z.object({
+      path: z
+        .union([
+          z.string().describe("本地图片路径，如 /path/to/screenshot.png。"),
+          z.array(z.string().describe("多个本地图片路径，一次识别多张。")),
+        ])
+        .optional(),
+      prompt: z
+        .string()
+        .describe(
+          "可选：具体的描述要求，如「图中验证码是什么」「逐字翻译图中的文字」。缺省时自动生成通用描述指令。",
+        )
+        .optional(),
     }),
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {

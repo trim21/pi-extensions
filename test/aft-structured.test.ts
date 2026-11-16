@@ -192,7 +192,7 @@ describe("aft_search 结构化结果", () => {
 describe("schema 的宽松度", () => {
   beforeEach(() => mockCallAftTool.mockReset());
 
-  it("引擎加了新字段照样通过复核（额外字段原样透传）", async () => {
+  it("引擎加了新字段照样通过复核（未声明字段不进载荷）", async () => {
     const response = await fixture("zoom-greet.json");
     const withNewFields = {
       ...response,
@@ -206,8 +206,9 @@ describe("schema 的宽松度", () => {
       symbols: "greet",
     });
 
-    expect(value.brand_new_field).toEqual({ nested: [1, 2, 3] });
-    expect(value.another).toBe("value");
+    expect(value.name).toBe(response.name);
+    expect(value).not.toHaveProperty("brand_new_field");
+    expect(value).not.toHaveProperty("another");
   });
 
   it("引擎省略文件条目的字段时仍通过复核", async () => {

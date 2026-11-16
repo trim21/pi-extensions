@@ -1,13 +1,13 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import type { z } from "zod";
 
-import { type StaticDefaulted } from "../../lib/schema-defaults.js";
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, type ToolCall, waitChecksReport } from "../base.js";
 import { checksVerdictSchema, waitPrChecksParameters } from "../schemas.js";
 
 /** 入参类型由参数 schema 推断：`fail_fast` 有默认值，解析后必填。 */
-type PrChecksWaitParams = StaticDefaulted<typeof waitPrChecksParameters>;
+type PrChecksWaitParams = z.infer<typeof waitPrChecksParameters>;
 
 /** pulls.get 里我们只需要 head commit 的 SHA（它决定查哪个 commit 的 checks）。 */
 const pullHeadSchema = Type.Object({ head: Type.Object({ sha: Type.String() }) });

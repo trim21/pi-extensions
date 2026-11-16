@@ -2,8 +2,9 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, matchesGlob } from "node:path";
 
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
+import { z } from "zod";
 
 import { type StructuredResult, type ToolBus } from "../../lib/tool-bus.js";
 import {
@@ -16,24 +17,23 @@ import {
 } from "../base.js";
 import { releaseDownloadSchema } from "../schemas.js";
 
-const releaseDownloadParameters = Type.Object({
-  repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
-  tag: Type.Optional(Type.String({ description: "Release tag (defaults to the latest release)" })),
-  pattern: Type.Optional(
-    Type.String({
-      description:
-        'Comma-separated glob patterns for asset names, e.g. "*.tar.gz,*.deb" (default: every asset)',
-    }),
-  ),
-  archive: Type.Optional(
-    Type.Union([Type.Literal("zip"), Type.Literal("tar.gz")], {
-      description: "Download the release's source archive instead of its assets",
-    }),
-  ),
+const releaseDownloadParameters = z.object({
+  repo: z.string().describe("OWNER/REPO (defaults to current repo)").optional(),
+  tag: z.string().describe("Release tag (defaults to the latest release)").optional(),
+  pattern: z
+    .string()
+    .describe(
+      'Comma-separated glob patterns for asset names, e.g. "*.tar.gz,*.deb" (default: every asset)',
+    )
+    .optional(),
+  archive: z
+    .union([z.literal("zip"), z.literal("tar.gz")])
+    .describe("Download the release's source archive instead of its assets")
+    .optional(),
 });
 
 /** 入参类型由参数 schema 推断，schema 是唯一来源。 */
-type ReleaseDownloadParams = Static<typeof releaseDownloadParameters>;
+type ReleaseDownloadParams = z.infer<typeof releaseDownloadParameters>;
 
 /** `repos.getReleaseByTag` / `getLatestRelease` 里本工具真正读取的字段。 */
 const releaseViewSchema = Type.Object({
@@ -113,7 +113,7 @@ async function listReleaseFiles(dir: string): Promise<ReleaseFile[]> {
 export async function downloadReleaseAssets(
   gh: GhClient,
   call: ToolCall<ReleaseDownloadParams>,
-): Promise<StructuredResult<Static<typeof releaseDownloadSchema>>> {
+): Promise<StructuredResult<z.output<typeof releaseDownloadSchema>>> {
   const { params, ctx, signal } = call;
   const patterns = releasePatterns(params.pattern);
   if (params.archive !== undefined && patterns.length > 0) {

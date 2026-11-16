@@ -21,10 +21,10 @@ import {
   truncateToVisualLines,
 } from "@earendil-works/pi-coding-agent";
 import { type TObject, Type } from "typebox";
+import { z } from "zod";
 
 import { type CommandResult, type CommandSpec, parseCommand } from "../lib/cli.js";
 import { resolveHomePath } from "../lib/path.js";
-import { Default } from "../lib/schema-defaults.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart, type ToolModule } from "../lib/tool-registration.js";
 import { restoreTalkAgentId, TALK_JOIN_ENTRY_TYPE, TalkCore } from "./core.js";
@@ -111,8 +111,8 @@ function registerTalkTools(
     label: "List Talk Agents",
     description: "List visible pi agents (id, status, work_dir, name).",
     promptSnippet: "List other pi agents on this machine",
-    parameters: Type.Object({
-      cwd: Type.Optional(Type.String({ description: "Only list agents in this directory" })),
+    parameters: z.object({
+      cwd: z.string().describe("Only list agents in this directory").optional(),
     }),
     async execute(_toolCallId, params) {
       const initError = requireInit();
@@ -129,13 +129,10 @@ function registerTalkTools(
     description:
       "Ask another pi agent a question and block until it responds (or times out). Before asking, it checks whether that agent already sent you something; if so, you are told to read and respond first instead of asking.",
     promptSnippet: "Ask another pi agent a question and wait for a response",
-    parameters: Type.Object({
-      to: Type.String({ description: "Target agent id (from talk-list-agents)" }),
-      message: Type.String({ description: "The question" }),
-      timeoutMs: Default(
-        Type.Integer({ minimum: 1, description: "Wait cap in ms" }),
-        ASK_TIMEOUT_MS,
-      ),
+    parameters: z.object({
+      to: z.string().describe("Target agent id (from talk-list-agents)"),
+      message: z.string().describe("The question"),
+      timeoutMs: z.coerce.number().int().min(1).describe("Wait cap in ms").default(ASK_TIMEOUT_MS),
     }),
     async execute(_toolCallId, params, signal) {
       const initError = requireInit();
@@ -154,9 +151,9 @@ function registerTalkTools(
     description:
       "Send a plain-text message to a single pi agent. Plain text only, ≤32KB — send a summary and a path, never file contents.",
     promptSnippet: "Send a message to another pi agent",
-    parameters: Type.Object({
-      to: Type.String({ description: "Target agent id (from talk-list-agents)" }),
-      message: Type.String({ description: "Message body" }),
+    parameters: z.object({
+      to: z.string().describe("Target agent id (from talk-list-agents)"),
+      message: z.string().describe("Message body"),
     }),
     async execute(_toolCallId, params) {
       const initError = requireInit();

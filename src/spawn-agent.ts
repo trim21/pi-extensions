@@ -67,7 +67,7 @@ import {
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { throttle } from "lodash-es";
-import { Type } from "typebox";
+import { z } from "zod";
 
 import { type BwrapConfig, completeBwrapConfig } from "./bwrap/core.js";
 import { createClaudeCodeFileTools } from "./claude-code/files.js";
@@ -130,15 +130,17 @@ const SETTINGS_PATH = join(getAgentDir(), "settings.json");
  */
 // ── schema ───────────────────────────────────────────────────────────────────
 
-const spawnAgentSchema = Type.Object({
-  agent: Type.String({
-    description:
+const spawnAgentSchema = z.object({
+  agent: z
+    .string()
+    .describe(
       "Name of the subagent type to invoke. Choose one of the available subagent types listed in your system prompt.",
-  }),
-  task: Type.String({
-    description:
+    ),
+  task: z
+    .string()
+    .describe(
       "Self-contained task for the subagent, which sees none of this conversation: state the repository path, the exact question, and what the answer must contain (file paths with line numbers).",
-  }),
+    ),
 });
 
 // ── result types ─────────────────────────────────────────────────────────────

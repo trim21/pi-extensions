@@ -19,7 +19,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
-import { Type } from "typebox";
+import { z } from "zod";
 
 import { withTimeoutSignal } from "../lib/abort.js";
 import { egress } from "../lib/egress.js";
@@ -377,14 +377,14 @@ export function createWebFetchTool(pi: ExtensionAPI): (bus: ToolBus) => void {
         "extension. Requests honour the proxy in ~/.pi/agent/proxy.json, so they reach hosts " +
         "the shell sandbox blocks. SSRF-protected: refuses private/internal addresses.",
       promptSnippet: "Fetch a web page, API response, or download a file",
-      parameters: Type.Object({
-        url: Type.String({ description: "The URL to fetch" }),
-        output_path: Type.Optional(
-          Type.String({
-            description:
-              "Save the response body to this path verbatim instead of returning it (absolute, or relative to the session cwd; ~ is expanded). Parent directories are created and an existing file is overwritten.",
-          }),
-        ),
+      parameters: z.object({
+        url: z.string().describe("The URL to fetch"),
+        output_path: z
+          .string()
+          .describe(
+            "Save the response body to this path verbatim instead of returning it (absolute, or relative to the session cwd; ~ is expanded). Parent directories are created and an existing file is overwritten.",
+          )
+          .optional(),
       }),
       async execute(_id, params, signal, _onUpdate, ctx) {
         const destination =

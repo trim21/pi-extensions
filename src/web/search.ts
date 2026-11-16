@@ -10,12 +10,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import { z } from "zod";
 
 import { withTimeoutSignal } from "../lib/abort.js";
 import { egress } from "../lib/egress.js";
-import { Default, type StaticDefaulted } from "../lib/schema-defaults.js";
 import type { ToolBus } from "../lib/tool-bus.js";
 import { registerToolsOnSessionStart, type ToolModule } from "../lib/tool-registration.js";
+import { booleanParam } from "../lib/zod-tool.js";
 import { loadSearch1ApiKey } from "./config.js";
 
 const SEARCH_URL = "https://api.search1api.com/search";
@@ -46,34 +47,25 @@ export interface SearchResult {
 }
 
 /** `web_search` 的参数：schema 是唯一来源，`numResults` 已按 schema 的 `default` 补齐。 */
-const searchParameters = Type.Object({
-  query: Type.Optional(
-    Type.String({ description: "Search query (mutually exclusive with queries)" }),
-  ),
-  queries: Type.Optional(
-    Type.Array(Type.String(), { description: "Multiple queries searched in sequence" }),
-  ),
-  numResults: Default(
-    Type.Integer({ minimum: 1, maximum: 50, description: "Results per query" }),
-    5,
-  ),
-  recencyFilter: Type.Optional(
-    Type.String({ description: "Filter by recency: day, week, month, year" }),
-  ),
-  domainFilter: Type.Optional(
-    Type.Array(Type.String(), { description: "Limit to domains; prefix with - to exclude" }),
-  ),
-  searchService: Type.Optional(
-    Type.String({
-      description: "Search engine: google, bing, duckduckgo, github, arxiv, reddit, youtube, etc.",
-    }),
-  ),
-  includeContent: Type.Optional(
-    Type.Boolean({ description: "Inline-fetch content for the top results (up to 5)" }),
-  ),
+const searchParameters = z.object({
+  query: z.string().describe("Search query (mutually exclusive with queries)").optional(),
+  queries: z.array(z.string()).describe("Multiple queries searched in sequence").optional(),
+  numResults: z.coerce.number().int().min(1).max(50).describe("Results per query").default(5),
+  recencyFilter: z.string().describe("Filter by recency: day, week, month, year").optional(),
+  domainFilter: z
+    .array(z.string())
+    .describe("Limit to domains; prefix with - to exclude")
+    .optional(),
+  searchService: z
+    .string()
+    .describe("Search engine: google, bing, duckduckgo, github, arxiv, reddit, youtube, etc.")
+    .optional(),
+  includeContent: booleanParam()
+    .describe("Inline-fetch content for the top results (up to 5)")
+    .optional(),
 });
 
-type WebSearchParams = StaticDefaulted<typeof searchParameters>;
+type WebSearchParams = z.infer<typeof searchParameters>;
 
 export type SearchOptions = Pick<WebSearchParams, "numResults"> &
   Partial<

@@ -15,7 +15,7 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { generateDiffString, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { z } from "zod";
 
 import { resolvePathArg } from "../path.js";
 import type { ToolPendant } from "../pendant.ts";
@@ -58,32 +58,30 @@ export function registerLspRenameTool(
     description: "Rename a code symbol and update all references across the workspace via LSP",
     promptSnippet: "Workspace-wide symbol rename via LSP",
     promptGuidelines: [LSP_RENAME_PROMPT],
-    parameters: Type.Object(
-      {
-        file_path: Type.String({
-          description:
-            "A file containing the symbol (absolute path, or relative / ~/ path resolved against the session cwd)",
-        }),
-        line: Type.Integer({
-          minimum: 1,
-          description:
-            "1-based line number where the symbol appears (any occurrence works, not only the definition)",
-        }),
-        symbol: Type.String({
-          minLength: 1,
-          description: "The symbol's name exactly as it appears on that line",
-        }),
-        new_name: Type.String({ minLength: 1, description: "The new name for the symbol" }),
-        character: Type.Optional(
-          Type.Integer({
-            minimum: 1,
-            description:
-              "1-based character offset of the symbol on that line. Only needed when the tool reports an ambiguity error on this line",
-          }),
+    parameters: z.object({
+      file_path: z
+        .string()
+        .describe(
+          "A file containing the symbol (absolute path, or relative / ~/ path resolved against the session cwd)",
         ),
-      },
-      { additionalProperties: false },
-    ),
+      line: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .describe(
+          "1-based line number where the symbol appears (any occurrence works, not only the definition)",
+        ),
+      symbol: z.string().min(1).describe("The symbol's name exactly as it appears on that line"),
+      new_name: z.string().min(1).describe("The new name for the symbol"),
+      character: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .describe(
+          "1-based character offset of the symbol on that line. Only needed when the tool reports an ambiguity error on this line",
+        )
+        .optional(),
+    }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
 

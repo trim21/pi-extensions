@@ -14,11 +14,12 @@ import { readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import { Type } from "typebox";
 import type { Hover } from "vscode-languageserver-types";
+import { z } from "zod";
 
 import { resolvePathArg } from "../path.js";
 import { defineStructuredTool, type ToolBus } from "../tool-bus.js";
+import { zodStructuredResult } from "../zod-tool.js";
 import type { InspectLocation } from "./client.js";
 import { lspHoverStructuredSchema, lspLocationsStructuredSchema } from "./inspect-schemas.js";
 import type { LspService } from "./lsp.js";
@@ -63,31 +64,29 @@ const FIND_DEFINITION_PROMPT = loadPrompt("lsp-find-definition.md");
 const FIND_REFERENCE_PROMPT = loadPrompt("lsp-find-reference.md");
 const INSPECT_PROMPT = loadPrompt("lsp-inspect.md");
 
-const POSITION_SCHEMA = Type.Object(
-  {
-    file_path: Type.String({
-      description:
-        "A file containing the symbol (absolute path, or relative / ~/ path resolved against the session cwd)",
-    }),
-    line: Type.Integer({
-      minimum: 1,
-      description:
-        "1-based line number where the symbol appears (any occurrence works, not only the definition)",
-    }),
-    symbol: Type.String({
-      minLength: 1,
-      description: "The symbol's name exactly as it appears on that line",
-    }),
-    character: Type.Optional(
-      Type.Integer({
-        minimum: 1,
-        description:
-          "1-based character offset of the symbol on that line. Only needed when the tool reports an ambiguity error on this line",
-      }),
+const POSITION_SCHEMA = z.object({
+  file_path: z
+    .string()
+    .describe(
+      "A file containing the symbol (absolute path, or relative / ~/ path resolved against the session cwd)",
     ),
-  },
-  { additionalProperties: false },
-);
+  line: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .describe(
+      "1-based line number where the symbol appears (any occurrence works, not only the definition)",
+    ),
+  symbol: z.string().min(1).describe("The symbol's name exactly as it appears on that line"),
+  character: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .describe(
+      "1-based character offset of the symbol on that line. Only needed when the tool reports an ambiguity error on this line",
+    )
+    .optional(),
+});
 
 async function readSymbolFile(
   cwd: string,
@@ -286,7 +285,7 @@ export function registerLspInspectTools(bus: ToolBus, service: LspService): void
       promptGuidelines: [FIND_DEFINITION_PROMPT],
       parameters: POSITION_SCHEMA,
       structuredSchema: lspLocationsStructuredSchema,
-      async execute(_id, params, signal, _onUpdate, ctx) {
+      async execute(_id, params: z.infer<typeof POSITION_SCHEMA>, signal, _onUpdate, ctx) {
         signal?.throwIfAborted();
         const { path: filePath, content } = await readSymbolFile(ctx.cwd, params.file_path);
         const cache = new Map<string, string[]>();
@@ -324,7 +323,10 @@ export function registerLspInspectTools(bus: ToolBus, service: LspService): void
               subtitle: `${params.symbol} · ${output.subtitle}`,
             },
           },
-          structuredResult: { ok: true as const, value: { text: output.text, ...output.payload } },
+          structuredResult: zodStructuredResult(lspLocationsStructuredSchema, {
+            text: output.text,
+            ...output.payload,
+          }),
         };
       },
     }),
@@ -340,7 +342,7 @@ export function registerLspInspectTools(bus: ToolBus, service: LspService): void
       promptGuidelines: [FIND_REFERENCE_PROMPT],
       parameters: POSITION_SCHEMA,
       structuredSchema: lspLocationsStructuredSchema,
-      async execute(_id, params, signal, _onUpdate, ctx) {
+      async execute(_id, params: z.infer<typeof POSITION_SCHEMA>, signal, _onUpdate, ctx) {
         signal?.throwIfAborted();
         const { path: filePath, content } = await readSymbolFile(ctx.cwd, params.file_path);
         const cache = new Map<string, string[]>();
@@ -379,7 +381,10 @@ export function registerLspInspectTools(bus: ToolBus, service: LspService): void
               subtitle: `${params.symbol} · ${output.subtitle}`,
             },
           },
-          structuredResult: { ok: true as const, value: { text: output.text, ...output.payload } },
+          structuredResult: zodStructuredResult(lspLocationsStructuredSchema, {
+            text: output.text,
+            ...output.payload,
+          }),
         };
       },
     }),
@@ -395,7 +400,7 @@ export function registerLspInspectTools(bus: ToolBus, service: LspService): void
       promptGuidelines: [INSPECT_PROMPT],
       parameters: POSITION_SCHEMA,
       structuredSchema: lspHoverStructuredSchema,
-      async execute(_id, params, signal, _onUpdate, ctx) {
+      async execute(_id, params: z.infer<typeof POSITION_SCHEMA>, signal, _onUpdate, ctx) {
         signal?.throwIfAborted();
         const { path: filePath, content } = await readSymbolFile(ctx.cwd, params.file_path);
         const output = await probeSymbolCandidates({
@@ -435,7 +440,10 @@ export function registerLspInspectTools(bus: ToolBus, service: LspService): void
           details: {
             pendant: { title: "lsp-inspect", subtitle: `${params.symbol} · ${output.subtitle}` },
           },
-          structuredResult: { ok: true as const, value: { text: output.text, ...output.payload } },
+          structuredResult: zodStructuredResult(lspHoverStructuredSchema, {
+            text: output.text,
+            ...output.payload,
+          }),
         };
       },
     }),

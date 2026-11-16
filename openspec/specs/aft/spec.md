@@ -191,9 +191,11 @@ aft 引擎自带备份、undo 栈、命名 checkpoint 以及 `safety` / `delete`
 
 ### Requirement: 感知工具的结构化结果
 
-四个感知工具（`aft_outline` / `aft_zoom` / `aft_callgraph` / `aft_search`）的成功结果 MUST 带 `structuredResult`，其载荷 MUST 是引擎响应自身的字段（去掉 envelope 的 request id）外加一个 `text`（与工具输出一致的渲染文本）。载荷 MUST 原样透传引擎字段：MUST NOT 丢弃脚本可能用得上的字段，MUST NOT 把引擎响应重新映射成另一套自定义形状。
+四个感知工具（`aft_outline` / `aft_zoom` / `aft_callgraph` / `aft_search`）的成功结果 MUST 带 `structuredResult`，其载荷 MUST 是引擎响应里**已声明**的字段（去掉 envelope 的 request id）外加一个 `text`（与工具输出一致的渲染文本）。MUST NOT 把引擎响应重新映射成另一套自定义形状。
 
-声明的 schema MUST 宽松：引擎字段一律可选且允许额外字段，因为引擎是外部依赖，其响应会新增、改名或在预算耗尽时省略字段；把字段声明成必需会让引擎的版本变化把工具调用变成失败。宽松只针对字段的在场，MUST NOT 放宽类型校验：`text` MUST 是必需的字符串。
+引擎多发的、未声明的字段 MUST 在复核时剥掉：模型与脚本只能依赖进上下文的声明（`src/codemode/declarations.ts` 按 schema 渲染脚本侧的 TS 类型），没声明的字段看不见也用不上。要让某个引擎字段可用，把它声明进 schema，而不是靠透传。
+
+声明的 schema MUST 宽松：引擎字段一律可选，因为引擎是外部依赖，其响应会省略字段或在预算耗尽时只给部分字段；把字段声明成必需会让引擎的版本变化把工具调用变成失败。宽松只针对字段的在场，MUST NOT 放宽类型校验：`text` MUST 是必需的字符串。
 
 软失败（`symbol_not_found`、`callgraph_building`、`search_lanes_unavailable` 等引擎给出否定答案的码）MUST 保持「工具执行成功」的语义：载荷保留引擎的 `success: false` 与 `code`，脚本据 `code` 分支；MUST NOT 因此把它变成调用失败。工具的文本输出、`details` 与错误抛出行为 MUST 保持不变。
 
@@ -220,7 +222,7 @@ aft 引擎自带备份、undo 栈、命名 checkpoint 以及 `safety` / `delete`
 #### Scenario: 引擎新增字段不导致失败
 
 - **WHEN** 引擎响应里出现 schema 未声明的新字段
-- **THEN** 载荷照样通过复核（新字段一并透传给脚本），调用不失败
+- **THEN** 载荷照样通过复核，调用不失败；未声明的字段不进载荷（脚本看到的对象正好是声明过的字段）
 
 #### Scenario: 软失败仍是成功调用
 

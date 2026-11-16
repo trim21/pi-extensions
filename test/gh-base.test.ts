@@ -10,8 +10,8 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
-import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
@@ -47,16 +47,16 @@ describe("ghExec", () => {
 });
 
 /** 结构化结果：数据只以 Result 信封交付，没有面向模型的 content / details。 */
-const issueSchema = Type.Object({ number: Type.Number(), title: Type.String() });
+const issueSchema = z.object({ number: z.number(), title: z.string() });
 
 describe("structuredResult", () => {
-  it("parses the value against the schema and keeps extra fields", () => {
+  it("parses the value against the schema and drops extra fields", () => {
     const result = structuredResult(issueSchema, { number: 142, title: "t", state: "OPEN" });
 
-    // 额外字段保留：schema 只描述工具依赖的字段，不该削掉 GitHub 多给的字段
+    // 额外字段不报错也不保留：脚本拿到的正好是 schema 声明的字段
     expect(result).toEqual({
       ok: true,
-      value: { number: 142, title: "t", state: "OPEN" },
+      value: { number: 142, title: "t" },
     });
   });
 

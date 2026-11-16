@@ -352,7 +352,7 @@ var PRELUDE_SOURCE = String.raw`(function (bridge, toolsJson, storeJson) {
 	};
 })`;
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/memory/memory.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/memory/memory.mjs
 var memory_exports = {};
 __export(memory_exports, {
   Assign: () => Assign,
@@ -363,7 +363,7 @@ __export(memory_exports, {
   Update: () => Update
 });
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/memory/metrics.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/memory/metrics.mjs
 var Metrics = {
   assign: 0,
   create: 0,
@@ -372,17 +372,10 @@ var Metrics = {
   update: 0
 };
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/settings/settings.mjs
-var settings_exports = {};
-__export(settings_exports, {
-  Get: () => Get,
-  Reset: () => Reset,
-  Set: () => Set2
-});
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/guard/guard.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/guard/guard.mjs
 var guard_exports = {};
 __export(guard_exports, {
+  CodePointCount: () => CodePointCount2,
   Counted: () => Counted,
   Entries: () => Entries,
   EntriesRegExp: () => EntriesRegExp,
@@ -423,15 +416,12 @@ __export(guard_exports, {
   Values: () => Values
 });
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/guard/string.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/guard/unicode/unicode_segment.mjs
 function IsBetween(value, min, max) {
   return value >= min && value <= max;
 }
 function IsZeroWidthJoiner(value) {
   return value === 8205;
-}
-function IsHighSurrogate(value) {
-  return IsBetween(value, 55296, 56319);
 }
 function IsRegionalIndicator(value) {
   return IsBetween(value, 127462, 127487);
@@ -470,67 +460,33 @@ function NextGraphemeClusterIndex(value, clusterStart) {
   }
   return clusterEnd;
 }
-function IsGraphemeCodePoint(value) {
-  return value >= 768 && // above special range
-  (IsHighSurrogate(value) || IsCombiningMark(value) || IsVariationSelector(value) || IsZeroWidthJoiner(value));
-}
 function GraphemeCount(value) {
-  let count = 0;
-  let index = 0;
+  let count = 0, index = 0;
   while (index < value.length) {
     index = NextGraphemeClusterIndex(value, index);
     count++;
   }
   return count;
 }
-function IsMinLengthSegmented(value, minLength) {
-  let count = 0;
-  let index = 0;
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/guard/unicode/unicode.mjs
+function CodePointCount(value) {
+  let result = 0, index = 0, prev = 0;
   while (index < value.length) {
-    index = NextGraphemeClusterIndex(value, index);
-    if (++count >= minLength)
-      return true;
+    const next = value.charCodeAt(index++) >> 10;
+    result += +((prev << 8 | next) !== 13879);
+    prev = next;
   }
-  return false;
-}
-function IsMaxLengthSegmented(value, maxLength) {
-  let count = 0;
-  let index = 0;
-  while (index < value.length) {
-    index = NextGraphemeClusterIndex(value, index);
-    if (++count > maxLength)
-      return false;
-  }
-  return true;
-}
-function IsMinLength(value, minLength) {
-  if (minLength === 0)
-    return true;
-  if (value.length < minLength)
-    return false;
-  let index = 0;
-  while (true) {
-    if (IsGraphemeCodePoint(value.charCodeAt(index))) {
-      return IsMinLengthSegmented(value, minLength);
-    }
-    if (++index >= minLength)
-      return true;
-  }
+  return result;
 }
 function IsMaxLength(value, maxLength) {
-  if (value.length <= maxLength)
-    return true;
-  let index = 0;
-  while (true) {
-    if (IsGraphemeCodePoint(value.charCodeAt(index))) {
-      return IsMaxLengthSegmented(value, maxLength);
-    }
-    if (++index > maxLength)
-      return false;
-  }
+  return value.length <= maxLength || value.length <= maxLength << 1 && CodePointCount(value) <= maxLength;
+}
+function IsMinLength(value, minLength) {
+  return value.length >= minLength << 1 || value.length >= minLength && CodePointCount(value) >= minLength;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/guard/guard.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/guard/guard.mjs
 function IsArray(value) {
   return Array.isArray(value);
 }
@@ -618,11 +574,14 @@ function IsValueLike(value) {
 function GraphemeCount2(value) {
   return GraphemeCount(value);
 }
-function IsMaxLength2(value, length) {
-  return IsMaxLength(value, length);
+function CodePointCount2(value) {
+  return CodePointCount(value);
 }
-function IsMinLength2(value, length) {
-  return IsMinLength(value, length);
+function IsMaxLength2(value, maxLength) {
+  return IsMaxLength(value, maxLength);
+}
+function IsMinLength2(value, minLength) {
+  return IsMinLength(value, minLength);
 }
 function Every(value, offset, callback) {
   return value.every((item, index) => index < offset || callback(item, index));
@@ -686,7 +645,7 @@ function IsDeepEqual(left, right) {
   return IsArray(left) ? DeepEqualArray(left, right) : IsObject(left) ? DeepEqualObject(left, right) : IsEqual(left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/guard/globals.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/guard/globals.mjs
 var globals_exports = {};
 __export(globals_exports, {
   IsBigInt64Array: () => IsBigInt64Array,
@@ -767,13 +726,20 @@ function IsMap(value) {
   return value instanceof globalThis.Map;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/guard/index.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/guard/index.mjs
 var guard_default = guard_exports;
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/settings/settings.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/settings/settings.mjs
+var settings_exports = {};
+__export(settings_exports, {
+  Get: () => Get,
+  Reset: () => Reset,
+  Set: () => Set2
+});
 var settings = {
   immutableTypes: false,
   maxErrors: 8,
+  maxParseErrors: 1,
   maxInstantiationCount: 128,
   useAcceleration: true,
   exactOptionalPropertyTypes: false,
@@ -784,6 +750,7 @@ var settings = {
 function Reset() {
   settings.immutableTypes = false;
   settings.maxErrors = 8;
+  settings.maxParseErrors = 1;
   settings.maxInstantiationCount = 128;
   settings.useAcceleration = true;
   settings.exactOptionalPropertyTypes = false;
@@ -803,31 +770,55 @@ function Get() {
   return settings;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/memory/freeze.mjs
-function Freeze(value) {
-  return settings_exports.Get().immutableTypes ? Object.freeze(value) : value;
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/memory/keys.mjs
+function Keys2(value) {
+  return [...guard_exports.Keys(value), ...guard_exports.Symbols(value)];
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/memory/assign.mjs
-function Assign(left, right) {
-  Metrics.assign += 1;
-  return Freeze({ ...left, ...right });
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/memory/finalize.mjs
+function Freeze(value, seen) {
+  if (seen.has(value))
+    return;
+  seen.add(value);
+  for (const key of Keys2(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor))
+      continue;
+    if (guard_exports.IsObject(descriptor.value))
+      Freeze(descriptor.value, seen);
+  }
+  Object.freeze(value);
 }
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/memory/clone.mjs
-function FromClassInstance(value) {
+function Finalize(value) {
+  if (!settings_exports.Get().immutableTypes)
+    return value;
+  Freeze(value, /* @__PURE__ */ new WeakSet());
   return value;
 }
-function IsSchemaObject(value) {
-  return guard_exports.HasPropertyKey(value, "~kind") || guard_exports.HasPropertyKey(value, "~unsafe");
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/memory/assign.mjs
+function Assign(left, right) {
+  Metrics.assign += 1;
+  const result = {}, rightKeys = Keys2(right), leftKeys = Keys2(left);
+  for (const key of leftKeys) {
+    if (rightKeys.includes(key))
+      continue;
+    Object.defineProperty(result, key, Object.getOwnPropertyDescriptor(left, key));
+  }
+  for (const key of rightKeys) {
+    Object.defineProperty(result, key, Object.getOwnPropertyDescriptor(right, key));
+  }
+  return Finalize(result);
 }
-function FromSchemaObject(value) {
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/memory/clone.mjs
+function Clone(value) {
+  Metrics.clone += 1;
   const result = {};
-  for (const key of guard_exports.Keys(value)) {
+  for (const key of Keys2(value)) {
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    descriptor.value = FromValue(descriptor.value);
     if (guard_exports.IsEqual(descriptor.enumerable, true)) {
       result[key] = descriptor.value;
     } else {
@@ -836,46 +827,12 @@ function FromSchemaObject(value) {
   }
   return result;
 }
-function FromPlainObject(value) {
-  const result = {};
-  for (const key of guard_exports.Keys(value)) {
-    if (guard_exports.IsUnsafePropertyKey(key))
-      continue;
-    result[key] = FromValue(value[key]);
-  }
-  for (const key of guard_exports.Symbols(value)) {
-    result[key] = FromValue(value[key]);
-  }
-  return result;
-}
-function FromObject(value) {
-  return guard_exports.IsClassInstance(value) ? FromClassInstance(value) : IsSchemaObject(value) ? FromSchemaObject(value) : FromPlainObject(value);
-}
-function FromArray(value) {
-  return value.map((element) => FromValue(element));
-}
-function FromTypedArray(value) {
-  return value.slice();
-}
-function FromRegExp(value) {
-  return new RegExp(value.source, value.flags);
-}
-function FromMap(value) {
-  return new Map(FromValue([...value.entries()]));
-}
-function FromSet(value) {
-  return new Set(FromValue([...value.values()]));
-}
-function FromValue(value) {
-  return globals_exports.IsTypeArray(value) ? FromTypedArray(value) : globals_exports.IsRegExp(value) ? FromRegExp(value) : globals_exports.IsMap(value) ? FromMap(value) : globals_exports.IsSet(value) ? FromSet(value) : guard_exports.IsArray(value) ? FromArray(value) : guard_exports.IsObject(value) ? FromObject(value) : value;
-}
-function Clone(value) {
-  Metrics.clone += 1;
-  return FromValue(value);
-}
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/memory/create.mjs
-function MergeHidden(left, right) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/memory/create.mjs
+function WithEnumerable(left, right) {
+  return { ...left, ...right };
+}
+function WithHidden(left, right) {
   for (const key of Object.keys(right)) {
     Object.defineProperty(left, key, {
       configurable: true,
@@ -886,44 +843,52 @@ function MergeHidden(left, right) {
   }
   return left;
 }
-function Merge(left, right) {
-  return { ...left, ...right };
-}
 function Create(hidden, enumerable, options = {}) {
   Metrics.create += 1;
-  const withOptions = Merge(enumerable, options);
-  const withHidden = settings_exports.Get().enumerableKind ? Merge(withOptions, hidden) : MergeHidden(withOptions, hidden);
-  return Freeze(withHidden);
+  const withEnumerable = WithEnumerable(enumerable, options);
+  const withHidden = settings_exports.Get().enumerableKind ? WithEnumerable(withEnumerable, hidden) : WithHidden(withEnumerable, hidden);
+  return Finalize(withHidden);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/memory/discard.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/memory/discard.mjs
 function Discard(value, propertyKeys) {
   Metrics.discard += 1;
   const result = {};
-  for (const key of guard_exports.Keys(value)) {
+  for (const key of Keys2(value)) {
     if (propertyKeys.includes(key))
       continue;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    descriptor.value = Clone(descriptor.value);
     Object.defineProperty(result, key, descriptor);
   }
-  return Freeze(result);
+  return Finalize(result);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/memory/update.mjs
-function Update(current, hidden, enumerable) {
-  Metrics.update += 1;
-  const settings2 = settings_exports.Get();
-  const result = Clone(current);
-  for (const key of Object.keys(hidden)) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/memory/update.mjs
+function WithCurrent(current, hiddenKeys, enumerableKeys, result) {
+  for (const key of Keys2(current)) {
+    if (guard_exports.IsUnsafePropertyKey(key) || hiddenKeys.includes(key) || enumerableKeys.includes(key))
+      continue;
+    const descriptor = Object.getOwnPropertyDescriptor(current, key);
+    Object.defineProperty(result, key, descriptor);
+  }
+}
+function WithHidden2(hidden, keys, result) {
+  const enumerableKind = settings_exports.Get().enumerableKind;
+  for (const key of keys) {
+    if (guard_exports.IsUnsafePropertyKey(key))
+      continue;
     Object.defineProperty(result, key, {
       configurable: true,
       writable: true,
-      enumerable: settings2.enumerableKind,
+      enumerable: enumerableKind,
       value: hidden[key]
     });
   }
-  for (const key of Object.keys(enumerable)) {
+}
+function WithEnumerable2(enumerable, keys, result) {
+  for (const key of keys) {
+    if (guard_exports.IsUnsafePropertyKey(key))
+      continue;
     Object.defineProperty(result, key, {
       configurable: true,
       enumerable: true,
@@ -931,10 +896,17 @@ function Update(current, hidden, enumerable) {
       value: enumerable[key]
     });
   }
-  return Freeze(result);
+}
+function Update(current, hidden, enumerable) {
+  Metrics.update += 1;
+  const result = {}, hiddenKeys = Keys2(hidden), enumerableKeys = Keys2(enumerable);
+  WithCurrent(current, hiddenKeys, enumerableKeys, result);
+  WithHidden2(hidden, hiddenKeys, result);
+  WithEnumerable2(enumerable, enumerableKeys, result);
+  return Finalize(result);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/schema.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/schema.mjs
 function IsKind(value, kind) {
   return guard_exports.IsObject(value) && guard_exports.HasPropertyKey(value, "~kind") && guard_exports.IsEqual(value["~kind"], kind);
 }
@@ -942,7 +914,7 @@ function IsSchema(value) {
   return guard_exports.IsObject(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/deferred.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/deferred.mjs
 function Deferred(action, parameters, options) {
   return memory_exports.Create({ "~kind": "Deferred" }, { type: "deferred", action, parameters, options }, {});
 }
@@ -950,12 +922,9 @@ function IsDeferred(value) {
   return IsKind(value, "Deferred");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/readonly/instantiate_add.mjs
-function AddReadonlyOperation(type) {
-  return memory_exports.Update(type, { "~readonly": true }, {});
-}
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/readonly/instantiate_add.mjs
 function AddReadonlyAction(type, options) {
-  const result = memory_exports.Update(AddReadonlyOperation(type), {}, options);
+  const result = memory_exports.Update(type, { "~readonly": true }, options);
   return result;
 }
 function AddReadonlyInstantiate(context, state, type, options) {
@@ -963,12 +932,9 @@ function AddReadonlyInstantiate(context, state, type, options) {
   return AddReadonlyAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/optional/instantiate_add.mjs
-function AddOptionalOperation(type) {
-  return memory_exports.Update(type, { "~optional": true }, {});
-}
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/optional/instantiate_add.mjs
 function AddOptionalAction(type, options) {
-  const result = memory_exports.Update(AddOptionalOperation(type), {}, options);
+  const result = memory_exports.Update(type, { "~optional": true }, options);
   return result;
 }
 function AddOptionalInstantiate(context, state, type, options) {
@@ -976,7 +942,7 @@ function AddOptionalInstantiate(context, state, type, options) {
   return AddOptionalAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/array.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/array.mjs
 function _Array_(items, options) {
   return memory_exports.Create({ "~kind": "Array" }, { type: "array", items }, options);
 }
@@ -987,7 +953,7 @@ function ArrayOptions(type) {
   return memory_exports.Discard(type, ["~kind", "type", "items"]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/constructor.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/constructor.mjs
 function Constructor(parameters, instanceType, options = {}) {
   return memory_exports.Create({ "~kind": "Constructor" }, { type: "constructor", parameters, instanceType }, options);
 }
@@ -998,7 +964,7 @@ function ConstructorOptions(type) {
   return memory_exports.Discard(type, ["~kind", "type", "parameters", "instanceType"]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/function.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/function.mjs
 function _Function_(parameters, returnType, options = {}) {
   return memory_exports.Create({ ["~kind"]: "Function" }, { type: "function", parameters, returnType }, options);
 }
@@ -1009,7 +975,7 @@ function FunctionOptions(type) {
   return memory_exports.Discard(type, ["~kind", "type", "parameters", "returnType"]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/ref.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/ref.mjs
 function Ref(ref, options) {
   return memory_exports.Create({ ["~kind"]: "Ref" }, { $ref: ref }, options);
 }
@@ -1017,7 +983,7 @@ function IsRef(value) {
   return IsKind(value, "Ref");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/generic.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/generic.mjs
 function Generic(parameters, expression) {
   return memory_exports.Create({ "~kind": "Generic" }, { type: "generic", parameters, expression });
 }
@@ -1025,7 +991,7 @@ function IsGeneric(value) {
   return IsKind(value, "Generic");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/any.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/any.mjs
 function Any(options) {
   return memory_exports.Create({ ["~kind"]: "Any" }, {}, options);
 }
@@ -1033,7 +999,7 @@ function IsAny(value) {
   return IsKind(value, "Any");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/never.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/never.mjs
 var NeverPattern = "(?!)";
 function Never(options) {
   return memory_exports.Create({ "~kind": "Never" }, { not: {} }, options);
@@ -1042,7 +1008,7 @@ function IsNever(value) {
   return IsKind(value, "Never");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/_add_optional.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/_add_optional.mjs
 function AddOptionalDeferred(type, options = {}) {
   return Deferred("AddOptional", [type], options);
 }
@@ -1050,7 +1016,7 @@ function AddOptional(type, options = {}) {
   return AddOptionalAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/_optional.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/_optional.mjs
 function Optional(type) {
   return AddOptional(type);
 }
@@ -1058,7 +1024,7 @@ function IsOptional(value) {
   return IsSchema(value) && guard_exports.HasPropertyKey(value, "~optional");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/properties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/properties.mjs
 function RequiredArray(properties) {
   return guard_exports.Keys(properties).filter((key) => !IsOptional(properties[key]));
 }
@@ -1069,7 +1035,7 @@ function PropertyValues(properties) {
   return guard_exports.Values(properties);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/object.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/object.mjs
 function _Object_(properties, options = {}) {
   const requiredKeys = RequiredArray(properties);
   const required = requiredKeys.length > 0 ? { required: requiredKeys } : {};
@@ -1082,7 +1048,7 @@ function ObjectOptions(type) {
   return memory_exports.Discard(type, ["~kind", "type", "properties", "required"]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/unknown.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/unknown.mjs
 function Unknown(options) {
   return memory_exports.Create({ ["~kind"]: "Unknown" }, {}, options);
 }
@@ -1090,7 +1056,7 @@ function IsUnknown(value) {
   return IsKind(value, "Unknown");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/cyclic.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/cyclic.mjs
 function Cyclic($defs, $ref, options) {
   const defs = guard_exports.Keys($defs).reduce((result, key) => {
     return { ...result, [key]: memory_exports.Update($defs[key], {}, { $id: key }) };
@@ -1101,7 +1067,7 @@ function IsCyclic(value) {
   return IsKind(value, "Cyclic");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/unsafe.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/unsafe.mjs
 function Unsafe(schema) {
   return memory_exports.Update(schema, { ["~unsafe"]: null }, {});
 }
@@ -1109,7 +1075,7 @@ function IsUnsafe(value) {
   return guard_exports.IsObjectNotArray(value) && guard_exports.HasPropertyKey(value, "~unsafe") && guard_exports.IsNull(value["~unsafe"]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/arguments/arguments.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/arguments/arguments.mjs
 var arguments_exports = {};
 __export(arguments_exports, {
   Match: () => Match
@@ -1120,7 +1086,7 @@ function Match(args, match) {
   })();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/infer.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/infer.mjs
 function Infer(...args) {
   const [name, extends_] = arguments_exports.Match(args, {
     2: (name2, extends_2) => [name2, extends_2, extends_2],
@@ -1132,7 +1098,7 @@ function IsInfer(value) {
   return IsKind(value, "Infer");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/dependent.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/dependent.mjs
 function Dependent(if_, then_, else_, options = {}) {
   return memory_exports.Create({ "~kind": "Dependent" }, { if: if_, then: then_, else: else_ }, options);
 }
@@ -1143,7 +1109,7 @@ function DependentOptions(type) {
   return memory_exports.Discard(type, ["~kind", "if", "then", "else"]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/enum/typescript_enum_to_enum_values.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/enum/typescript_enum_to_enum_values.mjs
 function IsTypeScriptEnumLike(value) {
   return guard_exports.IsObjectNotArray(value);
 }
@@ -1152,7 +1118,7 @@ function TypeScriptEnumToEnumValues(type) {
   return keys.reduce((result, key) => [...result, type[key]], []);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/enum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/enum.mjs
 function IsEnumValue(value) {
   return guard_exports.IsString(value) || guard_exports.IsNumber(value);
 }
@@ -1164,7 +1130,7 @@ function IsEnum(value) {
   return IsKind(value, "Enum");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/intersect.mjs
 function Intersect(types, options = {}) {
   return memory_exports.Create({ "~kind": "Intersect" }, { allOf: types }, options);
 }
@@ -1175,19 +1141,19 @@ function IntersectOptions(type) {
   return memory_exports.Discard(type, ["~kind", "allOf"]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/hashing/hash.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/hashing/hash.mjs
 var hash_exports = {};
 __export(hash_exports, {
   Hash: () => Hash,
   HashCode: () => HashCode
 });
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/unreachable/unreachable.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/unreachable/unreachable.mjs
 function Unreachable() {
   throw new Error("Unreachable");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/hashing/hash.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/hashing/hash.mjs
 function InstanceKeys(value) {
   const propertyKeys = /* @__PURE__ */ new Set();
   let current = value;
@@ -1203,40 +1169,44 @@ function InstanceKeys(value) {
 function IsIEEE754(value) {
   return typeof value === "number";
 }
-var ByteMarker;
-(function(ByteMarker2) {
-  ByteMarker2[ByteMarker2["Array"] = 0] = "Array";
-  ByteMarker2[ByteMarker2["BigInt"] = 1] = "BigInt";
-  ByteMarker2[ByteMarker2["Boolean"] = 2] = "Boolean";
-  ByteMarker2[ByteMarker2["Date"] = 3] = "Date";
-  ByteMarker2[ByteMarker2["Constructor"] = 4] = "Constructor";
-  ByteMarker2[ByteMarker2["Function"] = 5] = "Function";
-  ByteMarker2[ByteMarker2["Null"] = 6] = "Null";
-  ByteMarker2[ByteMarker2["Number"] = 7] = "Number";
-  ByteMarker2[ByteMarker2["Object"] = 8] = "Object";
-  ByteMarker2[ByteMarker2["RegExp"] = 9] = "RegExp";
-  ByteMarker2[ByteMarker2["String"] = 10] = "String";
-  ByteMarker2[ByteMarker2["Symbol"] = 11] = "Symbol";
-  ByteMarker2[ByteMarker2["TypeArray"] = 12] = "TypeArray";
-  ByteMarker2[ByteMarker2["Undefined"] = 13] = "Undefined";
-})(ByteMarker || (ByteMarker = {}));
-var Accumulator = BigInt("14695981039346656037");
-var [Prime, Size] = [BigInt("1099511628211"), BigInt(
-  "18446744073709551616"
-  /* 2 ^ 64 */
-)];
-var Bytes = Array.from({ length: 256 }).map((_, i) => BigInt(i));
+var ByteMarker = {
+  Array: 0,
+  BigInt: 1,
+  Boolean: 2,
+  Date: 3,
+  Constructor: 4,
+  Function: 5,
+  Null: 6,
+  Number: 7,
+  Object: 8,
+  RegExp: 9,
+  String: 10,
+  Symbol: 11,
+  TypeArray: 12,
+  Undefined: 13
+};
+var A0 = 8997;
+var A1 = 33826;
+var A2 = 40164;
+var A3 = 52210;
 var F64 = new Float64Array(1);
 var F64In = new DataView(F64.buffer);
 var F64Out = new Uint8Array(F64.buffer);
 function FNV1A64_OP(byte) {
-  Accumulator = Accumulator ^ Bytes[byte];
-  Accumulator = Accumulator * Prime % Size;
+  const L0 = A0 ^ byte;
+  const T0 = L0 * 435;
+  const T1 = A1 * 435 + (T0 >>> 16);
+  const T2 = A2 * 435 + (T1 >>> 16) + (L0 << 8);
+  const T3 = A3 * 435 + (T2 >>> 16) + (A1 << 8);
+  A0 = T0 & 65535;
+  A1 = T1 & 65535;
+  A2 = T2 & 65535;
+  A3 = T3 & 65535;
 }
-function FromArray2(value) {
+function FromArray(value) {
   FNV1A64_OP(ByteMarker.Array);
   for (const item of value) {
-    FromValue2(item);
+    FromValue(item);
   }
 }
 function FromBigInt(value) {
@@ -1252,15 +1222,15 @@ function FromBoolean(value) {
 }
 function FromConstructor(value) {
   FNV1A64_OP(ByteMarker.Constructor);
-  FromValue2(value.toString());
+  FromValue(value.toString());
 }
 function FromDate(value) {
   FNV1A64_OP(ByteMarker.Date);
-  FromValue2(value.getTime());
+  FromValue(value.getTime());
 }
 function FromFunction(value) {
   FNV1A64_OP(ByteMarker.Function);
-  FromValue2(value.toString());
+  FromValue(value.toString());
 }
 function FromNull(_value) {
   FNV1A64_OP(ByteMarker.Null);
@@ -1277,27 +1247,34 @@ function FromNumber(value) {
     FNV1A64_OP(byte);
   }
 }
-function FromObject2(value) {
+function FromObject(value) {
   FNV1A64_OP(ByteMarker.Object);
   for (const key of InstanceKeys(value).sort()) {
-    FromValue2(key);
-    FromValue2(value[key]);
+    FromValue(key);
+    FromValue(value[key]);
   }
 }
-function FromRegExp2(value) {
+function FromRegExp(value) {
   FNV1A64_OP(ByteMarker.RegExp);
   FromString(value.toString());
 }
 var encoder = new TextEncoder();
 function FromString(value) {
   FNV1A64_OP(ByteMarker.String);
-  for (const byte of encoder.encode(value)) {
-    FNV1A64_OP(byte);
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code > 127) {
+      for (const byte of encoder.encode(value.slice(i))) {
+        FNV1A64_OP(byte);
+      }
+      return;
+    }
+    FNV1A64_OP(code);
   }
 }
 function FromSymbol(value) {
   FNV1A64_OP(ByteMarker.Symbol);
-  FromValue2(value.toString());
+  FromValue(value.toString());
 }
 function FromTypeArray(value) {
   FNV1A64_OP(ByteMarker.TypeArray);
@@ -1309,19 +1286,22 @@ function FromTypeArray(value) {
 function FromUndefined(_value) {
   return FNV1A64_OP(ByteMarker.Undefined);
 }
-function FromValue2(value) {
-  return globals_exports.IsTypeArray(value) ? FromTypeArray(value) : globals_exports.IsDate(value) ? FromDate(value) : globals_exports.IsRegExp(value) ? FromRegExp2(value) : globals_exports.IsBoolean(value) ? FromBoolean(value.valueOf()) : globals_exports.IsString(value) ? FromString(value.valueOf()) : globals_exports.IsNumber(value) ? FromNumber(value.valueOf()) : IsIEEE754(value) ? FromNumber(value) : guard_exports.IsArray(value) ? FromArray2(value) : guard_exports.IsBoolean(value) ? FromBoolean(value) : guard_exports.IsBigInt(value) ? FromBigInt(value) : guard_exports.IsConstructor(value) ? FromConstructor(value) : guard_exports.IsNull(value) ? FromNull(value) : guard_exports.IsObject(value) ? FromObject2(value) : guard_exports.IsString(value) ? FromString(value) : guard_exports.IsSymbol(value) ? FromSymbol(value) : guard_exports.IsUndefined(value) ? FromUndefined(value) : guard_exports.IsFunction(value) ? FromFunction(value) : Unreachable();
+function FromValue(value) {
+  return globals_exports.IsTypeArray(value) ? FromTypeArray(value) : globals_exports.IsDate(value) ? FromDate(value) : globals_exports.IsRegExp(value) ? FromRegExp(value) : globals_exports.IsBoolean(value) ? FromBoolean(value.valueOf()) : globals_exports.IsString(value) ? FromString(value.valueOf()) : globals_exports.IsNumber(value) ? FromNumber(value.valueOf()) : IsIEEE754(value) ? FromNumber(value) : guard_exports.IsArray(value) ? FromArray(value) : guard_exports.IsBoolean(value) ? FromBoolean(value) : guard_exports.IsBigInt(value) ? FromBigInt(value) : guard_exports.IsConstructor(value) ? FromConstructor(value) : guard_exports.IsNull(value) ? FromNull(value) : guard_exports.IsObject(value) ? FromObject(value) : guard_exports.IsString(value) ? FromString(value) : guard_exports.IsSymbol(value) ? FromSymbol(value) : guard_exports.IsUndefined(value) ? FromUndefined(value) : guard_exports.IsFunction(value) ? FromFunction(value) : Unreachable();
+}
+function Hex(limb) {
+  return limb.toString(16).padStart(4, "0");
 }
 function HashCode(value) {
-  Accumulator = BigInt("14695981039346656037");
-  FromValue2(value);
-  return Accumulator;
+  return BigInt(`0x${Hash(value)}`);
 }
 function Hash(value) {
-  return HashCode(value).toString(16).padStart(16, "0");
+  A0 = 8997, A1 = 33826, A2 = 40164, A3 = 52210;
+  FromValue(value);
+  return `${Hex(A3)}${Hex(A2)}${Hex(A1)}${Hex(A0)}`;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/locale/en_US.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/locale/en_US.mjs
 function en_US(error) {
   switch (error.keyword) {
     case "additionalProperties":
@@ -1386,19 +1366,19 @@ function en_US(error) {
       return `must not have duplicate items`;
     case "~refine":
       return error.params.message;
-    // deno-coverage-ignore - unreachable
+    // deno-coverage-ignore-start - unreachable
     default:
       return "an unknown validation error occurred";
   }
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/system/locale/_config.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/locale/_config.mjs
 var locale = en_US;
 function Get2() {
   return locale;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/_codec.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/_codec.mjs
 var EncodeBuilder = class {
   constructor(type, decode) {
     this.type = type;
@@ -1437,7 +1417,7 @@ function IsCodec(value) {
   return IsSchema(value) && guard_exports.HasPropertyKey(value, "~codec") && guard_exports.IsObject(value["~codec"]) && guard_exports.HasPropertyKey(value["~codec"], "encode") && guard_exports.HasPropertyKey(value["~codec"], "decode");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/_immutable.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/_immutable.mjs
 function Immutable(type) {
   return AddImmutable(type);
 }
@@ -1445,7 +1425,7 @@ function IsImmutable(value) {
   return IsSchema(value) && guard_exports.HasPropertyKey(value, "~immutable");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/_add_readonly.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/_add_readonly.mjs
 function AddReadonlyDeferred(type, options = {}) {
   return Deferred("AddReadonly", [type], options);
 }
@@ -1453,7 +1433,7 @@ function AddReadonly(type, options = {}) {
   return AddReadonlyAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/_readonly.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/_readonly.mjs
 function Readonly(type) {
   return AddReadonly(type);
 }
@@ -1461,7 +1441,7 @@ function IsReadonly(value) {
   return IsSchema(value) && guard_exports.HasPropertyKey(value, "~readonly");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/_refine.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/_refine.mjs
 function RefineAdd(type, refinement) {
   const refinements = IsRefine(type) ? [...type["~refine"], refinement] : [refinement];
   return memory_exports.Update(type, { "~refine": refinements }, {});
@@ -1480,7 +1460,7 @@ function IsRefine(value) {
   return IsSchema(value) && guard_exports.HasPropertyKey(value, "~refine") && guard_exports.IsArray(value["~refine"]) && guard_exports.Every(value["~refine"], 0, (value2) => IsRefinement(value2));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/bigint.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/bigint.mjs
 var BigIntPattern = "-?(?:0|[1-9][0-9]*)n";
 function BigInt2(options) {
   return memory_exports.Create({ "~kind": "BigInt" }, { type: "bigint" }, options);
@@ -1489,7 +1469,7 @@ function IsBigInt2(value) {
   return IsKind(value, "BigInt");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/boolean.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/boolean.mjs
 function Boolean2(options) {
   return memory_exports.Create({ "~kind": "Boolean" }, { type: "boolean" }, options);
 }
@@ -1497,7 +1477,7 @@ function IsBoolean3(value) {
   return IsKind(value, "Boolean");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/identifier.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/identifier.mjs
 function Identifier(name) {
   return memory_exports.Create({ "~kind": "Identifier" }, { name });
 }
@@ -1505,7 +1485,7 @@ function IsIdentifier(value) {
   return IsKind(value, "Identifier");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/integer.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/integer.mjs
 var IntegerPattern = "-?(?:0|[1-9][0-9]*)";
 function Integer(options) {
   return memory_exports.Create({ "~kind": "Integer" }, { type: "integer" }, options);
@@ -1514,7 +1494,7 @@ function IsInteger2(value) {
   return IsKind(value, "Integer");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/literal.mjs
 var InvalidLiteralValue = class extends Error {
   constructor(value) {
     super(`Invalid Literal value`);
@@ -1553,7 +1533,7 @@ function IsLiteral(value) {
   return IsKind(value, "Literal");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/null.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/null.mjs
 function Null(options) {
   return memory_exports.Create({ "~kind": "Null" }, { type: "null" }, options);
 }
@@ -1561,7 +1541,7 @@ function IsNull2(value) {
   return IsKind(value, "Null");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/number.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/number.mjs
 var NumberPattern = "-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?";
 function Number2(options) {
   return memory_exports.Create({ "~kind": "Number" }, { type: "number" }, options);
@@ -1570,7 +1550,7 @@ function IsNumber3(value) {
   return IsKind(value, "Number");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/symbol.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/symbol.mjs
 function Symbol2(options) {
   return memory_exports.Create({ "~kind": "Symbol" }, { type: "symbol" }, options);
 }
@@ -1578,7 +1558,7 @@ function IsSymbol2(value) {
   return IsKind(value, "Symbol");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/parameter.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/parameter.mjs
 function Parameter(...args) {
   const [name, extends_, equals] = arguments_exports.Match(args, {
     3: (name2, extends_2, equals2) => [name2, extends_2, equals2],
@@ -1591,7 +1571,7 @@ function IsParameter(value) {
   return IsKind(value, "Parameter");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/string.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/string.mjs
 var StringPattern = ".*";
 function String2(options) {
   return memory_exports.Create({ "~kind": "String" }, { type: "string" }, options);
@@ -1600,7 +1580,7 @@ function IsString3(value) {
   return IsKind(value, "String");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/union.mjs
 function Union(anyOf, options = {}) {
   return memory_exports.Create({ "~kind": "Union" }, { anyOf }, options);
 }
@@ -1611,14 +1591,14 @@ function UnionOptions(type) {
   return memory_exports.Discard(type, ["~kind", "anyOf"]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/patterns/pattern.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/patterns/pattern.mjs
 function ParsePatternIntoTypes(pattern) {
   const parsed = Pattern(pattern);
   const result = guard_exports.IsEqual(parsed.length, 2) ? parsed[0] : [];
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/template_literal/is_finite.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/template_literal/is_finite.mjs
 function FromLiteral(_value) {
   return true;
 }
@@ -1637,12 +1617,12 @@ function IsTemplateLiteralFinite(types) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/template_literal/create.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/template_literal/create.mjs
 function TemplateLiteralCreate(pattern) {
   return memory_exports.Create({ ["~kind"]: "TemplateLiteral" }, { type: "string", pattern }, {});
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/template_literal/decode.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/template_literal/decode.mjs
 function FromLiteralPush(variants, value, result = []) {
   return guard_exports.ShiftLeft(variants, (left, right) => FromLiteralPush(right, value, [...result, `${left}${value}`]), () => result);
 }
@@ -1685,24 +1665,24 @@ function TemplateLiteralDecode(pattern) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/record_create.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/record_create.mjs
 function CreateRecord(key, value) {
   const type = "object";
   const patternProperties = { [key]: value };
   return memory_exports.Create({ ["~kind"]: "Record" }, { type, patternProperties });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/from_key_any.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/from_key_any.mjs
 function FromAnyKey(value) {
   return CreateRecord(StringKey, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/from_key_boolean.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/from_key_boolean.mjs
 function FromBooleanKey(value) {
   return _Object_({ true: value, false: value });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/tuple.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/tuple.mjs
 function Tuple(types, options = {}) {
   const [items, minItems, additionalItems] = [types, types.length, false];
   return memory_exports.Create({ ["~kind"]: "Tuple" }, { type: "array", additionalItems, items, minItems }, options);
@@ -1714,49 +1694,7 @@ function TupleOptions(type) {
   return memory_exports.Discard(type, ["~kind", "type", "items", "minItems", "additionalItems"]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/readonly/instantiate_remove.mjs
-function RemoveReadonlyOperation(type) {
-  return memory_exports.Discard(type, ["~readonly"]);
-}
-function RemoveReadonlyAction(type, options) {
-  const result = memory_exports.Update(RemoveReadonlyOperation(type), {}, options);
-  return result;
-}
-function RemoveReadonlyInstantiate(context, state, type, options) {
-  const instantiatedType = InstantiateType(context, state, type);
-  return RemoveReadonlyAction(instantiatedType, options);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/_remove_readonly.mjs
-function RemoveReadonlyDeferred(type, options = {}) {
-  return Deferred("RemoveReadonly", [type], options);
-}
-function RemoveReadonly(type, options = {}) {
-  return RemoveReadonlyAction(type, options);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/optional/instantiate_remove.mjs
-function RemoveOptionalOperation(type) {
-  return memory_exports.Discard(type, ["~optional"]);
-}
-function RemoveOptionalAction(type, options) {
-  const result = memory_exports.Update(RemoveOptionalOperation(type), {}, options);
-  return result;
-}
-function RemoveOptionalInstantiate(context, state, type, options) {
-  const instantiatedType = InstantiateType(context, state, type);
-  return RemoveOptionalAction(instantiatedType, options);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/_remove_optional.mjs
-function RemoveOptionalDeferred(type, options = {}) {
-  return Deferred("RemoveOptional", [type], options);
-}
-function RemoveOptional(type, options = {}) {
-  return RemoveOptionalAction(type, options);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/tuple/to_object.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/tuple/to_object.mjs
 function TupleElementsToProperties(types) {
   const result = types.reduceRight((result2, right, index) => {
     return { [index]: right, ...result2 };
@@ -1769,25 +1707,52 @@ function TupleToObject(type) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/evaluate/composite.mjs
-function CanComposite(type) {
-  return IsObject2(type) || IsTuple(type);
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/optional/instantiate_remove.mjs
+function RemoveOptionalOperation(type) {
+  return memory_exports.Discard(type, ["~optional"]);
 }
-function IsReadonlyProperty(left, right) {
-  return IsReadonly(left) ? IsReadonly(right) ? true : false : false;
+function RemoveOptionalAction(type, options) {
+  const result = memory_exports.Update(RemoveOptionalOperation(type), {}, options);
+  return result;
 }
-function IsOptionalProperty(left, right) {
-  return IsOptional(left) ? IsOptional(right) ? true : false : false;
+function RemoveOptionalInstantiate(context, state, type, options) {
+  const instantiatedType = InstantiateType(context, state, type);
+  return RemoveOptionalAction(instantiatedType, options);
 }
-function CompositeProperty(left, right) {
-  const isReadonly = IsReadonlyProperty(left, right);
-  const isOptional = IsOptionalProperty(left, right);
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/readonly/instantiate_remove.mjs
+function RemoveReadonlyOperation(type) {
+  return memory_exports.Discard(type, ["~readonly"]);
+}
+function RemoveReadonlyAction(type, options) {
+  const result = memory_exports.Update(RemoveReadonlyOperation(type), {}, options);
+  return result;
+}
+function RemoveReadonlyInstantiate(context, state, type, options) {
+  const instantiatedType = InstantiateType(context, state, type);
+  return RemoveReadonlyAction(instantiatedType, options);
+}
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/evaluate/property.mjs
+function EvaluatePropertyIntersect(left, right) {
+  const isReadonly = IsReadonly(left) && IsReadonly(right);
+  const isOptional = IsOptional(left) && IsOptional(right);
   const evaluated = EvaluateIntersect([left, right]);
-  const property = RemoveReadonly(RemoveOptional(evaluated));
-  return isReadonly && isOptional ? AddReadonly(AddOptional(property)) : isReadonly && !isOptional ? AddReadonly(property) : !isReadonly && isOptional ? AddOptional(property) : property;
+  const property = RemoveReadonlyAction(RemoveOptionalAction(evaluated, {}), {});
+  return isReadonly && isOptional ? AddReadonlyAction(AddOptionalAction(property, {}), {}) : isReadonly ? AddReadonlyAction(property, {}) : isOptional ? AddOptionalAction(property, {}) : property;
 }
+function EvaluatePropertyUnion(left, right) {
+  const isReadonly = IsReadonly(left) || IsReadonly(right);
+  const isOptional = IsOptional(left) || IsOptional(right);
+  const leftProperty = RemoveReadonlyAction(RemoveOptionalAction(left, {}), {});
+  const rightProperty = RemoveReadonlyAction(RemoveOptionalAction(right, {}), {});
+  const property = EvaluateUnion([leftProperty, rightProperty]);
+  return isReadonly && isOptional ? AddReadonlyAction(AddOptionalAction(property, {}), {}) : isReadonly ? AddReadonlyAction(property, {}) : isOptional ? AddOptionalAction(property, {}) : property;
+}
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/evaluate/composite.mjs
 function CompositePropertyKey(left, right, key) {
-  return key in left ? key in right ? CompositeProperty(left[key], right[key]) : left[key] : key in right ? right[key] : Never();
+  return key in left ? key in right ? EvaluatePropertyIntersect(left[key], right[key]) : left[key] : key in right ? right[key] : Never();
 }
 function CompositeProperties(left, right) {
   const keys = /* @__PURE__ */ new Set([...guard_exports.Keys(left), ...guard_exports.Keys(right)]);
@@ -1808,10 +1773,13 @@ function Composite(left, right) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/evaluate/narrow.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/evaluate/narrow.mjs
 function NarrowCompareRule(left, right) {
   const result = Compare(left, right);
   return guard_exports.IsEqual(result, CompareResultLeftInside) ? left : guard_exports.IsEqual(result, CompareResultRightInside) ? right : guard_exports.IsEqual(result, CompareResultEqual) ? right : Never();
+}
+function CanComposite(type) {
+  return IsObject2(type) || IsTuple(type);
 }
 function NarrowCompositeRule(left, right) {
   const canCompositeLeft = CanComposite(left);
@@ -1822,7 +1790,7 @@ function Narrow(left, right) {
   return IsNever(left) ? left : IsAny(left) ? left : IsUnknown(left) ? right : IsNever(right) ? right : IsAny(right) ? right : IsUnknown(right) ? left : NarrowCompositeRule(left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/evaluate/distribute.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/evaluate/distribute.mjs
 function ShouldEvaluate(left, right) {
   const result = IsUnion(left) || IsUnion(right);
   return result;
@@ -1844,7 +1812,7 @@ function Distribute(types, result = []) {
   return guard_exports.ShiftLeft(types, (left, right) => IsUnion(left) ? Distribute(right, DistributeUnion(left.anyOf, result)) : Distribute(right, DistributeType(left, result)), () => result);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/exclude/operation.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/exclude/operation.mjs
 function ExcludeType(left, right) {
   const check = Extends({}, left, right);
   const result = result_exports.IsExtendsTrueLike(check) ? [] : [left];
@@ -1861,7 +1829,7 @@ function ExcludeOperation(left, right) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/evaluate/evaluate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/evaluate/evaluate.mjs
 function EvaluateDependent(if_, then_, else_) {
   const intersected = EvaluateIntersect([if_, then_]);
   const excluded = ExcludeOperation(else_, if_);
@@ -1896,43 +1864,43 @@ function EvaluateUnionFast(types) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/from_key_enum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/from_key_enum.mjs
 function FromEnumKey(values, value) {
   const unionKey = EvaluateEnum(values);
   const result = FromKey(unionKey, value);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/from_key_integer.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/from_key_integer.mjs
 function FromIntegerKey(_key, value) {
   const result = CreateRecord(IntegerKey, value);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/from_key_intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/from_key_intersect.mjs
 function FromIntersectKey(types, value) {
   const evaluatedKey = EvaluateIntersect(types);
   const result = FromKey(evaluatedKey, value);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/from_key_literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/from_key_literal.mjs
 function FromLiteralKey(key, value) {
   return guard_exports.IsString(key) || guard_exports.IsNumber(key) ? _Object_({ [key]: value }) : guard_exports.IsEqual(key, false) ? _Object_({ false: value }) : guard_exports.IsEqual(key, true) ? _Object_({ true: value }) : _Object_({});
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/from_key_number.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/from_key_number.mjs
 function FromNumberKey(_key, value) {
   const result = CreateRecord(NumberKey, value);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/from_key_string.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/from_key_string.mjs
 function FromStringKey(key, value) {
   return guard_exports.HasPropertyKey(key, "pattern") && (guard_exports.IsString(key.pattern) || key.pattern instanceof RegExp) ? CreateRecord(key.pattern.toString(), value) : CreateRecord(StringKey, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/from_key_template_literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/from_key_template_literal.mjs
 function FromTemplateKey(pattern, value) {
   const types = ParsePatternIntoTypes(pattern);
   const finite = IsTemplateLiteralFinite(types);
@@ -1940,7 +1908,7 @@ function FromTemplateKey(pattern, value) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/evaluate/flatten.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/evaluate/flatten.mjs
 function FlattenType(type) {
   const result = IsUnion(type) ? Flatten(type.anyOf) : [type];
   return result;
@@ -1949,7 +1917,7 @@ function Flatten(types, result = []) {
   return guard_exports.ShiftLeft(types, (left, right) => Flatten(right, [...result, ...FlattenType(left)]), () => result);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/from_key_union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/from_key_union.mjs
 function StringOrNumberCheck(types) {
   return types.some((type) => IsString3(type) || IsNumber3(type) || IsInteger2(type));
 }
@@ -1972,13 +1940,13 @@ function FromUnionKey(types, value) {
   return IsSchema(record) ? record : CreateObject(flattened, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/from_key.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/from_key.mjs
 function FromKey(key, value) {
   const result = IsAny(key) ? FromAnyKey(value) : IsBoolean3(key) ? FromBooleanKey(value) : IsEnum(key) ? FromEnumKey(key.enum, value) : IsInteger2(key) ? FromIntegerKey(key, value) : IsIntersect(key) ? FromIntersectKey(key.allOf, value) : IsLiteral(key) ? FromLiteralKey(key.const, value) : IsNumber3(key) ? FromNumberKey(key, value) : IsUnion(key) ? FromUnionKey(key.anyOf, value) : IsString3(key) ? FromStringKey(key, value) : IsTemplateLiteral(key) ? FromTemplateKey(key.pattern, value) : _Object_({});
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/record/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/record/instantiate.mjs
 function RecordAction(key, value, options) {
   const result = CanInstantiate([key]) ? memory_exports.Update(FromKey(key, value), {}, options) : RecordDeferred(key, value, options);
   return result;
@@ -1989,7 +1957,7 @@ function RecordInstantiate(context, state, key, value, options) {
   return RecordAction(instantiatedKey, instantiatedValue, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/record.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/record.mjs
 var IntegerKey = `^${IntegerPattern}$`;
 var NumberKey = `^${NumberPattern}$`;
 var StringKey = `^${StringPattern}$`;
@@ -2021,7 +1989,7 @@ function IsRecord(value) {
   return IsKind(value, "Record");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/rest.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/rest.mjs
 function Rest(type) {
   return memory_exports.Create({ "~kind": "Rest" }, { type: "rest", items: type }, {});
 }
@@ -2029,7 +1997,7 @@ function IsRest(value) {
   return IsKind(value, "Rest");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/this.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/this.mjs
 function This(options) {
   return memory_exports.Create({ ["~kind"]: "This" }, { $ref: "#" }, options);
 }
@@ -2037,7 +2005,7 @@ function IsThis(value) {
   return IsKind(value, "This");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/undefined.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/undefined.mjs
 function Undefined(options) {
   return memory_exports.Create({ "~kind": "Undefined" }, { type: "undefined" }, options);
 }
@@ -2045,7 +2013,7 @@ function IsUndefined2(value) {
   return IsKind(value, "Undefined");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/void.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/void.mjs
 function Void(options) {
   return memory_exports.Create({ "~kind": "Void" }, { type: "void" }, options);
 }
@@ -2053,7 +2021,7 @@ function IsVoid(value) {
   return IsKind(value, "Void");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/mapping.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/mapping.mjs
 function IntrinsicOrCall(ref, parameters) {
   return guard_exports.IsEqual(ref, "Array") ? _Array_(parameters[0]) : guard_exports.IsEqual(ref, "Capitalize") ? CapitalizeDeferred(parameters[0]) : guard_exports.IsEqual(ref, "ConstructorParameters") ? ConstructorParametersDeferred(parameters[0]) : guard_exports.IsEqual(ref, "Evaluate") ? EvaluateDeferred(parameters[0]) : guard_exports.IsEqual(ref, "Exclude") ? ExcludeDeferred(parameters[0], parameters[1]) : guard_exports.IsEqual(ref, "Extract") ? ExtractDeferred(parameters[0], parameters[1]) : guard_exports.IsEqual(ref, "Index") ? IndexDeferred(parameters[0], parameters[1]) : guard_exports.IsEqual(ref, "InstanceType") ? InstanceTypeDeferred(parameters[0]) : guard_exports.IsEqual(ref, "Lowercase") ? LowercaseDeferred(parameters[0]) : guard_exports.IsEqual(ref, "NonNullable") ? NonNullableDeferred(parameters[0]) : guard_exports.IsEqual(ref, "Omit") ? OmitDeferred(parameters[0], parameters[1]) : guard_exports.IsEqual(ref, "Parameters") ? ParametersDeferred(parameters[0]) : guard_exports.IsEqual(ref, "Partial") ? PartialDeferred(parameters[0]) : guard_exports.IsEqual(ref, "Pick") ? PickDeferred(parameters[0], parameters[1]) : guard_exports.IsEqual(ref, "Readonly") ? ReadonlyObjectDeferred(parameters[0]) : guard_exports.IsEqual(ref, "KeyOf") ? KeyOfDeferred(parameters[0]) : guard_exports.IsEqual(ref, "Record") ? RecordDeferred(parameters[0], parameters[1]) : guard_exports.IsEqual(ref, "Required") ? RequiredDeferred(parameters[0]) : guard_exports.IsEqual(ref, "ReturnType") ? ReturnTypeDeferred(parameters[0]) : guard_exports.IsEqual(ref, "Uncapitalize") ? UncapitalizeDeferred(parameters[0]) : guard_exports.IsEqual(ref, "Uppercase") ? UppercaseDeferred(parameters[0]) : CallConstruct(Ref(ref), parameters);
 }
@@ -2481,7 +2449,7 @@ function ScriptMapping(input) {
   return input;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/internal/match.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/internal/match.mjs
 function IsMatch(value) {
   return IsEqual(value.length, 2);
 }
@@ -2489,7 +2457,7 @@ function Match2(input, ok, fail) {
   return IsMatch(input) ? ok(input[0], input[1]) : fail();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/internal/take.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/internal/take.mjs
 function TakeVariant(variant, input) {
   return IsEqual(input.indexOf(variant), 0) ? [variant, input.slice(variant.length)] : [];
 }
@@ -2502,7 +2470,7 @@ function Take(variants, input) {
   return [];
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/internal/char.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/internal/char.mjs
 function Range(start, end) {
   return Array.from({ length: end - start + 1 }, (_, i) => String.fromCharCode(start + i));
 }
@@ -2522,7 +2490,7 @@ var Dot = ".";
 var DollarSign = "$";
 var Hyphen = "-";
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/internal/trim.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/internal/trim.mjs
 var LineComment = "//";
 var OpenComment = "/*";
 var CloseComment = "*/";
@@ -2548,12 +2516,12 @@ function Trim(input) {
   return trimmed.startsWith(OpenComment) ? Trim(DiscardMultilineComment(trimmed.slice(2))) : trimmed.startsWith(LineComment) ? Trim(DiscardLineComment(trimmed.slice(2))) : trimmed;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/internal/optional.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/internal/optional.mjs
 function Optional2(value, input) {
   return Match2(Take([value], input), (Optional4, Rest2) => [Optional4, Rest2], () => ["", input]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/internal/many.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/internal/many.mjs
 function IsDiscard(discard, input) {
   return discard.includes(input);
 }
@@ -2561,7 +2529,7 @@ function Many(allowed, discard, input, result = "") {
   return Match2(Take(allowed, input), (Char, Rest2) => IsDiscard(discard, Char) ? Many(allowed, discard, Rest2, result) : Many(allowed, discard, Rest2, `${result}${Char}`), () => [result, input]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/unsigned_integer.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/unsigned_integer.mjs
 function TakeNonZero(input) {
   return Take(NonZero, input);
 }
@@ -2581,7 +2549,7 @@ function UnsignedInteger(input) {
   return TakeUnsignedInteger(Trim(input));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/integer.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/integer.mjs
 function TakeSign(input) {
   return Optional2(Hyphen, input);
 }
@@ -2597,7 +2565,7 @@ function Integer2(input) {
   return TakeSignedInteger(Trim(input));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/bigint.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/bigint.mjs
 function TakeBigInt(input) {
   return Match2(
     Integer2(input),
@@ -2610,7 +2578,7 @@ function BigInt3(input) {
   return TakeBigInt(input);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/const.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/const.mjs
 function TakeConst(const_, input) {
   return Take([const_], input);
 }
@@ -2618,7 +2586,7 @@ function Const(const_, input) {
   return IsEqual(const_, "") ? ["", input] : const_.startsWith(NewLine) ? TakeConst(const_, TrimWhitespace(input)) : const_.startsWith(WhiteSpace) ? TakeConst(const_, input) : TakeConst(const_, Trim(input));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/ident.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/ident.mjs
 var Initial = [...Alpha, UnderScore, DollarSign];
 function TakeInitial(input) {
   return Take(Initial, input);
@@ -2639,7 +2607,7 @@ function Ident(input) {
   return TakeIdent(Trim(input));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/unsigned_number.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/unsigned_number.mjs
 var AllowedDigits2 = [...Digit, UnderScore];
 function IsLeadingDot(input) {
   return IsMatch(Take([Dot], input));
@@ -2675,7 +2643,7 @@ function UnsignedNumber(input) {
   return TakeUnsignedNumber(Trim(input));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/number.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/number.mjs
 function TakeSign2(input) {
   return Optional2(Hyphen, input);
 }
@@ -2691,7 +2659,7 @@ function Number3(input) {
   return TakeSignedNumber(Trim(input));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/until.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/until.mjs
 function TakeOne(input) {
   const result = IsEqual(input, "") ? [] : [input.slice(0, 1), input.slice(1)];
   return result;
@@ -2707,7 +2675,7 @@ function Until(end, input, result = "") {
   );
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/span.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/span.mjs
 function MultiLine(start, end, input) {
   return Match2(
     Take([start], input),
@@ -2738,7 +2706,7 @@ function Span(start, end, multiLine, input) {
   return multiLine ? MultiLine(start, end, Trim(input)) : SingleLine(start, end, Trim(input));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/string.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/string.mjs
 function TakeInitial2(quotes, input) {
   return Take(quotes, input);
 }
@@ -2752,12 +2720,12 @@ function String3(quotes, input) {
   return TakeString(quotes, Trim(input));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/token/until_1.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/token/until_1.mjs
 function Until_1(end, input) {
   return Match2(Until(end, input), (Until2, UntilRest) => IsEqual(Until2, "") ? [] : [Until2, UntilRest], () => []);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/parser.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/parser.mjs
 var If = (result, left, right = () => []) => result.length === 2 ? left(result) : right();
 var GenericParameterExtendsEquals = (input) => If(If(Ident(input), ([_0, input2]) => If(Const("extends", input2), ([_1, input3]) => If(Type(input3), ([_2, input4]) => If(Const("=", input4), ([_3, input5]) => If(Type(input5), ([_4, input6]) => [[_0, _1, _2, _3, _4], input6]))))), ([_0, input2]) => [GenericParameterExtendsEqualsMapping(_0), input2]);
 var GenericParameterExtends = (input) => If(If(Ident(input), ([_0, input2]) => If(Const("extends", input2), ([_1, input3]) => If(Type(input3), ([_2, input4]) => [[_0, _1, _2], input4]))), ([_0, input2]) => [GenericParameterExtendsMapping(_0), input2]);
@@ -2887,14 +2855,14 @@ var ModuleDeclaration = (input) => If(If(ExportKeyword(input), ([_0, input2]) =>
 var Module = (input) => If(If(ModuleDeclaration(input), ([_0, input2]) => If(ModuleDeclarationList(input2), ([_1, input3]) => [[_0, _1], input3])), ([_0, input2]) => [ModuleMapping(_0), input2]);
 var Script = (input) => If(If(Module(input), ([_0, input2]) => [_0, input2], () => If(GenericType(input), ([_0, input2]) => [_0, input2], () => If(Type(input), ([_0, input2]) => [_0, input2], () => []))), ([_0, input2]) => [ScriptMapping(_0), input2]);
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/patterns/template.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/patterns/template.mjs
 function ParseTemplateIntoTypes(template) {
   const parsed = TemplateLiteralTypes(`\`${template}\``);
   const result = guard_exports.IsEqual(parsed.length, 2) ? parsed[0] : Unreachable();
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/template_literal/encode.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/template_literal/encode.mjs
 function JoinString(input) {
   return input.join("|");
 }
@@ -2951,7 +2919,7 @@ function TemplateLiteralEncode(types) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/template_literal/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/template_literal/instantiate.mjs
 function TemplateLiteralAction(types, options) {
   const result = CanInstantiate(types) ? memory_exports.Update(TemplateLiteralEncode(types), {}, options) : TemplateLiteralDeferred(types, options);
   return result;
@@ -2961,7 +2929,7 @@ function TemplateLiteralInstantiate(context, state, types, options) {
   return TemplateLiteralAction(instantiatedTypes, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/template_literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/template_literal.mjs
 function TemplateLiteralDeferred(types, options = {}) {
   return Deferred("TemplateLiteral", [types], options);
 }
@@ -2983,7 +2951,7 @@ function IsTemplateLiteral(value) {
   return IsKind(value, "TemplateLiteral");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/result.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/result.mjs
 var result_exports = {};
 __export(result_exports, {
   ExtendsFalse: () => ExtendsFalse,
@@ -3020,7 +2988,7 @@ function Match3(result, true_, false_) {
   return IsExtendsTrueLike(result) ? true_(result.inferred) : false_();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/extends_right.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/extends_right.mjs
 function ExtendsRightInfer(inferred, name, left, right) {
   return Match3(ExtendsLeft(inferred, left, right), (checkInferred) => ExtendsTrue(memory_exports.Assign(memory_exports.Assign(inferred, checkInferred), { [name]: left })), () => ExtendsFalse());
 }
@@ -3048,12 +3016,12 @@ function ExtendsRight(inferred, left, right) {
   return IsAny(right) ? ExtendsRightAny(inferred, left) : IsDependent(right) ? ExtendsRightDependent(inferred, left, right.if, right.then, right.else) : IsEnum(right) ? ExtendsRightEnum(inferred, left, right.enum) : IsInfer(right) ? ExtendsRightInfer(inferred, right.name, left, right.extends) : IsIntersect(right) ? ExtendsRightIntersect(inferred, left, right.allOf) : IsTemplateLiteral(right) ? ExtendsRightTemplateLiteral(inferred, left, right.pattern) : IsUnion(right) ? ExtendsRightUnion(inferred, left, right.anyOf) : IsUnknown(right) ? ExtendsTrue(inferred) : ExtendsFalse();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/any.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/any.mjs
 function ExtendsAny(inferred, left, right) {
   return IsInfer(right) ? ExtendsRight(inferred, left, right) : IsAny(right) ? ExtendsTrue(inferred) : IsUnknown(right) ? ExtendsTrue(inferred) : ExtendsUnion(inferred);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/array.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/array.mjs
 function ExtendsImmutable(left, right) {
   const isImmutableLeft = IsImmutable(left);
   const isImmutableRight = IsImmutable(right);
@@ -3063,17 +3031,17 @@ function ExtendsArray(inferred, arrayLeft, left, right) {
   return IsArray2(right) ? ExtendsImmutable(arrayLeft, right) ? ExtendsLeft(inferred, left, right.items) : ExtendsFalse() : ExtendsRight(inferred, arrayLeft, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/bigint.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/bigint.mjs
 function ExtendsBigInt(inferred, left, right) {
   return IsBigInt2(right) ? ExtendsTrue(inferred) : ExtendsRight(inferred, left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/boolean.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/boolean.mjs
 function ExtendsBoolean(inferred, left, right) {
   return IsBoolean3(right) ? ExtendsTrue(inferred) : ExtendsRight(inferred, left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/parameters.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/parameters.mjs
 function ParameterCompare(inferred, left, leftRest, right, rightRest) {
   const checkLeft = IsInfer(right) ? left : right;
   const checkRight = IsInfer(right) ? right : left;
@@ -3091,44 +3059,44 @@ function ExtendsParameters(inferred, left, right) {
   return ParametersLeft(inferred, left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/return_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/return_type.mjs
 function ExtendsReturnType(inferred, left, right) {
   return IsVoid(right) ? ExtendsTrue(inferred) : ExtendsLeft(inferred, left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/constructor.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/constructor.mjs
 function ExtendsConstructor(inferred, parameters, returnType, right) {
   return IsAny(right) ? ExtendsTrue(inferred) : IsUnknown(right) ? ExtendsTrue(inferred) : IsConstructor2(right) ? Match3(ExtendsParameters(inferred, parameters, right["parameters"]), (inferred2) => ExtendsReturnType(inferred2, returnType, right["instanceType"]), () => ExtendsFalse()) : ExtendsFalse();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/dependent.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/dependent.mjs
 function ExtendsDependent(inferred, if_, then_, else_, right) {
   return Match3(ExtendsLeft(inferred, if_, right), () => ExtendsLeft(inferred, then_, right), () => ExtendsLeft(inferred, else_, right));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/enum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/enum.mjs
 function ExtendsEnum(inferred, left, right) {
   const evaluated = EvaluateEnum(left);
   return ExtendsLeft(inferred, evaluated, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/function.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/function.mjs
 function ExtendsFunction(inferred, parameters, returnType, right) {
   return IsAny(right) ? ExtendsTrue(inferred) : IsUnknown(right) ? ExtendsTrue(inferred) : IsFunction2(right) ? Match3(ExtendsParameters(inferred, parameters, right["parameters"]), (inferred2) => ExtendsReturnType(inferred2, returnType, right["returnType"]), () => ExtendsFalse()) : ExtendsFalse();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/integer.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/integer.mjs
 function ExtendsInteger(inferred, left, right) {
   return IsInteger2(right) ? ExtendsTrue(inferred) : IsNumber3(right) ? ExtendsTrue(inferred) : ExtendsRight(inferred, left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/intersect.mjs
 function ExtendsIntersect(inferred, left, right) {
   const evaluated = EvaluateIntersect(left);
   return ExtendsLeft(inferred, evaluated, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/literal.mjs
 function ExtendsLiteralValue(inferred, left, right) {
   return left === right ? ExtendsTrue(inferred) : ExtendsFalse();
 }
@@ -3148,22 +3116,22 @@ function ExtendsLiteral(inferred, left, right) {
   return guard_exports.IsBigInt(left.const) ? ExtendsLiteralBigInt(inferred, left.const, right) : guard_exports.IsBoolean(left.const) ? ExtendsLiteralBoolean(inferred, left.const, right) : guard_exports.IsNumber(left.const) ? ExtendsLiteralNumber(inferred, left.const, right) : guard_exports.IsString(left.const) ? ExtendsLiteralString(inferred, left.const, right) : Unreachable();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/never.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/never.mjs
 function ExtendsNever(inferred, left, right) {
   return IsInfer(right) ? ExtendsRight(inferred, left, right) : ExtendsTrue(inferred);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/null.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/null.mjs
 function ExtendsNull(inferred, left, right) {
   return IsNull2(right) ? ExtendsTrue(inferred) : ExtendsRight(inferred, left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/number.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/number.mjs
 function ExtendsNumber(inferred, left, right) {
   return IsNumber3(right) ? ExtendsTrue(inferred) : ExtendsRight(inferred, left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/object.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/object.mjs
 function ExtendsPropertyOptional(inferred, left, right) {
   return IsOptional(left) ? IsOptional(right) ? ExtendsTrue(inferred) : ExtendsFalse() : ExtendsTrue(inferred);
 }
@@ -3214,34 +3182,34 @@ function ExtendsObject(inferred, left, right) {
   return IsRecord(right) ? ExtendsObjectToRecord(inferred, left, RecordPattern(right), RecordValue(right)) : IsObject2(right) ? ExtendsObjectToObject(inferred, left, right.properties) : ExtendsRight(inferred, _Object_(left), right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/record.mjs
-function FromObject3(inferred, properties) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/record.mjs
+function FromObject2(inferred, properties) {
   return guard_exports.IsEqual(guard_exports.Keys(properties).length, 0) ? ExtendsTrue(inferred) : ExtendsFalse();
 }
 function FromRecord(inferred, _leftKey, leftValue, _rightKey, rightValue) {
   return ExtendsLeft(inferred, leftValue, rightValue);
 }
 function ExtendsRecord(inferred, leftPattern, leftValue, right) {
-  return IsRecord(right) ? FromRecord(inferred, RecordPatternToType(leftPattern), leftValue, RecordPatternToType(RecordPattern(right)), RecordValue(right)) : IsObject2(right) ? FromObject3(inferred, right.properties) : IsAny(right) ? ExtendsTrue(inferred) : IsUnknown(right) ? ExtendsTrue(inferred) : ExtendsFalse();
+  return IsRecord(right) ? FromRecord(inferred, RecordPatternToType(leftPattern), leftValue, RecordPatternToType(RecordPattern(right)), RecordValue(right)) : IsObject2(right) ? FromObject2(inferred, right.properties) : IsAny(right) ? ExtendsTrue(inferred) : IsUnknown(right) ? ExtendsTrue(inferred) : ExtendsFalse();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/string.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/string.mjs
 function ExtendsString(inferred, left, right) {
   return IsString3(right) ? ExtendsTrue(inferred) : ExtendsRight(inferred, left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/symbol.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/symbol.mjs
 function ExtendsSymbol(inferred, left, right) {
   return IsSymbol2(right) ? ExtendsTrue(inferred) : ExtendsRight(inferred, left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/template_literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/template_literal.mjs
 function ExtendsTemplateLiteral(inferred, left, right) {
   const evaluated = EvaluateTemplateLiteral(left);
   return ExtendsLeft(inferred, evaluated, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/inference.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/inference.mjs
 function Inferrable(name, type) {
   return memory_exports.Create({ "~kind": "Inferrable" }, { name, type }, {});
 }
@@ -3254,8 +3222,14 @@ function TryRestInferable(type) {
 function TryInferable(type) {
   return IsInfer(type) ? Inferrable(type.name, type.extends) : void 0;
 }
-function TryInferResults(rest, right, result = []) {
-  return guard_exports.ShiftLeft(rest, (head, tail) => Match3(ExtendsLeft({}, head, right), () => TryInferResults(tail, right, [...result, head]), () => void 0), () => result);
+function TryInferResults(rest, right) {
+  const result = [];
+  for (const head of rest) {
+    if (!IsExtendsTrueLike(ExtendsLeft({}, head, right)))
+      return void 0;
+    result.push(head);
+  }
+  return result;
 }
 function InferTupleResult(inferred, name, left, right) {
   const results = TryInferResults(left, right);
@@ -3266,7 +3240,7 @@ function InferUnionResult(inferred, name, left, right) {
   return guard_exports.IsArray(results) ? ExtendsTrue(memory_exports.Assign(inferred, { [name]: Union(results) })) : ExtendsFalse();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/tuple.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/tuple.mjs
 function Reverse(types) {
   return [...types].reverse();
 }
@@ -3299,21 +3273,30 @@ function ExtendsTupleToTuple(inferred, left, right) {
   const reversed = Reversed(instantiatedRight);
   return Elements(inferred, reversed, ApplyReverse(left, reversed), ApplyReverse(instantiatedRight, reversed));
 }
+function ExtendsTupleToArrayReduce(inferred, left, right) {
+  for (const head of left) {
+    const result = ExtendsLeft(inferred, head, right);
+    if (!IsExtendsTrueLike(result))
+      return result;
+    inferred = result.inferred;
+  }
+  return ExtendsTrue(inferred);
+}
 function ExtendsTupleToArray(inferred, left, right) {
   const inferrable = TryInferable(right);
-  return IsInferable(inferrable) ? InferUnionResult(inferred, inferrable["name"], left, inferrable["type"]) : guard_exports.ShiftLeft(left, (head, tail) => Match3(ExtendsLeft(inferred, head, right), (inferred2) => ExtendsTupleToArray(inferred2, tail, right), () => ExtendsFalse()), () => ExtendsTrue(inferred));
+  return IsInferable(inferrable) ? InferUnionResult(inferred, inferrable["name"], left, inferrable["type"]) : ExtendsTupleToArrayReduce(inferred, left, right);
 }
 function ExtendsTuple(inferred, left, right) {
   const instantiatedLeft = InstantiateElements(inferred, State([], []), left);
   return IsTuple(right) ? ExtendsTupleToTuple(inferred, instantiatedLeft, right.items) : IsArray2(right) ? ExtendsTupleToArray(inferred, instantiatedLeft, right.items) : ExtendsRight(inferred, Tuple(instantiatedLeft), right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/undefined.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/undefined.mjs
 function ExtendsUndefined(inferred, left, right) {
   return IsVoid(right) ? ExtendsTrue(inferred) : IsUndefined2(right) ? ExtendsTrue(inferred) : ExtendsRight(inferred, left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/union.mjs
 function ExtendsUnionSome(inferred, type, unionTypes) {
   return guard_exports.ShiftLeft(unionTypes, (head, tail) => Match3(ExtendsLeft(inferred, type, head), (inferred2) => ExtendsTrue(inferred2), () => ExtendsUnionSome(inferred, type, tail)), () => ExtendsFalse());
 }
@@ -3325,22 +3308,22 @@ function ExtendsUnion2(inferred, left, right) {
   return IsInferable(inferrable) ? InferUnionResult(inferred, inferrable.name, left, inferrable.type) : IsUnion(right) ? ExtendsUnionLeft(inferred, left, right.anyOf) : ExtendsUnionLeft(inferred, left, [right]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/unknown.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/unknown.mjs
 function ExtendsUnknown(inferred, left, right) {
   return IsInfer(right) ? ExtendsRight(inferred, left, right) : IsAny(right) ? ExtendsTrue(inferred) : IsUnknown(right) ? ExtendsTrue(inferred) : ExtendsFalse();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/void.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/void.mjs
 function ExtendsVoid(inferred, left, right) {
   return IsVoid(right) ? ExtendsTrue(inferred) : ExtendsRight(inferred, left, right);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/extends_left.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/extends_left.mjs
 function ExtendsLeft(inferred, left, right) {
   return IsAny(left) ? ExtendsAny(inferred, left, right) : IsArray2(left) ? ExtendsArray(inferred, left, left.items, right) : IsBigInt2(left) ? ExtendsBigInt(inferred, left, right) : IsBoolean3(left) ? ExtendsBoolean(inferred, left, right) : IsConstructor2(left) ? ExtendsConstructor(inferred, left.parameters, left.instanceType, right) : IsDependent(left) ? ExtendsDependent(inferred, left.if, left.then, left.else, right) : IsEnum(left) ? ExtendsEnum(inferred, left.enum, right) : IsFunction2(left) ? ExtendsFunction(inferred, left.parameters, left.returnType, right) : IsInteger2(left) ? ExtendsInteger(inferred, left, right) : IsIntersect(left) ? ExtendsIntersect(inferred, left.allOf, right) : IsLiteral(left) ? ExtendsLiteral(inferred, left, right) : IsNever(left) ? ExtendsNever(inferred, left, right) : IsNull2(left) ? ExtendsNull(inferred, left, right) : IsNumber3(left) ? ExtendsNumber(inferred, left, right) : IsObject2(left) ? ExtendsObject(inferred, left.properties, right) : IsRecord(left) ? ExtendsRecord(inferred, RecordPattern(left), RecordValue(left), right) : IsString3(left) ? ExtendsString(inferred, left, right) : IsSymbol2(left) ? ExtendsSymbol(inferred, left, right) : IsTemplateLiteral(left) ? ExtendsTemplateLiteral(inferred, left.pattern, right) : IsTuple(left) ? ExtendsTuple(inferred, left.items, right) : IsUndefined2(left) ? ExtendsUndefined(inferred, left, right) : IsUnion(left) ? ExtendsUnion2(inferred, left.anyOf, right) : IsUnknown(left) ? ExtendsUnknown(inferred, left, right) : IsVoid(left) ? ExtendsVoid(inferred, left, right) : ExtendsFalse();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/interface/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/interface/instantiate.mjs
 function InterfaceOperation(heritage, properties) {
   const result = EvaluateIntersect([...heritage, _Object_(properties)]);
   return result;
@@ -3355,7 +3338,7 @@ function InterfaceInstantiate(context, state, heritage, properties, options) {
   return InterfaceAction(instantiatedHeritage, instantiatedProperties, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/interface.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/interface.mjs
 function InterfaceDeferred(heritage, properties, options = {}) {
   return Deferred("Interface", [heritage, properties], options);
 }
@@ -3366,7 +3349,7 @@ function Interface(heritage, properties, options = {}) {
   return InterfaceAction(heritage, properties, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/cyclic/check.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/cyclic/check.mjs
 function FromRef(stack, context, ref) {
   return stack.includes(ref) ? true : FromType3([...stack, ref], context, context[ref]);
 }
@@ -3385,7 +3368,7 @@ function CyclicCheck(stack, context, type) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/cyclic/candidates.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/cyclic/candidates.mjs
 function ResolveCandidateKeys(context, keys) {
   return keys.reduce((result, left) => {
     return CyclicCheck([left], context, context[left]) ? [...result, left] : result;
@@ -3397,7 +3380,7 @@ function CyclicCandidates(context) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/cyclic/dependencies.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/cyclic/dependencies.mjs
 function FromRef2(context, ref, result) {
   return result.includes(ref) ? result : ref in context ? FromType4(context, context[ref], [...result, ref]) : Unreachable();
 }
@@ -3418,7 +3401,7 @@ function CyclicDependencies(context, key, type) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/cyclic/extends.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/cyclic/extends.mjs
 function FromRef3(_ref) {
   return Any();
 }
@@ -3442,7 +3425,7 @@ function CyclicExtends(type) {
   return CyclicAnyFromParameters(type.$defs, type.$ref);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/cyclic/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/cyclic/instantiate.mjs
 function CyclicInterface(context, heritage, properties) {
   const instantiatedHeritage = InstantiateTypes(context, State([], []), heritage);
   const instantiatedProperties = InstantiateProperties({}, State([], []), properties);
@@ -3464,7 +3447,7 @@ function InstantiateCyclic(context, ref, type) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/cyclic/target.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/cyclic/target.mjs
 function Resolve(defs, ref) {
   return ref in defs ? IsRef(defs[ref]) ? Resolve(defs, defs[ref].$ref) : defs[ref] : Never();
 }
@@ -3473,7 +3456,7 @@ function CyclicTarget(defs, ref) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/extends/extends.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/extends/extends.mjs
 function Canonical(type) {
   return IsCyclic(type) ? CyclicExtends(type) : IsUnsafe(type) ? Unknown() : type;
 }
@@ -3483,7 +3466,7 @@ function Extends(inferred, left, right) {
   return ExtendsLeft(inferred, canonicalLeft, canonicalRight);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/evaluate/compare.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/evaluate/compare.mjs
 var CompareResultEqual = 0;
 var CompareResultDisjoint = 1;
 var CompareResultLeftInside = 2;
@@ -3493,7 +3476,7 @@ function Compare(left, right) {
   return result_exports.IsExtendsTrueLike(extendsCheck[0]) && result_exports.IsExtendsTrueLike(extendsCheck[1]) ? CompareResultEqual : result_exports.IsExtendsTrueLike(extendsCheck[0]) && result_exports.IsExtendsFalse(extendsCheck[1]) ? CompareResultLeftInside : result_exports.IsExtendsFalse(extendsCheck[0]) && result_exports.IsExtendsTrueLike(extendsCheck[1]) ? CompareResultRightInside : CompareResultDisjoint;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/evaluate/broaden.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/evaluate/broaden.mjs
 function BroadenFilter(type, types, result = [], all = types) {
   return guard_exports.ShiftLeft(types, (left, right) => {
     const compare = Compare(type, left);
@@ -3525,7 +3508,7 @@ function Broaden(types) {
   return flattened;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/evaluate/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/evaluate/instantiate.mjs
 function EvaluateAction(type, options) {
   const result = memory_exports.Update(EvaluateType(type), {}, options);
   return result;
@@ -3535,7 +3518,7 @@ function EvaluateInstantiate(context, state, type, options) {
   return EvaluateAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/call/distribute_arguments.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/call/distribute_arguments.mjs
 function CollectDistributionNames(expression, result = []) {
   return (
     // Conditional
@@ -3575,7 +3558,7 @@ function DistributeArguments(parameters, arguments_, expression) {
   return IsDeferred(expression) && guard_exports.IsEqual(expression.action, "Conditional") ? Distribute2(zippedArguments) : IsDeferred(expression) && guard_exports.IsEqual(expression.action, "Mapped") ? Distribute2(zippedArguments) : [arguments_];
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/call/resolve_target.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/call/resolve_target.mjs
 function FromNotResolvable() {
   return ["(not-resolvable)", Never()];
 }
@@ -3595,7 +3578,7 @@ function ResolveTarget(context, target, arguments_) {
   return FromType6(context, "(anonymous)", target, arguments_);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/call/resolve_arguments.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/call/resolve_arguments.mjs
 function AssertArgumentExtends(name, type, extends_) {
   if (IsInfer(type) || IsCall(type) || result_exports.IsExtendsTrueLike(Extends({}, type, extends_)))
     return;
@@ -3608,8 +3591,8 @@ function BindArgument(context, state, name, extends_, type) {
   return memory_exports.Assign(context, { [name]: instantiatedArgument });
 }
 function BindArguments(context, state, parameterLeft, parameterRight, arguments_) {
-  const instantiatedExtends = InstantiateType(context, state, parameterLeft.extends);
-  const instantiatedEquals = InstantiateType(context, state, parameterLeft.equals);
+  const instantiatedExtends = InstantiateType(context, State(state.callstack, []), parameterLeft.extends);
+  const instantiatedEquals = InstantiateType(context, State(state.callstack, []), parameterLeft.equals);
   return guard_exports.ShiftLeft(arguments_, (left, right) => BindParameters(BindArgument(context, state, parameterLeft["name"], instantiatedExtends, left), state, parameterRight, right), () => BindParameters(BindArgument(context, state, parameterLeft["name"], instantiatedExtends, instantiatedEquals), state, parameterRight, []));
 }
 function BindParameters(context, state, parameters, arguments_) {
@@ -3619,7 +3602,7 @@ function ResolveArgumentsContext(context, state, parameters, arguments_) {
   return BindParameters(context, state, parameters, arguments_);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/call/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/call/instantiate.mjs
 var instantiationDepth = 0;
 var instantiationCount = 0;
 function InstantiationAssert() {
@@ -3641,8 +3624,12 @@ function Peek(state) {
   const result = guard_exports.IsGreaterThan(state.callstack.length, 0) ? state.callstack[state.callstack.length - 1] : "";
   return result;
 }
-function IsTailCall(state, name) {
+function IsTailReturn(state, name) {
   const result = guard_exports.IsEqual(Peek(state), name);
+  return result;
+}
+function IsTailCall(returnType, name) {
+  const result = IsCall(returnType) && IsRef(returnType.target) && guard_exports.IsEqual(name, returnType["target"]["$ref"]);
   return result;
 }
 function CallDispatch(context, state, target, parameters, expression, arguments_) {
@@ -3650,7 +3637,8 @@ function CallDispatch(context, state, target, parameters, expression, arguments_
   try {
     const argumentsContext = ResolveArgumentsContext(context, state, parameters, arguments_);
     const returnType = InstantiateType(argumentsContext, State([...state["callstack"], target["$ref"]], state["visited"]), expression);
-    return InstantiateType(argumentsContext, State([], []), returnType);
+    const tailArguments = IsCall(returnType) ? InstantiateTypes(argumentsContext, State([], []), returnType.arguments) : [];
+    return IsTailCall(returnType, target["$ref"]) ? CallDispatch(context, State([], []), target, parameters, expression, tailArguments) : InstantiateType(argumentsContext, State([], []), returnType);
   } finally {
     InstantiationDecrement();
   }
@@ -3672,11 +3660,11 @@ function CallInstantiate(context, state, target, arguments_) {
   const resolved = ResolveTarget(context, target, arguments_);
   const name = resolved[0];
   const type = resolved[1];
-  const result = IsGeneric(type) ? IsTailCall(state, name) ? CallConstruct(Ref(name), instantiatedArguments) : CallImmediate(context, state, Ref(name), type.parameters, type.expression, instantiatedArguments) : CallConstruct(target, instantiatedArguments);
+  const result = IsGeneric(type) ? IsTailReturn(state, name) ? CallConstruct(Ref(name), instantiatedArguments) : CallImmediate(context, state, Ref(name), type.parameters, type.expression, instantiatedArguments) : CallConstruct(target, instantiatedArguments);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/types/call.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/types/call.mjs
 function CallConstruct(target, arguments_) {
   return memory_exports.Create({ ["~kind"]: "Call" }, { type: "call", target, arguments: arguments_ }, {});
 }
@@ -3687,7 +3675,7 @@ function IsCall(value) {
   return IsKind(value, "Call");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/immutable/instantiate_remove.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/immutable/instantiate_remove.mjs
 function RemoveImmutableOperation(type) {
   return memory_exports.Discard(type, ["~immutable"]);
 }
@@ -3700,35 +3688,35 @@ function RemoveImmutableInstantiate(context, state, type, options) {
   return RemoveImmutableAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/intrinsics/mapping.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/intrinsics/mapping.mjs
 function ApplyMapping(mapping, value) {
   return mapping(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/intrinsics/from_literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/intrinsics/from_literal.mjs
 function FromLiteral3(mapping, value) {
   return guard_exports.IsString(value) ? Literal(ApplyMapping(mapping, value)) : Literal(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/intrinsics/from_template_literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/intrinsics/from_template_literal.mjs
 function FromTemplateLiteral(mapping, pattern) {
   const evaluated = EvaluateTemplateLiteral(pattern);
   const result = FromType7(mapping, evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/intrinsics/from_union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/intrinsics/from_union.mjs
 function FromUnion2(mapping, types) {
   const result = types.map((type) => FromType7(mapping, type));
   return Union(result);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/intrinsics/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/intrinsics/from_type.mjs
 function FromType7(mapping, type) {
   return IsLiteral(type) ? FromLiteral3(mapping, type.const) : IsTemplateLiteral(type) ? FromTemplateLiteral(mapping, type.pattern) : IsUnion(type) ? FromUnion2(mapping, type.anyOf) : type;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/capitalize.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/capitalize.mjs
 function CapitalizeDeferred(type, options = {}) {
   return Deferred("Capitalize", [type], options);
 }
@@ -3736,7 +3724,7 @@ function Capitalize(type, options = {}) {
   return CapitalizeAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/lowercase.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/lowercase.mjs
 function LowercaseDeferred(type, options = {}) {
   return Deferred("Lowercase", [type], options);
 }
@@ -3744,7 +3732,7 @@ function Lowercase(type, options = {}) {
   return LowercaseAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/uncapitalize.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/uncapitalize.mjs
 function UncapitalizeDeferred(type, options = {}) {
   return Deferred("Uncapitalize", [type], options);
 }
@@ -3752,7 +3740,7 @@ function Uncapitalize(type, options = {}) {
   return UncapitalizeAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/uppercase.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/uppercase.mjs
 function UppercaseDeferred(type, options = {}) {
   return Deferred("Uppercase", [type], options);
 }
@@ -3760,7 +3748,7 @@ function Uppercase(type, options = {}) {
   return UppercaseAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/intrinsics/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/intrinsics/instantiate.mjs
 var CapitalizeMapping = (input) => input[0].toUpperCase() + input.slice(1);
 var LowercaseMapping = (input) => input.toLowerCase();
 var UncapitalizeMapping = (input) => input[0].toLowerCase() + input.slice(1);
@@ -3798,7 +3786,7 @@ function UppercaseInstantiate(context, state, type, options) {
   return UppercaseAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/conditional.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/conditional.mjs
 function ConditionalDeferred(left, right, true_, false_, options = {}) {
   return Deferred("Conditional", [left, right, true_, false_], options);
 }
@@ -3806,7 +3794,7 @@ function Conditional(left, right, true_, false_, options = {}) {
   return ConditionalAction({}, State([], []), left, right, true_, false_, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/conditional/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/conditional/instantiate.mjs
 function ConditionalOperation(context, state, left, right, true_, false_) {
   const extendsResult = Extends(context, left, right);
   return result_exports.IsExtendsUnion(extendsResult) ? Union([InstantiateType(extendsResult.inferred, state, true_), InstantiateType(context, state, false_)]) : result_exports.IsExtendsTrue(extendsResult) ? InstantiateType(extendsResult.inferred, state, true_) : InstantiateType(context, state, false_);
@@ -3821,7 +3809,7 @@ function ConditionalInstantiate(context, state, left, right, true_, false_, opti
   return ConditionalAction(context, state, instantiatedLeft, instantiatedRight, true_, false_, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/constructor_parameters.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/constructor_parameters.mjs
 function ConstructorParametersDeferred(type, options = {}) {
   return Deferred("ConstructorParameters", [type], options);
 }
@@ -3829,7 +3817,7 @@ function ConstructorParameters(type, options = {}) {
   return ConstructorParametersAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/constructor_parameters/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/constructor_parameters/instantiate.mjs
 function ConstructorParametersOperation(type) {
   const parameters = IsConstructor2(type) ? type["parameters"] : [];
   const instantiatedParameters = InstantiateElements({}, State([], []), parameters);
@@ -3845,7 +3833,7 @@ function ConstructorParametersInstantiate(context, state, type, options) {
   return ConstructorParametersAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/exclude.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/exclude.mjs
 function ExcludeDeferred(left, right, options = {}) {
   return Deferred("Exclude", [left, right], options);
 }
@@ -3853,7 +3841,7 @@ function Exclude(left, right, options = {}) {
   return ExcludeAction(left, right, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/exclude/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/exclude/instantiate.mjs
 function ExcludeAction(left, right, options) {
   const result = CanInstantiate([left, right]) ? memory_exports.Update(ExcludeOperation(left, right), {}, options) : ExcludeDeferred(left, right, options);
   return result;
@@ -3864,7 +3852,7 @@ function ExcludeInstantiate(context, state, left, right, options) {
   return ExcludeAction(instantiatedLeft, instantiatedRight, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/extract.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/extract.mjs
 function ExtractDeferred(left, right, options = {}) {
   return Deferred("Extract", [left, right], options);
 }
@@ -3872,7 +3860,7 @@ function Extract(left, right, options = {}) {
   return ExtractAction(left, right, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/extract/operation.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/extract/operation.mjs
 function ExtractType(left, right) {
   const check = Extends({}, left, right);
   const result = result_exports.IsExtendsTrueLike(check) ? [left] : [];
@@ -3889,7 +3877,7 @@ function ExtractOperation(left, right) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/extract/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/extract/instantiate.mjs
 function ExtractAction(left, right, options) {
   const result = CanInstantiate([left, right]) ? memory_exports.Update(ExtractOperation(left, right), {}, options) : ExtractDeferred(left, right, options);
   return result;
@@ -3900,7 +3888,7 @@ function ExtractInstantiate(context, state, left, right, options) {
   return ExtractAction(instantiatedLeft, instantiatedRight, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/helpers/keys_to_indexer.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/helpers/keys_to_indexer.mjs
 function KeysToLiterals(keys) {
   return keys.reduce((result, left) => {
     return IsLiteralValue(left) ? [...result, Literal(left)] : result;
@@ -3912,7 +3900,7 @@ function KeysToIndexer(keys) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/indexed.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/indexed.mjs
 function IndexDeferred(type, indexer, options = {}) {
   return Deferred("Index", [type, indexer], options);
 }
@@ -3921,28 +3909,28 @@ function Index(type, indexer_or_keys, options = {}) {
   return IndexAction(type, indexer, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/object/from_cyclic.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/object/from_cyclic.mjs
 function FromCyclic(defs, ref) {
   const target = CyclicTarget(defs, ref);
   const result = FromType8(target);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/object/from_dependent.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/object/from_dependent.mjs
 function FromDependent(if_, then_, else_) {
   const evaluated = EvaluateDependent(if_, then_, else_);
   const result = FromType8(evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/object/from_intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/object/from_intersect.mjs
 function CollapseIntersectProperties(left, right) {
   const leftKeys = guard_exports.Keys(left).filter((key) => !guard_exports.HasPropertyKey(right, key));
   const rightKeys = guard_exports.Keys(right).filter((key) => !guard_exports.HasPropertyKey(left, key));
   const sharedKeys = guard_exports.Keys(left).filter((key) => guard_exports.HasPropertyKey(right, key));
   const leftProperties = leftKeys.reduce((result, key) => ({ ...result, [key]: left[key] }), {});
   const rightProperties = rightKeys.reduce((result, key) => ({ ...result, [key]: right[key] }), {});
-  const sharedProperties = sharedKeys.reduce((result, key) => ({ ...result, [key]: EvaluateIntersect([left[key], right[key]]) }), {});
+  const sharedProperties = sharedKeys.reduce((result, key) => ({ ...result, [key]: EvaluatePropertyIntersect(left[key], right[key]) }), {});
   const unique = memory_exports.Assign(leftProperties, rightProperties);
   const shared = memory_exports.Assign(unique, sharedProperties);
   return shared;
@@ -3953,23 +3941,23 @@ function FromIntersect(types) {
   }, {});
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/object/from_object.mjs
-function FromObject4(properties) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/object/from_object.mjs
+function FromObject3(properties) {
   return properties;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/object/from_tuple.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/object/from_tuple.mjs
 function FromTuple(types) {
   const object = TupleToObject(Tuple(types));
   const result = FromType8(object);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/object/from_union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/object/from_union.mjs
 function CollapseUnionProperties(left, right) {
   const sharedKeys = guard_exports.Keys(left).filter((key) => key in right);
   const result = sharedKeys.reduce((result2, key) => {
-    return { ...result2, [key]: EvaluateUnion([left[key], right[key]]) };
+    return { ...result2, [key]: EvaluatePropertyUnion(left[key], right[key]) };
   }, {});
   return result;
 }
@@ -3980,26 +3968,26 @@ function FromUnion3(types) {
   return guard_exports.ShiftLeft(types, (left, right) => ReduceVariants(right, FromType8(left)), () => Unreachable());
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/object/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/object/from_type.mjs
 function FromType8(type) {
-  return IsCyclic(type) ? FromCyclic(type.$defs, type.$ref) : IsDependent(type) ? FromDependent(type.if, type.then, type.else) : IsIntersect(type) ? FromIntersect(type.allOf) : IsUnion(type) ? FromUnion3(type.anyOf) : IsTuple(type) ? FromTuple(type.items) : IsObject2(type) ? FromObject4(type.properties) : {};
+  return IsCyclic(type) ? FromCyclic(type.$defs, type.$ref) : IsDependent(type) ? FromDependent(type.if, type.then, type.else) : IsIntersect(type) ? FromIntersect(type.allOf) : IsUnion(type) ? FromUnion3(type.anyOf) : IsTuple(type) ? FromTuple(type.items) : IsObject2(type) ? FromObject3(type.properties) : {};
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/object/collapse.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/object/collapse.mjs
 function CollapseToObject(type) {
   const properties = FromType8(type);
   const result = _Object_(properties);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/helpers/keys.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/helpers/keys.mjs
 var integerKeyPattern = new RegExp("^(?:0|[1-9][0-9]*)$");
 function ConvertToIntegerKey(value) {
   const normal = `${value}`;
   return integerKeyPattern.test(normal) ? parseInt(normal) : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexed/from_array.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexed/from_array.mjs
 function NormalizeLiteral(value) {
   return Literal(ConvertToIntegerKey(value));
 }
@@ -4009,7 +3997,7 @@ function NormalizeIndexerTypes(types) {
 function NormalizeIndexer(type) {
   return IsIntersect(type) ? Intersect(NormalizeIndexerTypes(type.allOf)) : IsUnion(type) ? Union(NormalizeIndexerTypes(type.anyOf)) : IsLiteral(type) ? NormalizeLiteral(type.const) : type;
 }
-function FromArray3(type, indexer) {
+function FromArray2(type, indexer) {
   const normalizedIndexer = NormalizeIndexer(indexer);
   const check = Extends({}, normalizedIndexer, Number2());
   const result = (
@@ -4019,66 +4007,66 @@ function FromArray3(type, indexer) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexable/from_cyclic.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexable/from_cyclic.mjs
 function FromCyclic2(defs, ref) {
   const target = CyclicTarget(defs, ref);
   const result = FromType9(target);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexable/from_dependent.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexable/from_dependent.mjs
 function FromDependent2(if_, then_, else_) {
   const evaluated = EvaluateDependent(if_, then_, else_);
   const result = FromType9(evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexable/from_enum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexable/from_enum.mjs
 function FromEnum(values) {
   const evaluated = EvaluateEnum(values);
   const result = FromType9(evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexable/from_intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexable/from_intersect.mjs
 function FromIntersect2(types) {
   const evaluated = EvaluateIntersect(types);
   const result = FromType9(evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexable/from_literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexable/from_literal.mjs
 function FromLiteral4(value) {
   const result = [`${value}`];
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexable/from_template_literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexable/from_template_literal.mjs
 function FromTemplateLiteral2(pattern) {
   const evaluated = EvaluateTemplateLiteral(pattern);
   const result = FromType9(evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexable/from_union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexable/from_union.mjs
 function FromUnion4(types) {
   return types.reduce((result, left) => {
     return [...result, ...FromType9(left)];
   }, []);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexable/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexable/from_type.mjs
 function FromType9(type) {
   return IsCyclic(type) ? FromCyclic2(type.$defs, type.$ref) : IsDependent(type) ? FromDependent2(type.if, type.then, type.else) : IsEnum(type) ? FromEnum(type.enum) : IsIntersect(type) ? FromIntersect2(type.allOf) : IsLiteral(type) ? FromLiteral4(type.const) : IsTemplateLiteral(type) ? FromTemplateLiteral2(type.pattern) : IsUnion(type) ? FromUnion4(type.anyOf) : [];
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexable/to_indexable_keys.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexable/to_indexable_keys.mjs
 function ToIndexableKeys(type) {
   const result = FromType9(type);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/this/expand_this.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/this/expand_this.mjs
 function FromTypes5(properties, types) {
   return types.map((type) => FromType10(properties, type));
 }
@@ -4090,7 +4078,7 @@ function ExpandThis(properties, type) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexed/from_object.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexed/from_object.mjs
 function IndexProperty(properties, key) {
   const selectedType = key in properties ? properties[key] : Never();
   const result = ExpandThis(properties, selectedType);
@@ -4119,12 +4107,12 @@ function FromIndexerNumber(properties) {
   const result = EvaluateUnion(variants);
   return result;
 }
-function FromObject5(properties, indexer) {
+function FromObject4(properties, indexer) {
   const result = IsNumber3(indexer) ? FromIndexerNumber(properties) : FromIndexer(properties, indexer);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexed/array_indexer.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexed/array_indexer.mjs
 function ConvertLiteral(value) {
   return Literal(ConvertToIntegerKey(value));
 }
@@ -4135,7 +4123,7 @@ function FormatArrayIndexer(type) {
   return IsIntersect(type) ? Intersect(ArrayIndexerTypes(type.allOf)) : IsUnion(type) ? Union(ArrayIndexerTypes(type.anyOf)) : IsLiteral(type) ? ConvertLiteral(type.const) : type;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexed/from_tuple.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexed/from_tuple.mjs
 function IndexElementsWithIndexer(types, indexer) {
   return types.reduceRight((result, right, index) => {
     const check = Extends({}, Literal(index), indexer);
@@ -4157,12 +4145,12 @@ function FromTuple2(types, indexer) {
   );
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexed/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexed/from_type.mjs
 function FromType11(type, indexer) {
-  return IsArray2(type) ? FromArray3(type.items, indexer) : IsObject2(type) ? FromObject5(type.properties, indexer) : IsTuple(type) ? FromTuple2(type.items, indexer) : Never();
+  return IsArray2(type) ? FromArray2(type.items, indexer) : IsObject2(type) ? FromObject4(type.properties, indexer) : IsTuple(type) ? FromTuple2(type.items, indexer) : Never();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexed/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexed/instantiate.mjs
 function NormalizeType(type) {
   const result = IsCyclic(type) || IsDependent(type) || IsIntersect(type) || IsUnion(type) ? CollapseToObject(type) : type;
   return result;
@@ -4177,7 +4165,7 @@ function IndexInstantiate(context, state, type, indexer, options) {
   return IndexAction(instantiatedType, instantiatedIndexer, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/instance_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/instance_type.mjs
 function InstanceTypeDeferred(type, options = {}) {
   return Deferred("InstanceType", [type], options);
 }
@@ -4185,7 +4173,7 @@ function InstanceType(type, options = {}) {
   return InstanceTypeAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/instance_type/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/instance_type/instantiate.mjs
 function InstanceTypeOperation(type) {
   return IsConstructor2(type) ? type["instanceType"] : Never();
 }
@@ -4198,7 +4186,7 @@ function InstanceTypeInstantiate(context, state, type, options = {}) {
   return InstanceTypeAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/keyof.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/keyof.mjs
 function KeyOfDeferred(type, options = {}) {
   return Deferred("KeyOf", [type], options);
 }
@@ -4206,47 +4194,47 @@ function KeyOf2(type, options = {}) {
   return KeyOfAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/keyof/from_any.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/keyof/from_any.mjs
 function FromAny() {
   return Union([Number2(), String2(), Symbol2()]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/keyof/from_array.mjs
-function FromArray4(_type) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/keyof/from_array.mjs
+function FromArray3(_type) {
   return Number2();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/keyof/from_object.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/keyof/from_object.mjs
 function FromPropertyKeys(keys) {
   const result = keys.reduce((result2, left) => {
     return IsLiteralValue(left) ? [...result2, Literal(ConvertToIntegerKey(left))] : Unreachable();
   }, []);
   return result;
 }
-function FromObject6(properties) {
+function FromObject5(properties) {
   const propertyKeys = guard_exports.Keys(properties);
   const variants = FromPropertyKeys(propertyKeys);
   const result = EvaluateUnionFast(variants);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/keyof/from_record.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/keyof/from_record.mjs
 function FromRecord2(type) {
   return RecordKey(type);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/keyof/from_tuple.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/keyof/from_tuple.mjs
 function FromTuple3(types) {
   const result = types.map((_, index) => Literal(index));
   return EvaluateUnionFast(result);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/keyof/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/keyof/from_type.mjs
 function FromType12(type) {
-  return IsAny(type) ? FromAny() : IsArray2(type) ? FromArray4(type.items) : IsObject2(type) ? FromObject6(type.properties) : IsRecord(type) ? FromRecord2(type) : IsTuple(type) ? FromTuple3(type.items) : Never();
+  return IsAny(type) ? FromAny() : IsArray2(type) ? FromArray3(type.items) : IsObject2(type) ? FromObject5(type.properties) : IsRecord(type) ? FromRecord2(type) : IsTuple(type) ? FromTuple3(type.items) : Never();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/keyof/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/keyof/instantiate.mjs
 function NormalizeType2(type) {
   const result = IsCyclic(type) || IsDependent(type) || IsIntersect(type) || IsUnion(type) ? CollapseToObject(type) : type;
   return result;
@@ -4259,7 +4247,7 @@ function KeyOfInstantiate(context, state, type, options) {
   return KeyOfAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/mapped.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/mapped.mjs
 function MappedDeferred(identifier, type, as, property, options = {}) {
   return Deferred("Mapped", [identifier, type, as, property], options);
 }
@@ -4267,7 +4255,7 @@ function Mapped(identifier, type, as, property, options = {}) {
   return MappedAction({}, State([], []), identifier, type, as, property, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/mapped/mapped_variants.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/mapped/mapped_variants.mjs
 function FromTemplateLiteral3(pattern) {
   const evaluated = EvaluateTemplateLiteral(pattern);
   const result = FromType13(evaluated);
@@ -4296,7 +4284,7 @@ function MappedVariants(type) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/mapped/mapped_operation.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/mapped/mapped_operation.mjs
 function CanonicalAs(instantiatedAs) {
   const result = IsTemplateLiteral(instantiatedAs) ? EvaluateTemplateLiteral(instantiatedAs.pattern) : instantiatedAs;
   return result;
@@ -4326,7 +4314,7 @@ function MappedOperation(context, state, identifier, type, as, property) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/mapped/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/mapped/instantiate.mjs
 function MappedAction(context, state, identifier, type, as, property, options) {
   const result = CanInstantiate([type]) ? memory_exports.Update(MappedOperation(context, state, identifier, type, as, property), {}, options) : MappedDeferred(identifier, type, as, property, options);
   return result;
@@ -4336,7 +4324,7 @@ function MappedInstantiate(context, state, identifier, type, as, property, optio
   return MappedAction(context, state, identifier, instantiatedType, as, property, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/module/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/module/instantiate.mjs
 function InstantiateCyclics(context, declarations, cyclicKeys) {
   const declarationContext = memory_exports.Assign(context, declarations);
   const declarationKeys = guard_exports.Keys(declarations).filter((key) => cyclicKeys.includes(key));
@@ -4363,7 +4351,7 @@ function ModuleInstantiate(context, _state, declarations, options) {
   return instantiatedModule;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/non_nullable.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/non_nullable.mjs
 function NonNullableDeferred(type, options = {}) {
   return Deferred("NonNullable", [type], options);
 }
@@ -4371,7 +4359,7 @@ function NonNullable(type, options = {}) {
   return NonNullableAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/non_nullable/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/non_nullable/instantiate.mjs
 function NonNullableOperation(type) {
   const excluded = Union([Null(), Undefined()]);
   return ExcludeAction(type, excluded, {});
@@ -4385,7 +4373,7 @@ function NonNullableInstantiate(context, state, type, options) {
   return NonNullableAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/omit.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/omit.mjs
 function OmitDeferred(type, indexer, options = {}) {
   return Deferred("Omit", [type, indexer], options);
 }
@@ -4394,14 +4382,14 @@ function Omit(type, indexer_or_keys, options = {}) {
   return OmitAction(type, indexer, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/indexable/to_indexable.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/indexable/to_indexable.mjs
 function ToIndexable(type) {
   const collapsed = CollapseToObject(type);
   const result = IsObject2(collapsed) ? collapsed.properties : Unreachable();
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/omit/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/omit/from_type.mjs
 function FromKeys(properties, keys) {
   const result = guard_exports.Keys(properties).reduce((result2, key) => {
     return keys.includes(key) ? result2 : { ...result2, [key]: properties[key] };
@@ -4416,7 +4404,7 @@ function FromType14(type, indexer) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/omit/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/omit/instantiate.mjs
 function OmitAction(type, indexer, options) {
   const result = CanInstantiate([type, indexer]) ? memory_exports.Update(FromType14(type, indexer), {}, options) : OmitDeferred(type, indexer, options);
   return result;
@@ -4427,7 +4415,7 @@ function OmitInstantiate(context, state, type, indexer, options) {
   return OmitAction(instantiatedType, instantiatedIndexer, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/parameters.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/parameters.mjs
 function ParametersDeferred(type, options = {}) {
   return Deferred("Parameters", [type], options);
 }
@@ -4435,7 +4423,7 @@ function Parameters(type, options = {}) {
   return ParametersAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/parameters/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/parameters/instantiate.mjs
 function ParametersOperation(type) {
   const parameters = IsFunction2(type) ? type["parameters"] : [];
   const instantiatedParameters = InstantiateElements({}, State([], []), parameters);
@@ -4451,7 +4439,7 @@ function ParametersInstantiate(context, state, type, options) {
   return ParametersAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/partial.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/partial.mjs
 function PartialDeferred(type, options = {}) {
   return Deferred("Partial", [type], options);
 }
@@ -4459,7 +4447,7 @@ function Partial(type, options = {}) {
   return PartialAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/partial/from_cyclic.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/partial/from_cyclic.mjs
 function FromCyclic3(defs, ref) {
   const target = CyclicTarget(defs, ref);
   const partial = FromType15(target);
@@ -4467,28 +4455,28 @@ function FromCyclic3(defs, ref) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/partial/from_dependent.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/partial/from_dependent.mjs
 function FromDependent3(if_, then_, else_) {
   const evaluated = EvaluateDependent(if_, then_, else_);
   const result = FromType15(evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/partial/from_intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/partial/from_intersect.mjs
 function FromIntersect3(types) {
   const evaluated = EvaluateIntersect(types);
   const result = FromType15(evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/partial/from_union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/partial/from_union.mjs
 function FromUnion6(types) {
   const result = types.map((type) => FromType15(type));
   return Union(result);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/partial/from_object.mjs
-function FromObject7(properties) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/partial/from_object.mjs
+function FromObject6(properties) {
   const mapped = guard_exports.Keys(properties).reduce((result2, left) => {
     return { ...result2, [left]: AddOptional(properties[left]) };
   }, {});
@@ -4496,12 +4484,12 @@ function FromObject7(properties) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/partial/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/partial/from_type.mjs
 function FromType15(type) {
-  return IsCyclic(type) ? FromCyclic3(type.$defs, type.$ref) : IsDependent(type) ? FromDependent3(type.if, type.then, type.else) : IsIntersect(type) ? FromIntersect3(type.allOf) : IsUnion(type) ? FromUnion6(type.anyOf) : IsObject2(type) ? FromObject7(type.properties) : _Object_({});
+  return IsCyclic(type) ? FromCyclic3(type.$defs, type.$ref) : IsDependent(type) ? FromDependent3(type.if, type.then, type.else) : IsIntersect(type) ? FromIntersect3(type.allOf) : IsUnion(type) ? FromUnion6(type.anyOf) : IsObject2(type) ? FromObject6(type.properties) : _Object_({});
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/partial/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/partial/instantiate.mjs
 function PartialAction(type, options) {
   const result = CanInstantiate([type]) ? memory_exports.Update(FromType15(type), {}, options) : PartialDeferred(type, options);
   return result;
@@ -4511,7 +4499,7 @@ function PartialInstantiate(context, state, type, options) {
   return PartialAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/pick.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/pick.mjs
 function PickDeferred(type, indexer, options = {}) {
   return Deferred("Pick", [type, indexer], options);
 }
@@ -4520,7 +4508,7 @@ function Pick(type, indexer_or_keys, options = {}) {
   return PickAction(type, indexer, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/pick/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/pick/from_type.mjs
 function FromKeys2(properties, keys) {
   const result = guard_exports.Keys(properties).reduce((result2, key) => {
     return keys.includes(key) ? memory_exports.Assign(result2, { [key]: properties[key] }) : result2;
@@ -4535,7 +4523,7 @@ function FromType16(type, indexer) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/pick/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/pick/instantiate.mjs
 function PickAction(type, indexer, options) {
   const result = CanInstantiate([type, indexer]) ? memory_exports.Update(FromType16(type, indexer), {}, options) : PickDeferred(type, indexer, options);
   return result;
@@ -4546,7 +4534,7 @@ function PickInstantiate(context, state, type, indexer, options) {
   return PickAction(instantiatedType, instantiatedIndexer, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/readonly_object.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/readonly_object.mjs
 function ReadonlyObjectDeferred(type, options = {}) {
   return Deferred("ReadonlyObject", [type], options);
 }
@@ -4555,13 +4543,13 @@ function ReadonlyObject(type, options = {}) {
 }
 var ReadonlyType = ReadonlyObject;
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/readonly_object/from_array.mjs
-function FromArray5(type) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/readonly_object/from_array.mjs
+function FromArray4(type) {
   const result = AddImmutable(_Array_(type));
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/readonly_object/from_cyclic.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/readonly_object/from_cyclic.mjs
 function FromCyclic4(defs, ref) {
   const target = CyclicTarget(defs, ref);
   const partial = FromType17(target);
@@ -4569,22 +4557,22 @@ function FromCyclic4(defs, ref) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/readonly_object/from_dependent.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/readonly_object/from_dependent.mjs
 function FromDependent4(if_, then_, else_) {
   const evaluated = EvaluateDependent(if_, then_, else_);
   const result = FromType17(evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/readonly_object/from_intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/readonly_object/from_intersect.mjs
 function FromIntersect4(types) {
   const evaluated = EvaluateIntersect(types);
   const result = FromType17(evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/readonly_object/from_object.mjs
-function FromObject8(properties) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/readonly_object/from_object.mjs
+function FromObject7(properties) {
   const mapped = guard_exports.Keys(properties).reduce((result2, left) => {
     return { ...result2, [left]: AddReadonly(properties[left]) };
   }, {});
@@ -4592,24 +4580,24 @@ function FromObject8(properties) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/readonly_object/from_tuple.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/readonly_object/from_tuple.mjs
 function FromTuple4(types) {
   const result = AddImmutable(Tuple(types));
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/readonly_object/from_union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/readonly_object/from_union.mjs
 function FromUnion7(types) {
   const result = types.map((type) => FromType17(type));
   return Union(result);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/readonly_object/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/readonly_object/from_type.mjs
 function FromType17(type) {
-  return IsArray2(type) ? FromArray5(type.items) : IsCyclic(type) ? FromCyclic4(type.$defs, type.$ref) : IsDependent(type) ? FromDependent4(type.if, type.then, type.else) : IsIntersect(type) ? FromIntersect4(type.allOf) : IsObject2(type) ? FromObject8(type.properties) : IsTuple(type) ? FromTuple4(type.items) : IsUnion(type) ? FromUnion7(type.anyOf) : type;
+  return IsArray2(type) ? FromArray4(type.items) : IsCyclic(type) ? FromCyclic4(type.$defs, type.$ref) : IsDependent(type) ? FromDependent4(type.if, type.then, type.else) : IsIntersect(type) ? FromIntersect4(type.allOf) : IsObject2(type) ? FromObject7(type.properties) : IsTuple(type) ? FromTuple4(type.items) : IsUnion(type) ? FromUnion7(type.anyOf) : type;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/readonly_object/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/readonly_object/instantiate.mjs
 function ReadonlyObjectAction(type, options) {
   const result = CanInstantiate([type]) ? memory_exports.Update(FromType17(type), {}, options) : ReadonlyObjectDeferred(type);
   return result;
@@ -4619,12 +4607,12 @@ function ReadonlyObjectInstantiate(context, state, type, options) {
   return ReadonlyObjectAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/ref/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/ref/instantiate.mjs
 function RefInstantiate(context, state, type, ref) {
   return state.visited.includes(ref) ? type : ref in context ? InstantiateType(context, State(state["callstack"], [...state["visited"], ref]), context[ref]) : type;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/required/from_cyclic.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/required/from_cyclic.mjs
 function FromCyclic5(defs, ref) {
   const target = CyclicTarget(defs, ref);
   const partial = FromType18(target);
@@ -4632,28 +4620,36 @@ function FromCyclic5(defs, ref) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/required/from_dependent.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/required/from_dependent.mjs
 function FromDependent5(if_, then_, else_) {
   const evaluated = EvaluateDependent(if_, then_, else_);
   const result = FromType18(evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/required/from_intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/required/from_intersect.mjs
 function FromIntersect5(types) {
   const evaluated = EvaluateIntersect(types);
   const result = FromType18(evaluated);
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/required/from_union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/required/from_union.mjs
 function FromUnion8(types) {
   const result = types.map((type) => FromType18(type));
   return Union(result);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/required/from_object.mjs
-function FromObject9(properties) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/_remove_optional.mjs
+function RemoveOptionalDeferred(type, options = {}) {
+  return Deferred("RemoveOptional", [type], options);
+}
+function RemoveOptional(type, options = {}) {
+  return RemoveOptionalAction(type, options);
+}
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/required/from_object.mjs
+function FromObject8(properties) {
   const mapped = guard_exports.Keys(properties).reduce((result2, left) => {
     return { ...result2, [left]: RemoveOptional(properties[left]) };
   }, {});
@@ -4661,12 +4657,12 @@ function FromObject9(properties) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/required/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/required/from_type.mjs
 function FromType18(type) {
-  return IsCyclic(type) ? FromCyclic5(type.$defs, type.$ref) : IsDependent(type) ? FromDependent5(type.if, type.then, type.else) : IsIntersect(type) ? FromIntersect5(type.allOf) : IsUnion(type) ? FromUnion8(type.anyOf) : IsObject2(type) ? FromObject9(type.properties) : _Object_({});
+  return IsCyclic(type) ? FromCyclic5(type.$defs, type.$ref) : IsDependent(type) ? FromDependent5(type.if, type.then, type.else) : IsIntersect(type) ? FromIntersect5(type.allOf) : IsUnion(type) ? FromUnion8(type.anyOf) : IsObject2(type) ? FromObject8(type.properties) : _Object_({});
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/required.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/required.mjs
 function RequiredDeferred(type, options = {}) {
   return Deferred("Required", [type], options);
 }
@@ -4674,7 +4670,7 @@ function Required(type, options = {}) {
   return RequiredAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/required/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/required/instantiate.mjs
 function RequiredAction(type, options) {
   const result = CanInstantiate([type]) ? memory_exports.Update(FromType18(type), {}, options) : RequiredDeferred(type, options);
   return result;
@@ -4684,7 +4680,7 @@ function RequiredInstantiate(context, state, type, options) {
   return RequiredAction(instaniatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/return_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/return_type.mjs
 function ReturnTypeDeferred(type, options = {}) {
   return Deferred("ReturnType", [type], options);
 }
@@ -4692,7 +4688,7 @@ function ReturnType(type, options = {}) {
   return ReturnTypeAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/return_type/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/return_type/instantiate.mjs
 function ReturnTypeOperation(type) {
   return IsFunction2(type) ? type["returnType"] : Never();
 }
@@ -4705,7 +4701,7 @@ function ReturnTypeInstantiate(context, state, type, options = {}) {
   return ReturnTypeAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/with.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/with.mjs
 function WithDeferred(type, options) {
   return Deferred("With", [type, options], {});
 }
@@ -4713,7 +4709,7 @@ function With2(type, options) {
   return WithAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/with/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/with/instantiate.mjs
 function WithAction(type, options) {
   const result = CanInstantiate([type]) ? memory_exports.Update(type, {}, options) : WithDeferred(type, options);
   return result;
@@ -4723,7 +4719,7 @@ function WithInstantiate(context, state, type, options) {
   return WithAction(instaniatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/rest/spread.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/rest/spread.mjs
 function SpreadElement(type) {
   const result = IsRest(type) ? IsTuple(type.items) ? RestSpread(type.items.items) : IsInfer(type.items) ? [type] : IsRef(type.items) ? [type] : [Never()] : [type];
   return result;
@@ -4735,7 +4731,7 @@ function RestSpread(types) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/instantiate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/instantiate.mjs
 function State(callstack, visited) {
   return { callstack, visited };
 }
@@ -4783,12 +4779,9 @@ function Instantiate(context, type) {
   return InstantiateType(context, State([], []), type);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/immutable/instantiate_add.mjs
-function AddImmutableOperation(type) {
-  return memory_exports.Update(type, { "~immutable": true }, {});
-}
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/immutable/instantiate_add.mjs
 function AddImmutableAction(type, options) {
-  const result = memory_exports.Update(AddImmutableOperation(type), {}, options);
+  const result = memory_exports.Update(type, { "~immutable": true }, options);
   return result;
 }
 function AddImmutableInstantiate(context, state, type, options) {
@@ -4796,7 +4789,7 @@ function AddImmutableInstantiate(context, state, type, options) {
   return AddImmutableAction(instantiatedType, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/_add_immutable.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/_add_immutable.mjs
 function AddImmutableDeferred(type, options = {}) {
   return Deferred("AddImmutable", [type], options);
 }
@@ -4804,7 +4797,12 @@ function AddImmutable(type, options = {}) {
   return AddImmutableAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/evaluate.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/_remove_readonly.mjs
+function RemoveReadonlyDeferred(type, options = {}) {
+  return Deferred("RemoveReadonly", [type], options);
+}
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/evaluate.mjs
 function EvaluateDeferred(type, options = {}) {
   return Deferred("Evaluate", [type], options);
 }
@@ -4812,7 +4810,7 @@ function Evaluate(type, options = {}) {
   return EvaluateAction(type, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/action/module.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/action/module.mjs
 function ModuleDeferred(declarations, options = {}) {
   return Deferred("Module", [declarations], options);
 }
@@ -4820,7 +4818,7 @@ function Module2(declarations, options = {}) {
   return ModuleInstantiate({}, State([], []), declarations, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/engine/priority/priority.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/engine/priority/priority.mjs
 function Comparer(left, right) {
   const compareResult = Compare(left, right);
   return guard_exports.IsEqual(compareResult, CompareResultRightInside) ? 1 : guard_exports.IsEqual(compareResult, CompareResultDisjoint) ? 1 : 0;
@@ -4836,7 +4834,7 @@ function Priority(types) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/type/script/script.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/type/script/script.mjs
 function Script2(...args) {
   const [context, input, options] = arguments_exports.Match(args, {
     2: (script, options2) => guard_exports.IsString(script) ? [{}, script, options2] : [script, options2, {}],
@@ -4848,7 +4846,7 @@ function Script2(...args) {
   return memory_exports.Update(parsed, {}, options);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/typebox.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/typebox.mjs
 var typebox_exports = {};
 __export(typebox_exports, {
   Any: () => Any,
@@ -4970,123 +4968,144 @@ __export(typebox_exports, {
   With: () => With2
 });
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/_refine.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/pointer/pointer.mjs
+function EncodeFragment(fragment) {
+  return fragment.replace(/~/g, "~0").replace(/\//g, "~1");
+}
+function DecodeFragment(fragment) {
+  return fragment.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+function Fragments(pointer) {
+  const fragments = pointer.split("/").map(DecodeFragment);
+  return fragments[0] === "" ? fragments.slice(1) : fragments;
+}
+function Get3(value, pointer) {
+  let current = value;
+  for (const fragment of Fragments(pointer)) {
+    if (!guard_exports.IsObject(current) || guard_exports.IsUnsafePropertyKey(fragment))
+      return void 0;
+    current = current[fragment];
+  }
+  return current;
+}
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/_refine.mjs
 function IsRefine2(value) {
   return guard_exports.HasPropertyKey(value, "~refine") && guard_exports.IsArray(value["~refine"]) && guard_exports.Every(value["~refine"], 0, (value2) => guard_exports.IsObject(value2) && guard_exports.HasPropertyKey(value2, "check") && guard_exports.HasPropertyKey(value2, "error") && guard_exports.IsFunction(value2.check) && guard_exports.IsFunction(value2.error));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/schema.mjs
-function IsSchemaObject2(value) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/schema.mjs
+function IsSchemaObject(value) {
   return guard_exports.IsObject(value) && !guard_exports.IsArray(value);
 }
 function IsSchemaBoolean(value) {
   return guard_exports.IsBoolean(value);
 }
 function IsSchema2(value) {
-  return IsSchemaObject2(value) || IsSchemaBoolean(value);
+  return IsSchemaObject(value) || IsSchemaBoolean(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/additionalItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/additionalItems.mjs
 function IsAdditionalItems(schema) {
   return guard_exports.HasPropertyKey(schema, "additionalItems") && IsSchema2(schema.additionalItems);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/additionalProperties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/additionalProperties.mjs
 function IsAdditionalProperties(schema) {
   return guard_exports.HasPropertyKey(schema, "additionalProperties") && IsSchema2(schema.additionalProperties);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/allOf.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/allOf.mjs
 function IsAllOf(schema) {
   return guard_exports.HasPropertyKey(schema, "allOf") && guard_exports.IsArray(schema.allOf) && schema.allOf.every((value) => IsSchema2(value));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/anchor.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/anchor.mjs
 function IsAnchor(schema) {
   return guard_exports.HasPropertyKey(schema, "$anchor") && guard_exports.IsString(schema.$anchor);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/anyOf.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/anyOf.mjs
 function IsAnyOf(schema) {
   return guard_exports.HasPropertyKey(schema, "anyOf") && guard_exports.IsArray(schema.anyOf) && schema.anyOf.every((value) => IsSchema2(value));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/const.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/const.mjs
 function IsConst(value) {
   return guard_exports.HasPropertyKey(value, "const");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/contains.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/contains.mjs
 function IsContains(schema) {
   return guard_exports.HasPropertyKey(schema, "contains") && IsSchema2(schema.contains);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/default.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/default.mjs
 function IsDefault(schema) {
   return guard_exports.HasPropertyKey(schema, "default");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/dependencies.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/dependencies.mjs
 function IsDependencies(schema) {
   return guard_exports.HasPropertyKey(schema, "dependencies") && guard_exports.IsObject(schema.dependencies) && Object.values(schema.dependencies).every((value) => IsSchema2(value) || guard_exports.IsArray(value) && value.every((value2) => guard_exports.IsString(value2)));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/dependentRequired.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/dependentRequired.mjs
 function IsDependentRequired(schema) {
   return guard_exports.HasPropertyKey(schema, "dependentRequired") && guard_exports.IsObject(schema.dependentRequired) && Object.values(schema.dependentRequired).every((value) => guard_exports.IsArray(value) && value.every((value2) => guard_exports.IsString(value2)));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/dependentSchemas.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/dependentSchemas.mjs
 function IsDependentSchemas(schema) {
   return guard_exports.HasPropertyKey(schema, "dependentSchemas") && guard_exports.IsObject(schema.dependentSchemas) && Object.values(schema.dependentSchemas).every((value) => IsSchema2(value));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/dynamicAnchor.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/dynamicAnchor.mjs
 function IsDynamicAnchor(schema) {
   return guard_exports.HasPropertyKey(schema, "$dynamicAnchor") && guard_exports.IsString(schema.$dynamicAnchor);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/dynamicRef.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/dynamicRef.mjs
 function IsDynamicRef(schema) {
   return guard_exports.HasPropertyKey(schema, "$dynamicRef") && guard_exports.IsString(schema.$dynamicRef);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/else.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/else.mjs
 function IsElse(schema) {
   return guard_exports.HasPropertyKey(schema, "else") && IsSchema2(schema.else);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/enum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/enum.mjs
 function IsEnum2(schema) {
   return guard_exports.HasPropertyKey(schema, "enum") && guard_exports.IsArray(schema.enum);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/exclusiveMaximum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/exclusiveMaximum.mjs
 function IsExclusiveMaximum(schema) {
   return guard_exports.HasPropertyKey(schema, "exclusiveMaximum") && (guard_exports.IsNumber(schema.exclusiveMaximum) || guard_exports.IsBigInt(schema.exclusiveMaximum));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/exclusiveMinimum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/exclusiveMinimum.mjs
 function IsExclusiveMinimum(schema) {
   return guard_exports.HasPropertyKey(schema, "exclusiveMinimum") && (guard_exports.IsNumber(schema.exclusiveMinimum) || guard_exports.IsBigInt(schema.exclusiveMinimum));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/format.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/format.mjs
 function IsFormat(schema) {
   return guard_exports.HasPropertyKey(schema, "format") && guard_exports.IsString(schema.format);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/id.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/id.mjs
 function IsId(schema) {
   return guard_exports.HasPropertyKey(schema, "$id") && guard_exports.IsString(schema.$id);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/if.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/if.mjs
 function IsIf(schema) {
   return guard_exports.HasPropertyKey(schema, "if") && IsSchema2(schema.if);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/items.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/items.mjs
 function IsItems(schema) {
   return guard_exports.HasPropertyKey(schema, "items") && (IsSchema2(schema.items) || guard_exports.IsArray(schema.items) && schema.items.every((value) => {
     return IsSchema2(value);
@@ -5096,97 +5115,97 @@ function IsItemsSized(schema) {
   return IsItems(schema) && guard_exports.IsArray(schema.items);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/maximum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/maximum.mjs
 function IsMaximum(schema) {
   return guard_exports.HasPropertyKey(schema, "maximum") && (guard_exports.IsNumber(schema.maximum) || guard_exports.IsBigInt(schema.maximum));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/maxContains.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/maxContains.mjs
 function IsMaxContains(schema) {
   return guard_exports.HasPropertyKey(schema, "maxContains") && guard_exports.IsNumber(schema.maxContains);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/maxItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/maxItems.mjs
 function IsMaxItems(schema) {
   return guard_exports.HasPropertyKey(schema, "maxItems") && guard_exports.IsNumber(schema.maxItems);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/maxLength.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/maxLength.mjs
 function IsMaxLength3(schema) {
   return guard_exports.HasPropertyKey(schema, "maxLength") && guard_exports.IsNumber(schema.maxLength);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/maxProperties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/maxProperties.mjs
 function IsMaxProperties(schema) {
   return guard_exports.HasPropertyKey(schema, "maxProperties") && guard_exports.IsNumber(schema.maxProperties);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/minimum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/minimum.mjs
 function IsMinimum(schema) {
   return guard_exports.HasPropertyKey(schema, "minimum") && (guard_exports.IsNumber(schema.minimum) || guard_exports.IsBigInt(schema.minimum));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/minContains.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/minContains.mjs
 function IsMinContains(schema) {
   return guard_exports.HasPropertyKey(schema, "minContains") && guard_exports.IsNumber(schema.minContains);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/minItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/minItems.mjs
 function IsMinItems(schema) {
   return guard_exports.HasPropertyKey(schema, "minItems") && guard_exports.IsNumber(schema.minItems);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/minLength.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/minLength.mjs
 function IsMinLength3(schema) {
   return guard_exports.HasPropertyKey(schema, "minLength") && guard_exports.IsNumber(schema.minLength);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/minProperties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/minProperties.mjs
 function IsMinProperties(schema) {
   return guard_exports.HasPropertyKey(schema, "minProperties") && guard_exports.IsNumber(schema.minProperties);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/multipleOf.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/multipleOf.mjs
 function IsMultipleOf2(schema) {
   return guard_exports.HasPropertyKey(schema, "multipleOf") && (guard_exports.IsNumber(schema.multipleOf) || guard_exports.IsBigInt(schema.multipleOf));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/not.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/not.mjs
 function IsNot(schema) {
   return guard_exports.HasPropertyKey(schema, "not") && IsSchema2(schema.not);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/oneOf.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/oneOf.mjs
 function IsOneOf(schema) {
   return guard_exports.HasPropertyKey(schema, "oneOf") && guard_exports.IsArray(schema.oneOf) && schema.oneOf.every((value) => IsSchema2(value));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/pattern.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/pattern.mjs
 function IsPattern(schema) {
   return guard_exports.HasPropertyKey(schema, "pattern") && (guard_exports.IsString(schema.pattern) || schema.pattern instanceof RegExp);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/patternProperties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/patternProperties.mjs
 function IsPatternProperties(schema) {
   return guard_exports.HasPropertyKey(schema, "patternProperties") && guard_exports.IsObject(schema.patternProperties) && Object.values(schema.patternProperties).every((value) => IsSchema2(value));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/prefixItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/prefixItems.mjs
 function IsPrefixItems(schema) {
   return guard_exports.HasPropertyKey(schema, "prefixItems") && guard_exports.IsArray(schema.prefixItems) && schema.prefixItems.every((schema2) => IsSchema2(schema2));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/properties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/properties.mjs
 function IsProperties(schema) {
   return guard_exports.HasPropertyKey(schema, "properties") && guard_exports.IsObject(schema.properties) && Object.values(schema.properties).every((value) => IsSchema2(value));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/propertyNames.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/propertyNames.mjs
 function IsPropertyNames(schema) {
   return guard_exports.HasPropertyKey(schema, "propertyNames") && (guard_exports.IsObject(schema.propertyNames) || IsSchema2(schema.propertyNames));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/recursiveAnchor.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/recursiveAnchor.mjs
 function IsRecursiveAnchor(schema) {
   return guard_exports.HasPropertyKey(schema, "$recursiveAnchor") && guard_exports.IsBoolean(schema.$recursiveAnchor);
 }
@@ -5194,47 +5213,377 @@ function IsRecursiveAnchorTrue(schema) {
   return IsRecursiveAnchor(schema) && guard_exports.IsEqual(schema.$recursiveAnchor, true);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/recursiveRef.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/recursiveRef.mjs
 function IsRecursiveRef(schema) {
   return guard_exports.HasPropertyKey(schema, "$recursiveRef") && guard_exports.IsString(schema.$recursiveRef);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/ref.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/ref.mjs
 function IsRef2(schema) {
   return guard_exports.HasPropertyKey(schema, "$ref") && guard_exports.IsString(schema.$ref);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/required.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/required.mjs
 function IsRequired(schema) {
   return guard_exports.HasPropertyKey(schema, "required") && guard_exports.IsArray(schema.required) && schema.required.every((value) => guard_exports.IsString(value));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/then.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/then.mjs
 function IsThen(schema) {
   return guard_exports.HasPropertyKey(schema, "then") && IsSchema2(schema.then);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/type.mjs
 function IsType(schema) {
   return guard_exports.HasPropertyKey(schema, "type") && (guard_exports.IsString(schema.type) || guard_exports.IsArray(schema.type) && schema.type.every((value) => guard_exports.IsString(value)));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/uniqueItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/uniqueItems.mjs
 function IsUniqueItems(schema) {
   return guard_exports.HasPropertyKey(schema, "uniqueItems") && guard_exports.IsBoolean(schema.uniqueItems);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/unevaluatedItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/unevaluatedItems.mjs
 function IsUnevaluatedItems(schema) {
   return guard_exports.HasPropertyKey(schema, "unevaluatedItems") && IsSchema2(schema.unevaluatedItems);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/types/unevaluatedProperties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/types/unevaluatedProperties.mjs
 function IsUnevaluatedProperties(schema) {
   return guard_exports.HasPropertyKey(schema, "unevaluatedProperties") && IsSchema2(schema.unevaluatedProperties);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/_context.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/_stack.mjs
+var DefaultUri = "urn:typebox:root";
+function NextUri(ref, base) {
+  return URL.canParse(ref, base) ? new URL(ref, base) : guard_exports.IsEqual(base, DefaultUri) ? new URL(`${base}:${ref}`) : new URL(`${base.slice(0, base.lastIndexOf(":"))}:${ref}`);
+}
+function Stack(context, schema) {
+  const base = IsSchemaObject(schema) && IsId(schema) ? NextUri(schema.$id, DefaultUri).href : DefaultUri;
+  return {
+    context,
+    schema,
+    lexicalSchema: schema,
+    lexicalBase: base,
+    resourceBase: base,
+    referenceBase: base,
+    ids: [],
+    useResourceBaseForReference: true,
+    recursiveAnchor: void 0,
+    dynamicAnchors: [],
+    resourceEntries: /* @__PURE__ */ new Map(),
+    pendingResource: true,
+    enteredResource: false
+  };
+}
+function RegisterResourceAnchors(anchors, schema, isRoot = true) {
+  if (IsSchemaBoolean(schema))
+    return anchors;
+  if (Array.isArray(schema))
+    return schema.reduce((result, item) => RegisterResourceAnchors(result, item, false), anchors);
+  if (!IsSchemaObject(schema))
+    return anchors;
+  if (!isRoot && IsId(schema))
+    return anchors;
+  const next = !isRoot && IsDynamicAnchor(schema) ? [...anchors, schema] : anchors;
+  return Object.keys(schema).reduce((result, key) => RegisterResourceAnchors(result, schema[key], false), next);
+}
+function ResourceEntry(stack, schema) {
+  return stack.resourceEntries.get(schema);
+}
+function NextEnteredResource(stack, schema) {
+  return stack.enteredResource || ResourceEntry(stack, schema) !== void 0;
+}
+function IsRelativeId(schema) {
+  return !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(schema.$id);
+}
+function NextIds(stack, schema) {
+  return IsId(schema) ? [...stack.ids, schema] : stack.ids;
+}
+function NextRecursiveAnchor(stack, schema) {
+  return stack.recursiveAnchor ?? (IsRecursiveAnchorTrue(schema) ? schema : void 0);
+}
+function NextDynamicAnchors(stack, schema) {
+  const registered = IsId(schema) ? RegisterResourceAnchors(stack.dynamicAnchors, schema) : stack.dynamicAnchors;
+  return IsDynamicAnchor(schema) ? [...registered, schema] : registered;
+}
+function NextPendingResource(stack, schema) {
+  return IsId(schema) ? false : stack.pendingResource;
+}
+function NextLexicalBase(stack, schema) {
+  const entry = ResourceEntry(stack, schema);
+  if (entry)
+    return entry.base;
+  return IsId(schema) ? NextUri(schema.$id, stack.lexicalBase).href : stack.lexicalBase;
+}
+function NextResourceBase(stack, schema) {
+  const entry = ResourceEntry(stack, schema);
+  if (entry)
+    return entry.base;
+  return IsId(schema) && stack.pendingResource ? NextUri(schema.$id, stack.resourceBase).href : stack.resourceBase;
+}
+function NextUseResourceBaseForReference(stack, schema) {
+  return IsId(schema) ? !IsRelativeId(schema) : stack.useResourceBaseForReference;
+}
+function NextReferenceBase(stack, schema) {
+  const isRetrieved = NextEnteredResource(stack, schema);
+  const useResourceBaseForReference = NextUseResourceBaseForReference(stack, schema);
+  return isRetrieved || useResourceBaseForReference ? NextResourceBase(stack, schema) : NextLexicalBase(stack, schema);
+}
+function NextLexicalSchema(stack, schema) {
+  const entry = ResourceEntry(stack, schema);
+  if (entry)
+    return entry.root;
+  return IsId(schema) ? schema : stack.lexicalSchema;
+}
+function HasStackKeywords(stack, schema) {
+  return IsSchemaObject(schema) && (IsId(schema) || IsDynamicAnchor(schema) || guard_exports.IsUndefined(stack.recursiveAnchor) && IsRecursiveAnchorTrue(schema) || !guard_exports.IsUndefined(ResourceEntry(stack, schema)));
+}
+function NextStack(stack, schema) {
+  return HasStackKeywords(stack, schema) ? {
+    ...stack,
+    ids: NextIds(stack, schema),
+    dynamicAnchors: NextDynamicAnchors(stack, schema),
+    recursiveAnchor: NextRecursiveAnchor(stack, schema),
+    pendingResource: NextPendingResource(stack, schema),
+    lexicalBase: NextLexicalBase(stack, schema),
+    resourceBase: NextResourceBase(stack, schema),
+    useResourceBaseForReference: NextUseResourceBaseForReference(stack, schema),
+    referenceBase: NextReferenceBase(stack, schema),
+    lexicalSchema: NextLexicalSchema(stack, schema),
+    enteredResource: NextEnteredResource(stack, schema)
+  } : stack;
+}
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/resolve/resolve.mjs
+function RelativeBase(schema, base) {
+  return IsSchemaObject(schema) && IsId(schema) ? NextUri(schema.$id, base.href) : base;
+}
+function AbsoluteBase(base) {
+  return NextUri(base, DefaultUri);
+}
+function CanonicalHref(url) {
+  return url.href.split("#")[0];
+}
+function Base2(schema, base, target) {
+  return SearchBase(schema, AbsoluteBase(base), target);
+}
+function RefRoot(stack, ref) {
+  return ref.$ref.startsWith("#") || stack.enteredResource ? stack.lexicalSchema : stack.schema;
+}
+function SearchDynamicAnchor(schema, name) {
+  if (guard_exports.IsObject(schema) && IsDynamicAnchor(schema) && guard_exports.IsEqual(schema.$dynamicAnchor, name)) {
+    return schema;
+  }
+  if (guard_exports.IsObject(schema)) {
+    for (const key of guard_exports.Keys(schema)) {
+      const result = SearchDynamicAnchor(schema[key], name);
+      if (result)
+        return result;
+    }
+  }
+  return void 0;
+}
+function SearchBase(schema, base, target) {
+  if (guard_exports.IsEqual(schema, target))
+    return base.href;
+  const nextBase = RelativeBase(schema, base);
+  if (guard_exports.IsArray(schema)) {
+    for (const item of schema) {
+      const result = SearchBase(item, nextBase, target);
+      if (!guard_exports.IsUndefined(result))
+        return result;
+    }
+  } else if (guard_exports.IsObject(schema)) {
+    for (const key of guard_exports.Keys(schema)) {
+      const result = SearchBase(schema[key], nextBase, target);
+      if (!guard_exports.IsUndefined(result))
+        return result;
+    }
+  }
+  return void 0;
+}
+function MatchWithHash(schema, ref) {
+  if (ref.href.endsWith("#"))
+    return schema;
+  if (!ref.hash.startsWith("#"))
+    return void 0;
+  const fragment = decodeURIComponent(ref.hash.slice(1));
+  if (!fragment.startsWith("/"))
+    return void 0;
+  return Get3(schema, fragment);
+}
+function MatchWithId(schema, base, ref) {
+  if (!IsId(schema))
+    return void 0;
+  if (guard_exports.IsEqual(schema.$id, ref.hash))
+    return schema;
+  const absoluteRef = new URL(ref.href, base.href);
+  if (guard_exports.IsEqual(base.pathname, absoluteRef.pathname))
+    return ref.hash.startsWith("#") ? MatchWithHash(schema, ref) : schema;
+  return void 0;
+}
+function MatchWithAnchor(schema, base, ref) {
+  if (!IsAnchor(schema))
+    return void 0;
+  const absoluteAnchor = new URL(`#${schema.$anchor}`, base.href);
+  const absoluteRef = new URL(ref.href, base.href);
+  return guard_exports.IsEqual(absoluteAnchor.href, absoluteRef.href) ? schema : void 0;
+}
+function MatchWithDynamicAnchor(schema, base, ref) {
+  if (!IsDynamicAnchor(schema))
+    return void 0;
+  const absoluteAnchor = new URL(`#${schema.$dynamicAnchor}`, base.href);
+  const absoluteRef = new URL(ref.href, base.href);
+  const isMatch = guard_exports.IsEqual(absoluteAnchor.href, absoluteRef.href);
+  return isMatch ? schema : void 0;
+}
+function MatchSchemaObject(schema, base, ref) {
+  if (!IsSchemaObject(schema))
+    return void 0;
+  return MatchWithId(schema, base, ref) ?? MatchWithAnchor(schema, base, ref) ?? MatchWithDynamicAnchor(schema, base, ref) ?? MatchWithHash(schema, ref);
+}
+function MatchFromArray(schema, base, ref) {
+  if (!guard_exports.IsArray(schema))
+    return void 0;
+  return schema.reduce((result, item) => {
+    const match = Match4(item, base, ref);
+    return !guard_exports.IsUndefined(match) ? match : result;
+  }, void 0);
+}
+function MatchFromObject(schema, base, ref) {
+  if (!guard_exports.IsObject(schema))
+    return void 0;
+  return guard_exports.Keys(schema).reduce((result, key) => {
+    if (guard_exports.IsEqual(key, "const") || guard_exports.IsEqual(key, "enum"))
+      return result;
+    const match = Match4(schema[key], base, ref);
+    return !guard_exports.IsUndefined(match) ? match : result;
+  }, void 0);
+}
+function Match4(schema, base, ref) {
+  const relativeBase = RelativeBase(schema, base);
+  return MatchSchemaObject(schema, relativeBase, ref) ?? MatchFromArray(schema, relativeBase, ref) ?? MatchFromObject(schema, relativeBase, ref);
+}
+function Resource(context, schema, base, ref) {
+  const result = RefInternal(context, schema, base, ref);
+  return IsSchemaObject(result) && IsId(result) ? result : void 0;
+}
+function FindDeferredResourceLegacy(stack, ref, schema) {
+  if (!ref.$ref.startsWith("#"))
+    return void 0;
+  if (!IsSchemaObject(stack.schema) || guard_exports.HasPropertyKey(stack.schema, "$schema"))
+    return void 0;
+  const targetBase = Base2(stack.lexicalSchema, stack.referenceBase, schema);
+  if (guard_exports.IsUndefined(targetBase) || guard_exports.IsEqual(targetBase, stack.referenceBase))
+    return void 0;
+  return { target: schema, base: targetBase, root: (
+    /* safe-object-root */
+    stack.lexicalSchema
+  ) };
+}
+function FindDeferredResourceModern(stack, canonical, schema) {
+  const remoteRoot = stack.context[canonical];
+  if (!IsSchemaObject(remoteRoot))
+    return void 0;
+  const base = RelativeBase(remoteRoot, new URL(canonical)).href;
+  return { target: schema, base, root: remoteRoot };
+}
+function FindDeferredResource(stack, ref, schema, canonical, isRemote) {
+  const remote = isRemote ? FindDeferredResourceModern(stack, canonical, schema) : void 0;
+  return guard_exports.IsUndefined(remote) ? FindDeferredResourceLegacy(stack, ref, schema) : remote;
+}
+function FindResolvedResource(stack, canonical, schema) {
+  if (IsId(schema))
+    return void 0;
+  const resource = Resource(
+    stack.context,
+    /* safe-object-root */
+    stack.schema,
+    stack.referenceBase,
+    canonical
+  );
+  if (!resource || stack.ids.includes(resource))
+    return void 0;
+  return { resource };
+}
+function RefInternalWithContext(context, ref) {
+  return guard_exports.HasPropertyKey(context, ref) ? context[ref] : void 0;
+}
+function RefInternalWithLocal(schema, base, ref) {
+  return Match4(schema, base, ref);
+}
+function RefInternalWithRemote(context, base, ref) {
+  const canonicalHref = CanonicalHref(ref);
+  if (!guard_exports.HasPropertyKey(context, canonicalHref) || guard_exports.IsEqual(canonicalHref, CanonicalHref(base)))
+    return void 0;
+  const remoteSchema = context[canonicalHref];
+  const remoteBase = RelativeBase(remoteSchema, new URL(canonicalHref));
+  return guard_exports.IsEqual(ref.hash, "") ? remoteSchema : Match4(remoteSchema, remoteBase, ref);
+}
+function RefInternal(context, schema, base, ref) {
+  const absoluteBase = AbsoluteBase(base);
+  const target = NextUri(ref, absoluteBase.href);
+  return RefInternalWithContext(context, ref) ?? RefInternalWithLocal(schema, absoluteBase, target) ?? RefInternalWithRemote(context, absoluteBase, target);
+}
+function RefNextStackDeferred(stack, deferredResource) {
+  if (!deferredResource)
+    return stack;
+  const resourceEntries = new Map(stack.resourceEntries);
+  resourceEntries.set(deferredResource.target, { base: deferredResource.base, root: deferredResource.root });
+  return { ...stack, resourceEntries };
+}
+function RefNextStackResolved(stack, resolvedResource) {
+  return resolvedResource ? NextStack(stack, resolvedResource.resource) : stack;
+}
+function RefNextStack(stack, pendingResource, deferredResource, resolvedResource) {
+  const withDeferred = RefNextStackDeferred({ ...stack, pendingResource }, deferredResource);
+  const withResolved = RefNextStackResolved(withDeferred, resolvedResource);
+  return withResolved;
+}
+function RefResultFound(stack, ref, schema) {
+  const canonical = CanonicalHref(NextUri(ref.$ref, stack.referenceBase));
+  const isRemote = !guard_exports.IsEqual(canonical, stack.resourceBase);
+  const deferredResource = FindDeferredResource(stack, ref, schema, canonical, isRemote);
+  const resolvedResource = isRemote ? FindResolvedResource(stack, canonical, schema) : void 0;
+  return { schema, stack: RefNextStack(stack, true, deferredResource, resolvedResource) };
+}
+function RefResultNotFound(stack, schema) {
+  return { schema, stack: RefNextStack(stack, !guard_exports.IsUndefined(schema)) };
+}
+function Ref2(stack, ref) {
+  const schema = RefInternal(stack.context, RefRoot(stack, ref), stack.referenceBase, ref.$ref);
+  return IsSchemaObject(schema) ? RefResultFound(stack, ref, schema) : RefResultNotFound(stack, schema);
+}
+function IsRecursiveAnchorInScope(stack) {
+  return IsSchemaObject(stack.lexicalSchema) && IsRecursiveAnchorTrue(stack.lexicalSchema);
+}
+function RecursiveRef(stack, recursiveRef) {
+  const schema = IsRecursiveAnchorInScope(stack) ? stack.recursiveAnchor : stack.lexicalSchema;
+  return RefInternal(stack.context, schema, stack.lexicalBase, recursiveRef.$recursiveRef);
+}
+function DynamicRefName(stack, ref) {
+  if (!ref.includes("#"))
+    return ref;
+  const uri = NextUri(ref, AbsoluteBase(stack.lexicalBase).href);
+  return decodeURIComponent(uri.hash.slice(1));
+}
+function FindScopedDynamicAnchor(stack, name) {
+  return stack.dynamicAnchors.find((anchor) => guard_exports.IsEqual(anchor.$dynamicAnchor, name)) ?? SearchDynamicAnchor(stack.lexicalSchema, name) ?? SearchDynamicAnchor(stack.schema, name);
+}
+function DynamicRefWhenFound(stack, name, fragmentTarget) {
+  if (!IsSchemaObject(fragmentTarget) || !IsDynamicAnchor(fragmentTarget))
+    return fragmentTarget;
+  return name.startsWith("/") ? fragmentTarget : FindScopedDynamicAnchor(stack, fragmentTarget.$dynamicAnchor);
+}
+function DynamicRef(stack, dynamicRef) {
+  const name = DynamicRefName(stack, dynamicRef.$dynamicRef);
+  const fragmentRoot = dynamicRef.$dynamicRef.startsWith("#") ? stack.lexicalSchema : stack.schema;
+  const fragmentTarget = RefInternal(stack.context, fragmentRoot, stack.lexicalBase, dynamicRef.$dynamicRef);
+  return guard_exports.IsUndefined(fragmentTarget) ? FindScopedDynamicAnchor(stack, name) : DynamicRefWhenFound(stack, name, fragmentTarget);
+}
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/_context.mjs
 var CheckContext = class {
   constructor() {
     const indices = /* @__PURE__ */ new Set();
@@ -5286,35 +5635,43 @@ var ErrorContext = class extends CheckContext {
     super();
     this.errors = [];
   }
+  // ----------------------------------------------------------------
+  // Public
+  // ----------------------------------------------------------------
   AtCapacity() {
     return this.errors.length >= settings_exports.Get().maxErrors;
   }
-  AddError(error) {
-    if (!this.AtCapacity())
-      this.errors.push(error);
+  AddError(keyword, schemaPath, instancePath, params) {
+    return this.AddErrorObject({ keyword, schemaPath, instancePath, params });
+  }
+  AddErrors(error) {
+    error.forEach((error2) => this.AddErrorObject(error2));
     return false;
   }
   GetErrors() {
     return this.errors;
   }
+  // ----------------------------------------------------------------
+  // Private
+  // ----------------------------------------------------------------
+  AddErrorObject(error) {
+    if (!this.AtCapacity())
+      this.errors.push(error);
+    return false;
+  }
 };
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/_refine.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/_refine.mjs
 function CheckRefine(_stack, _context, schema, value) {
   return guard_exports.Every(schema["~refine"], 0, (refinement, _) => refinement.check(value));
 }
 function ErrorRefine(_stack, context, schemaPath, instancePath, schema, value) {
   return guard_exports.EveryAll(schema["~refine"], 0, (refinement, index) => {
-    return refinement.check(value) || context.AddError({
-      keyword: "~refine",
-      schemaPath,
-      instancePath,
-      params: { index, message: refinement.error(value) }
-    });
+    return refinement.check(value) || context.AddError("~refine", schemaPath, instancePath, { index, message: refinement.error(value) });
   });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/additionalItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/additionalItems.mjs
 function IsValid(schema) {
   return IsItems(schema) && guard_exports.IsArray(schema.items);
 }
@@ -5337,12 +5694,12 @@ function ErrorAdditionalItems(stack, context, schemaPath, instancePath, schema, 
   return isAdditionalItems;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/_regexp.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/_regexp.mjs
 function UnicodeRegExp(pattern) {
   return new RegExp(pattern, "u");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/additionalProperties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/additionalProperties.mjs
 function GetPropertyKeyAsPattern(key) {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return `^${escaped}$`;
@@ -5367,21 +5724,16 @@ function ErrorAdditionalProperties(stack, context, schemaPath, instancePath, sch
   const additionalProperties = [];
   const isAdditionalProperties = guard_exports.EveryAll(guard_exports.Keys(value), 0, (key, _index) => {
     const nextSchemaPath = `${schemaPath}/additionalProperties`;
-    const nextInstancePath = `${instancePath}/${key}`;
+    const nextInstancePath = `${instancePath}/${EncodeFragment(key)}`;
     const isAdditionalProperty = regexp.test(key) || ErrorSchemaPushStack(stack, context, nextSchemaPath, nextInstancePath, schema.additionalProperties, value[key]) && context.AddKey(key);
     if (!isAdditionalProperty)
       additionalProperties.push(key);
     return isAdditionalProperty;
   });
-  return isAdditionalProperties || context.AddError({
-    keyword: "additionalProperties",
-    schemaPath,
-    instancePath,
-    params: { additionalProperties }
-  });
+  return isAdditionalProperties || context.AddError("additionalProperties", schemaPath, instancePath, { additionalProperties });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/allOf.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/allOf.mjs
 function CheckAllOf(stack, context, schema, value) {
   const results = schema.allOf.reduce((result, schema2) => {
     const nextContext = new CheckContext();
@@ -5401,11 +5753,11 @@ function ErrorAllOf(stack, context, schemaPath, instancePath, schema, value) {
   }, []);
   const isAllOf = guard_exports.IsEqual(results.length, schema.allOf.length) && context.Merge(results);
   if (!isAllOf)
-    failedContexts.forEach((failed) => failed.GetErrors().forEach((error) => context.AddError(error)));
+    failedContexts.forEach((failed) => context.AddErrors(failed.GetErrors()));
   return isAllOf;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/anyOf.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/anyOf.mjs
 function CheckAnyOf(stack, context, schema, value) {
   const results = schema.anyOf.reduce((result, schema2) => {
     const nextContext = new CheckContext();
@@ -5425,42 +5777,27 @@ function ErrorAnyOf(stack, context, schemaPath, instancePath, schema, value) {
   }, []);
   const isAnyOf = guard_exports.IsGreaterThan(results.length, 0) && context.Merge(results);
   if (!isAnyOf)
-    failedContexts.forEach((failed) => failed.GetErrors().forEach((error) => context.AddError(error)));
-  return isAnyOf || context.AddError({
-    keyword: "anyOf",
-    schemaPath,
-    instancePath,
-    params: {}
-  });
+    failedContexts.forEach((failed) => context.AddErrors(failed.GetErrors()));
+  return isAnyOf || context.AddError("anyOf", schemaPath, instancePath, {});
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/boolean.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/boolean.mjs
 function CheckSchemaBoolean(_stack, _context, schema, _value) {
   return schema;
 }
 function ErrorSchemaBoolean(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckSchemaBoolean(stack, context, schema, value) || context.AddError({
-    keyword: "boolean",
-    schemaPath,
-    instancePath,
-    params: {}
-  });
+  return CheckSchemaBoolean(stack, context, schema, value) || context.AddError("boolean", schemaPath, instancePath, {});
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/const.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/const.mjs
 function CheckConst(_stack, _context, schema, value) {
   return guard_exports.IsValueLike(schema.const) ? guard_exports.IsEqual(value, schema.const) : guard_exports.IsDeepEqual(value, schema.const);
 }
 function ErrorConst(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckConst(stack, context, schema, value) || context.AddError({
-    keyword: "const",
-    schemaPath,
-    instancePath,
-    params: { allowedValue: schema.const }
-  });
+  return CheckConst(stack, context, schema, value) || context.AddError("const", schemaPath, instancePath, { allowedValue: schema.const });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/contains.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/contains.mjs
 function IsValid2(schema) {
   return !(IsMinContains(schema) && guard_exports.IsEqual(schema.minContains, 0));
 }
@@ -5472,15 +5809,10 @@ function CheckContains(stack, context, schema, value) {
   });
 }
 function ErrorContains(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckContains(stack, context, schema, value) || context.AddError({
-    keyword: "contains",
-    schemaPath,
-    instancePath,
-    params: { minContains: 1 }
-  });
+  return CheckContains(stack, context, schema, value) || context.AddError("contains", schemaPath, instancePath, { minContains: 1 });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/dependencies.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/dependencies.mjs
 function CheckDependencies(stack, context, schema, value) {
   const isLength = guard_exports.IsEqual(guard_exports.Keys(value).length, 0);
   const isEvery = guard_exports.Every(guard_exports.Entries(schema.dependencies), 0, ([key, schema2]) => {
@@ -5491,18 +5823,13 @@ function CheckDependencies(stack, context, schema, value) {
 function ErrorDependencies(stack, context, schemaPath, instancePath, schema, value) {
   const isLength = guard_exports.IsEqual(guard_exports.Keys(value).length, 0);
   const isEvery = guard_exports.EveryAll(guard_exports.Entries(schema.dependencies), 0, ([key, schema2]) => {
-    const nextSchemaPath = `${schemaPath}/dependencies/${key}`;
-    return !guard_exports.HasPropertyKey(value, key) || (guard_exports.IsArray(schema2) ? schema2.every((dependency) => guard_exports.HasPropertyKey(value, dependency) || context.AddError({
-      keyword: "dependencies",
-      schemaPath,
-      instancePath,
-      params: { property: key, dependencies: schema2 }
-    })) : ErrorSchema(stack, context, nextSchemaPath, instancePath, schema2, value));
+    const nextSchemaPath = `${schemaPath}/dependencies/${EncodeFragment(key)}`;
+    return !guard_exports.HasPropertyKey(value, key) || (guard_exports.IsArray(schema2) ? schema2.every((dependency) => guard_exports.HasPropertyKey(value, dependency) || context.AddError("dependencies", schemaPath, instancePath, { property: key, dependencies: schema2 })) : ErrorSchema(stack, context, nextSchemaPath, instancePath, schema2, value));
   });
   return isLength || isEvery;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/dependentRequired.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/dependentRequired.mjs
 function CheckDependentRequired(_stack, _context, schema, value) {
   const isLength = guard_exports.IsEqual(guard_exports.Keys(value).length, 0);
   const isEvery = guard_exports.Every(guard_exports.Entries(schema.dependentRequired), 0, ([key, keys]) => {
@@ -5513,17 +5840,12 @@ function CheckDependentRequired(_stack, _context, schema, value) {
 function ErrorDependentRequired(_stack, context, schemaPath, instancePath, schema, value) {
   const isLength = guard_exports.IsEqual(guard_exports.Keys(value).length, 0);
   const isEveryEntry = guard_exports.EveryAll(guard_exports.Entries(schema.dependentRequired), 0, ([key, keys]) => {
-    return !guard_exports.HasPropertyKey(value, key) || guard_exports.EveryAll(keys, 0, (dependency) => guard_exports.HasPropertyKey(value, dependency) || context.AddError({
-      keyword: "dependentRequired",
-      schemaPath,
-      instancePath,
-      params: { property: key, dependencies: keys }
-    }));
+    return !guard_exports.HasPropertyKey(value, key) || guard_exports.EveryAll(keys, 0, (dependency) => guard_exports.HasPropertyKey(value, dependency) || context.AddError("dependentRequired", schemaPath, instancePath, { property: key, dependencies: keys }));
   });
   return isLength || isEveryEntry;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/dependentSchemas.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/dependentSchemas.mjs
 function CheckDependentSchemas(stack, context, schema, value) {
   const isLength = guard_exports.IsEqual(guard_exports.Keys(value).length, 0);
   const isEvery = guard_exports.Every(guard_exports.Entries(schema.dependentSchemas), 0, ([key, schema2]) => {
@@ -5534,67 +5856,54 @@ function CheckDependentSchemas(stack, context, schema, value) {
 function ErrorDependentSchemas(stack, context, schemaPath, instancePath, schema, value) {
   const isLength = guard_exports.IsEqual(guard_exports.Keys(value).length, 0);
   const isEvery = guard_exports.EveryAll(guard_exports.Entries(schema.dependentSchemas), 0, ([key, schema2]) => {
-    const nextSchemaPath = `${schemaPath}/dependentSchemas/${key}`;
+    const nextSchemaPath = `${schemaPath}/dependentSchemas/${EncodeFragment(key)}`;
     return !guard_exports.HasPropertyKey(value, key) || ErrorSchema(stack, context, nextSchemaPath, instancePath, schema2, value);
   });
   return isLength || isEvery;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/dynamicRef.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/dynamicRef.mjs
 function CheckDynamicRef(stack, context, schema, value) {
-  const target = stack.DynamicRef(schema) ?? false;
-  return IsSchema2(target) && CheckSchema(stack, context, target, value);
+  const target = DynamicRef(stack, schema) ?? false;
+  const nextStack = target ? { ...stack, pendingResource: true } : stack;
+  return IsSchema2(target) && CheckSchema(nextStack, context, target, value);
 }
-function ErrorDynamicRef(stack, context, _schemaPath, instancePath, schema, value) {
-  const target = stack.DynamicRef(schema) ?? false;
-  return IsSchema2(target) && ErrorSchema(stack, context, "#", instancePath, target, value);
+function ErrorDynamicRef(stack, context, schemaPath, instancePath, schema, value) {
+  const target = DynamicRef(stack, schema) ?? false;
+  const nextStack = target ? { ...stack, pendingResource: true } : stack;
+  return IsSchema2(target) && ErrorSchema(nextStack, context, schemaPath, instancePath, target, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/enum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/enum.mjs
 function CheckEnum(_stack, _context, schema, value) {
   return guard_exports.Some(schema.enum, (option) => guard_exports.IsValueLike(option) ? guard_exports.IsEqual(value, option) : guard_exports.IsDeepEqual(value, option));
 }
 function ErrorEnum(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckEnum(stack, context, schema, value) || context.AddError({
-    keyword: "enum",
-    schemaPath,
-    instancePath,
-    params: { allowedValues: schema.enum }
-  });
+  return CheckEnum(stack, context, schema, value) || context.AddError("enum", schemaPath, instancePath, { allowedValues: schema.enum });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/exclusiveMaximum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/exclusiveMaximum.mjs
 function CheckExclusiveMaximum(_stack, _context, schema, value) {
   return guard_exports.IsLessThan(value, schema.exclusiveMaximum);
 }
 function ErrorExclusiveMaximum(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckExclusiveMaximum(stack, context, schema, value) || context.AddError({
-    keyword: "exclusiveMaximum",
-    schemaPath,
-    instancePath,
-    params: { comparison: "<", limit: schema.exclusiveMaximum }
-  });
+  return CheckExclusiveMaximum(stack, context, schema, value) || context.AddError("exclusiveMaximum", schemaPath, instancePath, { comparison: "<", limit: schema.exclusiveMaximum });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/exclusiveMinimum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/exclusiveMinimum.mjs
 function CheckExclusiveMinimum(_stack, _context, schema, value) {
   return guard_exports.IsGreaterThan(value, schema.exclusiveMinimum);
 }
 function ErrorExclusiveMinimum(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckExclusiveMinimum(stack, context, schema, value) || context.AddError({
-    keyword: "exclusiveMinimum",
-    schemaPath,
-    instancePath,
-    params: { comparison: ">", limit: schema.exclusiveMinimum }
-  });
+  return CheckExclusiveMinimum(stack, context, schema, value) || context.AddError("exclusiveMinimum", schemaPath, instancePath, { comparison: ">", limit: schema.exclusiveMinimum });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/format.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/format.mjs
 var format_exports = {};
 __export(format_exports, {
   Clear: () => Clear,
   Entries: () => Entries2,
-  Get: () => Get3,
+  Get: () => Get4,
   Has: () => Has,
   IsDate: () => IsDate2,
   IsDateTime: () => IsDateTime,
@@ -5622,7 +5931,7 @@ __export(format_exports, {
   Test: () => Test
 });
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/date.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/date.mjs
 var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
 function IsLeapYear(year) {
@@ -5638,7 +5947,7 @@ function IsDate2(value) {
   return month >= 1 && month <= 12 && day >= 1 && day <= (month === 2 && IsLeapYear(year) ? 29 : DAYS[month]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/time.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/time.mjs
 var TIME = /^(\d\d):(\d\d):(\d\d)(?:\.\d+)?(?:([Zz])|([+-])(\d\d):(\d\d))?$/;
 function IsTime(value, strictTimeZone = true) {
   const matches = TIME.exec(value);
@@ -5666,25 +5975,30 @@ function IsTime(value, strictTimeZone = true) {
   return (totalUtcMin % 1440 + 1440) % 1440 === 1439;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/date_time.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/date_time.mjs
+var DATE_TIME_SUFFIX = /^(?:\[!?(?:(?!\.{1,2}[/\]])[A-Za-z._][A-Za-z._0-9+-]{0,13}(?:\/(?!\.{1,2}[/\]])[A-Za-z._][A-Za-z._0-9+-]{0,13})*|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\](?:\[!?[a-z_][a-z_0-9-]*=[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\])*|(?:\[!?[a-z_][a-z_0-9-]*=[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\])*)$/;
 function IsDateTime(value) {
-  const dateTime = value.split(/T/i);
-  return dateTime.length === 2 && IsDate2(dateTime[0]) && IsTime(dateTime[1]);
+  const index = value.indexOf("[");
+  const datetime = index === -1 ? value : value.slice(0, index);
+  if (index !== -1 && !DATE_TIME_SUFFIX.test(value.slice(index)))
+    return false;
+  const split = datetime.split(/T/i);
+  return split.length === 2 && IsDate2(split[0]) && IsTime(split[1]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/duration.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/duration.mjs
 var Duration = /^P((\d+Y(\d+M(\d+D)?)?|\d+M(\d+D)?|\d+D)(T(\d+H(\d+M(\d+S)?)?|\d+M(\d+S)?|\d+S))?|T(\d+H(\d+M(\d+S)?)?|\d+M(\d+S)?|\d+S)|\d+W)$/;
 function IsDuration(value) {
   return Duration.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/email.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/email.mjs
 var Email = /^(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[^"\\]|\\[\x20-\x7e])*")@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[(?:IPv6:[a-f0-9:]+|(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3})\])$/i;
 function IsEmail(value) {
   return Email.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/idna/pattern/pattern.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/idna/pattern/pattern.mjs
 var RE_RULE_HYPHEN_PLACEMENT = /^(?!-).*(?<!-)$/;
 var RE_RULE_NOT_RESERVED_ACE = /^(?!..--)/;
 var RE_ASCII_LDH = /^[a-zA-Z0-9-]*$/;
@@ -5724,12 +6038,12 @@ var RE_PERMITTED_CATEGORY = new RegExp([
   RE_PVALID_EXCEPTIONS
 ].map((regexp) => regexp.source).join("|"), "u");
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/idna/label/ascii.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/idna/label/ascii.mjs
 function IsAsciiLabel(value) {
   return RE_RULE_HYPHEN_PLACEMENT.test(value) && RE_RULE_NOT_RESERVED_ACE.test(value) && RE_ASCII_LDH.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/idna/format/puny.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/idna/format/puny.mjs
 var PUNYCODE_BASE = 36;
 var PUNYCODE_TMIN = 1;
 var PUNYCODE_TMAX = 26;
@@ -5845,7 +6159,7 @@ function Encode2(input) {
   return result.join("");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/idna/format/bidi.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/idna/format/bidi.mjs
 var RE_RTL_ALLOWED = /^(?:R|AL|AN|EN|ES|CS|ET|ON|BN|NSM)$/;
 var RE_LTR_ALLOWED = /^(?:L|EN|ES|CS|ET|ON|BN|NSM)$/;
 var RE_RTL_CLASSES = /^(?:R|AL|AN)$/;
@@ -5900,7 +6214,7 @@ function SatisfiesBidiRule(value) {
   return true;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/idna/label/unicode.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/idna/label/unicode.mjs
 function ExceedsMaxALabelLength(value) {
   return RE_NON_ASCII.test(value) && Encode2(value).length + 4 > 63;
 }
@@ -5966,7 +6280,7 @@ function IsUnicodeLabel(value) {
   return true;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/idna/label/puny.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/idna/label/puny.mjs
 function IsPunyLabel(value) {
   if (!IsAcePrefixed(value))
     return false;
@@ -5983,7 +6297,7 @@ function IsPunyLabel(value) {
   }
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/idna/hostname.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/idna/hostname.mjs
 function IsValidLabelLength(value) {
   return value.length > 0 && value.length <= 63;
 }
@@ -5998,7 +6312,7 @@ function IsHostname(value) {
   return value.split(".").every((label) => IsLabel(label));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/idna/idn-hostname.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/idna/idn-hostname.mjs
 function IsValidLabelLength2(value) {
   return value.length > 0 && value.length <= 63;
 }
@@ -6019,70 +6333,62 @@ function IsIdnHostname(value) {
   return labels.every((label) => IsLabel2(label) && (!hasBidiChars || SatisfiesBidiRule(label)));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/hostname.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/hostname.mjs
 function IsHostname2(value) {
   return IsHostname(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/idn_email.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/idn_email.mjs
 var IdnEmail = /^(?:[A-Za-z0-9!#$%&'*+\/=?^_`{|}~\u{0080}-\u{10FFFF}-]+(?:\.[A-Za-z0-9!#$%&'*+\/=?^_`{|}~\u{0080}-\u{10FFFF}-]+)*|"(?:[^"\\]|\\.)*")@[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,62})(?<!-)(?:\.[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,62})(?<!-))*$/iu;
 function IsIdnEmail(value) {
   return IdnEmail.test(value.normalize("NFC"));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/idn_hostname.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/idn_hostname.mjs
 function IsIdnHostname2(value) {
   return IsIdnHostname(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/ipv4.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/ipv4.mjs
 var IPv4 = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
 function IsIPv4(value) {
   return IPv4.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/ipv6.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/ipv6.mjs
 var IPv6 = /^(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:)?[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)$/i;
 function IsIPv6(value) {
   return IPv6.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/iri_reference.mjs
-var InvalidIriChars = /[\x00-\x20\x7F\\]|%(?![0-9a-fA-F]{2})/;
-var MalformedScheme = /^[a-zA-Z][a-zA-Z0-9+\-.]*\/\//;
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/iri_reference.mjs
+var InvalidIriReferenceChars = /[\x00-\x20\x7f"<>\^`{|}\\]|%(?![0-9a-fA-F]{2})/;
+var MalformedScheme = /^(?:[a-z][a-z\d+\-.]*\/\/|(?!(?:[a-z][a-z\d+\-.]*:))[^/?#]*:)/i;
+var MultipleAuthorityAtSigns = /^(?:[a-z][a-z\d+\-.]*:)?\/\/[^/?#@]*@[^/?#@]*@/i;
+var BracketedPath = /^(?:[a-z][a-z\d+\-.]*:\/\/[^/?#]*\/|\/\/[^/?#]*\/|[a-z][a-z\d+\-.]*:(?!\/\/)|(?![a-z][a-z\d+\-.]*:|\/\/))[^?#]*[\[\]]/i;
 function IsIriReference(value) {
-  return !InvalidIriChars.test(value) && !MalformedScheme.test(value) && URL.canParse(value, "http://example.com");
+  return !InvalidIriReferenceChars.test(value) && !MalformedScheme.test(value) && !MultipleAuthorityAtSigns.test(value) && !BracketedPath.test(value) && URL.canParse(value, "http://example.com");
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/iri.mjs
-var IpvFutureMatchMaxLength = 2048;
-var IpvFutureMatch = /\[[vV][0-9a-fA-F]+\.[^\]]+\]/;
-var InvalidIriChars2 = /[\x00-\x20<>\^`{|}\\]/;
-var InvalidPercentEncoding = /%(?![0-9a-fA-F]{2})/;
-function NarrowIpvFuture(value) {
-  return value.length < IpvFutureMatchMaxLength ? value.replace(IpvFutureMatch, "[::1]") : value;
-}
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/iri.mjs
+var AbsoluteIriScheme = /^[a-z][a-z\d+\-.]*:/i;
 function IsIri(value) {
-  if (InvalidIriChars2.test(value))
-    return false;
-  if (InvalidPercentEncoding.test(value))
-    return false;
-  return URL.canParse(NarrowIpvFuture(value));
+  return AbsoluteIriScheme.test(value) && IsIriReference(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/json_pointer_uri_fragment.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/json_pointer_uri_fragment.mjs
 var JsonPointerUriFragment = /^#(?:\/(?:[a-z0-9_\-.!$&'()*+,;:=@]|%[0-9a-f]{2}|~0|~1)*)*$/i;
 function IsJsonPointerUriFragment(value) {
   return JsonPointerUriFragment.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/json_pointer.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/json_pointer.mjs
 var JsonPointer = /^(?:\/(?:[^~/]|~0|~1)*)*$/;
 function IsJsonPointer(value) {
   return JsonPointer.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/regex.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/regex.mjs
 function IsRegex(value) {
   try {
     new RegExp(value, "u");
@@ -6092,42 +6398,42 @@ function IsRegex(value) {
   }
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/relative_json_pointer.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/relative_json_pointer.mjs
 var RelativeJsonPointer = /^(?:0|[1-9][0-9]*)(?:#|(?:\/(?:[^~/]|~0|~1)*)*)$/;
 function IsRelativeJsonPointer(value) {
   return RelativeJsonPointer.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/uri_reference.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/uri_reference.mjs
 var UriReference = /^(?:[a-z][a-z0-9+\-.]*:(?:\/\/(?:(?:[-a-z0-9._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:[\da-f]{1,4}:){6}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|::(?:[\da-f]{1,4}:){5}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:[\da-f]{1,4})?::(?:[\da-f]{1,4}:){4}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,1}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){3}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,2}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){2}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,3}[\da-f]{1,4})?::[\da-f]{1,4}:(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,4}[\da-f]{1,4})?::(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,5}[\da-f]{1,4})?::[\da-f]{1,4}|(?:(?:[\da-f]{1,4}:){0,6}[\da-f]{1,4})?::)|v[0-9a-f]+\.[-a-z0-9._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|(?:[-a-z0-9._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:\/\/(?:(?:[-a-z0-9._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:[\da-f]{1,4}:){6}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|::(?:[\da-f]{1,4}:){5}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:[\da-f]{1,4})?::(?:[\da-f]{1,4}:){4}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,1}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){3}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,2}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){2}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,3}[\da-f]{1,4})?::[\da-f]{1,4}:(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,4}[\da-f]{1,4})?::(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,5}[\da-f]{1,4})?::[\da-f]{1,4}|(?:(?:[\da-f]{1,4}:){0,6}[\da-f]{1,4})?::)|v[0-9a-f]+\.[-a-z0-9._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|(?:[-a-z0-9._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[-a-z0-9._~!$&'()*+,;=@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?)(?:\?(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
 function IsUriReference(value) {
   return UriReference.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/uri_template.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/uri_template.mjs
 var UriTemplate = /^(?:(?:[^\x00-\x20"<>%\\^`{|}\x7f]|%[0-9a-f]{2})|\{[+#./;?&=,!@|]?(?:[a-z0-9_]|%[0-9a-f]{2})+(?:\.(?:[a-z0-9_]|%[0-9a-f]{2})+)*(?::[1-9]\d{0,3}|\*)?(?:,(?:[a-z0-9_]|%[0-9a-f]{2})+(?:\.(?:[a-z0-9_]|%[0-9a-f]{2})+)*(?::[1-9]\d{0,3}|\*)?)*\})*$/i;
 function IsUriTemplate(value) {
   return UriTemplate.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/uri.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/uri.mjs
 var Uri = /^[a-z][a-z0-9+\-.]*:(?:\/\/(?:(?:[-a-z0-9._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:[\da-f]{1,4}:){6}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|::(?:[\da-f]{1,4}:){5}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:[\da-f]{1,4})?::(?:[\da-f]{1,4}:){4}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,1}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){3}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,2}[\da-f]{1,4})?::(?:[\da-f]{1,4}:){2}(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,3}[\da-f]{1,4})?::[\da-f]{1,4}:(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,4}[\da-f]{1,4})?::(?:[\da-f]{1,4}:[\da-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))|(?:(?:[\da-f]{1,4}:){0,5}[\da-f]{1,4})?::[\da-f]{1,4}|(?:(?:[\da-f]{1,4}:){0,6}[\da-f]{1,4})?::)|v[0-9a-f]+\.[-a-z0-9._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|(?:[-a-z0-9._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[-a-z0-9._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?(?:\?(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[-a-z0-9._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
 function IsUri(value) {
   return Uri.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/url.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/url.mjs
 function IsUrl(value) {
   return URL.canParse(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/uuid.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/uuid.mjs
 var Uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 function IsUuid(value) {
   return Uuid.test(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/format/_registry.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/format/_registry.mjs
 var formats = /* @__PURE__ */ new Map();
 function Clear() {
   formats.clear();
@@ -6141,7 +6447,7 @@ function Set3(format, check) {
 function Has(format) {
   return formats.has(format);
 }
-function Get3(format) {
+function Get4(format) {
   return formats.get(format);
 }
 function Test(format, value) {
@@ -6173,20 +6479,15 @@ function Reset2() {
 }
 Reset2();
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/format.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/format.mjs
 function CheckFormat(_stack, _context, schema, value) {
   return format_exports.Test(schema.format, value);
 }
 function ErrorFormat(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckFormat(stack, context, schema, value) || context.AddError({
-    keyword: "format",
-    schemaPath,
-    instancePath,
-    params: { format: schema.format }
-  });
+  return CheckFormat(stack, context, schema, value) || context.AddError("format", schemaPath, instancePath, { format: schema.format });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/if.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/if.mjs
 function CheckIf(stack, context, schema, value) {
   const thenSchema = IsThen(schema) ? schema.then : true;
   const elseSchema = IsElse(schema) ? schema.else : true;
@@ -6196,23 +6497,13 @@ function ErrorIf(stack, context, schemaPath, instancePath, schema, value) {
   const thenSchema = IsThen(schema) ? schema.then : true;
   const elseSchema = IsElse(schema) ? schema.else : true;
   const trueContext = new ErrorContext();
-  const isIf = ErrorSchema(stack, trueContext, `${schemaPath}/if`, instancePath, schema.if, value) ? ErrorSchema(stack, trueContext, `${schemaPath}/then`, instancePath, thenSchema, value) || context.AddError({
-    keyword: "if",
-    schemaPath,
-    instancePath,
-    params: { failingKeyword: "then" }
-  }) : ErrorSchema(stack, context, `${schemaPath}/else`, instancePath, elseSchema, value) || context.AddError({
-    keyword: "if",
-    schemaPath,
-    instancePath,
-    params: { failingKeyword: "else" }
-  });
+  const isIf = ErrorSchema(stack, trueContext, `${schemaPath}/if`, instancePath, schema.if, value) ? ErrorSchema(stack, trueContext, `${schemaPath}/then`, instancePath, thenSchema, value) || context.AddError("if", schemaPath, instancePath, { failingKeyword: "then" }) : ErrorSchema(stack, context, `${schemaPath}/else`, instancePath, elseSchema, value) || context.AddError("if", schemaPath, instancePath, { failingKeyword: "else" });
   if (isIf)
     context.Merge([trueContext]);
   return isIf;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/items.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/items.mjs
 function CheckItemsSized(stack, context, schema, value) {
   return guard_exports.Every(schema.items, 0, (schema2, index) => {
     return guard_exports.IsLessEqualThan(value.length, index) || CheckSchemaPushStack(stack, context, schema2, value[index]) && context.AddIndex(index);
@@ -6246,7 +6537,7 @@ function ErrorItems(stack, context, schemaPath, instancePath, schema, value) {
   return IsItemsSized(schema) ? ErrorItemsSized(stack, context, schemaPath, instancePath, schema, value) : ErrorItemsUnsized(stack, context, schemaPath, instancePath, schema, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/maxContains.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/maxContains.mjs
 function IsValid3(schema) {
   return IsContains(schema);
 }
@@ -6258,67 +6549,42 @@ function CheckMaxContains(stack, context, schema, value) {
 }
 function ErrorMaxContains(stack, context, schemaPath, instancePath, schema, value) {
   const minContains = IsMinContains(schema) ? schema.minContains : 1;
-  return CheckMaxContains(stack, context, schema, value) || context.AddError({
-    keyword: "contains",
-    schemaPath,
-    instancePath,
-    params: { minContains, maxContains: schema.maxContains }
-  });
+  return CheckMaxContains(stack, context, schema, value) || context.AddError("contains", schemaPath, instancePath, { minContains, maxContains: schema.maxContains });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/maximum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/maximum.mjs
 function CheckMaximum(_stack, _context, schema, value) {
   return guard_exports.IsLessEqualThan(value, schema.maximum);
 }
 function ErrorMaximum(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckMaximum(stack, context, schema, value) || context.AddError({
-    keyword: "maximum",
-    schemaPath,
-    instancePath,
-    params: { comparison: "<=", limit: schema.maximum }
-  });
+  return CheckMaximum(stack, context, schema, value) || context.AddError("maximum", schemaPath, instancePath, { comparison: "<=", limit: schema.maximum });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/maxItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/maxItems.mjs
 function CheckMaxItems(_stack, _context, schema, value) {
   return guard_exports.IsLessEqualThan(value.length, schema.maxItems);
 }
 function ErrorMaxItems(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckMaxItems(stack, context, schema, value) || context.AddError({
-    keyword: "maxItems",
-    schemaPath,
-    instancePath,
-    params: { limit: schema.maxItems }
-  });
+  return CheckMaxItems(stack, context, schema, value) || context.AddError("maxItems", schemaPath, instancePath, { limit: schema.maxItems });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/maxLength.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/maxLength.mjs
 function CheckMaxLength(_stack, _context, schema, value) {
   return guard_exports.IsMaxLength(value, schema.maxLength);
 }
 function ErrorMaxLength(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckMaxLength(stack, context, schema, value) || context.AddError({
-    keyword: "maxLength",
-    schemaPath,
-    instancePath,
-    params: { limit: schema.maxLength }
-  });
+  return CheckMaxLength(stack, context, schema, value) || context.AddError("maxLength", schemaPath, instancePath, { limit: schema.maxLength });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/maxProperties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/maxProperties.mjs
 function CheckMaxProperties(_stack, _context, schema, value) {
   return guard_exports.IsLessEqualThan(guard_exports.Keys(value).length, schema.maxProperties);
 }
 function ErrorMaxProperties(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckMaxProperties(stack, context, schema, value) || context.AddError({
-    keyword: "maxProperties",
-    schemaPath,
-    instancePath,
-    params: { limit: schema.maxProperties }
-  });
+  return CheckMaxProperties(stack, context, schema, value) || context.AddError("maxProperties", schemaPath, instancePath, { limit: schema.maxProperties });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/minContains.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/minContains.mjs
 function IsValid4(schema) {
   return IsContains(schema);
 }
@@ -6329,80 +6595,50 @@ function CheckMinContains(stack, context, schema, value) {
   return guard_exports.IsGreaterEqualThan(count, schema.minContains);
 }
 function ErrorMinContains(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckMinContains(stack, context, schema, value) || context.AddError({
-    keyword: "contains",
-    schemaPath,
-    instancePath,
-    params: { minContains: schema.minContains }
-  });
+  return CheckMinContains(stack, context, schema, value) || context.AddError("contains", schemaPath, instancePath, { minContains: schema.minContains });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/minimum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/minimum.mjs
 function CheckMinimum(_stack, _context, schema, value) {
   return guard_exports.IsGreaterEqualThan(value, schema.minimum);
 }
 function ErrorMinimum(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckMinimum(stack, context, schema, value) || context.AddError({
-    keyword: "minimum",
-    schemaPath,
-    instancePath,
-    params: { comparison: ">=", limit: schema.minimum }
-  });
+  return CheckMinimum(stack, context, schema, value) || context.AddError("minimum", schemaPath, instancePath, { comparison: ">=", limit: schema.minimum });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/minItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/minItems.mjs
 function CheckMinItems(_stack, _context, schema, value) {
   return guard_exports.IsGreaterEqualThan(value.length, schema.minItems);
 }
 function ErrorMinItems(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckMinItems(stack, context, schema, value) || context.AddError({
-    keyword: "minItems",
-    schemaPath,
-    instancePath,
-    params: { limit: schema.minItems }
-  });
+  return CheckMinItems(stack, context, schema, value) || context.AddError("minItems", schemaPath, instancePath, { limit: schema.minItems });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/minLength.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/minLength.mjs
 function CheckMinLength(_stack, _context, schema, value) {
   return guard_exports.IsMinLength(value, schema.minLength);
 }
 function ErrorMinLength(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckMinLength(stack, context, schema, value) || context.AddError({
-    keyword: "minLength",
-    schemaPath,
-    instancePath,
-    params: { limit: schema.minLength }
-  });
+  return CheckMinLength(stack, context, schema, value) || context.AddError("minLength", schemaPath, instancePath, { limit: schema.minLength });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/minProperties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/minProperties.mjs
 function CheckMinProperties(_stack, _context, schema, value) {
   return guard_exports.IsGreaterEqualThan(guard_exports.Keys(value).length, schema.minProperties);
 }
 function ErrorMinProperties(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckMinProperties(stack, context, schema, value) || context.AddError({
-    keyword: "minProperties",
-    schemaPath,
-    instancePath,
-    params: { limit: schema.minProperties }
-  });
+  return CheckMinProperties(stack, context, schema, value) || context.AddError("minProperties", schemaPath, instancePath, { limit: schema.minProperties });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/multipleOf.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/multipleOf.mjs
 function CheckMultipleOf(_stack, _context, schema, value) {
   return guard_exports.IsMultipleOf(value, schema.multipleOf);
 }
 function ErrorMultipleOf(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckMultipleOf(stack, context, schema, value) || context.AddError({
-    keyword: "multipleOf",
-    schemaPath,
-    instancePath,
-    params: { multipleOf: schema.multipleOf }
-  });
+  return CheckMultipleOf(stack, context, schema, value) || context.AddError("multipleOf", schemaPath, instancePath, { multipleOf: schema.multipleOf });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/not.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/not.mjs
 function CheckNot(stack, context, schema, value) {
   const nextContext = new CheckContext();
   const isSchema = !CheckSchema(stack, nextContext, schema.not, value);
@@ -6410,15 +6646,10 @@ function CheckNot(stack, context, schema, value) {
   return isNot;
 }
 function ErrorNot(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckNot(stack, context, schema, value) || context.AddError({
-    keyword: "not",
-    schemaPath,
-    instancePath,
-    params: {}
-  });
+  return CheckNot(stack, context, schema, value) || context.AddError("not", schemaPath, instancePath, {});
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/oneOf.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/oneOf.mjs
 function CheckOneOf(stack, context, schema, value) {
   const passedContexts = schema.oneOf.reduce((result, schema2) => {
     const nextContext = new CheckContext();
@@ -6441,30 +6672,20 @@ function ErrorOneOf(stack, context, schemaPath, instancePath, schema, value) {
   }, []);
   const isOneOf = guard_exports.IsEqual(passedContexts.length, 1) && context.Merge(passedContexts);
   if (!isOneOf && guard_exports.IsEqual(passingSchemas.length, 0))
-    failedContexts.forEach((failed) => failed.GetErrors().forEach((error) => context.AddError(error)));
-  return isOneOf || context.AddError({
-    keyword: "oneOf",
-    schemaPath,
-    instancePath,
-    params: { passingSchemas }
-  });
+    failedContexts.forEach((failed) => context.AddErrors(failed.GetErrors()));
+  return isOneOf || context.AddError("oneOf", schemaPath, instancePath, { passingSchemas });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/pattern.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/pattern.mjs
 function CheckPattern(_stack, _context, schema, value) {
   const regexp = guard_exports.IsString(schema.pattern) ? UnicodeRegExp(schema.pattern) : schema.pattern;
   return regexp.test(value);
 }
 function ErrorPattern(stack, context, schemaPath, instancePath, schema, value) {
-  return CheckPattern(stack, context, schema, value) || context.AddError({
-    keyword: "pattern",
-    schemaPath,
-    instancePath,
-    params: { pattern: schema.pattern }
-  });
+  return CheckPattern(stack, context, schema, value) || context.AddError("pattern", schemaPath, instancePath, { pattern: schema.pattern });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/patternProperties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/patternProperties.mjs
 function CheckPatternProperties(stack, context, schema, value) {
   return guard_exports.Every(guard_exports.Entries(schema.patternProperties), 0, ([pattern, schema2]) => {
     const regexp = UnicodeRegExp(pattern);
@@ -6475,17 +6696,17 @@ function CheckPatternProperties(stack, context, schema, value) {
 }
 function ErrorPatternProperties(stack, context, schemaPath, instancePath, schema, value) {
   return guard_exports.EveryAll(guard_exports.Entries(schema.patternProperties), 0, ([pattern, schema2]) => {
-    const nextSchemaPath = `${schemaPath}/patternProperties/${pattern}`;
+    const nextSchemaPath = `${schemaPath}/patternProperties/${EncodeFragment(pattern)}`;
     const regexp = UnicodeRegExp(pattern);
     return guard_exports.EveryAll(guard_exports.Entries(value), 0, ([key, value2]) => {
-      const nextInstancePath = `${instancePath}/${key}`;
+      const nextInstancePath = `${instancePath}/${EncodeFragment(key)}`;
       const notKey = !regexp.test(key);
       return notKey || ErrorSchemaPushStack(stack, context, nextSchemaPath, nextInstancePath, schema2, value2) && context.AddKey(key);
     });
   });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/prefixItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/prefixItems.mjs
 function CheckPrefixItems(stack, context, schema, value) {
   return guard_exports.IsEqual(value.length, 0) || guard_exports.Every(schema.prefixItems, 0, (schema2, index) => {
     return guard_exports.IsLessEqualThan(value.length, index) || CheckSchemaPushStack(stack, context, schema2, value[index]) && context.AddIndex(index);
@@ -6499,7 +6720,7 @@ function ErrorPrefixItems(stack, context, schemaPath, instancePath, schema, valu
   });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/_exact_optional.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/_exact_optional.mjs
 function IsExactOptional(required, key) {
   return required.includes(key) || settings_exports.Get().exactOptionalPropertyTypes;
 }
@@ -6507,7 +6728,7 @@ function InexactOptionalCheck(value, key) {
   return guard_exports.IsUndefined(value[key]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/properties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/properties.mjs
 function CheckProperties(stack, context, schema, value) {
   const required = IsRequired(schema) ? schema.required : [];
   const isProperties = guard_exports.Every(guard_exports.Entries(schema.properties), 0, ([key, schema2]) => {
@@ -6519,67 +6740,66 @@ function CheckProperties(stack, context, schema, value) {
 function ErrorProperties(stack, context, schemaPath, instancePath, schema, value) {
   const required = IsRequired(schema) ? schema.required : [];
   const isProperties = guard_exports.EveryAll(guard_exports.Entries(schema.properties), 0, ([key, schema2]) => {
-    const nextSchemaPath = `${schemaPath}/properties/${key}`;
-    const nextInstancePath = `${instancePath}/${key}`;
+    const nextSchemaPath = `${schemaPath}/properties/${EncodeFragment(key)}`;
+    const nextInstancePath = `${instancePath}/${EncodeFragment(key)}`;
     const isProperty = () => !guard_exports.HasPropertyKey(value, key) || ErrorSchemaPushStack(stack, context, nextSchemaPath, nextInstancePath, schema2, value[key]) && context.AddKey(key);
     return IsExactOptional(required, key) ? isProperty() : InexactOptionalCheck(value, key) || isProperty();
   });
   return isProperties;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/propertyNames.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/propertyNames.mjs
 function CheckPropertyNames(stack, context, schema, value) {
   return guard_exports.Every(guard_exports.Keys(value), 0, (key, _index) => CheckSchema(stack, context, schema.propertyNames, key));
 }
 function ErrorPropertyNames(stack, context, schemaPath, instancePath, schema, value) {
   const propertyNames = [];
   const isPropertyNames = guard_exports.EveryAll(guard_exports.Keys(value), 0, (key, _index) => {
-    const nextInstancePath = `${instancePath}/${key}`;
+    const nextInstancePath = `${instancePath}/${EncodeFragment(key)}`;
     const nextSchemaPath = `${schemaPath}/propertyNames`;
     const isPropertyName = ErrorSchema(stack, context, nextSchemaPath, nextInstancePath, schema.propertyNames, key);
     if (!isPropertyName)
       propertyNames.push(key);
     return isPropertyName;
   });
-  return isPropertyNames || context.AddError({
-    keyword: "propertyNames",
-    schemaPath,
-    instancePath,
-    params: { propertyNames }
-  });
+  return isPropertyNames || context.AddError("propertyNames", schemaPath, instancePath, { propertyNames });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/recursiveRef.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/recursiveRef.mjs
 function CheckRecursiveRef(stack, context, schema, value) {
-  const target = stack.RecursiveRef(schema) ?? false;
-  return IsSchema2(target) && CheckSchema(stack, context, target, value);
+  const target = RecursiveRef(stack, schema) ?? false;
+  const nextStack = target ? { ...stack, pendingResource: true } : stack;
+  return IsSchema2(target) && CheckSchema(nextStack, context, target, value);
 }
-function ErrorRecursiveRef(stack, context, _schemaPath, instancePath, schema, value) {
-  const target = stack.RecursiveRef(schema) ?? false;
-  return IsSchema2(target) && ErrorSchema(stack, context, "#", instancePath, target, value);
+function ErrorRecursiveRef(stack, context, schemaPath, instancePath, schema, value) {
+  const target = RecursiveRef(stack, schema) ?? false;
+  const nextStack = target ? { ...stack, pendingResource: true } : stack;
+  return IsSchema2(target) && ErrorSchema(nextStack, context, schemaPath, instancePath, target, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/ref.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/ref.mjs
 function CheckRef(stack, context, schema, value) {
-  const target = stack.Ref(schema) ?? false;
+  const result = Ref2(stack, schema);
+  const target = result.schema ?? false;
   const nextContext = new CheckContext();
-  const result = IsSchema2(target) && CheckSchema(stack, nextContext, target, value);
-  if (result)
+  const valid = IsSchema2(target) && CheckSchema(result.stack, nextContext, target, value);
+  if (valid)
     context.Merge([nextContext]);
-  return result;
+  return valid;
 }
-function ErrorRef(stack, context, _schemaPath, instancePath, schema, value) {
-  const target = stack.Ref(schema) ?? false;
+function ErrorRef(stack, context, schemaPath, instancePath, schema, value) {
+  const result = Ref2(stack, schema);
+  const target = result.schema ?? false;
   const nextContext = new ErrorContext();
-  const result = IsSchema2(target) && ErrorSchema(stack, nextContext, "#", instancePath, target, value);
-  if (result)
+  const valid = IsSchema2(target) && ErrorSchema(result.stack, nextContext, schemaPath, instancePath, target, value);
+  if (valid)
     context.Merge([nextContext]);
-  if (!result)
-    nextContext.GetErrors().forEach((error) => context.AddError(error));
-  return result;
+  if (!valid)
+    context.AddErrors(nextContext.GetErrors());
+  return valid;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/required.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/required.mjs
 function CheckRequired(_stack, _context, schema, value) {
   return guard_exports.Every(schema.required, 0, (key) => guard_exports.HasPropertyKey(value, key));
 }
@@ -6591,15 +6811,10 @@ function ErrorRequired(_stack, context, schemaPath, instancePath, schema, value)
       requiredProperties.push(key);
     return hasKey;
   });
-  return isRequired || context.AddError({
-    keyword: "required",
-    schemaPath,
-    instancePath,
-    params: { requiredProperties }
-  });
+  return isRequired || context.AddError("required", schemaPath, instancePath, { requiredProperties });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/type.mjs
 function CheckTypeName(_stack, _context, type, _schema, value) {
   return (
     // jsonschema
@@ -6617,15 +6832,10 @@ function CheckType(stack, context, schema, value) {
 }
 function ErrorType(stack, context, schemaPath, instancePath, schema, value) {
   const isType = guard_exports.IsArray(schema.type) ? CheckTypeNames(stack, context, schema.type, schema, value) : CheckTypeName(stack, context, schema.type, schema, value);
-  return isType || context.AddError({
-    keyword: "type",
-    schemaPath,
-    instancePath,
-    params: { type: schema.type }
-  });
+  return isType || context.AddError("type", schemaPath, instancePath, { type: schema.type });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/unevaluatedItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/unevaluatedItems.mjs
 function CheckUnevaluatedItems(stack, context, schema, value) {
   const indices = context.GetIndices();
   return guard_exports.Every(value, 0, (item, index) => {
@@ -6642,15 +6852,10 @@ function ErrorUnevaluatedItems(stack, context, schemaPath, instancePath, schema,
       unevaluatedItems.push(index);
     return isEvaluatedItem;
   });
-  return isUnevaluatedItems || context.AddError({
-    keyword: "unevaluatedItems",
-    schemaPath,
-    instancePath,
-    params: { unevaluatedItems }
-  });
+  return isUnevaluatedItems || context.AddError("unevaluatedItems", schemaPath, instancePath, { unevaluatedItems });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/unevaluatedProperties.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/unevaluatedProperties.mjs
 function CheckUnevaluatedProperties(stack, context, schema, value) {
   const keys = context.GetKeys();
   return guard_exports.Every(guard_exports.Entries(value), 0, ([key, prop]) => {
@@ -6667,15 +6872,10 @@ function ErrorUnevaluatedProperties(stack, context, schemaPath, instancePath, sc
       unevaluatedProperties.push(key);
     return isEvaluatedProperty;
   });
-  return isUnevaluatedProperties || context.AddError({
-    keyword: "unevaluatedProperties",
-    schemaPath,
-    instancePath,
-    params: { unevaluatedProperties }
-  });
+  return isUnevaluatedProperties || context.AddError("unevaluatedProperties", schemaPath, instancePath, { unevaluatedProperties });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/uniqueItems.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/uniqueItems.mjs
 function IsValid5(schema) {
   return !guard_exports.IsEqual(schema.uniqueItems, false);
 }
@@ -6698,22 +6898,16 @@ function ErrorUniqueItems(_stack, context, schemaPath, instancePath, schema, val
     return result;
   }, []);
   const isUniqueItems = guard_exports.IsEqual(duplicateItems.length, 0);
-  return isUniqueItems || context.AddError({
-    keyword: "uniqueItems",
-    schemaPath,
-    instancePath,
-    params: { duplicateItems }
-  });
+  return isUniqueItems || context.AddError("uniqueItems", schemaPath, instancePath, { duplicateItems });
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/schema.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/engine/schema.mjs
 function CheckSchemaPushStack(stack, context, schema, value) {
   return context.Push() && CheckSchema(stack, context, schema, value) && context.Pop();
 }
 function CheckSchema(stack, context, schema, value) {
-  stack.Push(schema);
-  const result = IsSchemaBoolean(schema) ? CheckSchemaBoolean(stack, context, schema, value) : (!IsType(schema) || CheckType(stack, context, schema, value)) && (!(guard_exports.IsObject(value) && !guard_exports.IsArray(value)) || (!IsRequired(schema) || CheckRequired(stack, context, schema, value)) && (!IsAdditionalProperties(schema) || CheckAdditionalProperties(stack, context, schema, value)) && (!IsDependencies(schema) || CheckDependencies(stack, context, schema, value)) && (!IsDependentRequired(schema) || CheckDependentRequired(stack, context, schema, value)) && (!IsDependentSchemas(schema) || CheckDependentSchemas(stack, context, schema, value)) && (!IsPatternProperties(schema) || CheckPatternProperties(stack, context, schema, value)) && (!IsProperties(schema) || CheckProperties(stack, context, schema, value)) && (!IsPropertyNames(schema) || CheckPropertyNames(stack, context, schema, value)) && (!IsMinProperties(schema) || CheckMinProperties(stack, context, schema, value)) && (!IsMaxProperties(schema) || CheckMaxProperties(stack, context, schema, value))) && (!guard_exports.IsArray(value) || (!IsAdditionalItems(schema) || CheckAdditionalItems(stack, context, schema, value)) && (!IsContains(schema) || CheckContains(stack, context, schema, value)) && (!IsItems(schema) || CheckItems(stack, context, schema, value)) && (!IsMaxContains(schema) || CheckMaxContains(stack, context, schema, value)) && (!IsMaxItems(schema) || CheckMaxItems(stack, context, schema, value)) && (!IsMinContains(schema) || CheckMinContains(stack, context, schema, value)) && (!IsMinItems(schema) || CheckMinItems(stack, context, schema, value)) && (!IsPrefixItems(schema) || CheckPrefixItems(stack, context, schema, value)) && (!IsUniqueItems(schema) || CheckUniqueItems(stack, context, schema, value))) && (!guard_exports.IsString(value) || (!IsMaxLength3(schema) || CheckMaxLength(stack, context, schema, value)) && (!IsMinLength3(schema) || CheckMinLength(stack, context, schema, value)) && (!IsFormat(schema) || CheckFormat(stack, context, schema, value)) && (!IsPattern(schema) || CheckPattern(stack, context, schema, value))) && (!(guard_exports.IsNumber(value) || guard_exports.IsBigInt(value)) || (!IsExclusiveMaximum(schema) || CheckExclusiveMaximum(stack, context, schema, value)) && (!IsExclusiveMinimum(schema) || CheckExclusiveMinimum(stack, context, schema, value)) && (!IsMaximum(schema) || CheckMaximum(stack, context, schema, value)) && (!IsMinimum(schema) || CheckMinimum(stack, context, schema, value)) && (!IsMultipleOf2(schema) || CheckMultipleOf(stack, context, schema, value))) && (!IsRef2(schema) || CheckRef(stack, context, schema, value)) && (!IsRecursiveRef(schema) || CheckRecursiveRef(stack, context, schema, value)) && (!IsDynamicRef(schema) || CheckDynamicRef(stack, context, schema, value)) && (!IsConst(schema) || CheckConst(stack, context, schema, value)) && (!IsEnum2(schema) || CheckEnum(stack, context, schema, value)) && (!IsIf(schema) || CheckIf(stack, context, schema, value)) && (!IsNot(schema) || CheckNot(stack, context, schema, value)) && (!IsAllOf(schema) || CheckAllOf(stack, context, schema, value)) && (!IsAnyOf(schema) || CheckAnyOf(stack, context, schema, value)) && (!IsOneOf(schema) || CheckOneOf(stack, context, schema, value)) && (!IsUnevaluatedItems(schema) || (!guard_exports.IsArray(value) || CheckUnevaluatedItems(stack, context, schema, value))) && (!IsUnevaluatedProperties(schema) || (!guard_exports.IsObject(value) || CheckUnevaluatedProperties(stack, context, schema, value))) && (!IsRefine2(schema) || CheckRefine(stack, context, schema, value));
-  stack.Pop(schema);
+  const current = NextStack(stack, schema);
+  const result = IsSchemaBoolean(schema) ? CheckSchemaBoolean(current, context, schema, value) : (!IsType(schema) || CheckType(current, context, schema, value)) && (!(guard_exports.IsObject(value) && !guard_exports.IsArray(value)) || (!IsRequired(schema) || CheckRequired(current, context, schema, value)) && (!IsAdditionalProperties(schema) || CheckAdditionalProperties(current, context, schema, value)) && (!IsDependencies(schema) || CheckDependencies(current, context, schema, value)) && (!IsDependentRequired(schema) || CheckDependentRequired(current, context, schema, value)) && (!IsDependentSchemas(schema) || CheckDependentSchemas(current, context, schema, value)) && (!IsPatternProperties(schema) || CheckPatternProperties(current, context, schema, value)) && (!IsProperties(schema) || CheckProperties(current, context, schema, value)) && (!IsPropertyNames(schema) || CheckPropertyNames(current, context, schema, value)) && (!IsMinProperties(schema) || CheckMinProperties(current, context, schema, value)) && (!IsMaxProperties(schema) || CheckMaxProperties(current, context, schema, value))) && (!guard_exports.IsArray(value) || (!IsAdditionalItems(schema) || CheckAdditionalItems(current, context, schema, value)) && (!IsContains(schema) || CheckContains(current, context, schema, value)) && (!IsItems(schema) || CheckItems(current, context, schema, value)) && (!IsMinContains(schema) || CheckMinContains(current, context, schema, value)) && (!IsMaxContains(schema) || CheckMaxContains(current, context, schema, value)) && (!IsMinItems(schema) || CheckMinItems(current, context, schema, value)) && (!IsMaxItems(schema) || CheckMaxItems(current, context, schema, value)) && (!IsPrefixItems(schema) || CheckPrefixItems(current, context, schema, value)) && (!IsUniqueItems(schema) || CheckUniqueItems(current, context, schema, value))) && (!guard_exports.IsString(value) || (!IsMinLength3(schema) || CheckMinLength(current, context, schema, value)) && (!IsMaxLength3(schema) || CheckMaxLength(current, context, schema, value)) && (!IsFormat(schema) || CheckFormat(current, context, schema, value)) && (!IsPattern(schema) || CheckPattern(current, context, schema, value))) && (!(guard_exports.IsNumber(value) || guard_exports.IsBigInt(value)) || (!IsExclusiveMinimum(schema) || CheckExclusiveMinimum(current, context, schema, value)) && (!IsExclusiveMaximum(schema) || CheckExclusiveMaximum(current, context, schema, value)) && (!IsMinimum(schema) || CheckMinimum(current, context, schema, value)) && (!IsMaximum(schema) || CheckMaximum(current, context, schema, value)) && (!IsMultipleOf2(schema) || CheckMultipleOf(current, context, schema, value))) && (!IsRef2(schema) || CheckRef(current, context, schema, value)) && (!IsRecursiveRef(schema) || CheckRecursiveRef(current, context, schema, value)) && (!IsDynamicRef(schema) || CheckDynamicRef(current, context, schema, value)) && (!IsConst(schema) || CheckConst(current, context, schema, value)) && (!IsEnum2(schema) || CheckEnum(current, context, schema, value)) && (!IsIf(schema) || CheckIf(current, context, schema, value)) && (!IsNot(schema) || CheckNot(current, context, schema, value)) && (!IsAllOf(schema) || CheckAllOf(current, context, schema, value)) && (!IsAnyOf(schema) || CheckAnyOf(current, context, schema, value)) && (!IsOneOf(schema) || CheckOneOf(current, context, schema, value)) && (!IsUnevaluatedItems(schema) || (!guard_exports.IsArray(value) || CheckUnevaluatedItems(current, context, schema, value))) && (!IsUnevaluatedProperties(schema) || (!guard_exports.IsObject(value) || CheckUnevaluatedProperties(current, context, schema, value))) && (!IsRefine2(schema) || CheckRefine(current, context, schema, value));
   return result;
 }
 function ErrorSchemaPushStack(stack, context, schemaPath, instancePath, schema, value) {
@@ -6722,549 +6916,18 @@ function ErrorSchemaPushStack(stack, context, schemaPath, instancePath, schema, 
 function ErrorSchema(stack, context, schemaPath, instancePath, schema, value) {
   if (context.AtCapacity())
     return false;
-  stack.Push(schema);
-  const result = IsSchemaBoolean(schema) ? ErrorSchemaBoolean(stack, context, schemaPath, instancePath, schema, value) : !!(+(!IsType(schema) || ErrorType(stack, context, schemaPath, instancePath, schema, value)) & +(!(guard_exports.IsObject(value) && !guard_exports.IsArray(value)) || !!(+(!IsRequired(schema) || ErrorRequired(stack, context, schemaPath, instancePath, schema, value)) & +(!IsAdditionalProperties(schema) || ErrorAdditionalProperties(stack, context, schemaPath, instancePath, schema, value)) & +(!IsDependencies(schema) || ErrorDependencies(stack, context, schemaPath, instancePath, schema, value)) & +(!IsDependentRequired(schema) || ErrorDependentRequired(stack, context, schemaPath, instancePath, schema, value)) & +(!IsDependentSchemas(schema) || ErrorDependentSchemas(stack, context, schemaPath, instancePath, schema, value)) & +(!IsPatternProperties(schema) || ErrorPatternProperties(stack, context, schemaPath, instancePath, schema, value)) & +(!IsProperties(schema) || ErrorProperties(stack, context, schemaPath, instancePath, schema, value)) & +(!IsPropertyNames(schema) || ErrorPropertyNames(stack, context, schemaPath, instancePath, schema, value)) & +(!IsMinProperties(schema) || ErrorMinProperties(stack, context, schemaPath, instancePath, schema, value)) & +(!IsMaxProperties(schema) || ErrorMaxProperties(stack, context, schemaPath, instancePath, schema, value)))) & +(!guard_exports.IsArray(value) || !!(+(!IsAdditionalItems(schema) || ErrorAdditionalItems(stack, context, schemaPath, instancePath, schema, value)) & +(!IsContains(schema) || ErrorContains(stack, context, schemaPath, instancePath, schema, value)) & +(!IsItems(schema) || ErrorItems(stack, context, schemaPath, instancePath, schema, value)) & +(!IsMaxContains(schema) || ErrorMaxContains(stack, context, schemaPath, instancePath, schema, value)) & +(!IsMaxItems(schema) || ErrorMaxItems(stack, context, schemaPath, instancePath, schema, value)) & +(!IsMinContains(schema) || ErrorMinContains(stack, context, schemaPath, instancePath, schema, value)) & +(!IsMinItems(schema) || ErrorMinItems(stack, context, schemaPath, instancePath, schema, value)) & +(!IsPrefixItems(schema) || ErrorPrefixItems(stack, context, schemaPath, instancePath, schema, value)) & +(!IsUniqueItems(schema) || ErrorUniqueItems(stack, context, schemaPath, instancePath, schema, value)))) & +(!guard_exports.IsString(value) || !!(+(!IsMaxLength3(schema) || ErrorMaxLength(stack, context, schemaPath, instancePath, schema, value)) & +(!IsMinLength3(schema) || ErrorMinLength(stack, context, schemaPath, instancePath, schema, value)) & +(!IsFormat(schema) || ErrorFormat(stack, context, schemaPath, instancePath, schema, value)) & +(!IsPattern(schema) || ErrorPattern(stack, context, schemaPath, instancePath, schema, value)))) & +(!(guard_exports.IsNumber(value) || guard_exports.IsBigInt(value)) || !!(+(!IsExclusiveMaximum(schema) || ErrorExclusiveMaximum(stack, context, schemaPath, instancePath, schema, value)) & +(!IsExclusiveMinimum(schema) || ErrorExclusiveMinimum(stack, context, schemaPath, instancePath, schema, value)) & +(!IsMaximum(schema) || ErrorMaximum(stack, context, schemaPath, instancePath, schema, value)) & +(!IsMinimum(schema) || ErrorMinimum(stack, context, schemaPath, instancePath, schema, value)) & +(!IsMultipleOf2(schema) || ErrorMultipleOf(stack, context, schemaPath, instancePath, schema, value)))) & +(!IsRef2(schema) || ErrorRef(stack, context, schemaPath, instancePath, schema, value)) & +(!IsRecursiveRef(schema) || ErrorRecursiveRef(stack, context, schemaPath, instancePath, schema, value)) & +(!IsDynamicRef(schema) || ErrorDynamicRef(stack, context, schemaPath, instancePath, schema, value)) & +(!IsConst(schema) || ErrorConst(stack, context, schemaPath, instancePath, schema, value)) & +(!IsEnum2(schema) || ErrorEnum(stack, context, schemaPath, instancePath, schema, value)) & +(!IsIf(schema) || ErrorIf(stack, context, schemaPath, instancePath, schema, value)) & +(!IsNot(schema) || ErrorNot(stack, context, schemaPath, instancePath, schema, value)) & +(!IsAllOf(schema) || ErrorAllOf(stack, context, schemaPath, instancePath, schema, value)) & +(!IsAnyOf(schema) || ErrorAnyOf(stack, context, schemaPath, instancePath, schema, value)) & +(!IsOneOf(schema) || ErrorOneOf(stack, context, schemaPath, instancePath, schema, value)) & +(!IsUnevaluatedItems(schema) || (!guard_exports.IsArray(value) || ErrorUnevaluatedItems(stack, context, schemaPath, instancePath, schema, value))) & +(!IsUnevaluatedProperties(schema) || (!guard_exports.IsObject(value) || ErrorUnevaluatedProperties(stack, context, schemaPath, instancePath, schema, value)))) && (!IsRefine2(schema) || ErrorRefine(stack, context, schemaPath, instancePath, schema, value));
-  stack.Pop(schema);
+  const current = NextStack(stack, schema);
+  const result = IsSchemaBoolean(schema) ? ErrorSchemaBoolean(current, context, schemaPath, instancePath, schema, value) : !!(+(!IsType(schema) || ErrorType(current, context, schemaPath, instancePath, schema, value)) & +(!(guard_exports.IsObject(value) && !guard_exports.IsArray(value)) || !!(+(!IsRequired(schema) || ErrorRequired(current, context, schemaPath, instancePath, schema, value)) & +(!IsAdditionalProperties(schema) || ErrorAdditionalProperties(current, context, schemaPath, instancePath, schema, value)) & +(!IsDependencies(schema) || ErrorDependencies(current, context, schemaPath, instancePath, schema, value)) & +(!IsDependentRequired(schema) || ErrorDependentRequired(current, context, schemaPath, instancePath, schema, value)) & +(!IsDependentSchemas(schema) || ErrorDependentSchemas(current, context, schemaPath, instancePath, schema, value)) & +(!IsPatternProperties(schema) || ErrorPatternProperties(current, context, schemaPath, instancePath, schema, value)) & +(!IsProperties(schema) || ErrorProperties(current, context, schemaPath, instancePath, schema, value)) & +(!IsPropertyNames(schema) || ErrorPropertyNames(current, context, schemaPath, instancePath, schema, value)) & +(!IsMinProperties(schema) || ErrorMinProperties(current, context, schemaPath, instancePath, schema, value)) & +(!IsMaxProperties(schema) || ErrorMaxProperties(current, context, schemaPath, instancePath, schema, value)))) & +(!guard_exports.IsArray(value) || !!(+(!IsAdditionalItems(schema) || ErrorAdditionalItems(current, context, schemaPath, instancePath, schema, value)) & +(!IsContains(schema) || ErrorContains(current, context, schemaPath, instancePath, schema, value)) & +(!IsItems(schema) || ErrorItems(current, context, schemaPath, instancePath, schema, value)) & +(!IsMinContains(schema) || ErrorMinContains(current, context, schemaPath, instancePath, schema, value)) & +(!IsMaxContains(schema) || ErrorMaxContains(current, context, schemaPath, instancePath, schema, value)) & +(!IsMinItems(schema) || ErrorMinItems(current, context, schemaPath, instancePath, schema, value)) & +(!IsMaxItems(schema) || ErrorMaxItems(current, context, schemaPath, instancePath, schema, value)) & +(!IsPrefixItems(schema) || ErrorPrefixItems(current, context, schemaPath, instancePath, schema, value)) & +(!IsUniqueItems(schema) || ErrorUniqueItems(current, context, schemaPath, instancePath, schema, value)))) & +(!guard_exports.IsString(value) || !!(+(!IsMinLength3(schema) || ErrorMinLength(current, context, schemaPath, instancePath, schema, value)) & +(!IsMaxLength3(schema) || ErrorMaxLength(current, context, schemaPath, instancePath, schema, value)) & +(!IsFormat(schema) || ErrorFormat(current, context, schemaPath, instancePath, schema, value)) & +(!IsPattern(schema) || ErrorPattern(current, context, schemaPath, instancePath, schema, value)))) & +(!(guard_exports.IsNumber(value) || guard_exports.IsBigInt(value)) || !!(+(!IsExclusiveMinimum(schema) || ErrorExclusiveMinimum(current, context, schemaPath, instancePath, schema, value)) & +(!IsExclusiveMaximum(schema) || ErrorExclusiveMaximum(current, context, schemaPath, instancePath, schema, value)) & +(!IsMinimum(schema) || ErrorMinimum(current, context, schemaPath, instancePath, schema, value)) & +(!IsMaximum(schema) || ErrorMaximum(current, context, schemaPath, instancePath, schema, value)) & +(!IsMultipleOf2(schema) || ErrorMultipleOf(current, context, schemaPath, instancePath, schema, value)))) & +(!IsRef2(schema) || ErrorRef(current, context, schemaPath, instancePath, schema, value)) & +(!IsRecursiveRef(schema) || ErrorRecursiveRef(current, context, schemaPath, instancePath, schema, value)) & +(!IsDynamicRef(schema) || ErrorDynamicRef(current, context, schemaPath, instancePath, schema, value)) & +(!IsConst(schema) || ErrorConst(current, context, schemaPath, instancePath, schema, value)) & +(!IsEnum2(schema) || ErrorEnum(current, context, schemaPath, instancePath, schema, value)) & +(!IsIf(schema) || ErrorIf(current, context, schemaPath, instancePath, schema, value)) & +(!IsNot(schema) || ErrorNot(current, context, schemaPath, instancePath, schema, value)) & +(!IsAllOf(schema) || ErrorAllOf(current, context, schemaPath, instancePath, schema, value)) & +(!IsAnyOf(schema) || ErrorAnyOf(current, context, schemaPath, instancePath, schema, value)) & +(!IsOneOf(schema) || ErrorOneOf(current, context, schemaPath, instancePath, schema, value)) & +(!IsUnevaluatedItems(schema) || (!guard_exports.IsArray(value) || ErrorUnevaluatedItems(current, context, schemaPath, instancePath, schema, value))) & +(!IsUnevaluatedProperties(schema) || (!guard_exports.IsObject(value) || ErrorUnevaluatedProperties(current, context, schemaPath, instancePath, schema, value)))) && (!IsRefine2(schema) || ErrorRefine(current, context, schemaPath, instancePath, schema, value));
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/resolve/resolve.mjs
-var resolve_exports = {};
-__export(resolve_exports, {
-  Base: () => Base2,
-  DefaultBase: () => DefaultBase,
-  DynamicRef: () => DynamicRef,
-  Ref: () => Ref2,
-  ResolveDynamicRef: () => ResolveDynamicRef,
-  ResolveRecursiveRef: () => ResolveRecursiveRef,
-  ResolveRef: () => ResolveRef,
-  Resource: () => Resource
-});
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/pointer/pointer.mjs
-var pointer_exports = {};
-__export(pointer_exports, {
-  Delete: () => Delete,
-  Get: () => Get4,
-  Has: () => Has2,
-  Indices: () => Indices,
-  Set: () => Set4
-});
-function AssertNotRoot(indices) {
-  if (indices.length === 0)
-    throw Error("Cannot set root");
-}
-function AssertCanSet(value) {
-  if (!guard_exports.IsObject(value))
-    throw Error("Cannot set value");
-}
-function AssertIndex(index) {
-  if (guard_exports.IsUnsafePropertyKey(index))
-    throw Error("Pointer contains unsafe property key");
-}
-function AssertIndices(indices) {
-  for (const index of indices)
-    AssertIndex(index);
-}
-function IsNumericIndex(index) {
-  return /^(0|[1-9]\d*)$/.test(index);
-}
-function TakeIndexRight(indices) {
-  return [
-    indices.slice(0, indices.length - 1),
-    indices.slice(indices.length - 1)[0]
-  ];
-}
-function HasIndex(index, value) {
-  return guard_exports.IsObject(value) && guard_exports.HasPropertyKey(value, index);
-}
-function GetIndex(index, value) {
-  return guard_exports.IsObject(value) && !guard_exports.IsUnsafePropertyKey(index) ? value[index] : void 0;
-}
-function GetIndices(indices, value) {
-  return indices.reduce((value2, index) => GetIndex(index, value2), value);
-}
-function Indices(pointer) {
-  if (guard_exports.IsEqual(pointer.length, 0))
-    return [];
-  const indices = pointer.split("/").map((index) => index.replace(/~1/g, "/").replace(/~0/g, "~"));
-  return indices.length > 0 && indices[0] === "" ? indices.slice(1) : indices;
-}
-function Has2(value, pointer) {
-  let current = value;
-  return Indices(pointer).every((index) => {
-    if (!HasIndex(index, current))
-      return false;
-    current = current[index];
-    return true;
-  });
-}
-function Get4(value, pointer) {
-  const indices = Indices(pointer);
-  return GetIndices(indices, value);
-}
-function Set4(value, pointer, next) {
-  const indices = Indices(pointer);
-  AssertNotRoot(indices);
-  AssertIndices(indices);
-  const [head, index] = TakeIndexRight(indices);
-  const parent = GetIndices(head, value);
-  AssertCanSet(parent);
-  parent[index] = next;
-  return value;
-}
-function Delete(value, pointer) {
-  const indices = Indices(pointer);
-  AssertNotRoot(indices);
-  AssertIndices(indices);
-  const [head, index] = TakeIndexRight(indices);
-  const parent = GetIndices(head, value);
-  AssertCanSet(parent);
-  if (guard_exports.IsArray(parent) && IsNumericIndex(index)) {
-    parent.splice(+index, 1);
-  } else {
-    delete parent[index];
-  }
-  return value;
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/resolve/resolve.mjs
-var DefaultBase = "https://json-schema.org";
-function FindDynamicAnchor(schema, name) {
-  if (guard_exports.IsObject(schema) && IsDynamicAnchor(schema) && guard_exports.IsEqual(schema.$dynamicAnchor, name)) {
-    return schema;
-  }
-  if (guard_exports.IsObject(schema)) {
-    for (const key of guard_exports.Keys(schema)) {
-      const result = FindDynamicAnchor(schema[key], name);
-      if (result)
-        return result;
-    }
-  }
-  return void 0;
-}
-function FindBase(schema, base, target) {
-  if (guard_exports.IsEqual(schema, target))
-    return base.href;
-  const nextBase = IsSchemaObject2(schema) && IsId(schema) ? new URL(schema.$id, base.href) : base;
-  if (guard_exports.IsArray(schema)) {
-    for (const item of schema) {
-      const result = FindBase(item, nextBase, target);
-      if (!guard_exports.IsUndefined(result))
-        return result;
-    }
-  } else if (guard_exports.IsObject(schema)) {
-    for (const key of guard_exports.Keys(schema)) {
-      const result = FindBase(schema[key], nextBase, target);
-      if (!guard_exports.IsUndefined(result))
-        return result;
-    }
-  }
-  return void 0;
-}
-function MatchId(schema, base, ref) {
-  if (guard_exports.IsEqual(schema.$id, ref.hash))
-    return schema;
-  const absoluteRef = new URL(ref.href, base.href);
-  if (guard_exports.IsEqual(base.pathname, absoluteRef.pathname))
-    return ref.hash.startsWith("#") ? MatchHash(schema, ref) : schema;
-  return void 0;
-}
-function MatchAnchor(schema, base, ref) {
-  const absoluteAnchor = new URL(`#${schema.$anchor}`, base.href);
-  const absoluteRef = new URL(ref.href, base.href);
-  return guard_exports.IsEqual(absoluteAnchor.href, absoluteRef.href) ? schema : void 0;
-}
-function MatchDynamicAnchor(schema, base, ref) {
-  const absoluteAnchor = new URL(`#${schema.$dynamicAnchor}`, base.href);
-  const absoluteRef = new URL(ref.href, base.href);
-  const isMatch = guard_exports.IsEqual(absoluteAnchor.href, absoluteRef.href);
-  return isMatch ? schema : void 0;
-}
-function MatchHash(schema, ref) {
-  if (ref.href.endsWith("#"))
-    return schema;
-  if (!ref.hash.startsWith("#"))
-    return void 0;
-  const fragment = decodeURIComponent(ref.hash.slice(1));
-  if (!fragment.startsWith("/"))
-    return void 0;
-  const result = pointer_exports.Get(schema, fragment);
-  return result;
-}
-function Match4(schema, base, ref) {
-  if (IsId(schema)) {
-    const result = MatchId(schema, base, ref);
-    if (!guard_exports.IsUndefined(result))
-      return result;
-  }
-  if (IsAnchor(schema)) {
-    const result = MatchAnchor(schema, base, ref);
-    if (!guard_exports.IsUndefined(result))
-      return result;
-  }
-  if (IsDynamicAnchor(schema)) {
-    const result = MatchDynamicAnchor(schema, base, ref);
-    if (!guard_exports.IsUndefined(result))
-      return result;
-  }
-  return MatchHash(schema, ref);
-}
-function FromArray6(schema, base, ref) {
-  return schema.reduce((result, item) => {
-    const match = FromValue3(item, base, ref);
-    return !guard_exports.IsUndefined(match) ? match : result;
-  }, void 0);
-}
-function SkipProperty(key) {
-  return guard_exports.IsEqual(key, "const") || guard_exports.IsEqual(key, "enum");
-}
-function FromObject10(schema, base, ref) {
-  return guard_exports.Keys(schema).reduce((result, key) => {
-    if (SkipProperty(key))
-      return result;
-    const match = FromValue3(schema[key], base, ref);
-    return !guard_exports.IsUndefined(match) ? match : result;
-  }, void 0);
-}
-function FromValue3(schema, base, ref) {
-  const nextBase = IsSchemaObject2(schema) && IsId(schema) ? new URL(schema.$id, base.href) : base;
-  if (IsSchemaObject2(schema)) {
-    const result = Match4(schema, nextBase, ref);
-    if (!guard_exports.IsUndefined(result))
-      return result;
-  }
-  if (guard_exports.IsArray(schema))
-    return FromArray6(schema, nextBase, ref);
-  if (guard_exports.IsObject(schema))
-    return FromObject10(schema, nextBase, ref);
-  return void 0;
-}
-function Base2(schema, base, target) {
-  return FindBase(schema, new URL(base || ".", DefaultBase), target);
-}
-function Resource(context, schema, base, ref) {
-  const result = Ref2(context, schema, base, ref, false);
-  return IsSchemaObject2(result) && IsId(result) ? result : void 0;
-}
-function CanonicalHref(url) {
-  return url.href.split("#")[0];
-}
-function RefContext(context, ref) {
-  return guard_exports.HasPropertyKey(context, ref) ? context[ref] : void 0;
-}
-function RefLocal(schema, base, ref) {
-  return FromValue3(schema, base, ref);
-}
-function RefRemote(context, base, ref) {
-  const canonicalHref = CanonicalHref(ref);
-  if (guard_exports.IsEqual(canonicalHref, CanonicalHref(base)))
-    return void 0;
-  if (!guard_exports.HasPropertyKey(context, canonicalHref))
-    return void 0;
-  const remoteSchema = context[canonicalHref];
-  const remoteBase = IsSchemaObject2(remoteSchema) && IsId(remoteSchema) ? new URL(remoteSchema.$id, canonicalHref) : new URL(canonicalHref);
-  const result = guard_exports.IsEqual(ref.hash, "") ? remoteSchema : FromValue3(remoteSchema, remoteBase, ref);
-  return result;
-}
-function LegacyRetrievedResource(root, lexicalSchema, referenceBase, ref, schema) {
-  if (!ref.$ref.startsWith("#"))
-    return void 0;
-  if (guard_exports.HasPropertyKey(root, "$schema"))
-    return void 0;
-  const targetBase = Base2(lexicalSchema, referenceBase, schema);
-  if (guard_exports.IsUndefined(targetBase) || guard_exports.IsEqual(targetBase, referenceBase))
-    return void 0;
-  return { target: schema, base: targetBase, root: lexicalSchema };
-}
-function RemoteRetrievedResource(context, canonical, schema) {
-  const remoteRoot = context[canonical];
-  if (!IsSchemaObject2(remoteRoot))
-    return void 0;
-  return { target: schema, base: canonical, root: remoteRoot };
-}
-function FindRetrievedResource(stackframe, ref, schema, canonical, isRemote) {
-  const remote = isRemote ? RemoteRetrievedResource(stackframe.context, canonical, schema) : void 0;
-  if (!guard_exports.IsUndefined(remote))
-    return remote;
-  return LegacyRetrievedResource(stackframe.root, stackframe.lexicalSchema, stackframe.referenceBase, ref, schema);
-}
-function FindResolvedResource(context, root, referenceBase, canonical, schema, ids) {
-  if (IsId(schema))
-    return void 0;
-  const resource = Resource(context, root, referenceBase, canonical);
-  if (!resource || ids.includes(resource))
-    return void 0;
-  return { target: schema, resource };
-}
-function Ref2(remotes, schema, base, ref, applySchemaId = true) {
-  const initialBase = new URL(base || ".", DefaultBase);
-  const resolvedBase = applySchemaId && IsId(schema) ? new URL(schema.$id, initialBase) : initialBase;
-  const initialRef = new URL(ref, resolvedBase.href);
-  return RefContext(remotes, ref) ?? RefLocal(schema, resolvedBase, initialRef) ?? RefRemote(remotes, resolvedBase, initialRef);
-}
-function DynamicRef(context, root, base, schema, dynamicRef, dynamicAnchors) {
-  const initialBase = new URL(base || ".", DefaultBase);
-  const fragmentRoot = dynamicRef.$dynamicRef.startsWith("#") ? schema : root;
-  const fragmentTarget = Ref2(context, fragmentRoot, base, dynamicRef.$dynamicRef, false);
-  if (guard_exports.IsUndefined(fragmentTarget)) {
-    const fragment2 = new URL(dynamicRef.$dynamicRef, initialBase).hash;
-    if (!fragment2.startsWith("#/") && fragment2.startsWith("#")) {
-      const name = decodeURIComponent(fragment2.slice(1));
-      const anchorTarget2 = dynamicAnchors.find((anchor) => guard_exports.IsEqual(anchor.$dynamicAnchor, name)) ?? FindDynamicAnchor(root, name);
-      return anchorTarget2;
-    }
-    return void 0;
-  }
-  if (!IsSchemaObject2(fragmentTarget) || !IsDynamicAnchor(fragmentTarget))
-    return fragmentTarget;
-  const fragment = new URL(dynamicRef.$dynamicRef, initialBase).hash;
-  if (fragment.startsWith("#/"))
-    return fragmentTarget;
-  const anchorTarget = dynamicAnchors.find((anchor) => guard_exports.IsEqual(anchor.$dynamicAnchor, fragmentTarget.$dynamicAnchor));
-  return anchorTarget ?? fragmentTarget;
-}
-function ResolveRef(stackframe, ref) {
-  const source = stackframe.inRetrievedFrame ? stackframe.lexicalSchema : stackframe.root;
-  const refRoot = ref.$ref.startsWith("#") ? stackframe.lexicalSchema : source;
-  const schema = Ref2(stackframe.context, refRoot, stackframe.referenceBase, ref.$ref, false);
-  if (!schema || !IsSchemaObject2(schema))
-    return { schema };
-  const canonical = new URL(ref.$ref, stackframe.referenceBase).href.split("#")[0];
-  const isRemote = !guard_exports.IsEqual(canonical, stackframe.resourceBase);
-  const retrievedResource = FindRetrievedResource(stackframe, ref, schema, canonical, isRemote);
-  const resolvedResource = isRemote ? FindResolvedResource(stackframe.context, stackframe.root, stackframe.referenceBase, canonical, schema, stackframe.ids) : void 0;
-  return { schema, retrievedResource, resolvedResource };
-}
-function ResolveRecursiveRef(stackframe, recursiveRef) {
-  const refRoot = IsRecursiveAnchorTrue(stackframe.lexicalSchema) ? stackframe.recursiveAnchors[0] : stackframe.lexicalSchema;
-  return Ref2(stackframe.context, refRoot, stackframe.lexicalBase, recursiveRef.$recursiveRef, false);
-}
-function ResolveDynamicRef(stackframe, dynamicRef) {
-  return DynamicRef(stackframe.context, stackframe.root, stackframe.lexicalBase, stackframe.lexicalSchema, dynamicRef, stackframe.dynamicAnchors);
-}
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/engine/_stack.mjs
-var __classPrivateFieldGet = function(receiver, state, kind, f) {
-  if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
-  if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
-  return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
-};
-var _Stack_instances;
-var _Stack_StackFrame;
-var _Stack_ApplyRefResult;
-var _Stack_BuildBase;
-var _Stack_ResourceBaseURL;
-var _Stack_ReferenceBaseURL;
-var _Stack_LexicalSchema;
-var _Stack_RegisterResourceAnchorArray;
-var _Stack_UnregisterResourceAnchorArray;
-var _Stack_RegisterResourceAnchors;
-var _Stack_UnregisterResourceAnchors;
-var _Stack_RegisterResource;
-var _Stack_UnregisterResource;
-var _Stack_EnterResolvedResource;
-var _Stack_ExitResolvedResource;
-var Stack = class {
-  constructor(context, schema) {
-    _Stack_instances.add(this);
-    this.context = context;
-    this.schema = schema;
-    this.ids = [];
-    this.resourceIds = [];
-    this.anchors = [];
-    this.recursiveAnchors = [];
-    this.dynamicAnchors = [];
-    this.retrievedResources = /* @__PURE__ */ new Map();
-    this.retrievedFrames = [];
-    this.resolvedResources = /* @__PURE__ */ new Map();
-    this.pendingResource = true;
-  }
-  // ----------------------------------------------------------------
-  // LexicalBaseURL
-  // ----------------------------------------------------------------
-  LexicalBaseURL() {
-    return __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_BuildBase).call(this, this.ids);
-  }
-  // ----------------------------------------------------------------
-  // Push
-  // ----------------------------------------------------------------
-  Push(schema) {
-    if (!IsSchemaObject2(schema))
-      return;
-    if (IsId(schema))
-      __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_RegisterResource).call(this, schema);
-    if (IsAnchor(schema))
-      this.anchors.push(schema);
-    if (IsRecursiveAnchorTrue(schema))
-      this.recursiveAnchors.push(schema);
-    if (IsDynamicAnchor(schema))
-      this.dynamicAnchors.push(schema);
-    const retrievedResource = this.retrievedResources.get(schema);
-    if (retrievedResource) {
-      this.retrievedFrames.push({
-        schema: retrievedResource.root,
-        base: retrievedResource.base,
-        idDepth: this.ids.length,
-        resourceDepth: this.resourceIds.length
-      });
-    }
-  }
-  // ----------------------------------------------------------------
-  // Pop
-  // ----------------------------------------------------------------
-  Pop(schema) {
-    if (!IsSchemaObject2(schema))
-      return;
-    if (IsId(schema))
-      __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_UnregisterResource).call(this, schema);
-    if (IsAnchor(schema))
-      this.anchors.pop();
-    if (IsRecursiveAnchorTrue(schema))
-      this.recursiveAnchors.pop();
-    if (IsDynamicAnchor(schema))
-      this.dynamicAnchors.pop();
-    if (this.retrievedResources.has(schema))
-      this.retrievedFrames.pop();
-    __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_ExitResolvedResource).call(this, schema);
-  }
-  // ----------------------------------------------------------------
-  // Ref
-  // ----------------------------------------------------------------
-  Ref(ref) {
-    const result = resolve_exports.ResolveRef(__classPrivateFieldGet(this, _Stack_instances, "m", _Stack_StackFrame).call(this), ref);
-    __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_ApplyRefResult).call(this, result);
-    return result.schema;
-  }
-  // ----------------------------------------------------------------
-  // RecursiveRef
-  // ----------------------------------------------------------------
-  RecursiveRef(recursiveRef) {
-    const result = resolve_exports.ResolveRecursiveRef(__classPrivateFieldGet(this, _Stack_instances, "m", _Stack_StackFrame).call(this), recursiveRef);
-    if (result)
-      this.pendingResource = true;
-    return result;
-  }
-  // ----------------------------------------------------------------
-  // DynamicRef
-  // ----------------------------------------------------------------
-  DynamicRef(dynamicRef) {
-    const result = resolve_exports.ResolveDynamicRef(__classPrivateFieldGet(this, _Stack_instances, "m", _Stack_StackFrame).call(this), dynamicRef);
-    if (result)
-      this.pendingResource = true;
-    return result;
-  }
-};
-_Stack_instances = /* @__PURE__ */ new WeakSet(), _Stack_StackFrame = function _Stack_StackFrame2() {
-  return {
-    context: this.context,
-    root: this.schema,
-    ids: this.ids,
-    lexicalSchema: __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_LexicalSchema).call(this),
-    lexicalBase: this.LexicalBaseURL(),
-    referenceBase: __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_ReferenceBaseURL).call(this),
-    resourceBase: __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_ResourceBaseURL).call(this),
-    recursiveAnchors: this.recursiveAnchors,
-    dynamicAnchors: this.dynamicAnchors,
-    inRetrievedFrame: this.retrievedFrames.length > 0
-  };
-}, _Stack_ApplyRefResult = function _Stack_ApplyRefResult2(result) {
-  if (!guard_exports.IsUndefined(result.schema))
-    this.pendingResource = true;
-  if (!guard_exports.IsUndefined(result.resolvedResource)) {
-    __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_EnterResolvedResource).call(this, result.resolvedResource.target, result.resolvedResource.resource);
-  }
-  if (!guard_exports.IsUndefined(result.retrievedResource)) {
-    this.retrievedResources.set(result.retrievedResource.target, {
-      base: result.retrievedResource.base,
-      root: result.retrievedResource.root
-    });
-  }
-}, _Stack_BuildBase = function _Stack_BuildBase2(stack) {
-  const frame = this.retrievedFrames[this.retrievedFrames.length - 1];
-  const base = frame ? new URL(frame.base) : new URL(resolve_exports.DefaultBase);
-  const scoped = frame ? stack.slice(frame.idDepth) : stack;
-  return scoped.reduce((result, schema) => new URL(schema.$id, result), base).href;
-}, _Stack_ResourceBaseURL = function _Stack_ResourceBaseURL2() {
-  const frame = this.retrievedFrames[this.retrievedFrames.length - 1];
-  if (!frame)
-    return __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_BuildBase).call(this, this.resourceIds);
-  return this.resourceIds.slice(frame.resourceDepth).reduce((result, schema) => new URL(schema.$id, result), new URL(frame.base)).href;
-}, _Stack_ReferenceBaseURL = function _Stack_ReferenceBaseURL2() {
-  if (this.retrievedFrames.length > 0)
-    return __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_ResourceBaseURL).call(this);
-  const lexical = this.ids[this.ids.length - 1];
-  if (lexical && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(lexical.$id))
-    return this.LexicalBaseURL();
-  return __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_ResourceBaseURL).call(this);
-}, _Stack_LexicalSchema = function _Stack_LexicalSchema2() {
-  const frame = this.retrievedFrames[this.retrievedFrames.length - 1];
-  if (frame)
-    return this.ids.length > frame.idDepth ? this.ids[this.ids.length - 1] : frame.schema;
-  return this.ids.length > 0 ? this.ids[this.ids.length - 1] : this.schema;
-}, _Stack_RegisterResourceAnchorArray = function _Stack_RegisterResourceAnchorArray2(schema) {
-  schema.forEach((schema2) => __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_RegisterResourceAnchors).call(this, schema2, false));
-}, _Stack_UnregisterResourceAnchorArray = function _Stack_UnregisterResourceAnchorArray2(schema) {
-  schema.forEach((schema2) => __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_UnregisterResourceAnchors).call(this, schema2, false));
-}, _Stack_RegisterResourceAnchors = function _Stack_RegisterResourceAnchors2(schema, isRoot = true) {
-  if (IsSchemaBoolean(schema))
-    return;
-  if (guard_exports.IsArray(schema))
-    return __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_RegisterResourceAnchorArray).call(this, schema);
-  if (!IsSchemaObject2(schema))
-    return;
-  const current = schema;
-  if (!isRoot && IsId(current))
-    return;
-  if (!isRoot && IsDynamicAnchor(current))
-    this.dynamicAnchors.push(current);
-  for (const key of guard_exports.Keys(current))
-    __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_RegisterResourceAnchors2).call(this, current[key], false);
-}, _Stack_UnregisterResourceAnchors = function _Stack_UnregisterResourceAnchors2(schema, isRoot = true) {
-  if (IsSchemaBoolean(schema))
-    return;
-  if (guard_exports.IsArray(schema))
-    return __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_UnregisterResourceAnchorArray).call(this, schema);
-  if (!IsSchemaObject2(schema))
-    return;
-  const current = schema;
-  if (!isRoot && IsId(current))
-    return;
-  if (!isRoot && IsDynamicAnchor(current))
-    this.dynamicAnchors.pop();
-  for (const key of guard_exports.Keys(current))
-    __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_UnregisterResourceAnchors2).call(this, current[key], false);
-}, _Stack_RegisterResource = function _Stack_RegisterResource2(schema) {
-  this.ids.push(schema);
-  const isResource = this.pendingResource;
-  this.pendingResource = false;
-  if (isResource)
-    this.resourceIds.push(schema);
-  __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_RegisterResourceAnchors).call(this, schema, true);
-}, _Stack_UnregisterResource = function _Stack_UnregisterResource2(schema) {
-  this.ids.pop();
-  const isResource = this.resourceIds.length > 0 && guard_exports.IsEqual(this.resourceIds[this.resourceIds.length - 1], schema);
-  if (isResource)
-    this.resourceIds.pop();
-  __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_UnregisterResourceAnchors).call(this, schema, true);
-}, _Stack_EnterResolvedResource = function _Stack_EnterResolvedResource2(target, resource) {
-  __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_RegisterResource).call(this, resource);
-  this.resolvedResources.set(target, resource);
-}, _Stack_ExitResolvedResource = function _Stack_ExitResolvedResource2(target) {
-  if (!this.resolvedResources.has(target))
-    return;
-  const resource = this.resolvedResources.get(target);
-  __classPrivateFieldGet(this, _Stack_instances, "m", _Stack_UnregisterResource).call(this, resource);
-  this.resolvedResources.delete(target);
-};
-
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/errors.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/errors.mjs
 function Errors(...args) {
   const [context, schema, value] = arguments_exports.Match(args, {
     3: (context2, schema2, value2) => [context2, schema2, value2],
     2: (schema2, value2) => [{}, schema2, value2]
   });
-  const stack = new Stack(context, schema);
+  const stack = Stack(context, schema);
   const errorContext = new ErrorContext();
   const result = ErrorSchema(stack, errorContext, "#", "", schema, value);
   const errors = errorContext.GetErrors();
@@ -7273,18 +6936,30 @@ function Errors(...args) {
   return [result, localized];
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/schema/check.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/settings/internal.mjs
+var TempMaxErrors = 0;
+function EnableParseErrors() {
+  const settings2 = Get();
+  TempMaxErrors = settings2.maxErrors;
+  settings2.maxErrors = settings2.maxParseErrors;
+}
+function DisableParseErrors() {
+  const settings2 = Get();
+  settings2.maxErrors = TempMaxErrors;
+}
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/schema/check.mjs
 function Check(...args) {
   const [context, schema, value] = arguments_exports.Match(args, {
     3: (context2, schema2, value2) => [context2, schema2, value2],
     2: (schema2, value2) => [{}, schema2, value2]
   });
-  const stack = new Stack(context, schema);
+  const stack = Stack(context, schema);
   const checkContext = new CheckContext();
   return CheckSchema(stack, checkContext, schema, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/check/check.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/check/check.mjs
 function Check2(...args) {
   const [context, type, value] = arguments_exports.Match(args, {
     3: (context2, type2, value2) => [context2, type2, value2],
@@ -7293,7 +6968,7 @@ function Check2(...args) {
   return Check(context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/errors/errors.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/errors/errors.mjs
 function Errors2(...args) {
   const [context, type, value] = arguments_exports.Match(args, {
     3: (context2, type2, value2) => [context2, type2, value2],
@@ -7303,7 +6978,7 @@ function Errors2(...args) {
   return errors;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/assert/assert.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/assert/assert.mjs
 var AssertError = class extends Error {
   constructor(source, value, errors) {
     super(source);
@@ -7316,19 +6991,19 @@ var AssertError = class extends Error {
   }
 };
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/from_array.mjs
-function FromArray7(context, type, value) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clean/from_array.mjs
+function FromArray5(context, type, value) {
   if (!guard_exports.IsArray(value))
     return value;
   return value.map((value2) => FromType19(context, type.items, value2));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/from_cyclic.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clean/from_cyclic.mjs
 function FromCyclic6(context, type, value) {
   return FromType19({ ...context, ...type.$defs }, Ref(type.$ref), value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/from_intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clean/from_intersect.mjs
 function EvaluateIntersection(context, type) {
   const additionalProperties = guard_exports.HasPropertyKey(type, "unevaluatedProperties") ? { additionalProperties: type.unevaluatedProperties } : {};
   const instantiated = Instantiate(context, type);
@@ -7340,19 +7015,19 @@ function FromIntersect6(context, type, value) {
   return FromType19(context, evaluated, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/additional.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clean/additional.mjs
 function GetAdditionalProperties(type) {
   const additionalProperties = guard_exports.HasPropertyKey(type, "additionalProperties") ? type.additionalProperties : void 0;
   return additionalProperties;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/from_object.mjs
-function FromObject11(context, type, value) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clean/from_object.mjs
+function FromObject9(context, type, value) {
   if (!guard_exports.IsObject(value) || guard_exports.IsArray(value))
     return value;
   const additionalProperties = GetAdditionalProperties(type);
   for (const key of guard_exports.Keys(value)) {
-    if (guard_exports.HasPropertyKey(type.properties, key)) {
+    if (guard_exports.HasPropertyKey(type.properties, key) && IsSchema(type.properties[key])) {
       value[key] = FromType19(context, type.properties[key], value[key]);
       continue;
     }
@@ -7369,7 +7044,7 @@ function FromObject11(context, type, value) {
   return value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/from_record.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clean/from_record.mjs
 function FromRecord3(context, type, value) {
   if (!guard_exports.IsObject(value))
     return value;
@@ -7393,12 +7068,12 @@ function FromRecord3(context, type, value) {
   return value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/from_ref.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clean/from_ref.mjs
 function FromRef5(context, type, value) {
   return guard_exports.HasPropertyKey(context, type.$ref) ? FromType19(context, context[type.$ref], value) : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/from_tuple.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clean/from_tuple.mjs
 function FromTuple5(context, schema, value) {
   if (!guard_exports.IsArray(value))
     return value;
@@ -7409,12 +7084,71 @@ function FromTuple5(context, schema, value) {
   return guard_exports.IsGreaterThan(value.length, length) ? value.slice(0, length) : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clone/clone.mjs
-function Clone2(value) {
-  return Clone(value);
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/system/memory/deep.mjs
+function FromClassInstance(value) {
+  return value;
+}
+function IsSchemaObject2(value) {
+  return guard_exports.HasPropertyKey(value, "~kind") || guard_exports.HasPropertyKey(value, "~unsafe");
+}
+function FromSchemaObject(value) {
+  const result = {};
+  for (const key of guard_exports.Keys(value)) {
+    if (guard_exports.IsUnsafePropertyKey(key))
+      continue;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    descriptor.value = FromValue2(descriptor.value);
+    if (guard_exports.IsEqual(descriptor.enumerable, true)) {
+      result[key] = descriptor.value;
+    } else {
+      Object.defineProperty(result, key, descriptor);
+    }
+  }
+  return result;
+}
+function FromPlainObject(value) {
+  const result = {};
+  for (const key of guard_exports.Keys(value)) {
+    if (guard_exports.IsUnsafePropertyKey(key))
+      continue;
+    result[key] = FromValue2(value[key]);
+  }
+  for (const key of guard_exports.Symbols(value)) {
+    result[key] = FromValue2(value[key]);
+  }
+  return result;
+}
+function FromObject10(value) {
+  return guard_exports.IsClassInstance(value) ? FromClassInstance(value) : IsSchemaObject2(value) ? FromSchemaObject(value) : FromPlainObject(value);
+}
+function FromArray6(value) {
+  return value.map((element) => FromValue2(element));
+}
+function FromTypedArray(value) {
+  return value.slice();
+}
+function FromRegExp2(value) {
+  return new RegExp(value.source, value.flags);
+}
+function FromMap(value) {
+  return new Map(FromValue2([...value.entries()]));
+}
+function FromSet(value) {
+  return new Set(FromValue2([...value.values()]));
+}
+function FromValue2(value) {
+  return globals_exports.IsTypeArray(value) ? FromTypedArray(value) : globals_exports.IsRegExp(value) ? FromRegExp2(value) : globals_exports.IsMap(value) ? FromMap(value) : globals_exports.IsSet(value) ? FromSet(value) : guard_exports.IsArray(value) ? FromArray6(value) : guard_exports.IsObject(value) ? FromObject10(value) : value;
+}
+function Deep(value) {
+  return FromValue2(value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/from_union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clone/clone.mjs
+function Clone2(value) {
+  return Deep(value);
+}
+
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clean/from_union.mjs
 function FromUnion9(context, type, value) {
   for (const schema of type.anyOf) {
     const clean = FromType19(context, schema, Clone2(value));
@@ -7424,25 +7158,23 @@ function FromUnion9(context, type, value) {
   return value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clean/from_type.mjs
 function FromType19(context, type, value) {
-  return IsArray2(type) ? FromArray7(context, type, value) : IsCyclic(type) ? FromCyclic6(context, type, value) : IsIntersect(type) ? FromIntersect6(context, type, value) : IsObject2(type) ? FromObject11(context, type, value) : IsRecord(type) ? FromRecord3(context, type, value) : IsRef(type) ? FromRef5(context, type, value) : IsTuple(type) ? FromTuple5(context, type, value) : IsUnion(type) ? FromUnion9(context, type, value) : value;
+  return IsArray2(type) ? FromArray5(context, type, value) : IsCyclic(type) ? FromCyclic6(context, type, value) : IsIntersect(type) ? FromIntersect6(context, type, value) : IsObject2(type) ? FromObject9(context, type, value) : IsRecord(type) ? FromRecord3(context, type, value) : IsRef(type) ? FromRef5(context, type, value) : IsTuple(type) ? FromTuple5(context, type, value) : IsUnion(type) ? FromUnion9(context, type, value) : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/shared/union_priority_sort.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/shared/union_priority_sort.mjs
 function Modifiers(type, next) {
-  for (const key of guard_default.Keys(type)) {
-    if (guard_default.HasPropertyKey(next, key))
-      continue;
-    next[key] = type[key];
-  }
-  return next;
+  return memory_exports.Assign(type, next);
 }
 function FromProperties4(properties) {
   const result = {};
   for (const key of guard_default.Keys(properties))
     result[key] = FromType20(properties[key]);
   return result;
+}
+function FromRecordKey(type) {
+  return String2({ pattern: RecordPattern(type) });
 }
 function FromPriorityTypes(types) {
   return FromTypes6(Priority(types));
@@ -7451,7 +7183,7 @@ function FromTypes6(types) {
   return types.map((type) => FromType20(type));
 }
 function FromType20(type) {
-  const next = IsArray2(type) ? _Array_(FromType20(type.items), ArrayOptions(type)) : IsIntersect(type) ? Intersect(FromTypes6(type.allOf)) : IsUnion(type) ? Union(FromPriorityTypes(type.anyOf)) : IsObject2(type) ? _Object_(FromProperties4(type.properties)) : IsRecord(type) ? Record(RecordKey(type), FromType20(RecordValue(type))) : IsTuple(type) ? Tuple(FromTypes6(type.items)) : type;
+  const next = IsArray2(type) ? _Array_(FromType20(type.items), ArrayOptions(type)) : IsIntersect(type) ? Intersect(FromTypes6(type.allOf)) : IsUnion(type) ? Union(FromPriorityTypes(type.anyOf)) : IsObject2(type) ? _Object_(FromProperties4(type.properties)) : IsRecord(type) ? Record(FromRecordKey(type), FromType20(RecordValue(type))) : IsTuple(type) ? Tuple(FromTypes6(type.items)) : type;
   return Modifiers(type, next);
 }
 function UnionPrioritySort(type) {
@@ -7459,7 +7191,7 @@ function UnionPrioritySort(type) {
   return result;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/clean/clean.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/clean/clean.mjs
 function Clean(...args) {
   const [context, type, value] = arguments_exports.Match(args, {
     3: (context2, type2, value2) => [context2, type2, value2],
@@ -7469,7 +7201,7 @@ function Clean(...args) {
   return FromType19(context, sorted, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/try/try.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/try/try.mjs
 var try_exports = {};
 __export(try_exports, {
   Fail: () => Fail,
@@ -7484,7 +7216,7 @@ __export(try_exports, {
   TryUndefined: () => TryUndefined
 });
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/try/try_result.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/try/try_result.mjs
 function IsOk(value) {
   return guard_exports.IsObject(value) && guard_exports.HasPropertyKey(value, "value");
 }
@@ -7495,12 +7227,12 @@ function Fail() {
   return void 0;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/try/try_array.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/try/try_array.mjs
 function TryArray(value) {
   return guard_exports.IsArray(value) ? Ok(value) : Ok([value]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/try/try_bigint.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/try/try_bigint.mjs
 function FromBoolean2(value) {
   return guard_exports.IsEqual(value, true) ? Ok(BigInt(1)) : Ok(BigInt(0));
 }
@@ -7524,7 +7256,7 @@ function TryBigInt(value) {
   return guard_exports.IsBigInt(value) ? Ok(value) : guard_exports.IsBoolean(value) ? FromBoolean2(value) : guard_exports.IsNumber(value) ? Ok(BigInt(Math.trunc(value))) : guard_exports.IsNull(value) ? Ok(BigInt(0)) : guard_exports.IsString(value) ? FromString2(value) : guard_exports.IsUndefined(value) ? Ok(BigInt(0)) : Fail();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/try/try_boolean.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/try/try_boolean.mjs
 function FromBigInt2(value) {
   return guard_exports.IsEqual(value, BigInt(0)) ? Ok(false) : guard_exports.IsEqual(value, BigInt(1)) ? Ok(true) : Fail();
 }
@@ -7538,7 +7270,7 @@ function TryBoolean(value) {
   return guard_exports.IsBigInt(value) ? FromBigInt2(value) : guard_exports.IsBoolean(value) ? Ok(value) : guard_exports.IsNumber(value) ? FromNumber2(value) : guard_exports.IsNull(value) ? Ok(false) : guard_exports.IsString(value) ? FromString3(value) : guard_exports.IsUndefined(value) ? Ok(false) : Fail();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/try/try_null.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/try/try_null.mjs
 function FromBigInt3(value) {
   return guard_exports.IsEqual(value, BigInt(0)) ? Ok(null) : Fail();
 }
@@ -7557,7 +7289,7 @@ function TryNull(value) {
   return guard_exports.IsBigInt(value) ? FromBigInt3(value) : guard_exports.IsBoolean(value) ? FromBoolean3(value) : guard_exports.IsNumber(value) ? FromNumber3(value) : guard_exports.IsNull(value) ? Ok(null) : guard_exports.IsString(value) ? FromString4(value) : guard_exports.IsUndefined(value) ? Ok(null) : Fail();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/try/try_number.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/try/try_number.mjs
 var maxBigInt = BigInt(Number.MAX_SAFE_INTEGER);
 var minBigInt = BigInt(Number.MIN_SAFE_INTEGER);
 function FromBigInt4(value) {
@@ -7584,12 +7316,12 @@ function TryNumber(value) {
   return guard_exports.IsBigInt(value) ? FromBigInt4(value) : guard_exports.IsBoolean(value) ? FromBoolean4(value) : guard_exports.IsNumber(value) ? Ok(value) : guard_exports.IsNull(value) ? Ok(0) : guard_exports.IsString(value) ? FromString5(value) : guard_exports.IsUndefined(value) ? Ok(0) : Fail();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/try/try_string.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/try/try_string.mjs
 function TryString(value) {
   return guard_exports.IsBigInt(value) ? Ok(value.toString()) : guard_exports.IsBoolean(value) ? Ok(value.toString()) : guard_exports.IsNumber(value) ? Ok(value.toString()) : guard_exports.IsNull(value) ? Ok("null") : guard_exports.IsString(value) ? Ok(value) : guard_exports.IsUndefined(value) ? Ok("") : Fail();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/try/try_undefined.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/try/try_undefined.mjs
 function FromBigInt5(value) {
   return guard_exports.IsEqual(value, BigInt(0)) ? Ok(void 0) : Fail();
 }
@@ -7608,48 +7340,48 @@ function TryUndefined(value) {
   return guard_exports.IsBigInt(value) ? FromBigInt5(value) : guard_exports.IsBoolean(value) ? FromBoolean5(value) : guard_exports.IsNumber(value) ? FromNumber4(value) : guard_exports.IsNull(value) ? Ok(void 0) : guard_exports.IsString(value) ? FromString6(value) : guard_exports.IsUndefined(value) ? Ok(value) : Fail();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_array.mjs
-function FromArray8(context, type, value) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_array.mjs
+function FromArray7(context, type, value) {
   const result = try_exports.TryArray(value);
   return result.value.map((value2) => FromType21(context, type.items, value2));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_bigint.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_bigint.mjs
 function FromBigInt6(_context, _type, value) {
   const result = try_exports.TryBigInt(value);
   return try_exports.IsOk(result) ? result.value : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_boolean.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_boolean.mjs
 function FromBoolean6(_context, _type, value) {
   const result = try_exports.TryBoolean(value);
   return try_exports.IsOk(result) ? result.value : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_cyclic.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_cyclic.mjs
 function FromCyclic7(context, type, value) {
   return FromType21({ ...context, ...type.$defs }, Ref(type.$ref), value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_enum.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_enum.mjs
 function FromEnum3(context, type, value) {
   return FromType21(context, Evaluate(type), value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_integer.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_integer.mjs
 function FromInteger(_context, _type, value) {
   const result = try_exports.TryNumber(value);
   return try_exports.IsOk(result) ? Math.trunc(result.value) : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_intersect.mjs
 function FromIntersect7(context, type, value) {
   const instantiated = Instantiate(context, type);
   const evaluated = Evaluate(instantiated);
   return FromType21(context, evaluated, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_literal.mjs
 function FromLiteralBigInt(_context, type, value) {
   const result = try_exports.TryBigInt(value);
   return try_exports.IsOk(result) && guard_exports.IsEqual(type.const, result.value) ? result.value : value;
@@ -7672,19 +7404,19 @@ function FromLiteral6(context, type, value) {
   return IsLiteralBigInt(type) ? FromLiteralBigInt(context, type, value) : IsLiteralBoolean(type) ? FromLiteralBoolean(context, type, value) : IsLiteralNumber(type) ? FromLiteralNumber(context, type, value) : IsLiteralString(type) ? FromLiteralString(context, type, value) : Unreachable();
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_null.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_null.mjs
 function FromNull2(_context, _type, value) {
   const result = try_exports.TryNull(value);
   return try_exports.IsOk(result) ? result.value : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_number.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_number.mjs
 function FromNumber5(_context, _type, value) {
   const result = try_exports.TryNumber(value);
   return try_exports.IsOk(result) ? result.value : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_additional.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_additional.mjs
 function FromAdditionalProperties(context, entries, additionalProperties, value) {
   const keys = guard_exports.Keys(value);
   for (const [regexp, _] of entries) {
@@ -7697,12 +7429,12 @@ function FromAdditionalProperties(context, entries, additionalProperties, value)
   return value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/shared/optional_undefined.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/shared/optional_undefined.mjs
 function IsOptionalUndefined(property, key, value) {
   return IsOptional(property) && guard_exports.IsUndefined(value[key]);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_object.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_object.mjs
 function FromProperties5(context, type, value) {
   const entries = guard_exports.EntriesRegExp(type.properties);
   const keys = guard_exports.Keys(value);
@@ -7715,11 +7447,11 @@ function FromProperties5(context, type, value) {
   }
   return guard_exports.HasPropertyKey(type, "additionalProperties") && guard_exports.IsObject(type.additionalProperties) ? FromAdditionalProperties(context, entries, type.additionalProperties, value) : value;
 }
-function FromObject12(context, type, value) {
+function FromObject11(context, type, value) {
   return guard_exports.IsObjectNotArray(value) ? FromProperties5(context, type, value) : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_record.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_record.mjs
 function FromPatternProperties(context, type, value) {
   const entries = guard_exports.EntriesRegExp(type.patternProperties);
   const keys = guard_exports.Keys(value);
@@ -7736,23 +7468,23 @@ function FromRecord4(context, type, value) {
   return guard_exports.IsObjectNotArray(value) ? FromPatternProperties(context, type, value) : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_ref.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_ref.mjs
 function FromRef6(context, type, value) {
   return guard_exports.HasPropertyKey(context, type.$ref) ? FromType21(context, context[type.$ref], value) : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_string.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_string.mjs
 function FromString7(_context, _type, value) {
   const result = try_exports.TryString(value);
   return try_exports.IsOk(result) ? result.value : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_template_literal.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_template_literal.mjs
 function FromTemplateLiteral4(context, type, value) {
   return FromType21(context, Evaluate(type), value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_tuple.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_tuple.mjs
 function FromTuple6(context, type, value) {
   if (!guard_exports.IsArray(value))
     return value;
@@ -7762,13 +7494,13 @@ function FromTuple6(context, type, value) {
   return value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_undefined.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_undefined.mjs
 function FromUndefined2(_context, _type, value) {
   const result = try_exports.TryUndefined(value);
   return try_exports.IsOk(result) ? result.value : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_union.mjs
 function FromUnion10(context, type, value) {
   const matched = type.anyOf.some((type2) => Check2(context, type2, value));
   if (matched)
@@ -7778,18 +7510,18 @@ function FromUnion10(context, type, value) {
   return guard_exports.IsUndefined(selected) ? value : selected;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_void.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_void.mjs
 function FromVoid(_context, _type, value) {
   const result = try_exports.TryUndefined(value);
   return try_exports.IsOk(result) ? void 0 : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/from_type.mjs
 function FromType21(context, type, value) {
-  return IsArray2(type) ? FromArray8(context, type, value) : IsBigInt2(type) ? FromBigInt6(context, type, value) : IsBoolean3(type) ? FromBoolean6(context, type, value) : IsCyclic(type) ? FromCyclic7(context, type, value) : IsEnum(type) ? FromEnum3(context, type, value) : IsInteger2(type) ? FromInteger(context, type, value) : IsIntersect(type) ? FromIntersect7(context, type, value) : IsLiteral(type) ? FromLiteral6(context, type, value) : IsNull2(type) ? FromNull2(context, type, value) : IsNumber3(type) ? FromNumber5(context, type, value) : IsObject2(type) ? FromObject12(context, type, value) : IsRecord(type) ? FromRecord4(context, type, value) : IsRef(type) ? FromRef6(context, type, value) : IsString3(type) ? FromString7(context, type, value) : IsTemplateLiteral(type) ? FromTemplateLiteral4(context, type, value) : IsTuple(type) ? FromTuple6(context, type, value) : IsUndefined2(type) ? FromUndefined2(context, type, value) : IsUnion(type) ? FromUnion10(context, type, value) : IsVoid(type) ? FromVoid(context, type, value) : value;
+  return IsArray2(type) ? FromArray7(context, type, value) : IsBigInt2(type) ? FromBigInt6(context, type, value) : IsBoolean3(type) ? FromBoolean6(context, type, value) : IsCyclic(type) ? FromCyclic7(context, type, value) : IsEnum(type) ? FromEnum3(context, type, value) : IsInteger2(type) ? FromInteger(context, type, value) : IsIntersect(type) ? FromIntersect7(context, type, value) : IsLiteral(type) ? FromLiteral6(context, type, value) : IsNull2(type) ? FromNull2(context, type, value) : IsNumber3(type) ? FromNumber5(context, type, value) : IsObject2(type) ? FromObject11(context, type, value) : IsRecord(type) ? FromRecord4(context, type, value) : IsRef(type) ? FromRef6(context, type, value) : IsString3(type) ? FromString7(context, type, value) : IsTemplateLiteral(type) ? FromTemplateLiteral4(context, type, value) : IsTuple(type) ? FromTuple6(context, type, value) : IsUndefined2(type) ? FromUndefined2(context, type, value) : IsUnion(type) ? FromUnion10(context, type, value) : IsVoid(type) ? FromVoid(context, type, value) : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/convert/convert.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/convert/convert.mjs
 function Convert(...args) {
   const [context, type, value] = arguments_exports.Match(args, {
     3: (context2, type2, value2) => [context2, type2, value2],
@@ -7798,8 +7530,8 @@ function Convert(...args) {
   return FromType21(context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/default/from_array.mjs
-function FromArray9(context, type, value) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/default/from_array.mjs
+function FromArray8(context, type, value) {
   if (!guard_exports.IsArray(value))
     return value;
   for (let i = 0; i < value.length; i++) {
@@ -7808,27 +7540,27 @@ function FromArray9(context, type, value) {
   return value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/default/from_cyclic.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/default/from_cyclic.mjs
 function FromCyclic8(context, type, value) {
   return FromType22({ ...context, ...type.$defs }, Ref(type.$ref), value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/default/from_default.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/default/from_default.mjs
 function FromDefault(type, value) {
   if (!guard_exports.IsUndefined(value))
     return value;
   return guard_exports.IsFunction(type.default) ? type.default() : Clone2(type.default);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/default/from_intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/default/from_intersect.mjs
 function FromIntersect8(context, type, value) {
   const instantiated = Instantiate(context, type);
   const evaluated = Evaluate(instantiated);
   return FromType22(context, evaluated, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/default/from_object.mjs
-function FromObject13(context, type, value) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/default/from_object.mjs
+function FromObject12(context, type, value) {
   if (!guard_exports.IsObject(value))
     return value;
   const knownPropertyKeys = guard_exports.Keys(type.properties);
@@ -7849,7 +7581,7 @@ function FromObject13(context, type, value) {
   return value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/default/from_record.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/default/from_record.mjs
 function FromRecord5(context, type, value) {
   if (!guard_exports.IsObject(value))
     return value;
@@ -7869,12 +7601,12 @@ function FromRecord5(context, type, value) {
   return value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/default/from_ref.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/default/from_ref.mjs
 function FromRef7(context, type, value) {
   return guard_exports.HasPropertyKey(context, type.$ref) ? FromType22(context, context[type.$ref], value) : value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/default/from_tuple.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/default/from_tuple.mjs
 function FromTuple7(context, schema, value) {
   if (!guard_exports.IsArray(value))
     return value;
@@ -7886,7 +7618,7 @@ function FromTuple7(context, schema, value) {
   return value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/default/from_union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/default/from_union.mjs
 function FromUnion11(context, schema, value) {
   for (const inner of schema.anyOf) {
     const result = FromType22(context, inner, Clone2(value));
@@ -7897,13 +7629,13 @@ function FromUnion11(context, schema, value) {
   return value;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/default/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/default/from_type.mjs
 function FromType22(context, type, value) {
   const defaulted = IsDefault(type) ? FromDefault(type, value) : value;
-  return IsArray2(type) ? FromArray9(context, type, defaulted) : IsCyclic(type) ? FromCyclic8(context, type, defaulted) : IsIntersect(type) ? FromIntersect8(context, type, defaulted) : IsObject2(type) ? FromObject13(context, type, defaulted) : IsRecord(type) ? FromRecord5(context, type, defaulted) : IsRef(type) ? FromRef7(context, type, defaulted) : IsTuple(type) ? FromTuple7(context, type, defaulted) : IsUnion(type) ? FromUnion11(context, type, defaulted) : defaulted;
+  return IsArray2(type) ? FromArray8(context, type, defaulted) : IsCyclic(type) ? FromCyclic8(context, type, defaulted) : IsIntersect(type) ? FromIntersect8(context, type, defaulted) : IsObject2(type) ? FromObject12(context, type, defaulted) : IsRecord(type) ? FromRecord5(context, type, defaulted) : IsRef(type) ? FromRef7(context, type, defaulted) : IsTuple(type) ? FromTuple7(context, type, defaulted) : IsUnion(type) ? FromUnion11(context, type, defaulted) : defaulted;
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/default/default.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/default/default.mjs
 function Default(...args) {
   const [context, type, value] = arguments_exports.Match(args, {
     3: (context2, type2, value2) => [context2, type2, value2],
@@ -7912,7 +7644,7 @@ function Default(...args) {
   return FromType22(context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/pipeline/pipeline.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/pipeline/pipeline.mjs
 function Pipeline(pipeline) {
   return (...args) => {
     const [context, type, value] = arguments_exports.Match(args, {
@@ -7923,7 +7655,7 @@ function Pipeline(pipeline) {
   };
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/callback.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/callback.mjs
 function Decode3(_context, type, value) {
   return type["~codec"].decode(value);
 }
@@ -7936,7 +7668,7 @@ function Callback(direction, context, type, value) {
   return guard_exports.IsEqual(direction, "Decode") ? Decode3(context, type, value) : Encode3(context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/from_array.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/from_array.mjs
 function Decode4(direction, context, type, value) {
   if (!guard_exports.IsArray(value))
     return value;
@@ -7954,17 +7686,17 @@ function Encode4(direction, context, type, value) {
   }
   return exterior;
 }
-function FromArray10(direction, context, type, value) {
+function FromArray9(direction, context, type, value) {
   return guard_exports.IsEqual(direction, "Decode") ? Decode4(direction, context, type, value) : Encode4(direction, context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/from_cyclic.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/from_cyclic.mjs
 function FromCyclic9(direction, context, type, value) {
   value = FromType23(direction, { ...context, ...type.$defs }, Ref(type.$ref), value);
   return Callback(direction, context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/from_intersect.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/from_intersect.mjs
 function MergeInteriors(interiors) {
   return interiors.reduce((results, interior) => ({ ...results, ...interior }), {});
 }
@@ -7996,7 +7728,7 @@ function FromIntersect9(direction, context, type, value) {
   return guard_exports.IsEqual(direction, "Decode") ? Decode5(direction, context, type, value) : Encode5(direction, context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/from_object.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/from_object.mjs
 function Decode6(direction, context, type, value) {
   if (!guard_exports.IsObjectNotArray(value))
     return value;
@@ -8018,11 +7750,11 @@ function Encode6(direction, context, type, value) {
   }
   return exterior;
 }
-function FromObject14(direction, context, type, value) {
+function FromObject13(direction, context, type, value) {
   return guard_exports.IsEqual(direction, "Decode") ? Decode6(direction, context, type, value) : Encode6(direction, context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/from_record.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/from_record.mjs
 function Decode7(direction, context, type, value) {
   if (!guard_exports.IsObjectNotArray(value))
     return value;
@@ -8050,15 +7782,15 @@ function FromRecord6(direction, context, type, value) {
   return guard_exports.IsEqual(direction, "Decode") ? Decode7(direction, context, type, value) : Encode7(direction, context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/from_ref.mjs
-function ResolveRef2(direction, context, type, value) {
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/from_ref.mjs
+function ResolveRef(direction, context, type, value) {
   return guard_exports.HasPropertyKey(context, type.$ref) ? FromType23(direction, context, context[type.$ref], value) : value;
 }
 function FromRef8(direction, context, type, value) {
-  return guard_exports.IsEqual(direction, "Decode") ? Callback(direction, context, type, ResolveRef2(direction, context, type, value)) : ResolveRef2(direction, context, type, Callback(direction, context, type, value));
+  return guard_exports.IsEqual(direction, "Decode") ? Callback(direction, context, type, ResolveRef(direction, context, type, value)) : ResolveRef(direction, context, type, Callback(direction, context, type, value));
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/from_tuple.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/from_tuple.mjs
 function Decode8(direction, context, type, value) {
   if (!guard_exports.IsArray(value))
     return value;
@@ -8080,7 +7812,7 @@ function FromTuple8(direction, context, type, value) {
   return guard_exports.IsEqual(direction, "Decode") ? Decode8(direction, context, type, value) : Encode8(direction, context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/from_union.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/from_union.mjs
 function Decode9(direction, context, type, value) {
   for (const schema of type.anyOf) {
     if (!Check2(context, schema, value))
@@ -8104,12 +7836,12 @@ function FromUnion12(direction, context, type, value) {
   return guard_exports.IsEqual(direction, "Decode") ? Decode9(direction, context, type, value) : Encode9(direction, context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/from_type.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/from_type.mjs
 function FromType23(direction, context, type, value) {
-  return IsArray2(type) ? FromArray10(direction, context, type, value) : IsCyclic(type) ? FromCyclic9(direction, context, type, value) : IsIntersect(type) ? FromIntersect9(direction, context, type, value) : IsObject2(type) ? FromObject14(direction, context, type, value) : IsRecord(type) ? FromRecord6(direction, context, type, value) : IsRef(type) ? FromRef8(direction, context, type, value) : IsTuple(type) ? FromTuple8(direction, context, type, value) : IsUnion(type) ? FromUnion12(direction, context, type, value) : Callback(direction, context, type, value);
+  return IsArray2(type) ? FromArray9(direction, context, type, value) : IsCyclic(type) ? FromCyclic9(direction, context, type, value) : IsIntersect(type) ? FromIntersect9(direction, context, type, value) : IsObject2(type) ? FromObject13(direction, context, type, value) : IsRecord(type) ? FromRecord6(direction, context, type, value) : IsRef(type) ? FromRef8(direction, context, type, value) : IsTuple(type) ? FromTuple8(direction, context, type, value) : IsUnion(type) ? FromUnion12(direction, context, type, value) : Callback(direction, context, type, value);
 }
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/decode.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/decode.mjs
 var DecodeError = class extends AssertError {
   constructor(value, errors) {
     super("Decode", value, errors);
@@ -8133,7 +7865,7 @@ var Decoder = Pipeline([
   (context, type, value) => DecodeUnsafe(context, type, value)
 ]);
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/codec/encode.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/codec/encode.mjs
 var EncodeError = class extends AssertError {
   constructor(value, errors) {
     super("Encode", value, errors);
@@ -8157,15 +7889,18 @@ var Encoder = Pipeline([
   (context, type, value) => Assert2(context, type, value)
 ]);
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/parse/parse.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/parse/parse.mjs
 var ParseError = class extends AssertError {
   constructor(value, errors) {
     super("Parse", value, errors);
   }
 };
 function Assert3(context, type, value) {
+  EnableParseErrors();
+  const errors = Errors2(context, type, value);
+  DisableParseErrors();
   if (!Check2(context, type, value))
-    throw new ParseError(value, Errors2(context, type, value));
+    throw new ParseError(value, errors);
   return value;
 }
 var Parser = Pipeline([
@@ -8176,7 +7911,7 @@ var Parser = Pipeline([
   (context, type, value) => Assert3(context, type, value)
 ]);
 
-// node_modules/.pnpm/typebox@1.3.27/node_modules/typebox/build/value/delta/edit.mjs
+// node_modules/.pnpm/typebox@1.4.7/node_modules/typebox/build/value/delta/edit.mjs
 var Insert2 = _Object_({
   type: Literal("insert"),
   path: String2(),
@@ -8187,11 +7922,11 @@ var Update2 = Object({
   path: String2(),
   value: Unknown()
 });
-var Delete2 = _Object_({
+var Delete = _Object_({
   type: Literal("delete"),
   path: String2()
 });
-var Edit = Union([Insert2, Update2, Delete2]);
+var Edit = Union([Insert2, Update2, Delete]);
 
 // src/codemode/protocol.ts
 var MEMORY_LIMIT_BYTES = 2 * 1024 ** 3;

@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { z } from "zod";
 
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, structuredResult, watchRun } from "../base.js";
@@ -11,9 +11,9 @@ export function addWatchRunTool(gh: GhClient, bus: ToolBus) {
     description:
       "Watch a GitHub Actions workflow run until it completes. " +
       "Blocks until the run finishes and returns its final status.",
-    parameters: Type.Object({
-      run_id: Type.Union([Type.Number(), Type.String()], { description: "Workflow run ID" }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
+    parameters: z.object({
+      run_id: z.union([z.number(), z.string()]).describe("Workflow run ID"),
+      repo: z.string().describe("OWNER/REPO").optional(),
     }),
     structuredSchema: ghRunPayloadSchema,
     async execute(_id, params, signal, ctx) {

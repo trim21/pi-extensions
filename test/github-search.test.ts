@@ -20,8 +20,7 @@ function build(kind: "issue" | "pr", params: QueryParams = {}) {
 describe("buildSearchQuery state semantics", () => {
   it("state / limit 的缺省值来自工具参数 schema", () => {
     const schema = listFilterParameters("issue");
-    expect(schema.properties.state).toMatchObject({ default: "open" });
-    expect(schema.properties.limit).toMatchObject({ default: 30 });
+    expect(schema.parse({})).toMatchObject({ state: "open", limit: 30 });
   });
 
   it("state=all applies no state filter", () => {

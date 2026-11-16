@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { z } from "zod";
 
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, structuredResult } from "../base.js";
@@ -9,9 +9,9 @@ export function addReadIssueTool(gh: GhClient, bus: ToolBus) {
     name: "read-github-issue",
     label: "GitHub Issue",
     description: "Get details of a GitHub issue by number.",
-    parameters: Type.Object({
-      number: Type.Union([Type.Number(), Type.String()], { description: "Issue number" }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
+    parameters: z.object({
+      number: z.union([z.number(), z.string()]).describe("Issue number"),
+      repo: z.string().describe("OWNER/REPO (defaults to current repo)").optional(),
     }),
     structuredSchema: issueViewSchema,
     async execute(_id, params, signal, ctx) {

@@ -1,7 +1,7 @@
-import { Type } from "typebox";
+import { z } from "zod";
 
-import { Default } from "../../lib/schema-defaults.js";
 import { type ToolBus } from "../../lib/tool-bus.js";
+import { booleanParam } from "../../lib/zod-tool.js";
 import { type GhClient, resolveRepoTarget, structuredResult } from "../base.js";
 import { prCommentsSchema } from "../schemas.js";
 
@@ -11,15 +11,11 @@ export function addReadPrCommentsTool(gh: GhClient, bus: ToolBus) {
     label: "GitHub PR Comments",
     description:
       "Get review comments on a GitHub pull request. Set reviews=true for inline code review comments with diff_hunk.",
-    parameters: Type.Object({
-      number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
-      repo: Type.Optional(Type.String({ description: "OWNER/REPO" })),
-      reviews: Default(
-        Type.Boolean({
-          description:
-            "If true, returns inline code review comments (with diff_hunk, path, line) via API instead of issue comments",
-        }),
-        false,
+    parameters: z.object({
+      number: z.union([z.number(), z.string()]).describe("PR number"),
+      repo: z.string().describe("OWNER/REPO").optional(),
+      reviews: booleanParam({ default: false }).describe(
+        "If true, returns inline code review comments (with diff_hunk, path, line) via API instead of issue comments",
       ),
     }),
     structuredSchema: prCommentsSchema,

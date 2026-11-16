@@ -1,4 +1,4 @@
-import { type Static, Type } from "typebox";
+import { z } from "zod";
 
 import { type ToolBus } from "../../lib/tool-bus.js";
 import {
@@ -11,13 +11,13 @@ import {
 } from "../base.js";
 import { prStatusSchema } from "../schemas.js";
 
-const prStatusParameters = Type.Object({
-  number: Type.Union([Type.Number(), Type.String()], { description: "PR number" }),
-  repo: Type.Optional(Type.String({ description: "OWNER/REPO (defaults to current repo)" })),
+const prStatusParameters = z.object({
+  number: z.union([z.number(), z.string()]).describe("PR number"),
+  repo: z.string().describe("OWNER/REPO (defaults to current repo)").optional(),
 });
 
 /** 入参类型由参数 schema 推断，schema 是唯一来源。 */
-type PrStatusParams = Static<typeof prStatusParameters>;
+type PrStatusParams = z.infer<typeof prStatusParameters>;
 
 /**
  * `read-github-pr-status`: the PR head commit's checks as a snapshot. Same read

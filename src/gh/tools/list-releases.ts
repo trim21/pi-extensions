@@ -1,7 +1,6 @@
-import { Type } from "typebox";
+import { z } from "zod";
 
 import { releaseListParameters } from "../../lib/github-params.js";
-import { parseWithSchema } from "../../lib/parse-with-schema.js";
 import { type ToolBus } from "../../lib/tool-bus.js";
 import { type GhClient, resolveRepoTarget, structuredResult } from "../base.js";
 import { ghReleaseListPayloadSchema, ghReleaseSummarySchema } from "../schemas.js";
@@ -17,7 +16,7 @@ export function addListReleasesTool(gh: GhClient, bus: ToolBus) {
       const { limit } = params;
       const { owner, name } = await resolveRepoTarget(params.repo, signal, ctx.cwd, params);
       const items = await gh.reads.listReleases(owner, name, limit, signal);
-      const releases = parseWithSchema(Type.Array(ghReleaseSummarySchema), items);
+      const releases = z.array(ghReleaseSummarySchema).parse(items);
       return structuredResult(ghReleaseListPayloadSchema, { releases });
     },
   });
