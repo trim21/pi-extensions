@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@cortexkit/aft-bridge':
-        specifier: 0.64.0
-        version: 0.64.0
+        specifier: 0.65.0
+        version: 0.65.0
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -140,8 +140,8 @@ importers:
         version: 5.1.0(@types/node@24.19.2)(@vitest/coverage-v8@5.1.0)(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
     optionalDependencies:
       '@cortexkit/aft-linux-x64':
-        specifier: 0.64.0
-        version: 0.64.0
+        specifier: 0.65.0
+        version: 0.65.0
 
 packages:
 
@@ -265,17 +265,17 @@ packages:
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
 
-  '@cortexkit/aft-bridge@0.64.0':
-    resolution: {integrity: sha512-4EQO/hJmjWh8LUvul5YL+CAuu2jzIZdfX6AuE436PzqcF8jLEMJPVgN9aWhHPcaTD4JxpFpsoJVyNawvZRjN7g==}
+  '@cortexkit/aft-bridge@0.65.0':
+    resolution: {integrity: sha512-rhgcyQnW2gAMceqXs0RcScIPE2A6+yaAg2EV1/0R98GT+dyYCSf2zQJAJVU0j67GBko8Mt4rSZkF5dq6fA59QQ==}
 
-  '@cortexkit/aft-linux-x64@0.64.0':
-    resolution: {integrity: sha512-PwHrqOd40gvMP/DI8Bf/QNoZqkLvwken9Bwkwi17MfA6izFEY4bzdt28IbgvHYT+E2QAwpmgZvSJNIJuxOFEDA==}
+  '@cortexkit/aft-linux-x64@0.65.0':
+    resolution: {integrity: sha512-TzjOERu3FkFVdk7GMI5WJtvQqczUwd/FPS6iUXYsW7YvvN3yEERxEU4207DdI0mJsXS2VpAc9mKl9tmdu8+zrA==}
     cpu: [x64]
     os: [linux]
     hasBin: true
 
-  '@cortexkit/subc-client@0.21.2':
-    resolution: {integrity: sha512-xQLfwFBOigFRF1VMgta7Dr/640H34EHexRtFLDkH42yAAMvtXJFmQ4bsjin6CDmfXiKeItsuQqjYFRMEZs4Aaw==}
+  '@cortexkit/subc-client@0.24.5':
+    resolution: {integrity: sha512-quPMUUXjj6RG8Ns3EJcNV7rbFyCLP5MVoaOSSBAwD6deY8Rxg77Y/4GA5bKdr5WAO/JTQT9aLz53fTvuzNF9Sg==}
     engines: {node: '>=18'}
 
   '@earendil-works/pi-agent-core@1.5.0':
@@ -2796,15 +2796,15 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
-  '@cortexkit/aft-bridge@0.64.0':
+  '@cortexkit/aft-bridge@0.65.0':
     dependencies:
-      '@cortexkit/subc-client': 0.21.2
+      '@cortexkit/subc-client': 0.24.5
       undici: 7.30.2
 
-  '@cortexkit/aft-linux-x64@0.64.0':
+  '@cortexkit/aft-linux-x64@0.65.0':
     optional: true
 
-  '@cortexkit/subc-client@0.21.2': {}
+  '@cortexkit/subc-client@0.24.5': {}
 
   '@earendil-works/pi-agent-core@1.5.0(@aws-sdk/credential-provider-node@3.972.97)(@smithy/signature-v4@5.7.5)(undici@8.12.3)(ws@8.23.0)(zod@4.6.7)':
     dependencies:
