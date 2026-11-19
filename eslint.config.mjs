@@ -129,6 +129,10 @@ export default defineConfig(
       // 只被一个函数用到的模块级 type alias（`type X = Static<typeof xSchema>` 这类）刻意与它
       // 依赖的 schema / 数组常量放在一起；该规则要求把它们挪进函数体，会切散这种就近关系。
       "unicorn/prefer-smaller-scope": "off",
+      // v80 把该规则放进 recommended：它要求把 options 对象前的可选位置参数并入 options
+      // 对象，且「options 对象」的判定宽到把 `NodeJS.ProcessEnv` 这类索引签名类型也算上，
+      // 按它重构只是机械改写内部签名（含 LspService 接口形状），没有可读性收益。
+      "unicorn/prefer-options-parameter": "off",
       quotes: "off",
       "@typescript-eslint/quotes": "off",
       "n/no-missing-import": "off",
