@@ -87,12 +87,12 @@
       "prettier --write"
     ]
   },
-  "packageManager": "pnpm@11.28.12",
+  "packageManager": "pnpm@11.28.13",
   "engines": {
     "node": ">=24.14"
   },
   "dependencies": {
-    "@cortexkit/aft-bridge": "0.65.0",
+    "@cortexkit/aft-bridge": "0.66.0",
     "@mozilla/readability": "^0.6.0",
     "@parcel/watcher": "^2.6.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
@@ -110,6 +110,6 @@
     "zod": "^4.6.7"
   },
   "optionalDependencies": {
-    "@cortexkit/aft-linux-x64": "0.65.0"
+    "@cortexkit/aft-linux-x64": "0.66.0"
   }
 }
