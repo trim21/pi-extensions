@@ -519,7 +519,6 @@ export function registerFileTools(
     description: [
       "Writes a file to the local filesystem.",
       "This tool overwrites an existing file with the full content provided.",
-      "If the file exists, you must use Read first. Prefer Edit for partial changes.",
     ].join("\n"),
     promptSnippet: "Create or overwrite files",
     promptGuidelines: [WRITE_PROMPT],
