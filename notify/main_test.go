@@ -87,74 +87,86 @@ func TestMessageEndpointRejectsBadInput(t *testing.T) {
 	}
 }
 
-func TestScanSession(t *testing.T) {
+func TestScanSessionCwd(t *testing.T) {
 	path := writeSessionFile(t, strings.Join([]string{
 		`{"type":"session","version":3,"id":"abc","cwd":"/home/user/projects/demo"}`,
-		`{"type":"model_change","modelId":"x"}`,
+		`{"type":"session_info","name":"a session title that must be ignored"}`,
 		`{"type":"message","message":{"role":"user","content":"hi"}}`,
-		`{"type":"session_info","name":"first title"}`,
-		`{"type":"session_info","name":"  final title  "}`,
 		``,
 	}, "\n"))
 
-	name, cwd, err := scanSession(path)
+	cwd, err := scanSessionCwd(path)
 	if err != nil {
-		t.Fatalf("scanSession: %v", err)
-	}
-	if name != "final title" {
-		t.Fatalf("name = %q, want %q", name, "final title")
+		t.Fatalf("scanSessionCwd: %v", err)
 	}
 	if cwd != "/home/user/projects/demo" {
 		t.Fatalf("cwd = %q, want %q", cwd, "/home/user/projects/demo")
 	}
 }
 
-func TestScanSessionToleratesLongLines(t *testing.T) {
-	content := `{"type":"session","cwd":"/srv/app"}` + "\n" +
-		`{"type":"message","message":{"text":"` + strings.Repeat("a", 512<<10) + `"}}` + "\n" +
-		`{"type":"session_info","name":"after long line"}` + "\n"
+func TestScanSessionCwdToleratesLongLines(t *testing.T) {
+	content := `{"type":"message","message":{"text":"` + strings.Repeat("a", 512<<10) + `"}}` + "\n" +
+		`{"type":"session","cwd":"/srv/app"}` + "\n"
 
-	name, cwd, err := scanSession(writeSessionFile(t, content))
+	cwd, err := scanSessionCwd(writeSessionFile(t, content))
 	if err != nil {
-		t.Fatalf("scanSession: %v", err)
-	}
-	if name != "after long line" {
-		t.Fatalf("name = %q, want %q", name, "after long line")
+		t.Fatalf("scanSessionCwd: %v", err)
 	}
 	if cwd != "/srv/app" {
 		t.Fatalf("cwd = %q, want %q", cwd, "/srv/app")
 	}
 }
 
-func TestScanSessionEmptyPath(t *testing.T) {
-	name, cwd, err := scanSession("")
+func TestScanSessionCwdEmptyPath(t *testing.T) {
+	cwd, err := scanSessionCwd("")
 	if err != nil {
-		t.Fatalf("scanSession(\"\"): %v", err)
+		t.Fatalf("scanSessionCwd(\"\"): %v", err)
 	}
-	if name != "" || cwd != "" {
-		t.Fatalf("scanSession(\"\") = (%q, %q), want empty", name, cwd)
+	if cwd != "" {
+		t.Fatalf("scanSessionCwd(\"\") = %q, want empty", cwd)
 	}
 }
 
-func TestScanSessionReportsMissingFile(t *testing.T) {
-	_, _, err := scanSession(filepath.Join(t.TempDir(), "missing.jsonl"))
+func TestScanSessionCwdReportsMissingFile(t *testing.T) {
+	_, err := scanSessionCwd(filepath.Join(t.TempDir(), "missing.jsonl"))
 	if err == nil {
-		t.Fatal("scanSession on a missing file returned no error")
+		t.Fatal("scanSessionCwd on a missing file returned no error")
 	}
 	if !strings.Contains(err.Error(), "open session file") {
 		t.Fatalf("error = %q, want it to mention opening the file", err)
 	}
 }
 
-func TestScanSessionReportsUnparsableFile(t *testing.T) {
+func TestScanSessionCwdReportsUnparsableFile(t *testing.T) {
 	path := writeSessionFile(t, "not json\n{\"broken\":\n")
 
-	name, cwd, err := scanSession(path)
+	cwd, err := scanSessionCwd(path)
 	if err == nil {
-		t.Fatalf("scanSession on garbage returned (%q, %q), want error", name, cwd)
+		t.Fatalf("scanSessionCwd on garbage returned %q, want error", cwd)
 	}
 	if !strings.Contains(err.Error(), "no session metadata") {
 		t.Fatalf("error = %q, want it to mention missing metadata", err)
+	}
+}
+
+func TestReadPayload(t *testing.T) {
+	t.Setenv("PENDANT_EVENT", " input_request ")
+	t.Setenv("PENDANT_TITLE", "Pendant")
+	t.Setenv("PENDANT_SESSION_NAME", " fix gotify title ")
+	t.Setenv("PENDANT_SESSION_PATH", " /tmp/session.jsonl ")
+
+	payload := readPayload()
+	if payload.Event != "input_request" {
+		t.Errorf("Event = %q, want %q", payload.Event, "input_request")
+	}
+	if payload.Title != "Pendant" {
+		t.Errorf("Title = %q, want %q", payload.Title, "Pendant")
+	}
+	if payload.SessionName != "fix gotify title" {
+		t.Errorf("SessionName = %q, want %q", payload.SessionName, "fix gotify title")
+	}
+	if payload.SessionPath != "/tmp/session.jsonl" {
+		t.Errorf("SessionPath = %q, want %q", payload.SessionPath, "/tmp/session.jsonl")
 	}
 }
 

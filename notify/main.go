@@ -1,8 +1,9 @@
 // Command pi-notify turns a Pendant hook event into a gotify push.
 //
-// Pendant runs it with PENDANT_EVENT, PENDANT_TITLE and PENDANT_SESSION_PATH in
-// the environment. The session title is read from the pi session JSONL file,
-// because Pendant reports the constant "Pendant" as the notification title.
+// Pendant runs it with PENDANT_EVENT, PENDANT_TITLE, PENDANT_SESSION_NAME and
+// PENDANT_SESSION_PATH in the environment. The notification title comes from
+// PENDANT_SESSION_NAME; the workspace cwd is read from the pi session JSONL
+// file for the project name in the notification body.
 package main
 
 import (
@@ -30,12 +31,12 @@ const (
 type hookPayload struct {
 	Event       string
 	Title       string
+	SessionName string
 	SessionPath string
 }
 
 type sessionRecord struct {
 	Type string `json:"type"`
-	Name string `json:"name"`
 	CWD  string `json:"cwd"`
 }
 
@@ -65,14 +66,15 @@ func run() error {
 		return errors.New("no PENDANT_* environment variables set, refusing to send an empty notification")
 	}
 
-	// A missing or unreadable session file only costs us the notification
-	// title, so report it and keep going instead of dropping the event.
-	sessionName, cwd, sessionErr := scanSession(payload.SessionPath)
+	// A missing or unreadable session file only costs us the project name in
+	// the notification body, so report it and keep going instead of dropping
+	// the event.
+	cwd, sessionErr := scanSessionCwd(payload.SessionPath)
 	if sessionErr != nil {
 		fmt.Fprintf(os.Stderr, "pi-notify: session metadata unavailable: %v\n", sessionErr)
 	}
 
-	title := firstNonEmpty(sessionName, payload.Title, defaultTitle)
+	title := firstNonEmpty(payload.SessionName, payload.Title, defaultTitle)
 	body := notificationBody(payload.Event, cwd)
 
 	client := newClient(*noProxy)
@@ -98,6 +100,7 @@ func readPayload() hookPayload {
 	return hookPayload{
 		Event:       strings.TrimSpace(os.Getenv("PENDANT_EVENT")),
 		Title:       strings.TrimSpace(os.Getenv("PENDANT_TITLE")),
+		SessionName: strings.TrimSpace(os.Getenv("PENDANT_SESSION_NAME")),
 		SessionPath: strings.TrimSpace(os.Getenv("PENDANT_SESSION_PATH")),
 	}
 }
@@ -149,22 +152,20 @@ func notificationBody(event, cwd string) string {
 	}
 }
 
-// scanSession collects the latest session name and workspace cwd from the pi
-// session JSONL file. Records are appended over a session's lifetime, so the
-// last session_info record wins. The returned values are still usable when err
-// is set.
-func scanSession(path string) (string, string, error) {
+// scanSessionCwd collects the workspace cwd from the pi session JSONL file.
+// The returned value is still usable when err is set.
+func scanSessionCwd(path string) (string, error) {
 	if path == "" {
-		return "", "", nil
+		return "", nil
 	}
 
 	file, err := os.Open(path)
 	if err != nil {
-		return "", "", fmt.Errorf("open session file: %w", err)
+		return "", fmt.Errorf("open session file: %w", err)
 	}
 	defer file.Close()
 
-	var name, cwd string
+	var cwd string
 	var malformed int
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxLineSize)
@@ -175,25 +176,19 @@ func scanSession(path string) (string, string, error) {
 			continue
 		}
 
-		switch record.Type {
-		case "session":
-			if cwd == "" {
-				cwd = strings.TrimSpace(record.CWD)
-			}
-		case "session_info":
-			if trimmed := strings.TrimSpace(record.Name); trimmed != "" {
-				name = trimmed
-			}
+		if record.Type == "session" && strings.TrimSpace(record.CWD) != "" {
+			cwd = strings.TrimSpace(record.CWD)
+			break
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return name, cwd, fmt.Errorf("read session file %s: %w", path, err)
+		return cwd, fmt.Errorf("read session file %s: %w", path, err)
 	}
-	if name == "" && cwd == "" && malformed > 0 {
-		return "", "", fmt.Errorf("no session metadata in %s (%d malformed lines)", path, malformed)
+	if cwd == "" && malformed > 0 {
+		return "", fmt.Errorf("no session metadata in %s (%d malformed lines)", path, malformed)
 	}
 
-	return name, cwd, nil
+	return cwd, nil
 }
 
 func postGotify(client *http.Client, endpoint, token, title, message string) error {
