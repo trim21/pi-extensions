@@ -68,9 +68,16 @@ async function emitSessionStart(
   }
 }
 
+// 配置隔离：settings 与全局 lsp.json 注入必然不存在的路径（缺失文件按未配置
+// 处理），不读本机用户配置。
+const ISOLATION = {
+  settingsPath: join(tmpdir(), "cc-lsp-e2e-inspect-settings-does-not-exist.json"),
+  globalConfigPath: join(tmpdir(), "cc-lsp-e2e-inspect-lsp-does-not-exist.json"),
+};
+
 const ENTRIES: Record<string, ToolsetLoader> = {
-  "claude-code": claudeCodeFileTools,
-  opencode: opencodeFileTools,
+  "claude-code": (pi) => claudeCodeFileTools(pi, ISOLATION),
+  opencode: (pi) => opencodeFileTools(pi, ISOLATION),
 };
 
 function context(cwd: string) {

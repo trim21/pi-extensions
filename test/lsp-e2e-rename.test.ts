@@ -77,9 +77,22 @@ async function emitSessionStart(
   }
 }
 
+// 配置隔离：服务器定义写进临时项目的 .pi/lsp.json；settings 与全局 lsp.json
+// 注入必然不存在的路径（缺失文件按未配置处理），不读本机用户配置。
+const ISOLATION = {
+  settingsPath: join(tmpdir(), "cc-lsp-e2e-rename-settings-does-not-exist.json"),
+  globalConfigPath: join(tmpdir(), "cc-lsp-e2e-rename-lsp-does-not-exist.json"),
+};
+
 const ENTRIES: Record<string, ToolsetEntry> = {
-  "claude-code": { load: () => loadFileTools(claudeCodeFileTools), tracksReads: true },
-  opencode: { load: () => loadFileTools(opencodeFileTools), tracksReads: true },
+  "claude-code": {
+    load: () => loadFileTools((pi) => claudeCodeFileTools(pi, ISOLATION)),
+    tracksReads: true,
+  },
+  opencode: {
+    load: () => loadFileTools((pi) => opencodeFileTools(pi, ISOLATION)),
+    tracksReads: true,
+  },
 };
 
 function context(cwd: string) {

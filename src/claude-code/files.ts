@@ -628,6 +628,11 @@ export interface ClaudeCodeFileToolOptions extends LspServiceOptions {
    * 来自 `personalExtensions.fileIoReadTracking`；缺省 true。
    */
   readTracking?: boolean;
+  /**
+   * 注入固定的 settings 来源（如测试指向必然不存在的路径以取默认配置）；
+   * 缺省读用户 settings.json。
+   */
+  settingsPath?: string;
 }
 
 /**
@@ -725,7 +730,7 @@ export default function claudeCodeFileTools(
   pi: ExtensionAPI,
   options?: ClaudeCodeFileToolOptions,
 ): void {
-  const registration = createToolRegistration(pi);
+  const registration = createToolRegistration(pi, options?.settingsPath);
   const toolset = createClaudeCodeFileTools(pi, {
     ...options,
     bus: registration.bus,

@@ -472,8 +472,12 @@ describe("opencode read reports LSP diagnostics", () => {
     const recorder = createToolRecorder<Tool>();
     opencodeFileTools(
       recorder.pi,
-      // globalConfigPath 指向临时配置，隔离真实全局 lsp.json
-      { globalConfigPath: configPath },
+      // globalConfigPath 指向临时配置；settingsPath 指向必然不存在的文件
+      //（缺失文件按未配置处理）：隔离真实全局 lsp.json 与用户 settings.json
+      {
+        globalConfigPath: configPath,
+        settingsPath: join(tmpdir(), "cc-opencode-read-settings-does-not-exist.json"),
+      },
     );
 
     const lspCtx = {

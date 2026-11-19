@@ -954,6 +954,11 @@ export interface OpencodeFileToolOptions extends LspServiceOptions {
    * 来自 `personalExtensions.fileIoReadTracking`；缺省 true。
    */
   readTracking?: boolean;
+  /**
+   * 注入固定的 settings 来源（如测试指向必然不存在的路径以取默认配置）；
+   * 缺省读用户 settings.json。
+   */
+  settingsPath?: string;
 }
 
 /** 一套文件工具集：reads state 归实例所有，LSP 与请求策略可以由入口注入共享。 */
@@ -1036,7 +1041,7 @@ export default function opencodeFileTools(
   pi: ExtensionAPI,
   options?: OpencodeFileToolOptions,
 ): void {
-  const registration = createToolRegistration(pi);
+  const registration = createToolRegistration(pi, options?.settingsPath);
   const toolset = createOpencodeFileTools(pi, {
     ...options,
     bus: registration.bus,
