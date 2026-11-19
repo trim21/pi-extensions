@@ -1,12 +1,13 @@
 import { ChildProcess, spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   completeBwrapConfig,
@@ -88,10 +89,53 @@ async function runInStack(
   }
 }
 
-// 需要真实 mihomo/slirp4netns/unshare 与可出网的 DNS，常规 CI 不满足；
-// 手动用 RUN_NETSTACK_INTEGRATION=1 运行。某些环境的系统 DNS 走 slirp4netns
-// 出站不可达时，可用 NETSTACK_DNS 指定一个可通的 DNS（如 NETSTACK_DNS=223.5.5.5）。
+// 需要真实 mihomo/slirp4netns/unshare：CI 已装齐并在 ci.yml 里设 RUN_NETSTACK_INTEGRATION=1
+// 全量运行，本地手动跑同一变量。真实出网用例的目标是本测试自建的本机 HTTP 服务：
+// nip.io 域名（10-0-2-2.nip.io）解析回 slirp4netns 的宿主别名 10.0.2.2，连接不经过
+// 任何外部服务（此前直连真实站点曾因 runner 出网瞬断随机失败：curl: (35) Broken pipe）。
+// DIRECT 拨号前的 DNS 查询仍走宿主配置的解析器；系统 DNS 走 slirp4netns 出站不可达时，
+// 可用 NETSTACK_DNS 指定一个可通的 DNS（如 NETSTACK_DNS=223.5.5.5）。
 describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack integration", () => {
+  /**
+   * slirp4netns 的宿主别名是 10.0.2.2（沙箱内访问宿主 loopback 服务的地址）；
+   * 把它编进名字的 nip.io 域名由公共 DNS 解析回 10.0.2.2。
+   */
+  const HOST_ALIAS_DOMAIN = "10-0-2-2.nip.io";
+  // %{http_code} 不能出现在模板字符串里（unicorn 视作错误的插值语法），拆成普通字符串拼接
+  const CURL_HTTP_CODE = 'curl -sS -m 20 -o /dev/null -w "%{http_code}"';
+
+  let localServer: Server | undefined;
+  let localServerPort = 0;
+
+  beforeAll(
+    () =>
+      new Promise<void>((resolve) => {
+        const server = createServer((_request, response) => {
+          response.writeHead(200, { "content-type": "text/plain" });
+          response.end("ok");
+        });
+        localServer = server;
+        server.listen(0, "127.0.0.1", () => {
+          const address = server.address();
+          if (typeof address === "object" && address !== null) {
+            localServerPort = address.port;
+          }
+          resolve();
+        });
+      }),
+  );
+
+  afterAll(
+    () =>
+      new Promise<void>((resolve) => {
+        if (localServer) {
+          localServer.close(() => resolve());
+        } else {
+          resolve();
+        }
+      }),
+  );
+
   // 回归：条目匹配精度两档——裸域名只匹配自己，`*.` 前缀匹配全部子域名（不含 apex）。
   it("matches bare domains exactly and '*.domain' entries as subdomains only", async () => {
     const dnsServers = process.env.NETSTACK_DNS
@@ -109,13 +153,14 @@ describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack inte
     expect(await resolve(["*.pypi.org"], "pypi.org")).toBe("");
     expect(await resolve(["*.pypi.org"], "notpypi.org")).toBe("");
 
-    // 连接层与 DNS 层一致：通配条目的子域名能真的连出去
+    // 连接层与 DNS 层一致：通配条目的子域名能真的连出去。目标换成本机起的 HTTP
+    // 服务（域名经 nip.io 解析回 slirp4netns 的宿主别名），不再依赖外部站点。
     const httpCode = await runInStack(
-      ["*.pythonhosted.org"],
-      'curl -sS -m 20 -o /dev/null -w "%{http_code}" https://files.pythonhosted.org/',
+      ["*.nip.io"],
+      `${CURL_HTTP_CODE} http://a.b.${HOST_ALIAS_DOMAIN}:${localServerPort}/`,
       dnsServers,
     );
-    expect(httpCode).toMatch(/^[1-5]\d\d$/);
+    expect(httpCode).toBe("200");
   }, 120000);
 
   // 回归：每次启动的 mihomo 工作目录必须在停栈时删除（曾只 mkdir 从不删，
@@ -158,18 +203,19 @@ describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack inte
       ? [process.env.NETSTACK_DNS]
       : await resolveDnsServers();
     const stack = await startNetworkStack({
-      allowlist: ["pypi.org", "files.pythonhosted.org"],
+      allowlist: ["pypi.org", HOST_ALIAS_DOMAIN],
       dnsServers,
       mihomoPath: findMihomo(),
       slirp4netnsPath: findSlirp4netns(),
     });
     try {
+      // 允许的域名（精确条目）能真的连出去：目标同样是本机起的 HTTP 服务
       expect(
         await execInStack(
           stack,
-          "curl -sS -m 20 -o /dev/null -w '%{http_code}' https://pypi.org/simple/",
+          `${CURL_HTTP_CODE} http://${HOST_ALIAS_DOMAIN}:${localServerPort}/`,
         ),
-      ).toContain("200");
+      ).toBe("200");
 
       const out = await execInStack(
         stack,
