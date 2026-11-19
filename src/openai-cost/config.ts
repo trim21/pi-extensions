@@ -3,9 +3,9 @@
  * 用 typebox 校验，解析失败或文件缺失时视为未配置。
  */
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -55,7 +55,7 @@ export interface OpenaiCostConfig {
 }
 
 function openaiCostConfigPath(): string {
-  return join(homedir(), ".pi", "agent", "openai-cost.json");
+  return join(getAgentDir(), "openai-cost.json");
 }
 
 function nonEmpty(value: string | undefined): string | undefined {

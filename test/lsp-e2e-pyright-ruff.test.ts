@@ -26,25 +26,35 @@ interface RegisteredTool {
   execute: (...args: any[]) => Promise<any>;
 }
 
+// 配置隔离：settings 与全局 lsp.json 注入必然不存在的路径（缺失文件按未配置
+// 处理），不读本机用户配置。
+const ISOLATION = {
+  settingsPath: join(tmpdir(), "cc-lsp-e2e-pyright-settings-does-not-exist.json"),
+  globalConfigPath: join(tmpdir(), "cc-lsp-e2e-pyright-lsp-does-not-exist.json"),
+};
+
 function loadFileTools(): {
   tools: Map<string, RegisteredTool>;
   emitSessionStart: (cwd: string) => Promise<void>;
 } {
   const tools = new Map<string, RegisteredTool>();
   const handlers = new Map<string, ((...args: any[]) => unknown)[]>();
-  claudeCodeFileTools({
-    registerTool(tool: RegisteredTool) {
-      tools.set(tool.name, tool);
-    },
-    registerFlag: vi.fn(),
-    registerCommand: vi.fn(),
-    on(event: string, handler: (...args: any[]) => unknown) {
-      const list = handlers.get(event) ?? [];
-      list.push(handler);
-      handlers.set(event, list);
-    },
-    exec: vi.fn(),
-  } as never);
+  claudeCodeFileTools(
+    {
+      registerTool(tool: RegisteredTool) {
+        tools.set(tool.name, tool);
+      },
+      registerFlag: vi.fn(),
+      registerCommand: vi.fn(),
+      on(event: string, handler: (...args: any[]) => unknown) {
+        const list = handlers.get(event) ?? [];
+        list.push(handler);
+        handlers.set(event, list);
+      },
+      exec: vi.fn(),
+    } as never,
+    ISOLATION,
+  );
   return { tools, emitSessionStart: (cwd: string) => emitSessionStart(handlers, cwd) };
 }
 

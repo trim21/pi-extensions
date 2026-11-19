@@ -17,9 +17,9 @@
  */
 
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 
@@ -38,7 +38,7 @@ export interface HttpProxySettings {
 }
 
 function proxyConfigPath(): string {
-  return join(homedir(), ".pi", "agent", "proxy.json");
+  return join(getAgentDir(), "proxy.json");
 }
 
 /** 解析 proxy.json 的内容；字段类型不符时抛出带字段路径的错误。 */

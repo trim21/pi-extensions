@@ -8,12 +8,17 @@ read / edit / write 工具内置 LSP 诊断：读取或写入文件后等待并�
 
 ### Requirement: 服务器配置
 
-LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，按服务器 id 合并；不存在内置默认服务器集合。每个服务器可声明 `kind`（`language` | `linter`，缺省 `language`）。
+LSP 服务器 SHALL 全部由 JSON 配置声明，项目配置优先于全局，按服务器 id 合并；不存在内置默认服务器集合。全局配置路径 SHALL 由 agent dir 解析（`PI_CODING_AGENT_DIR` 可重定向，缺省 `~/.pi/agent/lsp.json`）。每个服务器可声明 `kind`（`language` | `linter`，缺省 `language`）。
 
 #### Scenario: 项目覆盖全局
 
-- **WHEN** 项目 `.pi/lsp.json` 与全局 `~/.pi/agent/lsp.json` 都存在
+- **WHEN** 项目 `.pi/lsp.json` 与全局配置（agent dir 下的 `lsp.json`）都存在
 - **THEN** 顶层字段本地覆盖全局；`servers` 按 id 合并（同名整体覆盖、新 id 新增、全局其余保留）
+
+#### Scenario: 环境变量重定向全局配置
+
+- **WHEN** `PI_CODING_AGENT_DIR` 指向某目录，且该目录下存在 `lsp.json`
+- **THEN** 全局配置从该目录读取，真实 home 下的 `.pi/agent/lsp.json` 不参与合并
 
 #### Scenario: 无内置默认服务器
 

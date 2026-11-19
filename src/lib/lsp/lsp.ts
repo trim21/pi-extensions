@@ -3,7 +3,8 @@
  *
  * - state（client 缓存、broken 集合、spawning 去重）是 service 工厂的
  *   闭包变量，不做成模块级全局；
- * - 配置来源：全局 `~/.pi/agent/lsp.json` + 本地 `<cwd>/.pi/lsp.json`
+ * - 配置来源：全局 lsp.json（agent dir 下，`PI_CODING_AGENT_DIR` 可重定向，
+ *   缺省 `~/.pi/agent`）+ 本地 `<cwd>/.pi/lsp.json`
  *   （本地覆盖全局）：`servers` 按 id 合并（同名 id 整体覆盖、新增 id，全局
  *   其余服务器保留），`watch` 按字段合并（本地逐字段覆盖、`ignore` 取并集）；
  *   合并结果解析为 `ResolvedLspConfig`（缺省值应用、超时换算为 ms、白名单转
@@ -21,10 +22,14 @@
 
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { basename, extname, join, normalize, relative, resolve, sep } from "node:path";
 
-import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionAPI,
+  type ExtensionUIContext,
+  getAgentDir,
+} from "@earendil-works/pi-coding-agent";
 import { debounce, type DebouncedFunc } from "lodash-es";
 import { minimatch } from "minimatch";
 import { type Static, Type } from "typebox";
@@ -346,7 +351,7 @@ export function mergeConfig(globalConfig: LspConfig, localConfig: LspConfig): Ls
  */
 export async function loadLspConfig(
   cwd: string,
-  globalConfigPath: string = join(homedir(), ".pi", "agent", "lsp.json"),
+  globalConfigPath: string = join(getAgentDir(), "lsp.json"),
   onWarning?: (message: string) => void,
 ): Promise<ResolvedLspConfig> {
   const globalConfig = await readConfigFile(globalConfigPath, onWarning);
@@ -573,9 +578,7 @@ export function createLspService(
   const sessionNotify = startupOptions?.notify;
   // 扩展加载时校验全局配置（本地配置在 session_start 预加载时校验）
   validateConfig(
-    resolveConfig(
-      readConfigFileSync(globalConfigPath ?? join(homedir(), ".pi", "agent", "lsp.json")),
-    ),
+    resolveConfig(readConfigFileSync(globalConfigPath ?? join(getAgentDir(), "lsp.json"))),
     adapters,
   );
   const state: LspState = {

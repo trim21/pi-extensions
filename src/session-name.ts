@@ -21,11 +21,10 @@
  */
 
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { type Api, type Model } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -35,7 +34,7 @@ import { isRecord } from "./lib/narrow.js";
 // ── constants ────────────────────────────────────────────────────────────────
 
 /** ~/.pi/agent/settings.json：sessionName 配置所在文件 */
-export const SETTINGS_PATH = join(homedir(), ".pi", "agent", "settings.json");
+export const SETTINGS_PATH = join(getAgentDir(), "settings.json");
 /** 会话名最大长度（字符），模型命名与输出清洗共用 */
 export const DEFAULT_MAX_LENGTH = 30;
 /** 命名请求超时。ctx.signal 在 agent 空闲时为 undefined，不能只依赖它 */
