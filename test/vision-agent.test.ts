@@ -52,7 +52,7 @@ function withTempFile(content: unknown, fn: (path: string) => void) {
   }
 }
 
-/** 把 settings.json 写进临时 home，并加载扩展模块 */
+/** 把 settings.json 写进临时 agent dir（mock getAgentDir），并加载扩展模块 */
 async function loadVisionAgentWithHome(files: Record<string, string>) {
   vi.resetModules();
   const tempHome = mkdtempSync(join(tmpdir(), "vision-home-"));
@@ -61,9 +61,9 @@ async function loadVisionAgentWithHome(files: Record<string, string>) {
   for (const [name, content] of Object.entries(files)) {
     writeFileSync(join(agentDir, name), content, "utf8");
   }
-  vi.doMock("node:os", async (importOriginal) => {
-    const mod = await importOriginal<typeof import("node:os")>();
-    return { ...mod, homedir: () => tempHome };
+  vi.doMock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+    const mod = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+    return { ...mod, getAgentDir: () => agentDir };
   });
   const { default: visionAgent, createVisionTools } = await import("../src/vision-agent.js");
   return { visionAgent, createVisionTools, tempHome };

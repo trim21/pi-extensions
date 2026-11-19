@@ -18,11 +18,10 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
 
 import { type Api, type ImageContent, type Model, type TextContent } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { z } from "zod";
@@ -36,7 +35,7 @@ import { registerToolsOnSessionStart, type ToolModule } from "./lib/tool-registr
 
 export const TOOL_NAME = "describe_image";
 /** ~/.pi/agent/settings.json：visionConfig（provider + model）所在文件 */
-export const SETTINGS_PATH = join(homedir(), ".pi", "agent", "settings.json");
+export const SETTINGS_PATH = join(getAgentDir(), "settings.json");
 /** 单张图片体积上限：base64 后约 1.34 倍，再整体塞进请求 body，需要留出内存余量 */
 export const MAX_IMAGE_BYTES = 100 * 1024 * 1024;
 /** 单次视觉请求的默认超时。ctx.signal 在 agent 空闲时为 undefined，不能只依赖它 */
