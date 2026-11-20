@@ -70,6 +70,21 @@ async function execInStack(stack: NetworkStack, command: string): Promise<string
   return out;
 }
 
+/**
+ * 出网断言的 HTTP 码，带重试：解析仍是外部依赖，瞬断与 allowlist 放行无关（见文件头说明）。
+ * 允许项被彻底拦死时每次都失败，断言照样报错。
+ */
+async function httpCodeWithRetry(run: () => Promise<string>): Promise<string> {
+  let code = "";
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    code = await run();
+    if (code === "200") {
+      return code;
+    }
+  }
+  return code;
+}
+
 /** 起一个栈跑一条命令并收集输出（栈随命令结束停止）。 */
 async function runInStack(
   allowlist: string[],
@@ -93,6 +108,11 @@ async function runInStack(
 // 全量运行，本地手动跑同一变量。真实出网用例的目标是本测试自建的本机 HTTP 服务：
 // nip.io 域名（10-0-2-2.nip.io）解析回 slirp4netns 的宿主别名 10.0.2.2，连接不经过
 // 任何外部服务（此前直连真实站点曾因 runner 出网瞬断随机失败：curl: (35) Broken pipe）。
+// 但域名解析仍是外部依赖：客户端拿到的 fake IP 被 mihomo 还原成域名后，DIRECT 出站要按
+// 域名重新解析真实 IP（direct-nameserver = 宿主上游 DNS），10-0-2-2.nip.io 这条记录由
+// 公共 DNS 给出；上游瞬断时 mihomo 拨号失败、连接被 reset（客户端报 curl: (56) Recv
+// failure，mihomo 日志为 dns resolve failed: couldn't find ip），与本测试要验的 allowlist
+// 放行无关，所以出网断言走 httpCodeWithRetry。
 // DIRECT 拨号前的 DNS 查询仍走宿主配置的解析器；系统 DNS 走 slirp4netns 出站不可达时，
 // 可用 NETSTACK_DNS 指定一个可通的 DNS（如 NETSTACK_DNS=223.5.5.5）。
 describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack integration", () => {
@@ -155,10 +175,12 @@ describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack inte
 
     // 连接层与 DNS 层一致：通配条目的子域名能真的连出去。目标换成本机起的 HTTP
     // 服务（域名经 nip.io 解析回 slirp4netns 的宿主别名），不再依赖外部站点。
-    const httpCode = await runInStack(
-      ["*.nip.io"],
-      `${CURL_HTTP_CODE} http://a.b.${HOST_ALIAS_DOMAIN}:${localServerPort}/`,
-      dnsServers,
+    const httpCode = await httpCodeWithRetry(() =>
+      runInStack(
+        ["*.nip.io"],
+        `${CURL_HTTP_CODE} http://a.b.${HOST_ALIAS_DOMAIN}:${localServerPort}/`,
+        dnsServers,
+      ),
     );
     expect(httpCode).toBe("200");
   }, 120000);
@@ -211,9 +233,8 @@ describe.skipIf(process.env.RUN_NETSTACK_INTEGRATION !== "1")("NetworkStack inte
     try {
       // 允许的域名（精确条目）能真的连出去：目标同样是本机起的 HTTP 服务
       expect(
-        await execInStack(
-          stack,
-          `${CURL_HTTP_CODE} http://${HOST_ALIAS_DOMAIN}:${localServerPort}/`,
+        await httpCodeWithRetry(() =>
+          execInStack(stack, `${CURL_HTTP_CODE} http://${HOST_ALIAS_DOMAIN}:${localServerPort}/`),
         ),
       ).toBe("200");
 
