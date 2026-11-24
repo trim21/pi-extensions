@@ -14,5 +14,7 @@ export default function requestHeaders(pi: ExtensionAPI) {
     event.headers["Thread-Id"] = sessionID;
     // OpenRouter
     event.headers["x-session-id"] = sessionID;
+    // opencode-go
+    event.headers["x-opencode-session"] = sessionID;
   });
 }
