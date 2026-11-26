@@ -148,6 +148,11 @@ opencode 风格工具集（小写 `read` / `edit` / `write` / `grep` / `glob` / 
 - **WHEN** 用户不选预设选项
 - **THEN** 可通过 `Type your own answer.` 自由输入
 
+#### Scenario: 取消自由输入不算作答
+
+- **WHEN** 用户在 `Type your own answer.` 的输入框按 Esc
+- **THEN** 回到选项列表重新选择，不把取消当成一次空答案；在选项列表上再按 Esc 才跳过该问题（返回空数组）。只有显式空提交才按 `Unanswered` 处理
+
 ## Implementation
 
 入口 `src/opencode/index.ts` 聚合注册六组工具：files（read / edit / write，统一构建并共享 LSP service）、grep / glob（ripgrep 搜索）、todo、question、bash。
@@ -158,7 +163,7 @@ opencode 风格工具集（小写 `read` / `edit` / `write` / `grep` / `glob` / 
 - **write**：`guardWriteAccess` 过写保护后写入，自动创建父目录；若该文件已被读过且磁盘内容在读取后发生变化（或被删除），拒绝覆盖。
 - **bash**：走 bwrap 沙箱执行（与 Claude Code 风格 `Bash` 共用 `src/bwrap/` 实现）。
 - **todowrite**：完整列表替换语义，列表存 `details.todos` 随会话分支恢复，用 `details.pendant.markdown` 渲染（`src/lib/pendant.ts` 约定）。
-- **question**：交互走 pi 内置 `ctx.ui.select` / `ctx.ui.input`，阻塞等用户作答。
+- **question**：交互走 pi 内置 `ctx.ui.select` / `ctx.ui.input`，阻塞等用户作答；追问输入统一经 `src/lib/ui.ts` 的 `selectWithOptionalInput`（Esc 回到选项列表），Claude Code 风格的 `AskUserQuestion` 共用同一实现。
 - **LSP 工具族**：`lsp-rename` / `lsp-find-definition` / `lsp-find-reference` / `lsp-inspect` 由 files 模块的 LSP manager 在存在 enabled 服务器时注册（见 `openspec/specs/lsp/spec.md`）。
 
 涉及文件：`src/opencode/`（index.ts / files.ts / edit-engine.ts / ripgrep.ts / grep.ts / glob.ts / bash.ts / todo.ts / question.ts）。

@@ -178,6 +178,21 @@ describe("execute", () => {
     });
   });
 
+  it("goes back to the options when the free-text input is cancelled", async () => {
+    const { tool } = loadTool();
+    const select = vi.fn().mockResolvedValueOnce(CUSTOM_LABEL).mockResolvedValueOnce("A");
+    const input = vi.fn().mockResolvedValue(undefined);
+    const result = await tool.execute(
+      "id",
+      { questions: [q({})] },
+      undefined,
+      undefined,
+      ctxWith({ select, input }),
+    );
+    expect(result.details.answers).toEqual([["A"]]);
+    expect(select).toHaveBeenCalledTimes(2);
+  });
+
   it("treats blank free-text input as an unanswered question", async () => {
     const { tool } = loadTool();
     const select = vi.fn(async () => CUSTOM_LABEL);

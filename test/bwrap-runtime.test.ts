@@ -682,10 +682,11 @@ describe("BwrapRuntime", () => {
       expect(input).toHaveBeenCalledTimes(1);
     });
 
-    it("denies without feedback when the reason input is cancelled", async () => {
+    it("returns to the main decision when the reason input is cancelled", async () => {
       const { runtime } = setupRuntime();
       runtime.setMode(process.cwd(), { fs: "workspace-write" });
-      const select = vi.fn(async () => DENY_WITH_REASON);
+      // 理由输入框 Esc = 回到主决策；第二次选择 Deny，按无理由拒绝
+      const select = vi.fn().mockResolvedValueOnce(DENY_WITH_REASON).mockResolvedValueOnce(DENY);
       const input = vi.fn().mockResolvedValue(undefined);
       await expect(
         runtime.execute({
@@ -694,9 +695,8 @@ describe("BwrapRuntime", () => {
           requestFullAccess: true,
           ctx: fullAccessContext({ select, input }),
         }),
-      ).rejects.toThrow(/User denied command execution\.$/);
-      // 无循环：单选 1 次，input 取消后直接拒绝
-      expect(select).toHaveBeenCalledTimes(1);
+      ).rejects.toThrow(/User denied unsandboxed execution/);
+      expect(select).toHaveBeenCalledTimes(2);
       expect(input).toHaveBeenCalledTimes(1);
     });
 
