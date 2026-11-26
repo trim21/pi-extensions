@@ -105,6 +105,11 @@ Claude Code 风格工具集（大写 `Read` / `Edit` / `Write` / `Bash` / `Grep`
 - **WHEN** 提出一个问题或多个问题
 - **THEN** 阻塞等待用户作答（支持单选/多选与自定义答案），答案返回给模型
 
+#### Scenario: 取消自由输入不算作答
+
+- **WHEN** 用户在 `Other` 的输入框按 Esc
+- **THEN** 回到选项列表重新选择，不把取消当成一次空答案；在选项列表上再按 Esc 才跳过该问题（返回 `Unanswered`）。只有显式空提交才按 `Unanswered` 处理
+
 ## Implementation
 
 入口 `src/claude-code/index.ts` 聚合四组工具：files（Read / Edit / Write）、search（Grep / Glob，`search.ts` 聚合 `grep.ts` / `glob.ts`）、shell（Bash）、session（TodoWrite / AskUserQuestion）。

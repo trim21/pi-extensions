@@ -41,14 +41,36 @@ describe("selectWithOptionalInput", () => {
     expect(input).toHaveBeenCalledWith("Pick", "Type your answer", { signal: undefined });
   });
 
-  it("reports an undefined input when the input dialog is cancelled", async () => {
-    const select = vi.fn(async () => "Other");
+  it("goes back to the selection list when the input dialog is cancelled", async () => {
+    const select = vi.fn().mockResolvedValueOnce("Other").mockResolvedValueOnce("A");
     const input = vi.fn().mockResolvedValue(undefined);
     await expect(selectWithOptionalInput("Pick", actions, uiWith(select, input))).resolves.toEqual({
-      label: "Other",
-      prompted: true,
-      input: undefined,
+      label: "A",
+      prompted: false,
     });
+    expect(select).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns undefined when the list is dismissed after a cancelled input", async () => {
+    const select = vi.fn().mockResolvedValueOnce("Other").mockResolvedValueOnce(undefined);
+    const input = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      selectWithOptionalInput("Pick", actions, uiWith(select, input)),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not re-prompt when the dialog is closed by an abort", async () => {
+    const controller = new AbortController();
+    const select = vi.fn(async () => "Other");
+    const input = vi.fn().mockImplementation(async () => {
+      controller.abort();
+    });
+    await expect(
+      selectWithOptionalInput("Pick", actions, uiWith(select, input), {
+        signal: controller.signal,
+      }),
+    ).resolves.toBeUndefined();
+    expect(select).toHaveBeenCalledTimes(1);
   });
 
   it("reports an empty string for a submitted blank input", async () => {

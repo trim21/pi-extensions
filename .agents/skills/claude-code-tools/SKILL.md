@@ -80,4 +80,5 @@ The capitalized tools below follow Claude Code behavior with a few deliberate de
 ## AskUserQuestion
 
 - Blocking: 1–4 questions, 2–4 options each; `multiSelect` for multiple selection. An `Other` free-text option is provided automatically.
+- Cancelling with Esc is a back-out, never a committed answer: Esc inside the `Other` input returns to the option list, Esc on the option list skips the question. Only an explicit blank submit counts as `Unanswered`.
 - Returns `User has answered your questions: "q"="a", ... . You can now continue with the user's answers in mind.`

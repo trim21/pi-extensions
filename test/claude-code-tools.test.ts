@@ -1753,11 +1753,36 @@ describe("TodoWrite and AskUserQuestion", () => {
     });
   });
 
-  it("records Unanswered when Other input is blank or cancelled", async () => {
+  it("goes back to the options when the Other input is cancelled", async () => {
+    const tools = loadTools();
+    const ctx = context(process.cwd());
+    ctx.ui.select.mockResolvedValueOnce("Other").mockResolvedValueOnce("SQLite");
+    ctx.ui.input.mockResolvedValue(undefined);
+    const result = await call(
+      tools.get("AskUserQuestion")!,
+      {
+        questions: [
+          {
+            question: "Which database?",
+            header: "Database",
+            options: [
+              { label: "Postgres", description: "Relational" },
+              { label: "SQLite", description: "Embedded" },
+            ],
+            multiSelect: false,
+          },
+        ],
+      },
+      ctx,
+    );
+    expect(result.content[0].text).toContain('"Which database?"="SQLite"');
+  });
+
+  it("records Unanswered when Other input is blank", async () => {
     const tools = loadTools();
     const ctx = context(process.cwd());
     ctx.ui.select.mockResolvedValue("Other");
-    ctx.ui.input.mockResolvedValue(undefined);
+    ctx.ui.input.mockResolvedValue(" ".repeat(3));
     const result = await call(
       tools.get("AskUserQuestion")!,
       {

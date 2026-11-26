@@ -190,7 +190,7 @@ bash 工具（opencode 风格 `bash`、Claude Code 风格 `Bash`）注册了 `da
 
 建议模型不确定时先尝试沙箱模式，若因沙箱限制失败，再以完整权限重试。
 
-审批对话框的选项：**Allow once** 放行本次；**Run this in sandbox** 拒绝提权、命令降级为沙箱内执行（不持久化）；**Deny** / **Deny with reason** 拒绝；**Edit approval rules** 进入子菜单，按 pattern 勾选持久化 allow/deny 规则。
+审批对话框的选项：**Allow once** 放行本次；**Run this in sandbox** 拒绝提权、命令降级为沙箱内执行（不持久化）；**Deny** / **Deny with reason** 拒绝；**Edit approval rules** 进入子菜单，按 pattern 勾选持久化 allow/deny 规则。理由输入框按 Esc 回到上一层重新选择（不提交空理由），空提交则按无理由拒绝。
 
 另一条提权路径是编辑类工具（`Edit` / `Write` / `lsp-rename` / `web_fetch`）写工作区外路径，同样经审批框放行。
 
@@ -267,7 +267,7 @@ bwrap 已集成进 bash 工具实现（opencode 风格 `bash` 位于 `src/openco
 写保护直接内置在各写工具（opencode 风格 `write`/`edit`、Claude Code 风格 `Write`/`Edit`）内部，通过 `src/lib/write-guard.ts` 的 `guardWriteAccess` 实现。读取工具（`read`、`ls`、`find`、`grep`）不受限制。
 
 - workspace 内或 `/tmp` 下的路径自动放行
-- 外部路径需通过确认对话框由用户审批（**Approve once** / **Block** / **Block with reason**），对话框内以 ```diff 代码块展示将要发生的变更；预览由「将要写入的内容」直接算出，批准后写的就是这份内容（批准前若文件被外部改动则拒绝写入）
+- 外部路径需通过确认对话框由用户审批（**Approve once** / **Block** / **Block with reason**），对话框内以 ```diff 代码块展示将要发生的变更；预览由「将要写入的内容」直接算出，批准后写的就是这份内容（批准前若文件被外部改动则拒绝写入）；**Block with reason** 的理由输入框按 Esc 回到选择框重新选
 - headless（无 UI）会话直接拒绝外部写入；Windows 上不提供审批路径，工作区外写入一律拒绝
 - `/bwrap-deny-request` 生效期间外部写入按无理由拒绝处理（`user deny <tool>: blocked`）
 - 无需配置，随各写工具自动生效
@@ -438,7 +438,7 @@ opencode 风格的提问工具，参数与语义和 opencode 的 [`question`](ht
 - **参数**：`questions: Array<{ question, header, options, multiple? }>`
   - `options` 每项为 `{ label, description }`
   - `multiple` 缺省为单选，`true` 时循环用 `ui.select` 逐个勾选直到「✓ Done」
-- **自定义答案**：每个问题自动追加 `Type your own answer.` 选项，选中后走 `ui.input` 自由输入
+- **自定义答案**：每个问题自动追加 `Type your own answer.` 选项，选中后走 `ui.input` 自由输入；输入框按 Esc 回到选项列表重新选，空提交按 `Unanswered` 处理
 - **返回值**：每个问题一个 label 数组（`Answer = string[]`），跳过的为空数组
 - **输出**：与 opencode 一致 —— `User has answered your questions: "q"="a", "q2"="Unanswered"...`
 

@@ -9,26 +9,26 @@ export interface SelectAction {
   /**
    * Set to turn this entry into a free-text input: picking it opens an input
    * dialog instead of returning immediately. The typed text (trimmed) is
-   * reported via `SelectActionResult.input`; `undefined` means the input
-   * dialog was cancelled, `""` that an empty value was submitted.
+   * reported via `SelectActionResult.input`; `""` means an empty value was
+   * submitted, while cancelling the input goes back to the selection list.
    */
   inputPrompt?: string;
 }
 
-export interface SelectActionResult {
-  label: string;
-  /** Whether the picked action carries an inputPrompt (false for plain actions) */
-  prompted: boolean;
-  /** Meaningful when prompted: undefined=cancelled input, ""=blank submission, otherwise the trimmed text */
-  input?: string;
-}
+export type SelectActionResult =
+  /** 普通动作（没有 `inputPrompt`）：直接返回选中的 label */
+  | { label: string; prompted: false }
+  /** 自由输入动作：`input` 是 trim 后的提交值，空串表示用户空提交 */
+  | { label: string; prompted: true; input: string };
 
 /**
  * Combined select + optional input dialog.
  *
  * Shows a selection list built from `actions`. If the user picks an action
- * with `inputPrompt`, an input dialog opens for free-text entry. Returns
- * `undefined` when the selection list is dismissed.
+ * with `inputPrompt`, an input dialog opens for free-text entry; cancelling
+ * that input (Esc) returns to the selection list instead of committing an
+ * empty answer, so `input` is only ever a string. Returns `undefined` when
+ * the selection list is dismissed, or when an abort closes the dialog.
  */
 export async function selectWithOptionalInput(
   title: string,
@@ -37,24 +37,29 @@ export async function selectWithOptionalInput(
   opts: { signal?: AbortSignal } = {},
 ): Promise<SelectActionResult | undefined> {
   const { signal } = opts;
-  const choice = await ui.select(
-    title,
-    actions.map((action) => action.label),
-    { signal },
-  );
-  if (choice === undefined) {
-    return undefined;
+  for (;;) {
+    const choice = await ui.select(
+      title,
+      actions.map((action) => action.label),
+      { signal },
+    );
+    if (choice === undefined) {
+      return undefined;
+    }
+    const action = actions.find((candidate) => candidate.label === choice);
+    if (action?.inputPrompt === undefined) {
+      return { label: choice, prompted: false };
+    }
+    const answer = await ui.input(title, action.inputPrompt, { signal });
+    if (answer === undefined) {
+      // 输入框 Esc = 放弃这次输入，回到上一级；若对话框因中止而关闭则不再重问
+      if (signal?.aborted) {
+        return undefined;
+      }
+      continue;
+    }
+    return { label: choice, prompted: true, input: answer.trim() };
   }
-  const action = actions.find((candidate) => candidate.label === choice);
-  if (action?.inputPrompt === undefined) {
-    return { label: choice, prompted: false };
-  }
-  const answer = await ui.input(title, action.inputPrompt, { signal });
-  return {
-    label: choice,
-    prompted: true,
-    input: answer === undefined ? undefined : answer.trim(),
-  };
 }
 
 /** 已选 / 未选 的符号标记：打勾方框 / 空方框 */

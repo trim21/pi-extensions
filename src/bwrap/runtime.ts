@@ -862,7 +862,7 @@ export class BwrapRuntime {
         return {
           result: verdict.label,
           foreverApprovedPattern: selected,
-          reason: verdict.input,
+          reason: verdict.prompted ? verdict.input : undefined,
         };
       }
       selected = await selectMultiple(
