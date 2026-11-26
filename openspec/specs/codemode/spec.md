@@ -95,6 +95,20 @@
 - **WHEN** 脚本调用一个声明了 `structuredSchema` 但返回结果里没有 `structuredResult` 的工具
 - **THEN** 该调用在脚本内以 `CallFailedError` 失败（运行时复核由工具总线负责），脚本可以捕获并继续
 
+### Requirement: 声明渲染器支持数组形式 `type`
+
+codemode 声明渲染器 MUST 把 JSON Schema 的数组形式 `type`（Zod 为 union / nullable 生成）渲染成联合类型，而不是退化成 `unknown`。
+
+#### Scenario: nullable 字段
+
+- **WHEN** 工具参数里的字段由 `z.string().nullable()` 派生为 `type: ["string","null"]`
+- **THEN** codemode 声明里该字段的类型是 `string | null`
+
+#### Scenario: union 字段
+
+- **WHEN** 字段由 `z.union([z.number(), z.string()])` 派生为 `type: ["number","string"]`
+- **THEN** codemode 声明里该字段的类型是 `number | string`
+
 ### Requirement: 脚本执行隔离
 
 脚本 MUST 在本扩展自带的 QuickJS VM 里执行，VM 内 MUST NOT 存在宿主能力（Node API、文件系统、网络、timer、模块加载、`WebAssembly`）；脚本唯一的出口是注入的工具，而这些工具由主线程执行。VM MUST 跑在 worker 线程里，使死循环脚本能被终止而不阻塞会话。VM 的 wasm 模块 MUST 在注册 `codemode` 工具时编译一次，每次执行复用同一份编译结果，且每次执行 MUST 使用新的 VM 实例。只有脚本的输出与返回值进入模型上下文，脚本内部发起的工具调用 MUST NOT 在会话记录里产生工具调用条目。

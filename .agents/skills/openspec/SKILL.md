@@ -30,20 +30,20 @@ If they ask how OpenSpec works or how to set something up, read `references/answ
 
 When the user asks for work, find the row that matches, then use that skill and follow its steps.
 
-| The user wants to                                                             | Use                            |
-| ----------------------------------------------------------------------------- | ------------------------------ |
-| think an idea or problem through before deciding what to build                | `openspec-explore`             |
-| describe what to build and get the whole plan: proposal, specs, design, tasks | `openspec-propose`             |
-| start a change and write its plan one artifact at a time                      | `openspec-new-change`          |
-| write the next artifact of a change                                           | `openspec-continue-change`     |
-| write every remaining artifact of a change at once                            | `openspec-ff-change`           |
-| revise the plan of an existing change                                         | `openspec-update-change`       |
-| implement the tasks of a change                                               | `openspec-apply-change`        |
-| check the code against a change before archiving it                           | `openspec-verify-change`       |
-| update the main specs from a change and keep the change open                  | `openspec-sync-specs`          |
-| finish a change and archive it                                                | `openspec-archive-change`      |
-| archive several finished changes at once                                      | `openspec-bulk-archive-change` |
-| take a guided first run through OpenSpec                                      | `openspec-onboard`             |
+| The user wants to | Use |
+|---|---|
+| think an idea or problem through before deciding what to build | `openspec-explore` |
+| describe what to build and get the whole plan: proposal, specs, design, tasks | `openspec-propose` |
+| start a change and write its plan one artifact at a time | `openspec-new-change` |
+| write the next artifact of a change | `openspec-continue-change` |
+| write every remaining artifact of a change at once | `openspec-ff-change` |
+| revise the plan of an existing change | `openspec-update-change` |
+| implement the tasks of a change | `openspec-apply-change` |
+| check the code against a change before archiving it | `openspec-verify-change` |
+| update the main specs from a change and keep the change open | `openspec-sync-specs` |
+| finish a change and archive it | `openspec-archive-change` |
+| archive several finished changes at once | `openspec-bulk-archive-change` |
+| take a guided first run through OpenSpec | `openspec-onboard` |
 
 - If the request could mean more than one row, ask which, naming the choices.
 - If the skill for the row is not installed, say so, then read `references/without-skills.md` and follow the section for that skill. Tell the user they can install it with `openspec config profile`, then `openspec update`.
