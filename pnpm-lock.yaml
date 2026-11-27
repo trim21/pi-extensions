@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@cortexkit/aft-bridge':
-        specifier: 0.66.0
-        version: 0.66.0
+        specifier: 0.68.1
+        version: 0.68.1
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -140,8 +140,8 @@ importers:
         version: 5.1.1(@types/node@24.19.2)(@vitest/coverage-v8@5.1.1)(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
     optionalDependencies:
       '@cortexkit/aft-linux-x64':
-        specifier: 0.66.0
-        version: 0.66.0
+        specifier: 0.68.1
+        version: 0.68.1
 
 packages:
 
@@ -265,11 +265,11 @@ packages:
   '@cacheable/utils@2.5.0':
     resolution: {integrity: sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA==}
 
-  '@cortexkit/aft-bridge@0.66.0':
-    resolution: {integrity: sha512-G+pnAdE/mQDNVU8+MLgzh+IYAHcMNkJsCkMlw2TDVWw6QNQLB3IhNdy7y59Hj6pYX/tDRYStbhXVHCEujovwKA==}
+  '@cortexkit/aft-bridge@0.68.1':
+    resolution: {integrity: sha512-4ztX/hgwkPrhaSXwrgJuCnSYAG7mK6edxZqcTHZF9mtbvTKLorQ6WUpNwX/1AQIOnlVUyRRpb469DJqj2r1I7Q==}
 
-  '@cortexkit/aft-linux-x64@0.66.0':
-    resolution: {integrity: sha512-FTTj5luJ/MhU3NaYo3PrBbZi0VRtIUGh6KBeZDhnjdLHEg1xSDJWV9OWwSdH4zr3eRGBt0+ZBBWfb7JO3XHifw==}
+  '@cortexkit/aft-linux-x64@0.68.1':
+    resolution: {integrity: sha512-Uy2iRLRoNZ1tGwufTz9UTgQ24UtrfOt6UK0nQ0e+euAOhKeQnTRkZK9UygR+jeBmBJCrP2W8LzRxEpaJbU+YdQ==}
     cpu: [x64]
     os: [linux]
     hasBin: true
@@ -2323,10 +2323,6 @@ packages:
   undici-types@7.24.6:
     resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
-  undici@7.30.2:
-    resolution: {integrity: sha512-mLyPQnHwUxaM/rideoK/+KL8DaAJLRl4aBCfmX444aCSLnIaomqPLtNRe2jdCYcsk5wZzXrDIQC8ZeYNRAYyIA==}
-    engines: {node: '>=20.18.1'}
-
   undici@8.12.4:
     resolution: {integrity: sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==}
     engines: {node: '>=22.19.0'}
@@ -2717,12 +2713,11 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
-  '@cortexkit/aft-bridge@0.66.0':
+  '@cortexkit/aft-bridge@0.68.1':
     dependencies:
       '@cortexkit/subc-client': 0.24.5
-      undici: 7.30.2
 
-  '@cortexkit/aft-linux-x64@0.66.0':
+  '@cortexkit/aft-linux-x64@0.68.1':
     optional: true
 
   '@cortexkit/subc-client@0.24.5': {}
@@ -4644,8 +4639,6 @@ snapshots:
   uhyphen@0.2.0: {}
 
   undici-types@7.24.6: {}
-
-  undici@7.30.2: {}
 
   undici@8.12.4: {}
 
